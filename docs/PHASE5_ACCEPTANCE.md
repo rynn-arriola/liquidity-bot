@@ -27,7 +27,7 @@ Current verdict: **`DO_NOT_START_TRIAL`**. See `docs/SCALE_REVIEW.md`.
 
 Operator exception: one named market, exactly one contract per quote, 30-second
 inventory age, $2 market/$5 session soft limits, $15 emergency hard stop, and a
-06:00 New York cutoff. Startup still requires the whole account flat, exclusive
+graceful operator-controlled stop. Startup still requires the whole account flat, exclusive
 key ownership, maker-lab stopped, fresh private state, and a current applicable
 liquidity program. See `docs/COMMISSIONING.md`.
 

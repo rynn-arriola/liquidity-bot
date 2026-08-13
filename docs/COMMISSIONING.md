@@ -13,8 +13,8 @@ strategy is profitable and not permission to scale.
   stressed-depth, price-capped IOC;
 - $2 per-market soft stop, $5 marked-account-equity session stop, and $15
   emergency marked-account-equity hard stop;
-- stop adding risk at 06:00 `America/New_York`, then remain alive until every
-  owned order is terminal and the exact position is flat;
+- run until an operator stop or terminal safety/loss condition, then remain
+  alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account
   state use WebSockets.
 
@@ -27,15 +27,21 @@ The command refuses before order entry unless all of these are true:
 
 1. `--arm-live`, `--accept-one-contract-risk`, `--exclusive-api-key`, and
    `--maker-lab-stopped` are all present.
-2. The next 06:00 New York cutoff is within 12 hours.
-3. The named market is open, rewarded in the lifecycle applying now, pregame,
-   and starts after the shutdown cutoff.
+2. The runner is explicitly armed for operator-controlled graceful stop.
+3. The named market is open, rewarded in the lifecycle applying now, and
+   pregame.
 4. One contract is aligned to the current venue tick and minimum quantity.
 5. The whole account has no open order, nonzero position, unresolved mutation,
    or unowned state.
 6. The balance schema is complete and marked equity is known.
 7. REST reconciliation and the private account WebSocket are fresh.
 8. Normal and critical Discord webhooks are configured.
+
+During runtime, a recoverable private or market adapter error enters a dormant
+recovery state instead of ending the process. The runner records the error and
+stack, cancels known quotes, reconnects, reconciles the whole account, and only
+then permits new risk. Loss stops, unowned state, and unprovable shutdown state
+are not downgraded to recoverable warnings.
 
 After a process death, a restart may enter recovery-only mode only when every
 working order and nonzero position belongs to this persisted ledger and the one
@@ -66,7 +72,7 @@ logs are ignored by Git. Never copy secrets into this repository.
 
 ## Exit meanings
 
-- `0`: clean intentional/risk/cutoff exit with flat state proven;
+- `0`: clean operator/risk exit with flat state proven;
 - `2`: startup refused; no automatic restart;
 - `3`: flat state was not proven; no automatic restart and immediate operator
   inspection required;

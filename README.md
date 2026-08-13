@@ -32,10 +32,17 @@ The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a non-scalable commissioning run. It is hard-locked to one named
 rewarded market, exactly one contract per quote, a 30-second inventory age, a
-$2 market stop, a $5 session stop, a $15 emergency hard stop, and a 06:00
-America/New_York risk cutoff. It cannot be armed without four explicit command
+$2 market stop, a $5 session stop, a $15 emergency hard stop, and an
+operator-controlled graceful stop. It cannot be armed without four explicit command
 acknowledgements, an exclusive key handoff, a flat whole-account snapshot, and
 fresh private state.
+
+Recoverable market/private adapter failures no longer terminate the process.
+The runner logs the stack, disables new risk, cancels known working quotes,
+reconnects, and requires whole-account REST plus fresh stream state before it
+can quote again. Confirmed loss limits and unsafe/ambiguous ownership remain
+terminal safety events. `stop_commissioning.sh` requests graceful cancellation,
+flattening, and exact flat-state proof before exit.
 
 All REST access shares one asynchronous limiter. The default is 4 requests per
 second, the configured hard maximum is 20, and continuous book/trade data uses
@@ -110,8 +117,8 @@ The server launcher is deliberately explicit:
 
 The launcher refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
-orders enter recovery-only mode, where no new risk is allowed. Clean cutoff,
-startup refusal, caught runtime failure, non-flat exit, and risk-stop exits are
+orders enter recovery-only mode, where no new risk is allowed. Operator stop,
+startup refusal, caught terminal failure, non-flat exit, and risk-stop exits are
 never restarted. See [commissioning operations](docs/COMMISSIONING.md).
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md),

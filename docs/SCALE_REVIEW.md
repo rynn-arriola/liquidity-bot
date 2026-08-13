@@ -73,7 +73,7 @@ letting inventory ride to settlement.
 
 The operator-authorized commissioning exception is one market, one contract
 per quote, a 30-second inventory timeout, a $2 per-market soft cap, a $5
-session soft cap, a $15 emergency hard stop, and a 06:00 New York cutoff. Do
+session soft cap, a $15 emergency hard stop, and graceful operator stop. Do
 not add a market or contract until the scale gate sees three attributable
 paid reward days, 20 independent paid events, five clean sessions, positive
 conservative net after actual exit costs, and a ledger/exchange difference no

@@ -105,3 +105,11 @@ account flat, and stopped. Private events now carry their subscription scope;
 the projector may use an omitted slug only for an explicitly singleton market
 subscription. Account-wide and multi-market ambiguity still fails closed, and
 whole-account REST reconciliation remains in place.
+
+For the next operator-authorized session, recoverable market/private adapter
+failures keep the process alive in a no-new-risk recovery state. Known quotes
+are canceled, the affected stream is recreated, and whole-account REST plus
+fresh stream state must pass before quoting resumes. Runtime errors retain a
+credential-redacted stack in `commissioning.log` with bounded Discord alerts.
+The former 06:00 cutoff is replaced by graceful operator stop; the $2 market,
+$5 session, and $15 hard loss stops remain terminal.

@@ -36,10 +36,14 @@ These are implementation requirements, not suggestions.
 23. Normal summaries use the status webhook; critical process, money, or
     exchange-state failures use the error webhook and must not block the market
     or private WebSocket event loop.
-24. Commissioning stops adding risk at 06:00 `America/New_York`; process exit
+24. Commissioning runs until operator stop or a terminal safety/loss condition.
+    Recoverable adapter failures keep the process alive with new risk disabled;
+    quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only while it cancels, flattens, and proves exact flat state.
 25. The $15 hard stop uses marked account equity (`currentBalance` plus
     `assetNotional`). Buying power is never treated as P&L or marked equity.
 26. A restart may mutate only persisted, identified orders/positions in the one
     configured market, and then only to recover flat. Unowned or cross-market
     state refuses without mutation.
+27. `SIGTERM` and `SIGINT` are graceful operator-stop requests. They enter
+    market-scoped cancel/flatten/reconcile rather than terminate immediately.

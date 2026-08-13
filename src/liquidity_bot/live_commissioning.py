@@ -2,7 +2,7 @@
 
 The economic evidence gate remains red. This runner exists only for the
 operator-accepted experiment and is mechanically constrained to one named
-rewarded market, one contract per quote, a 06:00 New York risk cutoff, a $5
+rewarded market, one contract per quote, an operator-controlled stop, a $5
 normal session stop, and a $15 emergency hard stop.
 
 Importing this module has no side effect. Exchange access is possible only
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import signal
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -67,7 +68,7 @@ Clock = Callable[[], datetime]
 @dataclass(frozen=True)
 class CommissioningResult:
     started_at: datetime
-    cutoff_at: datetime
+    cutoff_at: datetime | None
     stopped_at: datetime
     stop_reason: str
     flat: bool
@@ -106,6 +107,8 @@ class CommissioningRunner:
         self.kill_switch = MarketKillSwitch(self.executor, ledger)
         self.projector = PrivateLedgerProjector(ledger)
         self.gate = PrivateStateGate(max_silence_seconds=30)
+        self.market_stream_factory = market_stream_factory
+        self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
         self.private_stream = private_stream_factory(client)
         self.market: MarketMetadata | None = None
@@ -132,6 +135,7 @@ class CommissioningRunner:
         self._score_seconds = 0.0
         self._score_observed_at: datetime | None = None
         self._orders_before = 0
+        self._runtime_error_counts: dict[str, int] = {}
 
     def request_stop(self, reason: str = "operator_requested") -> None:
         self._stop_requested = str(reason or "operator_requested")
@@ -153,11 +157,10 @@ class CommissioningRunner:
         if (not self.market.active or self.market.closed
                 or self.market.status not in OPEN_MARKET_STATUSES):
             raise CommissioningRefused("selected market is not open")
-        if self.market.game_start is None or self.cutoff_at is None:
-            raise CommissioningRefused("market or cutoff clock is unavailable")
-        if self.market.game_start <= self.cutoff_at:
-            raise CommissioningRefused(
-                "selected market starts before the 06:00 New York shutdown completes")
+        if self.market.game_start is None:
+            raise CommissioningRefused("market start clock is unavailable")
+        if self.market.game_start <= now:
+            raise CommissioningRefused("selected market is no longer pregame")
         try:
             period = select_applicable_period(
                 self.incentive.periods, self.market.game_start, now)
@@ -256,7 +259,8 @@ class CommissioningRunner:
         self.started_at = now
         had_prior_place = bool(self.ledger.query(
             "SELECT 1 FROM execution_intents WHERE operation='PLACE' LIMIT 1"))
-        self.cutoff_at = self.config.assert_authorized(now=now)
+        self.config.assert_authorized(now=now)
+        self.cutoff_at = None
         await self._refresh_contracts(now)
         await self._refresh_book(now)
         # A singleton private subscription makes the documented position
@@ -279,13 +283,12 @@ class CommissioningRunner:
             raise CommissioningRefused("; ".join(report.blockers))
         self.gate.on_rest_reconciled(now)
         self.balance = await self.account.fetch_balance(observed_at=now)
-        duration = (self.cutoff_at - now).total_seconds()
         self.risk_guard = SessionRiskGuard(
             started_at=now,
             starting_equity=self.balance.marked_equity,
             max_session_loss=self.config.max_session_loss_usd,
             max_market_loss=self.config.max_market_loss_usd,
-            max_duration_seconds=duration,
+            max_duration_seconds=float("inf"),
             max_equity_age_seconds=15,
             hard_stop_loss=self.config.hard_stop_loss_usd,
         )
@@ -301,7 +304,7 @@ class CommissioningRunner:
         delivery = await self.notifier.send_async(
             "🟠 Liquidity Bot LIVE commissioning started: one market, "
             "one contract per quote, $5 soft stop, $15 hard stop, "
-            "06:00 America/New_York cutoff.")
+            "operator-controlled stop; pregame and loss gates remain active.")
         if not getattr(delivery, "sent", False):
             raise CommissioningRefused(
                 "Discord startup alert delivery failed before order entry")
@@ -375,7 +378,14 @@ class CommissioningRunner:
             return MarketFrame(
                 self.market, now, self.book, self.book_observed_at, position,
                 self._working_orders(), False, self._reward_eligible, {}, 0)
-        expected = {side: 1e-9 for side in self._reward_eligible}
+        eligible = self._reward_eligible
+        if (position == 0 and self.risk_guard is not None
+                and not self.risk_guard.can_add_new_risk(now=now)):
+            # A stale/unknown marked balance is recoverable, but existing flat-
+            # state quotes would still add risk if filled. Make them undesired
+            # so the reconciler cancels them while the process stays alive.
+            eligible = frozenset()
+        expected = {side: 1e-9 for side in eligible}
         return MarketFrame(
             market=self.market,
             now=now,
@@ -385,7 +395,7 @@ class CommissioningRunner:
             working_orders=self._working_orders(),
             state_known=(self.gate.ready(self.ledger, now=now)
                          and self.ledger.risk_state_known()),
-            reward_eligible=self._reward_eligible,
+            reward_eligible=eligible,
             # The operator accepted missing profitability evidence. A tiny
             # positive sentinel permits only venue-eligible sides; it is not
             # stored or reported as estimated profit.
@@ -408,15 +418,21 @@ class CommissioningRunner:
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:
             return self._stop_requested
-        if self.cutoff_at is not None and now >= self.cutoff_at:
-            return "06:00_America_New_York_cutoff"
         if self.risk_guard is None:
             return "risk_guard_missing"
         if self.risk_guard.hard_stop_reached(now=now):
             return "15_USD_HARD_STOP"
         blockers = self.risk_guard.blockers(now=now)
-        if blockers:
-            return "risk_stop:" + ",".join(blockers)
+        # Missing/stale equity is recoverable only by staying alive with new
+        # risk disabled. A confirmed loss, clock failure, or explicit critical
+        # condition still enters terminal flatten-and-stop handling.
+        transient = {
+            "marked account equity is unknown",
+            "marked account equity is stale",
+        }
+        terminal = tuple(item for item in blockers if item not in transient)
+        if terminal:
+            return "risk_stop:" + ",".join(terminal)
         return None
 
     def _oldest_unresolved_age_seconds(self, now: datetime) -> float | None:
@@ -509,6 +525,140 @@ class CommissioningRunner:
         payload["embeds"][0]["footer"]["text"] += (
             f" • session creates {place_count - self._orders_before}")
         await self.notifier.send_payload_async(payload, critical=critical)
+
+    async def _report_runtime_error(
+        self, component: str, exc: Exception, attempt: int | None = None,
+    ) -> None:
+        if attempt is None:
+            attempt = self._runtime_error_counts.get(component, 0) + 1
+        self._runtime_error_counts[component] = max(
+            attempt, self._runtime_error_counts.get(component, 0))
+        now = self._now()
+        detail = str(exc).replace("\n", " ")
+        for name in ("key_id", "secret_key"):
+            secret = str(getattr(self.client, name, "") or "")
+            if secret:
+                detail = detail.replace(secret, "<redacted>")
+        print(
+            f"[runtime-recovery] at={now.isoformat()} component={component} "
+            f"attempt={attempt} error={type(exc).__name__}: {detail}",
+            flush=True,
+        )
+        if exc.__traceback__ is not None:
+            traceback.print_tb(exc.__traceback__)
+        # Keep Discord useful during a long outage while every occurrence is
+        # still retained in commissioning.log.
+        if attempt <= 2 or (attempt & (attempt - 1)) == 0:
+            await self.notifier.send_async(
+                "⚠️ Liquidity Bot runtime recovery: "
+                f"{component} attempt {attempt}, {type(exc).__name__}: "
+                f"{detail[:400]}. "
+                "New risk is disabled until reconnect and reconciliation pass.",
+                critical=True,
+            )
+
+    async def _quarantine_working_orders(self) -> None:
+        """Cancel known quotes and prove their terminal state before resume."""
+
+        now = self._now()
+        await self._rest_reconcile(now)
+        slug = self.config.market_slug
+        if self.ledger.market_has_unresolved_intent(slug):
+            raise AdapterError("runtime recovery has unresolved order intents")
+        if self.ledger.working_orders(slug):
+            await self.kill_switch.initiate(slug, now=self._now())
+            await self._rest_reconcile(self._now())
+        if self.ledger.market_has_unresolved_intent(slug):
+            raise AdapterError("runtime recovery cancel is not yet reconciled")
+        if self.ledger.working_orders(slug):
+            raise AdapterError("runtime recovery order is still working")
+
+    async def _recover_private_stream(self, initial: Exception) -> str | None:
+        """Stay alive but dormant until private state is proven again."""
+
+        exc = initial
+        attempt = 0
+        self.gate.on_disconnect()
+        while True:
+            attempt += 1
+            await self._report_runtime_error("private_stream", exc, attempt)
+            try:
+                try:
+                    await self.private_stream.close()
+                except Exception:
+                    traceback.print_exc()
+                try:
+                    await self._refresh_balance(self._now())
+                except Exception as balance_exc:
+                    print(
+                        "[runtime-recovery] balance refresh failed: "
+                        f"{type(balance_exc).__name__}: {balance_exc}",
+                        flush=True,
+                    )
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self._quarantine_working_orders()
+                stream = self.private_stream_factory(self.client)
+                self.private_stream = stream
+                await stream.start([self.config.market_slug])
+                self.gate.on_connect()
+                await self._rest_reconcile(self._now())
+                await self._wait_for_initial_private_state()
+                await self.notifier.send_async(
+                    "✅ Liquidity Bot private stream recovered; REST and fresh "
+                    "private state passed. Quoting may resume.")
+                self._runtime_error_counts.pop("private_stream", None)
+                return None
+            except Exception as recovery_exc:
+                self.gate.on_disconnect()
+                exc = recovery_exc
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self.sleep(min(2 ** min(attempt - 1, 5), 30))
+
+    async def _recover_market_stream(self, initial: Exception) -> str | None:
+        """Reconnect market data after canceling quotes made on the old book."""
+
+        exc = initial
+        attempt = 0
+        while True:
+            attempt += 1
+            await self._report_runtime_error("market_stream", exc, attempt)
+            try:
+                try:
+                    await self.market_stream.close()
+                except Exception:
+                    traceback.print_exc()
+                try:
+                    await self._refresh_balance(self._now())
+                except Exception as balance_exc:
+                    print(
+                        "[runtime-recovery] balance refresh failed: "
+                        f"{type(balance_exc).__name__}: {balance_exc}",
+                        flush=True,
+                    )
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self._quarantine_working_orders()
+                stream = self.market_stream_factory(self.client)
+                self.market_stream = stream
+                await stream.start([self.config.market_slug])
+                self.book = await stream.next_book(timeout=15)
+                self.book_observed_at = self._now()
+                await self.notifier.send_async(
+                    "✅ Liquidity Bot market stream recovered with a fresh full book. "
+                    "Quoting may resume.")
+                self._runtime_error_counts.pop("market_stream", None)
+                return None
+            except Exception as recovery_exc:
+                exc = recovery_exc
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
@@ -609,9 +759,9 @@ class CommissioningRunner:
                         self.book = market_task.result()
                         self.book_observed_at = self._now()
                     except Exception as exc:
-                        if self.risk_guard:
-                            self.risk_guard.trip_critical(
-                                f"market stream: {type(exc).__name__}")
+                        stop_reason = await self._recover_market_stream(exc) or ""
+                        if stop_reason:
+                            break
                     market_task = asyncio.create_task(
                         self.market_stream.next_book())
                 if private_task in done:
@@ -619,10 +769,9 @@ class CommissioningRunner:
                         await self._observe_private(
                             private_task.result(), self._now())
                     except Exception as exc:
-                        self.gate.on_disconnect()
-                        if self.risk_guard:
-                            self.risk_guard.trip_critical(
-                                f"private stream: {type(exc).__name__}")
+                        stop_reason = await self._recover_private_stream(exc) or ""
+                        if stop_reason:
+                            break
                     private_task = asyncio.create_task(
                         self.private_stream.next_event())
                 now = self._now()
@@ -646,20 +795,24 @@ class CommissioningRunner:
                 if now >= next_contract_refresh:
                     try:
                         await self._refresh_contracts(now)
+                        self._runtime_error_counts.pop(
+                            "market_incentive_refresh", None)
                     except Exception as exc:
-                        if self.risk_guard:
-                            self.risk_guard.trip_critical(
-                                f"market/incentive refresh: {type(exc).__name__}")
+                        self.incentive = None
+                        self._reward_eligible = frozenset()
+                        await self._report_runtime_error(
+                            "market_incentive_refresh", exc)
                     next_contract_refresh = now + timedelta(minutes=1)
                 # Keep this last among periodic REST work so account/incentive
                 # latency cannot age the book before the decision below.
                 try:
                     next_book_refresh = await self._refresh_quiet_book_if_due(
                         next_book_refresh)
+                    self._runtime_error_counts.pop(
+                        "quiet_book_rest_refresh", None)
                 except Exception as exc:
-                    if self.risk_guard:
-                        self.risk_guard.trip_critical(
-                            f"quiet-book REST refresh: {type(exc).__name__}")
+                    await self._report_runtime_error(
+                        "quiet_book_rest_refresh", exc)
                     next_book_refresh = self._now() + timedelta(seconds=3)
                 now = self._now()
                 self._evaluate_rewards(now)
@@ -691,8 +844,21 @@ class CommissioningRunner:
                     continue
                 actions = self.reconciler.plan(self._frame(now))
                 if actions and actions[0].kind == ActionKind.CRITICAL:
-                    stop_reason = f"critical:{actions[0].reason}"
+                    reason = actions[0].reason
+                    if reason in {"book_stale", "execution_state_unknown"}:
+                        await self._report_runtime_error(
+                            "runtime_state_gate", AdapterError(reason))
+                        try:
+                            await self._quarantine_working_orders()
+                        except Exception as exc:
+                            await self._report_runtime_error(
+                                "runtime_state_quarantine", exc)
+                        await self.sleep(1)
+                        continue
+                    stop_reason = f"critical:{reason}"
                     break
+                self._runtime_error_counts.pop("runtime_state_gate", None)
+                self._runtime_error_counts.pop("runtime_state_quarantine", None)
                 if self.driver is None or self.market is None:
                     raise RuntimeError("commissioning driver is unavailable")
                 await self.driver.apply_one(
@@ -730,7 +896,7 @@ class CommissioningRunner:
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         return CommissioningResult(
             self.started_at or stopped,
-            self.cutoff_at or stopped,
+            self.cutoff_at,
             stopped,
             stop_reason,
             self.ledger.position(self.config.market_slug) == 0,
@@ -758,10 +924,22 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     client = AsyncPolymarketUS(
         key_id=secrets.key_id, secret_key=secrets.secret_key)
     ledger = ExecutionLedger(args.database)
+    runner = CommissioningRunner(
+        client, config, ledger, DiscordNotifier(secrets))
+    loop = asyncio.get_running_loop()
+    installed_signals: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(
+                sig, runner.request_stop, f"operator_{sig.name.lower()}")
+            installed_signals.append(sig)
+        except (NotImplementedError, RuntimeError):
+            pass
     try:
-        return await CommissioningRunner(
-            client, config, ledger, DiscordNotifier(secrets)).run()
+        return await runner.run()
     finally:
+        for sig in installed_signals:
+            loop.remove_signal_handler(sig)
         ledger.close()
         await client.close()
         lease.release()
@@ -786,7 +964,8 @@ def main() -> int:
         parser.exit(2, f"commissioning refused: {exc}\n")
     print(json.dumps({
         "started_at": result.started_at.isoformat(),
-        "cutoff_at": result.cutoff_at.isoformat(),
+        "cutoff_at": (
+            result.cutoff_at.isoformat() if result.cutoff_at is not None else None),
         "stopped_at": result.stopped_at.isoformat(),
         "stop_reason": result.stop_reason,
         "flat": result.flat,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Restart only after an unexpected process death. A caught trading failure,
-# refusal, non-flat exit, or clean cutoff is terminal and is never restarted.
+# Restart only after an unexpected process death. A caught terminal failure,
+# refusal, non-flat exit, or operator stop is terminal and is never restarted.
 
 set -u
 cd "$(dirname "$0")/.." || exit 1

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
+from liquidity_bot.errors import AdapterError
 from liquidity_bot.execution_ledger import ExecutionLedger
 from liquidity_bot.live_commissioning import CommissioningRunner, _run
 from liquidity_bot.notifications import NotificationResult
@@ -17,7 +18,6 @@ from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-CUTOFF = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
 GAME_START = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
 
 
@@ -174,6 +174,12 @@ class FakeMarketStream:
         self.closed = True
 
 
+class FailingPrivateStream(FakePrivateStream):
+    async def start(self, slugs=None):
+        self.started_with = slugs
+        raise AdapterError("simulated private reconnect failure")
+
+
 class FakeNotifier:
     def __init__(self, *, delivery_succeeds=True):
         self.messages = []
@@ -191,17 +197,6 @@ class FakeNotifier:
         return NotificationResult(
             self.delivery_succeeds,
             "sent" if self.delivery_succeeds else "delivery_failed")
-
-
-class StepClock:
-    """Hold preflight at NOW, then cross the cutoff before order entry."""
-
-    def __init__(self):
-        self.calls = 0
-
-    def __call__(self):
-        self.calls += 1
-        return NOW if self.calls <= 3 else CUTOFF
 
 
 class TickingClock:
@@ -259,12 +254,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_cutoff_run_exits_flat_without_placing_an_order(self):
-        runner, client, notifier = self.build_runner(clock=StepClock())
+    async def test_operator_stop_exits_flat_without_placing_an_order(self):
+        runner, client, notifier = self.build_runner()
+        runner.request_stop("operator_requested")
         result = await runner.run()
 
-        self.assertEqual(result.stop_reason, "06:00_America_New_York_cutoff")
-        self.assertEqual(result.cutoff_at, CUTOFF)
+        self.assertEqual(result.stop_reason, "operator_requested")
+        self.assertIsNone(result.cutoff_at)
         self.assertTrue(result.flat)
         self.assertEqual(result.orders_sent_to_polymarket, 0)
         self.assertEqual(client.orders.create_calls, [])
@@ -413,6 +409,96 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._rest_reconcile(later)
         self.assertTrue(runner.gate.ready(runner.ledger, now=later))
         self.assertEqual(runner.gate.last_message_at, NOW)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_private_adapter_error_recovers_without_placing_new_orders(self):
+        runner, client, notifier = self.build_runner()
+        await runner.preflight()
+        old_stream = runner.private_stream
+
+        stop = await runner._recover_private_stream(
+            AdapterError("position market slug is missing"))
+
+        self.assertIsNone(stop)
+        self.assertTrue(old_stream.closed)
+        self.assertIsNot(runner.private_stream, old_stream)
+        self.assertEqual(runner.private_stream.started_with, ["market-one"])
+        self.assertTrue(runner.gate.ready(runner.ledger, now=NOW))
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(critical for _, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_market_adapter_error_recovers_from_fresh_book_without_new_orders(self):
+        runner, client, notifier = self.build_runner()
+        await runner.preflight()
+        old_stream = runner.market_stream
+        recovered_book = runner.book
+
+        class RecoveringMarketStream(FakeMarketStream):
+            async def next_book(self, *, timeout=None):
+                return recovered_book
+
+        runner.market_stream_factory = RecoveringMarketStream
+        stop = await runner._recover_market_stream(
+            AdapterError("market WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertTrue(old_stream.closed)
+        self.assertIsNot(runner.market_stream, old_stream)
+        self.assertIs(runner.book, recovered_book)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(critical for _, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_repeated_private_reconnect_failure_stays_alive_until_operator_stop(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.private_stream_factory = FailingPrivateStream
+        sleeps = 0
+
+        async def stop_after_retry(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            runner.request_stop("operator_requested")
+
+        runner.sleep = stop_after_retry
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertEqual(stop, "operator_requested")
+        self.assertEqual(sleeps, 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_hard_stop_remains_terminal_during_stream_recovery(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        client.account.current_balance = Decimal("85")
+
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertEqual(stop, "15_USD_HARD_STOP")
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stale_equity_stays_alive_but_cannot_add_new_risk(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        later = NOW + timedelta(seconds=16)
+        runner.book_observed_at = later
+
+        self.assertIsNone(runner._stop_reason(later))
+        frame = runner._frame(later)
+        self.assertEqual(frame.reward_eligible, frozenset())
+        self.assertEqual(runner.reconciler.plan(frame), [])
+        self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
 

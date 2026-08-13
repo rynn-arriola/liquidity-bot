@@ -1,4 +1,4 @@
-"""Hard-locked authorization and 06:00 New York cutoff for first live tests.
+"""Hard-locked authorization for one-market live commissioning.
 
 This module does not connect to Polymarket. It turns the operator's explicit
 risk acceptance into a narrow, reproducible commissioning configuration. The
@@ -53,10 +53,11 @@ class CommissioningConfig:
     max_session_loss_usd: Decimal = Decimal("5")
     hard_stop_loss_usd: Decimal = Decimal("15")
     rest_requests_per_second: Decimal = Decimal("4")
-    latest_stop_hour_et: int = 6
-    max_session_hours: Decimal = Decimal("12")
+    manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
         problems: list[str] = []
         if not self.arm_live:
             problems.append("live arming flag is absent")
@@ -70,8 +71,8 @@ class CommissioningConfig:
             problems.append("one explicit market slug is required")
         if self.quote_size != 1 or self.max_markets != 1:
             problems.append("commissioning is hard-locked to one market/contract")
-        if self.latest_stop_hour_et != 6:
-            problems.append("commissioning cutoff must be 06:00 New York")
+        if not self.manual_stop_only:
+            problems.append("commissioning must remain armed for operator stop")
         if (self.max_session_loss_usd != 5 or self.max_market_loss_usd != 2
                 or self.hard_stop_loss_usd != 15):
             problems.append(
@@ -80,15 +81,9 @@ class CommissioningConfig:
             problems.append("hard stop must exceed the normal session stop")
         if self.rest_requests_per_second > 4:
             problems.append("commissioning REST budget cannot exceed 4 requests/second")
-        cutoff = next_six_am_new_york(now)
-        duration = Decimal(str((cutoff - now).total_seconds())) / Decimal("3600")
-        if duration > self.max_session_hours:
-            problems.append(
-                "next 06:00 New York cutoff is more than 12 hours away")
         return tuple(problems)
 
-    def assert_authorized(self, *, now: datetime) -> datetime:
+    def assert_authorized(self, *, now: datetime) -> None:
         problems = self.blockers(now=now)
         if problems:
             raise CommissioningRefused("; ".join(problems))
-        return next_six_am_new_york(now)

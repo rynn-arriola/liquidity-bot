@@ -63,8 +63,8 @@ Gate: a multi-hour dry run produces no path where unmatched inventory can outliv
 - One named market for commissioning
 - Exactly one contract per quote for commissioning
 - Pregame only
-- Detached supervision, persisted recovery-only restart, and a 06:00 New York
-  risk cutoff
+- Detached supervision, persisted recovery-only restart, and graceful operator
+  stop
 - Per-market/session loss breakers and market-scoped kill switch
 
 Gate: the readiness evaluator must first permit a trial. Scaling then requires

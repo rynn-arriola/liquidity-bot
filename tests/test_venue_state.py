@@ -146,6 +146,31 @@ class ProjectorTests(unittest.TestCase):
             "SELECT net_qty FROM execution_positions WHERE market_slug='market-one'")[0]
         self.assertEqual(row["net_qty"], "1.50")
 
+    def test_documented_position_update_uses_single_market_scope_when_slug_omitted(self):
+        event = PrivateEvent(
+            PrivateEventKind.POSITION_UPDATE,
+            {"beforePosition": {"netPositionDecimal": "0.00"},
+             "afterPosition": {"netPositionDecimal": "-1.00"},
+             "updateTime": "2026-08-13T05:39:26Z",
+             "tradeId": "trade-live-fill"},
+            "positions-request",
+            "SUBSCRIPTION_TYPE_POSITION",
+            ("market-one",))
+        self.projector.apply(event, received_at=NOW)
+        row = self.ledger.query(
+            "SELECT net_qty FROM execution_positions "
+            "WHERE market_slug='market-one'")[0]
+        self.assertEqual(row["net_qty"], "-1.00")
+
+    def test_slugless_position_update_without_single_market_scope_fails_closed(self):
+        event = PrivateEvent(
+            PrivateEventKind.POSITION_UPDATE,
+            {"beforePosition": {"netPositionDecimal": "0.00"},
+             "afterPosition": {"netPositionDecimal": "-1.00"}},
+            "positions-request")
+        with self.assertRaisesRegex(AdapterError, "market slug is missing"):
+            self.projector.apply(event, received_at=NOW)
+
 
 if __name__ == "__main__":
     unittest.main()

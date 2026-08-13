@@ -132,6 +132,33 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(kinds, ["connect", "orders", "positions", "balance", "close"])
         self.assertEqual(event.kind, PrivateEventKind.ORDER_SNAPSHOT)
 
+    def test_private_event_carries_single_market_subscription_scope(self):
+        async def scenario():
+            client = FakeClient()
+            stream = PrivateReadOnlyStream(client)
+            await stream.start(["market-one"])
+            position_call = next(
+                call for call in client.private_socket.calls
+                if call[0] == "positions")
+            client.private_socket.emit("message", {
+                "requestId": position_call[1],
+                "subscriptionType": "SUBSCRIPTION_TYPE_POSITION",
+                "positionSubscription": {
+                    "beforePosition": {"netPositionDecimal": "0"},
+                    "afterPosition": {"netPositionDecimal": "-1"},
+                    "updateTime": "2026-08-13T05:39:26Z",
+                    "tradeId": "trade-one",
+                },
+            })
+            try:
+                return await stream.next_event(timeout=0.1)
+            finally:
+                await stream.close()
+
+        event = self.run_async(scenario())
+        self.assertEqual(event.kind, PrivateEventKind.POSITION_UPDATE)
+        self.assertEqual(event.market_scope, ("market-one",))
+
     def test_private_stream_surfaces_unknown_schema_as_error(self):
         async def scenario():
             client = FakeClient()

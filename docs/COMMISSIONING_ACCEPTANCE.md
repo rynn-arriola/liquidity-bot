@@ -96,3 +96,12 @@ One more attempt exposed a scheduler edge: a due check could see a WebSocket
 book just under three seconds old, skip REST, and then schedule three seconds
 from the check time, allowing the five-second limit to arrive first. The next
 deadline is now anchored to the book's actual receipt timestamp.
+
+The final attempt ran for 614 seconds. Its first maker fill was durably applied,
+then the documented `positionSubscription` update omitted `marketSlug`. The
+private projector rejected the otherwise exact decimal position update and the
+fail-safe canceled the opposite quote, flattened one contract, proved the
+account flat, and stopped. Private events now carry their subscription scope;
+the projector may use an omitted slug only for an explicitly singleton market
+subscription. Account-wide and multi-market ambiguity still fails closed, and
+whole-account REST reconciliation remains in place.

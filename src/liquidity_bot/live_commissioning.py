@@ -259,7 +259,10 @@ class CommissioningRunner:
         self.cutoff_at = self.config.assert_authorized(now=now)
         await self._refresh_contracts(now)
         await self._refresh_book(now)
-        await self.private_stream.start(None)
+        # A singleton private subscription makes the documented position
+        # update (which omits marketSlug) attributable without guessing. Whole-
+        # account REST reconciliation remains the authoritative safety check.
+        await self.private_stream.start([self.config.market_slug])
         self.gate.on_connect()
         await self.market_stream.start([self.config.market_slug])
         if self.ledger.working_orders(owned_only=True) or self.ledger.unresolved_intents():

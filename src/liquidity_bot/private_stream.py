@@ -26,6 +26,7 @@ class PrivateEvent:
     payload: Any
     request_id: str | None = None
     subscription_type: str | None = None
+    market_scope: tuple[str, ...] | None = None
 
 
 _PAYLOADS = (

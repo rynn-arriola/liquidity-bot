@@ -143,10 +143,12 @@ class FakePrivateStream:
             PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
             {"balances": []}, "fake-balance")]
         self.started = False
+        self.started_with = None
         self.closed = False
 
     async def start(self, slugs=None):
         self.started = True
+        self.started_with = slugs
 
     async def next_event(self, *, timeout=None):
         if self.events:
@@ -241,6 +243,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         self.assertEqual(client.orders.create_calls, [])
         self.assertTrue(runner.gate.ready(runner.ledger, now=NOW))
+        self.assertEqual(runner.private_stream.started_with, ["market-one"])
 
         runner._evaluate_rewards(NOW)
         actions = runner.reconciler.plan(runner._frame(NOW))

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import replace
 from typing import Any, Iterable
 
 from .adapters import parse_book_response, parse_trade_response
@@ -90,6 +91,7 @@ class PrivateReadOnlyStream:
         self._socket = client.ws.private()
         self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
         self._started = False
+        self._market_scope_by_request_id: dict[str, tuple[str, ...] | None] = {}
         # The installed SDK emits every decoded JSON object on `message`
         # before its convenience event. Register once to avoid duplicates.
         self._socket.on("message", self._on_message)
@@ -98,7 +100,13 @@ class PrivateReadOnlyStream:
 
     def _on_message(self, message: Any) -> None:
         try:
-            self._queue.put_nowait(decode_private_message(message))
+            event = decode_private_message(message)
+            if event.request_id in self._market_scope_by_request_id:
+                event = replace(
+                    event,
+                    market_scope=self._market_scope_by_request_id[event.request_id],
+                )
+            self._queue.put_nowait(event)
         except Exception as exc:
             self._queue.put_nowait(
                 exc if isinstance(exc, AdapterError)
@@ -120,12 +128,24 @@ class PrivateReadOnlyStream:
             if not clean:
                 raise ValueError("an explicit market filter cannot be empty")
         base = uuid.uuid4().hex
+        order_request_id = f"liquidity-orders-{base}"
+        position_request_id = f"liquidity-positions-{base}"
+        balance_request_id = f"liquidity-balance-{base}"
+        scope = tuple(clean) if clean is not None else None
+        # Install request metadata before subscribing because an initial
+        # snapshot can arrive as soon as the subscribe call is awaited.
+        self._market_scope_by_request_id = {
+            order_request_id: scope,
+            position_request_id: scope,
+            balance_request_id: None,
+        }
         try:
             await self._socket.connect()
-            await self._socket.subscribe_orders(f"liquidity-orders-{base}", clean)
-            await self._socket.subscribe_positions(f"liquidity-positions-{base}", clean)
-            await self._socket.subscribe_account_balance(f"liquidity-balance-{base}")
+            await self._socket.subscribe_orders(order_request_id, clean)
+            await self._socket.subscribe_positions(position_request_id, clean)
+            await self._socket.subscribe_account_balance(balance_request_id)
         except Exception as exc:
+            self._market_scope_by_request_id.clear()
             try:
                 await self._socket.close()
             except Exception:
@@ -145,6 +165,7 @@ class PrivateReadOnlyStream:
             await self._socket.close()
         finally:
             self._started = False
+            self._market_scope_by_request_id.clear()
 
 
 class ShadowMarketStream:

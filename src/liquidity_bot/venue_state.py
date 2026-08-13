@@ -296,6 +296,12 @@ class PrivateLedgerProjector:
                 raw["updateTime"] = update_time
             slug = (_wire(payload, "marketSlug", "market_slug")
                     or _wire(raw, "marketSlug", "market_slug"))
+            # The documented ``positionSubscription`` update omits
+            # ``marketSlug``. It is still unambiguous when the request itself
+            # was subscribed to exactly one market. Never guess for an
+            # account-wide or multi-market subscription.
+            if not slug and event.market_scope and len(event.market_scope) == 1:
+                slug = event.market_scope[0]
             position = normalize_position(slug, raw, observed_at=received_at)
             self.ledger.apply_position_event(
                 "private_ws", f"position:{_event_id(payload)}", position,

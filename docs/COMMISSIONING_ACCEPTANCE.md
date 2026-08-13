@@ -4,7 +4,7 @@ No mutation or Discord endpoint was called during these checks.
 
 ## Deterministic verification
 
-- 208 unit/integration tests passed under Python 3.14 on Windows.
+- 227 unit/integration tests passed under Python 3.14 on Windows.
 - A fake venue accepted only an exact one-contract, post-only payload.
 - Fake 06:00 New York cutoff completed flat with zero new orders.
 - A $15 marked-equity drawdown selected the named emergency hard-stop path.
@@ -160,15 +160,129 @@ was insufficient. The selected WNBA market still had a $200 `day_of` pool and
 both one-contract touch orders scored, but the target-size walk reached roughly
 25,744 contracts on the bid and 56,945 on the offer. One contract's normalized
 share could earn only a fraction of a cent over the remaining period and could
-not reach the documented $1 payout floor. Authenticated account earnings showed
+not cover the then-assumed exit cost. Authenticated account earnings showed
 $32.06 paid, $5.39 pending, and $0.39 skipped across prior activity; none was
 treated as income attributable to this session.
 
 The former `1e-9` profitability sentinel is removed. Commissioning now uses the
 current full-book competing score, at most half the period pool per side, a 50%
-haircut, a 30-second projection, the $1 payout floor, and a 2x stressed exit
-cost margin. It assumes zero pair-completion spread and zero maker rebate. A
+haircut, a 30-second projection, and a stressed exit-cost margin. It assumes
+zero pair-completion spread and zero maker rebate. A
 side that fails any term remains idle even when venue reward-eligible. Passive
 reducers cannot quote through basis, authenticated market earnings are stored
 separately every 15 minutes, and the first confirmed taker exit ends maker
 quoting rather than beginning another cycle.
+
+## Automatic reward-market selection - 2026-08-13
+
+The fixed-slug runner could stay healthy forever on one economically rejected
+market. Automatic commissioning now bulk-loads active sports metadata, applies
+the open/tick/quantity/proven-six-hour-clock gates in memory, and requests
+incentives only for those symbols in 40-market batches. No per-reward-slug
+metadata loop is allowed. It applies exact one-contract economics to a 25-book
+bounded pass, retains the best/current candidates, and rotates a window through
+lower-ranked programs on later 15-minute passes.
+
+A read-only production-contract measurement at approximately `2026-08-13T21:00Z`
+completed in 42.1 seconds through the unchanged 4 requests/second governor. It
+normalized 18,220 catalog markets, retained 2,565 executable six-hour
+candidates, matched 2,304 to rewards, evaluated exactly 25 books, and reported
+zero adapter failures. The former implementation would have made thousands of
+individual metadata reads. None of the 25 measured books cleared the
+one-contract reward-versus-exit gate, so the strategy correctly authorized no
+order.
+
+A second full rewarded-universe measurement joined 13,220 active reward groups
+to 18,313 active/open sports catalog rows. Of 12,124 joined reward markets,
+every row reported two market sides, confirming that side count cannot identify
+a head-to-head. The V2 structure distribution was 4,327 futures, 2,861 props,
+2,206 spreads, 1,900 totals, 776 moneylines, and 54 drawable outcomes. Inside
+the executable six-hour window there were 2,338 rewarded rows: 1,249 props, 503
+totals, 474 spreads, 97 moneylines, and 15 drawable outcomes.
+
+The 97 rewarded six-hour moneylines were then evaluated without mutation. Of
+91 applicable pregame books, 83 had spreads below 2 cents and only eight met or
+exceeded 2 cents; none cleared the conservative reward-versus-exit model. The
+measured spread buckets were 83 below 2 cents, three from 2 to under 4 cents,
+three from 4 to under 7 cents, one from 12 to under 25 cents, and one at 25
+cents or wider. This makes the explicit spread rule a correction to the prior
+gate: because the old model used immediate unwind cost as a negative term, a
+tighter book mechanically looked cheaper and therefore more attractive even
+though maker-lab's measured sub-2-cent fills were its only negative spread
+regime.
+
+Commissioning now admits only the exact V2 moneyline enum, skips known-tight
+catalog rows before book fan-out, and rechecks the 2-cent threshold against the
+fresh full book. Resting building orders use a 1.5-cent pull threshold; reducers
+and hard exits never inherit the entry gate. Midpoint distance is a ranking
+tie-break only, while pair-completion spread, maker rebate, and markout remain
+zero in the profitability gate. Selection scan and full flat-rotation time are
+instrumented rather than moving discovery into an unprioritized background
+task that could starve reconciliation.
+
+## Probability-weighted economics correction - 2026-08-13
+
+The earlier $1-per-market gate was incorrect. Authenticated earnings for
+2026-08-10 contained 86 paid market rows totaling $32.06; 37 individual rows
+were below $0.10. Commissioning now passes a zero per-market floor to the
+projection and displays the $1 venue aggregate floor as reporting-only.
+
+The same paid-market sample supplied a bounded first-fill calibration: 301
+resting order lifetimes, 114 first fills, and 372,259.527 exposure-seconds. The
+global 30-second empirical hazard is 0.9187%, and its 95% Wilson upper bound is
+1.1024%. Each proposed side uses the maximum upper bound from the applicable
+global, league, price, queue, side, spread, and time-to-event cells. Conditional
+effects are not multiplied. The reward term is multiplied by the no-fill
+probability, while stressed unwind loss and the second safety-margin copy are
+multiplied by fill probability.
+
+Monday paid yield is used only to rank current candidates, with league values
+shrunk toward the $0.0304/contract-hour global result using a ten-market prior.
+It cannot bypass current spread, target-depth, reward-projection, exit-depth,
+or positive expected-value checks. A replay at a two-cent exit cost blocks the
+global average and the observed $0.0097/contract-hour low-yield market, while
+the observed $0.3176/contract-hour high-yield market clears the probability-
+weighted comparison. This is calibration evidence, not proof of future profit
+and not permission to increase one-contract size.
+
+The completed probability-weighted implementation was then exercised through
+its actual read-only selector at `2026-08-13` production state. It normalized
+18,002 catalog rows, retained 95 executable moneyline catalog candidates,
+matched 94 to rewards, skipped 80 known-tight catalog BBOs, and fetched only
+eight full books. The scan completed in 15.5 seconds through the shared 4
+requests/second governor with zero adapter failures. All eight were evaluated
+with 30-second fill estimates between 1.2120% and 3.0846%; zero markets passed
+the corrected economic gate, so this observation authorized no order.
+
+Execution exposure remains one market. Rotation cancels known quotes, performs
+whole-account REST reconciliation, and requires exact flat, no working order,
+no unresolved intent, and known ownership before rebinding singleton market and
+private streams. Restart recovery follows an identified ledger market before
+new discovery. Unit boundaries cover catalog/incentive joining with zero
+individual metadata reads, low-pool inclusion, deferred-candidate rotation,
+flat-only rebinding, nonzero-position refusal, and ledger-first recovery.
+
+A bounded live API probe returned 100 program groups on the first page with a
+nonempty next token. The visible rows were active golf programs using
+`tournament_with_cutoff`, including multiple simultaneous period rows. Official
+liquidity documentation defines Early, Day-of, Live, and Daily but not that
+venue value. If such a lifecycle appears among otherwise executable pregame
+candidates, it is counted and reported but remains read-only; no duration or
+pool split is guessed.
+
+## Post-review runtime corrections - 2026-08-13
+
+Live score-seconds now measure only confirmed owned working orders that remain
+economically authorized. Venue-eligible candidates with no order, and working
+orders newly blocked for cancellation, contribute no future score-seconds.
+Unsupported market structures record an explicit blocker instead of returning
+without a diagnostic.
+
+`RewardMarketSelection.selected` now means at least one side has positive
+lower-bound expected value. A zero-viable startup refuses, and a zero-viable
+refresh retains the existing market streams rather than rebinding to another
+monitoring-only market. Catalog BBO remains an optional optimization: malformed,
+locked, or crossed values are discarded while the authoritative full book
+continues to make the entry decision. Reward-evaluation invariant exceptions
+are routed through the terminal strategy handler so ownership and identity
+codes remain visible.

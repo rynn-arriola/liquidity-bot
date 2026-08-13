@@ -10,7 +10,11 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
+from liquidity_bot.commissioning import (
+    AUTO_REWARD_MARKET,
+    CommissioningConfig,
+    CommissioningRefused,
+)
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
@@ -20,9 +24,15 @@ from liquidity_bot.live_commissioning import (
     main,
 )
 from liquidity_bot.live_orders import OrderOutcomeUncertain, OrderRequest
+from liquidity_bot.market_selector import (
+    RewardMarketOpportunity,
+    RewardMarketSelection,
+)
+from liquidity_bot.models import BookLevel, BookSnapshot, MarketIncentive, MarketMetadata
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
-from liquidity_bot.reconciler import ActionKind, PlanAction
+from liquidity_bot.reconciler import ActionKind, PlanAction, WorkingOrder
+from liquidity_bot.rewards import IncentivePeriod
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -51,6 +61,7 @@ class FakeMarkets:
             "orderPriceMinTickSize": {"value": "0.01", "currency": "USD"},
             "minimumTradeQty": "1",
             "sportsMarketType": "moneyline",
+            "sportsMarketTypeV2": "SPORTS_MARKET_TYPE_MONEYLINE",
             "question": "Fake commissioning market?",
         }}
 
@@ -135,8 +146,9 @@ class FakeClient:
             return {"rewards": self.earnings_rows}
         if path != "/v1/incentives":
             raise AssertionError(f"unexpected GET {path}")
+        symbols = list((query or {}).get("symbols") or ("market-one",))
         return {"programs": [{
-            "marketSlug": "market-one",
+            "marketSlug": slug,
             "eventStartTime": GAME_START.isoformat(),
             "timePeriods": [{
                 "programId": "fake-day-of-program",
@@ -149,7 +161,7 @@ class FakeClient:
                 "start": None,
                 "end": None,
             }],
-        }]}
+        } for slug in symbols]}
 
 
 class FakePrivateStream:
@@ -177,10 +189,12 @@ class FakePrivateStream:
 class FakeMarketStream:
     def __init__(self, _client):
         self.started = False
+        self.started_with = None
         self.closed = False
 
     async def start(self, slugs):
         self.started = True
+        self.started_with = slugs
 
     async def next_book(self, *, timeout=None):
         await asyncio.Future()
@@ -214,6 +228,63 @@ class FakeNotifier:
             "sent" if self.delivery_succeeds else "delivery_failed")
 
 
+def fake_selection(slug: str, *, discovered: int = 4) -> RewardMarketSelection:
+    market = MarketMetadata(
+        slug=slug,
+        game_start=GAME_START,
+        tick_size=.01,
+        active=True,
+        closed=False,
+        status="MARKET_STATUS_OPEN",
+        minimum_trade_qty=1,
+        sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE",
+    )
+    period = IncentivePeriod(
+        program_id=f"reward-{slug}",
+        period="day_of",
+        status="active",
+        reward_pool=200,
+        discount_factor=.5,
+        target_size=10,
+    )
+    incentive = MarketIncentive(slug, (period,))
+    book = BookSnapshot(
+        slug,
+        (BookLevel(.49, 100), BookLevel(.48, 100)),
+        (BookLevel(.51, 100), BookLevel(.52, 100)),
+    )
+    opportunity = RewardMarketOpportunity(
+        market, incentive, period, book, ())
+    return RewardMarketSelection(
+        selected=opportunity,
+        opportunities=(opportunity,),
+        rewarded_executable_markets=discovered,
+        catalog_markets=discovered,
+        executable_catalog_markets=discovered,
+        unsupported_programs=0,
+        eligible_pregame_markets=discovered,
+        books_evaluated=1,
+        deferred_markets=(),
+        failures=(),
+    )
+
+
+def no_viable_selection(slug: str = "monitor-only") -> RewardMarketSelection:
+    return replace(fake_selection(slug), selected=None)
+
+
+class FakeRewardSelector:
+    def __init__(self, *selections):
+        self.selections = list(selections)
+        self.calls = []
+
+    async def select(self, *, now):
+        self.calls.append(now)
+        if len(self.selections) > 1:
+            return self.selections.pop(0)
+        return self.selections[0]
+
+
 class TickingClock:
     def __init__(self):
         self.value = NOW
@@ -225,18 +296,26 @@ class TickingClock:
 
 
 class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
-    def build_runner(self, *, clock=lambda: NOW, notifier=None):
+    def build_runner(
+        self,
+        *,
+        clock=lambda: NOW,
+        notifier=None,
+        auto=False,
+        reward_selector=None,
+    ):
         root = Path(tempfile.mkdtemp(prefix="liquidity-commissioning-"))
         ledger = ExecutionLedger(root / "ledger.db")
         self.addCleanup(ledger.close)
         client = FakeClient()
         notifier = notifier or FakeNotifier()
         config = CommissioningConfig(
-            market_slug="market-one",
+            market_slug=AUTO_REWARD_MARKET if auto else "market-one",
             economic_risk_accepted=True,
             exclusive_api_key_confirmed=True,
             maker_lab_stopped_confirmed=True,
             arm_live=True,
+            auto_select_reward_markets=auto,
         )
         runner = CommissioningRunner(
             client, config, ledger, notifier,
@@ -244,6 +323,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             sleep=lambda _seconds: asyncio.sleep(0),
             market_stream_factory=FakeMarketStream,
             private_stream_factory=FakePrivateStream,
+            reward_selector=reward_selector,
         )
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
@@ -269,7 +349,312 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_sub_dollar_reward_projection_places_no_order(self):
+    async def test_score_seconds_do_not_accrue_without_a_working_order(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+
+        runner._evaluate_rewards(NOW)
+        runner._evaluate_rewards(NOW + timedelta(seconds=10))
+
+        self.assertTrue(runner._expected_net_by_side)
+        self.assertEqual(runner._score_by_side, {})
+        self.assertEqual(runner._score_seconds, 0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_confirmed_economic_working_order_accrues_score_seconds(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        working = WorkingOrder(
+            "owned-bid", "bid", .49, Decimal("1"))
+
+        with patch.object(
+                runner, "_working_orders", return_value=(working,)):
+            runner._evaluate_rewards(NOW)
+            self.assertIn("bid", runner._score_by_side)
+            expected_score = runner._score_by_side["bid"] * 10
+            runner._evaluate_rewards(NOW + timedelta(seconds=10))
+
+        self.assertAlmostEqual(runner._score_seconds, expected_score)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_blocked_working_order_stops_future_score_accrual(self):
+        runner, client, _ = self.build_runner()
+        client.reward_pool = 200
+        await runner.preflight()
+        working = WorkingOrder(
+            "owned-bid", "bid", .49, Decimal("1"))
+
+        with patch.object(
+                runner, "_working_orders", return_value=(working,)):
+            runner._evaluate_rewards(NOW)
+            runner._evaluate_rewards(NOW + timedelta(seconds=10))
+
+        self.assertEqual(runner._score_by_side, {})
+        self.assertEqual(runner._score_seconds, 0)
+        self.assertEqual(
+            set(runner._economic_blocker_by_side.values()),
+            {"projected_reward_does_not_cover_probability_weighted_exit_cost"},
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_auto_preflight_selects_from_reward_universe(self):
+        selector = FakeRewardSelector(fake_selection("market-two", discovered=7))
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector)
+
+        mode = await runner.preflight()
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner.market_slug, "market-two")
+        self.assertEqual(runner.private_stream.started_with, ["market-two"])
+        self.assertEqual(runner.market_stream.started_with, ["market-two"])
+        self.assertEqual(len(selector.calls), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(
+            "from 7 rewarded executable markets" in message
+            for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_auto_preflight_refuses_when_no_market_is_economically_viable(self):
+        selector = FakeRewardSelector(no_viable_selection())
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+
+        with self.assertRaisesRegex(
+                CommissioningRefused, "no economically viable"):
+            await runner.preflight()
+
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertIsNone(runner._active_market_slug)
+
+    async def test_auto_rotation_rebinds_only_after_whole_account_flat(self):
+        selector = FakeRewardSelector(
+            fake_selection("market-one"),
+            fake_selection("market-two"),
+        )
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+        old_private = runner.private_stream
+        old_market = runner.market_stream
+
+        changed = await runner._rotate_reward_market(NOW)
+
+        self.assertTrue(changed)
+        self.assertEqual(runner.market_slug, "market-two")
+        self.assertTrue(old_private.closed)
+        self.assertTrue(old_market.closed)
+        self.assertEqual(runner.private_stream.started_with, ["market-two"])
+        self.assertEqual(runner.market_stream.started_with, ["market-two"])
+        self.assertTrue(runner.gate.ready(runner.ledger, now=NOW))
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(
+            "rotated while flat" in message for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_discovery_defers_while_a_viable_side_is_authorized(self):
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+
+        runner._expected_net_by_side = {"bid": 1e-6}
+
+        # Scanning here would cancel a quote that is currently accruing score
+        # to buy an unmeasured chance of a better market.
+        self.assertFalse(runner._discovery_is_free())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_discovery_defers_while_an_owned_quote_rests(self):
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+        runner._expected_net_by_side = {}
+        runner.ledger.apply_order_event(
+            "ws", "resting-owned",
+            OrderState(
+                client_order_id="liquidity-resting",
+                exchange_order_id="resting-1",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._discovery_is_free())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_discovery_runs_when_nothing_rests_and_nothing_is_viable(self):
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+        runner._expected_net_by_side = {}
+
+        # Nothing resting and no authorized side means accrual is already zero,
+        # so the scan cannot cost score-seconds.
+        self.assertTrue(runner._discovery_is_free())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_zero_viable_scan_stays_idle_when_bound_market_expired(self):
+        selector = FakeRewardSelector(
+            fake_selection("market-one"),
+            no_viable_selection(),
+        )
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        await runner.preflight()
+        old_private = runner.private_stream
+        old_market = runner.market_stream
+
+        async def expired(_now):
+            raise CommissioningRefused("selected market is no longer pregame")
+
+        runner._refresh_contracts = expired
+
+        # A bound market that starts mid-scan is an idle result, not a
+        # discovery failure. Escalating it would put the caller on its 60
+        # second error retry and rescan the whole universe continuously.
+        changed = await runner._rotate_reward_market(runner._now())
+
+        self.assertFalse(changed)
+        self.assertEqual(runner.market_slug, "market-one")
+        self.assertIs(runner.private_stream, old_private)
+        self.assertIs(runner.market_stream, old_market)
+        self.assertIsNone(runner.incentive)
+        self.assertEqual(runner._reward_eligible, frozenset())
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(
+            "idle_market_refresh" in message
+            for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_zero_viable_refresh_keeps_current_stream_scope(self):
+        selector = FakeRewardSelector(
+            fake_selection("market-one"),
+            no_viable_selection(),
+        )
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+        old_private = runner.private_stream
+        old_market = runner.market_stream
+
+        changed = await runner._rotate_reward_market(NOW)
+
+        self.assertFalse(changed)
+        self.assertEqual(runner.market_slug, "market-one")
+        self.assertIs(runner.private_stream, old_private)
+        self.assertIs(runner.market_stream, old_market)
+        self.assertFalse(old_private.closed)
+        self.assertFalse(old_market.closed)
+        self.assertIsNone(runner._market_selection.selected)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_auto_rotation_refuses_nonzero_position_without_switch(self):
+        selector = FakeRewardSelector(
+            fake_selection("market-one"),
+            fake_selection("market-two"),
+        )
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner.preflight()
+        old_private = runner.private_stream
+        client.portfolio.rows = {
+            "market-one": {
+                "netPosition": "1",
+                "netPositionDecimal": "1.0000",
+                "updateTime": NOW.isoformat(),
+            }
+        }
+
+        with self.assertRaisesRegex(AdapterError, "nonzero position"):
+            await runner._rotate_reward_market(NOW)
+
+        self.assertEqual(runner.market_slug, "market-one")
+        self.assertFalse(old_private.closed)
+        self.assertEqual(len(selector.calls), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_auto_restart_recovers_ledger_market_before_new_selection(self):
+        selector = FakeRewardSelector(fake_selection("market-two"))
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        payload = {
+            "marketSlug": "market-one",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "type": "ORDER_TYPE_LIMIT",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 1,
+            "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+            "participateDontInitiate": True,
+            "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC",
+            "synchronousExecution": False,
+        }
+        runner.ledger.prepare_intent(
+            "prior-auto", "PLACE", "market-one", "prior-auto-client",
+            payload, created_at=NOW)
+        runner.ledger.transition_intent(
+            "prior-auto", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "prior-auto", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="prior-auto-order")
+        client.orders.rows["prior-auto-order"] = {
+            "id": "prior-auto-order",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "1",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+
+        result = await runner.run()
+
+        self.assertEqual(result.stop_reason, "startup_recovery_only")
+        self.assertEqual(runner.market_slug, "market-one")
+        self.assertEqual(selector.calls, [])
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(len(client.orders.cancel_calls), 1)
+
+    async def test_auto_start_refuses_unattributed_position_in_selected_market(self):
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        client.portfolio.rows = {
+            "market-one": {
+                "netPosition": "1",
+                "netPositionDecimal": "1.0000",
+                "updateTime": NOW.isoformat(),
+            }
+        }
+
+        with self.assertRaisesRegex(CommissioningRefused, "nonzero positions"):
+            await runner.run()
+
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+
+    async def test_sub_dollar_reward_is_evaluated_but_risk_can_block_order(self):
         runner, client, _ = self.build_runner()
         client.reward_pool = 200
         await runner.preflight()
@@ -281,7 +666,86 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._expected_net_by_side, {})
         self.assertEqual(
             {item.reason for item in runner._reward_projection_by_side.values()},
-            {"below_minimum_payout"})
+            {"projected"})
+        self.assertEqual(
+            set(runner._economic_blocker_by_side.values()),
+            {"projected_reward_does_not_cover_probability_weighted_exit_cost"},
+        )
+        self.assertTrue(all(
+            0 < value < 1
+            for value in runner._fill_probability_by_side.values()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_tight_book_is_economically_blocked_before_new_order(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 100), BookLevel(.48, 100)),
+            (BookLevel(.50, 100), BookLevel(.51, 100)),
+            "MARKET_STATE_OPEN",
+            NOW,
+        )
+        runner.book_observed_at = NOW
+
+        runner._evaluate_rewards(NOW)
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(actions, [])
+        self.assertEqual(runner._expected_net_by_side, {})
+        self.assertEqual(
+            set(runner._economic_blocker_by_side.values()),
+            {"spread_below_entry_minimum"},
+        )
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_non_moneyline_structure_cannot_build_risk(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.market = replace(
+            runner.market,
+            sports_market_type_v2="SPORTS_MARKET_TYPE_PROP",
+        )
+
+        runner._evaluate_rewards(NOW)
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(actions, [])
+        self.assertEqual(runner._reward_eligible, frozenset())
+        self.assertEqual(
+            runner._economic_blocker_by_side,
+            {
+                "bid": "unsupported_market_structure",
+                "offer": "unsupported_market_structure",
+            },
+        )
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_selection_and_rotation_durations_are_instrumented(self):
+        selector = FakeRewardSelector(
+            fake_selection("market-one"),
+            fake_selection("market-one"),
+            fake_selection("market-two"),
+        )
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        await runner._select_reward_market(NOW)
+        self.assertIsNotNone(runner._selection_scan_seconds_last)
+        self.assertGreaterEqual(runner._selection_scan_seconds_last, 0)
+
+        await runner.preflight()
+        changed = await runner._rotate_reward_market(NOW)
+
+        self.assertTrue(changed)
+        self.assertIsNotNone(runner._selection_scan_seconds_last)
+        self.assertGreaterEqual(runner._selection_scan_seconds_last, 0)
+        self.assertIsNotNone(runner._rotation_transition_seconds_last)
+        self.assertGreaterEqual(runner._rotation_transition_seconds_last, 0)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -642,6 +1106,21 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_reward_evaluation_invariant_keeps_its_terminal_code(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        invariant = RuntimeInvariantViolation(
+            "working_order_intent_unmapped",
+            "working order intent cannot be mapped",
+        )
+
+        with patch.object(
+                runner, "_evaluate_rewards", side_effect=invariant):
+            result = await runner.run()
+
+        self.assertEqual(
+            result.stop_reason, "critical:working_order_intent_unmapped")
+        self.assertEqual(client.orders.create_calls, [])
+
     async def test_only_named_transient_strategy_critical_recovers(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()
@@ -672,6 +1151,54 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                     f"critical:{reason}")
 
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    def test_furthest_resting_price_is_the_conservative_choice(self):
+        runner, _, _ = self.build_runner()
+        orders = (
+            WorkingOrder("a", "bid", .49, Decimal("1")),
+            WorkingOrder("b", "bid", .48, Decimal("1")),
+            WorkingOrder("c", "offer", .51, Decimal("1")),
+            WorkingOrder("d", "offer", .52, Decimal("1")),
+        )
+
+        self.assertEqual(runner._furthest_resting_price(orders, "bid"), .48)
+        self.assertEqual(runner._furthest_resting_price(orders, "offer"), .52)
+        self.assertIsNone(runner._furthest_resting_price((), "bid"))
+
+    async def test_drifted_resting_order_scores_below_the_touch(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        period = runner.incentive.periods[0]
+        touch = runner.book.best_bid.price
+
+        at_touch = runner._resting_score(
+            side="bid", period=period, touch_price=touch,
+            touch_score=1.0, resting_price=touch)
+        drifted = runner._resting_score(
+            side="bid", period=period, touch_price=touch,
+            touch_score=1.0, resting_price=touch - .01)
+
+        self.assertEqual(at_touch, 1.0)
+        # Score decays as discount_factor ** ticks_from_best, so a quote one
+        # tick behind the touch must never be credited the touch score.
+        self.assertLess(drifted, at_touch)
+        self.assertGreaterEqual(drifted, 0.0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_resting_score_is_zero_outside_the_reward_cutoff(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        period = runner.incentive.periods[0]
+        touch = runner.book.best_bid.price
+
+        outside = runner._resting_score(
+            side="bid", period=period, touch_price=touch,
+            touch_score=1.0, resting_price=.05)
+
+        self.assertEqual(outside, 0.0)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -936,6 +1463,34 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 "liquidity_bot.live_commissioning._run",
                 new=AsyncMock(return_value=result)), patch("builtins.print"):
             self.assertEqual(main(), 3)
+
+    def test_cli_accepts_automatic_reward_selection(self):
+        result = CommissioningResult(
+            started_at=NOW,
+            cutoff_at=None,
+            stopped_at=NOW,
+            stop_reason="operator_requested",
+            flat=True,
+            orders_sent_to_polymarket=0,
+        )
+        argv = [
+            "live_commissioning",
+            "--auto-select-rewards",
+            "--arm-live",
+            "--accept-one-contract-risk",
+            "--exclusive-api-key",
+            "--maker-lab-stopped",
+        ]
+        mocked = AsyncMock(return_value=result)
+
+        with patch("sys.argv", argv), patch(
+                "liquidity_bot.live_commissioning._run", new=mocked), patch(
+                    "builtins.print"):
+            self.assertEqual(main(), 0)
+
+        args = mocked.await_args.args[0]
+        self.assertTrue(args.auto_select_rewards)
+        self.assertIsNone(args.market_slug)
 
     async def test_ambiguous_place_is_adopted_instead_of_unowned(self):
         runner, client, _ = self.build_runner(clock=TickingClock())

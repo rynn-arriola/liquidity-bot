@@ -66,7 +66,8 @@ def run_scenario(*, logical_hours: int, horizon_seconds: int) -> dict:
     market = MarketMetadata(
         slug="dry-run-market", game_start=start + timedelta(hours=logical_hours + 1),
         tick_size=.01, active=True, closed=False,
-        status="MARKET_STATE_OPEN", sports_market_type="moneyline")
+        status="MARKET_STATE_OPEN", sports_market_type="moneyline",
+        sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE")
     policy = ReconcilerPolicy(
         quote_size=Decimal("2"),
         max_inventory_age_seconds=horizon_seconds,

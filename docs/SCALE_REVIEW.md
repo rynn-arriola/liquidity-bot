@@ -27,6 +27,9 @@ letting inventory ride to settlement.
 - Reward lifecycle, target cutoff, liquidity-program filtering, and
   `discountFactor ^ ticks * size` scoring are deterministic and tested.
 - Current rewarded pregame markets can be discovered and observed read-only.
+- A full catalog/reward join found only 97 rewarded six-hour moneylines; 83 of
+  91 applicable pregame moneyline books were below the 2-cent entry threshold,
+  and none of the 91 passed the conservative reward-versus-exit model.
 - A prior 45-second read-only run saw 57 full books, 114 candidate
   observations, 548.7018 hypothetical score-seconds, no reconnects, and zero
   orders.
@@ -44,8 +47,10 @@ letting inventory ride to settlement.
 
 ## What is not proven
 
-- No public trade occurred in the short live shadow sample, so there are zero
-  live fill-hazard or exit-policy samples so far.
+- This bot has no attributable fill-hazard sample yet. Its temporary
+  first-fill prior comes from 301 maker-lab order lifetimes in the 86 markets
+  paid on 2026-08-10 (114 first fills over 372,259.527 exposure-seconds), not
+  from liquidity-bot executions.
 - No timeout has been selected from evidence.
 - The existing $32.06 paid reward belongs to prior account activity and is not
   attributable to this strategy. Pending and skipped rewards do not count.
@@ -54,6 +59,9 @@ letting inventory ride to settlement.
   the kill switch has not been tested against the exchange under supervision.
 - There are no controlled live sessions, independent attributable paid events,
   or cent-accurate live P&L reconciliations for this bot.
+- The 2-cent entry and 1.5-cent pull thresholds are supported by maker-lab's
+  historical spread buckets, but have not yet produced a liquidity-bot live
+  fill/exit/reward sample.
 - The one-contract runner and detached supervisor are mechanically tested, but
   have not yet produced controlled live evidence at the time of this review.
 
@@ -71,7 +79,8 @@ letting inventory ride to settlement.
 
 ## Scale rule
 
-The operator-authorized commissioning exception is one market, one contract
+The operator-authorized commissioning exception is one selected market at a
+time, one contract
 per quote, a 30-second inventory timeout, a $2 per-market soft cap, a $5
 session soft cap, a $15 emergency hard stop, and graceful operator stop. Do
 not add a market or contract until the scale gate sees three attributable

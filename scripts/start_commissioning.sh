@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Detached one-market launcher. It refuses to overlap maker-lab or itself.
+# Detached one-market-at-a-time launcher. It refuses overlapping executors.
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-SLUG=${1:-}
-if [ -z "$SLUG" ]; then
-    echo "usage: ./scripts/start_commissioning.sh MARKET-SLUG"
+TARGET=${1:-auto}
+if [ "$#" -gt 1 ]; then
+    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto]"
     exit 2
 fi
 
@@ -41,10 +41,10 @@ if [ ! -f ../maker-lab/credentials.py ] \
 fi
 
 mkdir -p data logs
-setsid nohup ./scripts/supervise_commissioning.sh "$SLUG" \
+setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" \
     >> logs/supervisor.log 2>&1 < /dev/null &
 
-echo "starting one-contract commissioning for $SLUG"
+echo "starting one-contract commissioning target=$TARGET"
 for _ in $(seq 1 20); do
     sleep 1
     [ -n "$(runner_pids)" ] && break

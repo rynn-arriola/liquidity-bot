@@ -9,6 +9,9 @@ from decimal import Decimal
 from .rewards import IncentivePeriod
 
 
+SPORTS_MONEYLINE_V2 = "SPORTS_MARKET_TYPE_MONEYLINE"
+
+
 @dataclass(frozen=True)
 class MarketIncentive:
     slug: str
@@ -40,6 +43,14 @@ class MarketMetadata:
     sports_market_type: str | None = None
     question: str | None = None
     minimum_trade_qty: float | None = None
+    sports_market_type_v2: str | None = None
+    catalog_best_bid: float | None = None
+    catalog_best_offer: float | None = None
+
+    @property
+    def is_supported_moneyline(self) -> bool:
+        return (self.sports_market_type_v2 or "").strip().upper() == (
+            SPORTS_MONEYLINE_V2)
 
 
 @dataclass(frozen=True)

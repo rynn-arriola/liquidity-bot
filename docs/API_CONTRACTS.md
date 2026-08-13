@@ -27,6 +27,11 @@ Official references:
 - Use snake-case query parameters: `page_size`, `page_token`, and
   `program_type=liquidityProgram`. Camel-case parameters were observed being
   silently ignored.
+- Omitting `symbols` is a documented universe-discovery request, but the active
+  universe is too large for the commissioning hot path. Automatic selection
+  bulk-loads the active sports catalog, applies metadata gates in memory, then
+  requests incentives in batches of at most 40 candidate symbols. These reads
+  use the same 4 requests/second limiter as books, reconciliation, and mutations.
 - Continue pagination with `nextPageToken`; do not assume the requested page
   size was honored.
 - Only rows whose `programType` is `liquidityProgram` enter book-liquidity
@@ -35,15 +40,44 @@ Official references:
   select only the lifecycle phase applying at the verified market clock.
 - A filtered incentive row can contain an empty `eventStartTime`. Do not use it
   as the sole event clock.
+- A live unfiltered page on 2026-08-13 returned 100 program groups plus a next
+  token. Its first groups used two simultaneous active
+  `tournament_with_cutoff` rows. That lifecycle is not described by the
+  official Early/Day-of/Live/Daily definitions and therefore remains
+  discovery-only rather than being guessed from `gameStartTime`.
 - Each second, an eligible order's documented score is
   `discountFactor ^ ticks * size`. Full-side cumulative depth must reach
   `targetSize`, and all orders inside the resulting cutoff can score.
 - Published pools are not guaranteed payout. Only settled `PAID` earnings are
   accepted for reward calibration; the documented minimum payout and settlement
-  delay must not be modeled as immediate cash.
+  delay must not be modeled as immediate cash. On 2026-08-10 the authenticated
+  endpoint returned 86 `PAID` market rows totaling $32.06, including 37 rows
+  below $0.10. That observation disproves a $1-per-market interpretation, so
+  commissioning treats $1 as an aggregate reporting/settlement threshold.
+- First-fill risk is calibrated only from the 301 maker-lab order lifetimes in
+  those paid markets: 114 first fills over 372,259.527 exposure-seconds. The
+  global 30-second Wilson upper bound is 1.1024%. Commissioning takes the
+  maximum upper bound among applicable global, league, price, queue, side,
+  spread, and time-to-event cells; it does not multiply conditional effects.
+  Unknown leagues retain the global and other applicable bounds.
+- Monday reward yield is a ranking prior only. League yields are shrunk toward
+  the $0.0304/contract-hour global value with ten prior markets and cannot
+  authorize an otherwise negative current-book opportunity.
 
 ## Markets and books
 
+- The bulk market catalog exposes slug, `gameStartTime`,
+  `orderPriceMinTickSize`, `minimumTradeQty`, active/closed state, status,
+  `sportsMarketTypeV2`, `bestBidQuote`, and `bestAskQuote`.
+  Automatic selection joins these normalized rows to incentives in memory;
+  per-reward-slug metadata retrieval is forbidden.
+- `marketSides=2` is not a moneyline discriminator: the measured rewarded
+  catalog also reports two sides for futures and props. Commissioning requires
+  the exact `SPORTS_MARKET_TYPE_MONEYLINE` V2 enum and fails closed when it is
+  missing or different.
+- Catalog BBO is advisory and may only remove a known-tight candidate from
+  book fan-out. A fresh `markets.book` snapshot rechecks the 2-cent entry
+  threshold and is the only spread observation allowed to authorize risk.
 - `markets.retrieve_by_slug(slug)` returns `{ "market": {...} }`.
 - The verified start clock is `market.gameStartTime`.
 - The market metadata endpoint has emitted `MARKET_STATUS_OPEN`, while the

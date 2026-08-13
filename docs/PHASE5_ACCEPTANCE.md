@@ -25,7 +25,8 @@ eligible before scale, while scale remains impossible until payouts settle.
 
 Current verdict: **`DO_NOT_START_TRIAL`**. See `docs/SCALE_REVIEW.md`.
 
-Operator exception: one named market, exactly one contract per quote, 30-second
+Operator exception: one automatically selected rewarded market at a time,
+exactly one contract per quote, 30-second
 inventory age, $2 market/$5 session soft limits, $15 emergency hard stop, and a
 graceful operator-controlled stop. Startup still requires the whole account flat, exclusive
 key ownership, maker-lab stopped, fresh private state, and a current applicable

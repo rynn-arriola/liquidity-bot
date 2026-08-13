@@ -45,9 +45,10 @@ class RewardProjection:
 
     Liquidity rewards are normalized independently on each side of every
     snapshot.  The projection therefore uses no more than half of the period
-    pool for one side, discounts the current order's observed score share, and
-    refuses to count a reward that cannot reach the venue's minimum payout
-    even if the present book remained unchanged for the rest of the period.
+    pool for one side and discounts the current order's observed score share.
+    ``minimum_payout`` remains available to research callers, but live
+    commissioning passes zero because the venue's $1 settlement threshold is
+    aggregate rather than a per-market entry requirement.
     """
 
     eligible: bool

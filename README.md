@@ -30,18 +30,23 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
-permits only a non-scalable commissioning process. It is hard-locked to one
-named rewarded market, exactly one contract per quote, a 30-second inventory
+permits only a non-scalable commissioning process. It joins the active sports
+catalog to reward programs and binds a single executor to one selected market at
+a time. It remains hard-locked to exactly one contract per quote, a 30-second inventory
 age, a $2 market stop, a $5 session stop, a $15 emergency hard stop, and an
 operator-controlled graceful stop. Live entry is nevertheless fail-closed: a
-venue-eligible side must also pass a book-competition reward projection, the
-$1 payout floor, a 50% reward haircut, and a 2x stressed-exit-cost margin. The
+venue-eligible side must also pass a book-competition reward projection, a 50%
+reward haircut, and a 2x probability-weighted stressed-exit-cost margin. The
+$1 venue payout floor is aggregate reporting policy and never a per-market
+entry gate. Fill risk uses the conservative upper bound of the applicable
+2026-08-10 maker-lab paid-market calibration cells; projected reward is also
+reduced by the no-fill probability. The
 process may remain healthy and intentionally place no orders when that economic
 proof is absent. It cannot be armed without four explicit command
 acknowledgements, an exclusive key handoff, a flat whole-account snapshot, and
 fresh private state.
 
-Authenticated earnings for the named market are snapshotted separately from
+Authenticated earnings for the active market are snapshotted separately from
 execution P&L every 15 minutes. A passive reducer never locks in a loss: it
 rests at no worse than inventory basis. If the 30-second emergency path still
 needs a taker exit, the first such exit ends maker quoting so a one-cent test
@@ -117,15 +122,36 @@ and a whole-account flat/open-order reconciliation before any new risk.
 
 ## One-contract commissioning
 
-The server launcher is deliberately explicit:
+Automatic selection is the default. It bulk-loads active sports metadata,
+requires the venue's `SPORTS_MARKET_TYPE_MONEYLINE` structure enum, filters to
+the proven six-hour pregame execution window, requests incentives for those
+symbols in batches, deeply evaluates at most 25 books per 15-minute pass,
+and round-robins the lower-ranked remainder so small pools are not permanently
+hidden by the API budget. Lifecycle modes not yet
+implemented by the pregame executor—including documented `daily` and observed
+but undocumented `tournament_with_cutoff`—are counted and reported but cannot
+authorize orders until their timing and pool allocation are modeled.
+
+New building quotes require a current full-book spread of at least 2 cents.
+An already-resting building quote is retained down to 1.5 cents to avoid
+touch-noise churn and is canceled below that threshold. This rule never blocks
+an inventory-reducing quote or emergency exit. Catalog best bid/ask values are
+only a read-saving prefilter; the fresh full book is authoritative.
+
+The server launcher remains deliberately explicit and also retains a static
+market diagnostic mode:
 
 ```bash
+./scripts/start_commissioning.sh
 ./scripts/start_commissioning.sh MARKET-SLUG
 ./scripts/status_commissioning.sh
 ./scripts/stop_commissioning.sh
 ```
 
-The launcher refuses to overlap maker-lab or another liquidity runner. Its
+Automatic rotation first cancels owned quotes and requires whole-account REST
+proof of zero working orders, zero positions, known ownership, and zero
+unresolved intents. Only then is the singleton private/public stream scope
+rebound. The launcher refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
 orders enter recovery-only mode, where no new risk is allowed. Operator stop,
 startup refusal, caught terminal failure, non-flat exit, and risk-stop exits are

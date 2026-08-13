@@ -1,0 +1,530 @@
+"""Read-only automatic selection across the liquidity-reward universe.
+
+Discovery and execution deliberately remain separate.  This module can list,
+validate, and rank reward markets, but it has no order client and cannot mutate
+venue state.  The live runner may bind its existing one-market executor to the
+selected slug only after it has proved the account flat and order-free.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from .adapters import AsyncReadOnlyGateway
+from .errors import AdapterError
+from .fill_hazard import (
+    MondayFillHazardModel,
+    historical_reward_yield_prior,
+)
+from .live_orders import OPEN_MARKET_STATUSES
+from .models import BookSnapshot, MarketIncentive, MarketMetadata
+from .rewards import (
+    AmbiguousIncentiveError,
+    IncentivePeriod,
+    RewardProjection,
+    evaluate_order_score,
+    project_order_reward,
+    select_applicable_period,
+)
+from .risk import OpportunityEconomics
+from .shadow_math import cross_exit
+
+
+SUPPORTED_EVENT_PERIODS = frozenset({
+    "early",
+    "pre_day",
+    "pre-day",
+    "day_of",
+    "day-of",
+    "dayof",
+    "live",
+})
+
+
+@dataclass(frozen=True)
+class RewardSelectionPolicy:
+    """Hard-bounded read-only selection policy for commissioning."""
+
+    quote_size: float = 1.0
+    projection_horizon_seconds: float = 30.0
+    projection_haircut: float = 0.5
+    exit_depth_haircut: float = 0.5
+    exit_cost_safety_multiple: float = 2.0
+    max_book_candidates: int = 25
+    minimum_entry_spread: float = 0.02
+
+    def __post_init__(self) -> None:
+        if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
+            raise ValueError("selection size and horizon must be positive")
+        if not 0 < self.projection_haircut <= 1:
+            raise ValueError("selection reward haircut must be in (0, 1]")
+        if not 0 < self.exit_depth_haircut <= 1:
+            raise ValueError("selection exit haircut must be in (0, 1]")
+        if self.exit_cost_safety_multiple < 1:
+            raise ValueError("selection exit-cost multiple must be at least one")
+        if not 1 <= self.max_book_candidates <= 100:
+            raise ValueError("selection book-candidate cap must be in [1, 100]")
+        if not 0 < self.minimum_entry_spread < 1:
+            raise ValueError("selection entry spread must be in (0, 1)")
+
+
+@dataclass(frozen=True)
+class SideOpportunity:
+    side: str
+    price: float
+    reward_score_eligible: bool
+    projection: RewardProjection
+    stressed_exit_complete: bool
+    stressed_exit_pnl: float
+    expected_net_value: float | None
+    blocker: str | None
+    fill_probability: float
+    fill_risk_driver: str
+
+    @property
+    def viable(self) -> bool:
+        return self.expected_net_value is not None and self.expected_net_value > 0
+
+
+@dataclass(frozen=True)
+class RewardMarketOpportunity:
+    market: MarketMetadata
+    incentive: MarketIncentive
+    period: IncentivePeriod
+    book: BookSnapshot
+    sides: tuple[SideOpportunity, ...]
+
+    @property
+    def viable_sides(self) -> tuple[str, ...]:
+        return tuple(item.side for item in self.sides if item.viable)
+
+    @property
+    def best_expected_net_value(self) -> float | None:
+        values = [item.expected_net_value for item in self.sides
+                  if item.expected_net_value is not None]
+        return max(values) if values else None
+
+    @property
+    def maximum_remaining_reward(self) -> float:
+        return max(
+            (item.projection.maximum_remaining_reward for item in self.sides),
+            default=0.0,
+        )
+
+    @property
+    def reward_density(self) -> float:
+        return self.period.reward_pool / self.period.target_size
+
+    @property
+    def spread(self) -> float:
+        return self.book.best_offer.price - self.book.best_bid.price
+
+    @property
+    def entry_spread_eligible(self) -> bool:
+        return bool(self.sides) and all(
+            side.blocker != "spread_below_entry_minimum"
+            for side in self.sides
+        )
+
+    @property
+    def midpoint_distance(self) -> float:
+        midpoint = (self.book.best_bid.price + self.book.best_offer.price) / 2
+        return abs(midpoint - 0.5)
+
+    @property
+    def historical_reward_yield_prior(self) -> float:
+        """Shrunk paid yield used only to rank otherwise valid markets."""
+
+        return historical_reward_yield_prior(self.market.slug)
+
+
+@dataclass(frozen=True)
+class RewardMarketSelection:
+    selected: RewardMarketOpportunity | None
+    opportunities: tuple[RewardMarketOpportunity, ...]
+    rewarded_executable_markets: int
+    catalog_markets: int
+    executable_catalog_markets: int
+    unsupported_programs: int
+    eligible_pregame_markets: int
+    books_evaluated: int
+    deferred_markets: tuple[str, ...]
+    failures: tuple[str, ...]
+    catalog_spread_filtered_markets: int = 0
+
+    @property
+    def viable_markets(self) -> int:
+        return sum(bool(item.viable_sides) for item in self.opportunities)
+
+
+def evaluate_market_opportunity(
+    market: MarketMetadata,
+    incentive: MarketIncentive,
+    book: BookSnapshot,
+    *,
+    period: IncentivePeriod,
+    now: datetime,
+    policy: RewardSelectionPolicy,
+    fill_hazard_model: MondayFillHazardModel | None = None,
+) -> RewardMarketOpportunity:
+    """Apply the exact live one-contract economic gate to both book sides."""
+
+    if market.game_start is None or market.tick_size is None:
+        raise ValueError("market clock and tick are required for selection")
+    fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
+    spread = book.best_offer.price - book.best_bid.price
+    seconds_to_event = max(0.0, (market.game_start - now).total_seconds())
+    sides: list[SideOpportunity] = []
+    for side, price in (("bid", book.best_bid.price),
+                        ("offer", book.best_offer.price)):
+        score = evaluate_order_score(
+            side=side,
+            price=price,
+            size=policy.quote_size,
+            levels=book.levels(side),
+            incentive=period,
+            tick_size=market.tick_size,
+        )
+        projection = project_order_reward(
+            side=side,
+            price=price,
+            size=policy.quote_size,
+            levels=book.levels(side),
+            incentive=period,
+            tick_size=market.tick_size,
+            event_start=market.game_start,
+            now=now,
+            horizon_seconds=policy.projection_horizon_seconds,
+            haircut=policy.projection_haircut,
+            # The venue's $1 threshold applies to aggregate reward settlement,
+            # not to every market row.  Per-order economics must therefore use
+            # the actual sub-dollar projection.
+            minimum_payout=0.0,
+        )
+        queue_ahead = (
+            book.best_bid.size if side == "bid" else book.best_offer.size)
+        fill_hazard = fill_hazard_model.estimate(
+            slug=market.slug,
+            side=side,
+            price=price,
+            spread=spread,
+            queue_ahead=queue_ahead,
+            seconds_to_event=seconds_to_event,
+            horizon_seconds=policy.projection_horizon_seconds,
+        )
+        blocker: str | None = None
+        exit_complete = False
+        exit_pnl = 0.0
+        expected: float | None = None
+        if spread + 1e-9 < policy.minimum_entry_spread:
+            blocker = "spread_below_entry_minimum"
+        elif not projection.eligible:
+            blocker = projection.reason
+        else:
+            exit_result = cross_exit(
+                book,
+                entry_side=side,
+                entry_price=price,
+                qty=policy.quote_size,
+                depth_haircut=policy.exit_depth_haircut,
+                exclude_entry_level=True,
+            )
+            exit_complete = exit_result.complete
+            exit_pnl = exit_result.pnl
+            if not exit_result.complete:
+                blocker = "stressed_exit_incomplete"
+            else:
+                unwind_cost = max(0.0, -exit_result.pnl)
+                economics = OpportunityEconomics(
+                    # A fill can stop score accrual before the horizon.  Count
+                    # the full projected reward only in the no-fill branch;
+                    # the fill branch contributes zero reward here.
+                    conservative_reward=(
+                        projection.projected_reward
+                        * (1.0 - fill_hazard.probability)),
+                    maker_rebate=0.0,
+                    spread_capture=0.0,
+                    fill_probability=fill_hazard.probability,
+                    unwind_loss_if_filled=unwind_cost,
+                    operational_buffer=(
+                        fill_hazard.probability * unwind_cost
+                        * (policy.exit_cost_safety_multiple - 1.0)),
+                )
+                if economics.should_quote:
+                    expected = economics.expected_net_value
+                else:
+                    blocker = (
+                        "projected_reward_does_not_cover_probability_"
+                        "weighted_exit_cost")
+        sides.append(SideOpportunity(
+            side=side,
+            price=price,
+            reward_score_eligible=score.eligible,
+            projection=projection,
+            stressed_exit_complete=exit_complete,
+            stressed_exit_pnl=exit_pnl,
+            expected_net_value=expected,
+            blocker=blocker,
+            fill_probability=fill_hazard.probability,
+            fill_risk_driver=fill_hazard.driver,
+        ))
+    return RewardMarketOpportunity(
+        market=market,
+        incentive=incentive,
+        period=period,
+        book=book,
+        sides=tuple(sides),
+    )
+
+
+def _candidate_key(
+    item: tuple[MarketMetadata, MarketIncentive, IncentivePeriod],
+) -> tuple[int, float, float, float, datetime, str]:
+    market, _, period = item
+    # Day-of can be projected from its proven six-hour clock.
+    phase = 0 if period.period == "day_of" else 1
+    density = period.reward_pool / period.target_size
+    midpoint_distance = 1.0
+    if (market.catalog_best_bid is not None
+            and market.catalog_best_offer is not None):
+        midpoint_distance = abs(
+            (market.catalog_best_bid + market.catalog_best_offer) / 2 - 0.5)
+    return (
+        phase,
+        -historical_reward_yield_prior(market.slug),
+        -density,
+        midpoint_distance,
+        market.game_start or datetime.max,
+        market.slug,
+    )
+
+
+def _opportunity_key(
+    item: RewardMarketOpportunity,
+) -> tuple[int, float, float, float, float, float, datetime, str]:
+    best = item.best_expected_net_value
+    return (
+        0 if item.viable_sides else 1,
+        -(best if best is not None else 0.0),
+        -item.historical_reward_yield_prior,
+        item.midpoint_distance,
+        -item.maximum_remaining_reward,
+        -item.reward_density,
+        item.market.game_start or datetime.max,
+        item.market.slug,
+    )
+
+
+class RewardMarketSelector:
+    """Join the bulk sports catalog to rewards and score a bounded set."""
+
+    def __init__(
+        self,
+        gateway: AsyncReadOnlyGateway,
+        policy: RewardSelectionPolicy | None = None,
+        fill_hazard_model: MondayFillHazardModel | None = None,
+    ):
+        self.gateway = gateway
+        self.policy = policy or RewardSelectionPolicy()
+        self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
+        self._book_cursor = 0
+        self._last_selected_slug: str | None = None
+
+    async def select(self, *, now: datetime) -> RewardMarketSelection:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("selection clock must be timezone-aware")
+        # Market list rows carry every immutable field needed for selection.
+        # Join one bulk catalog snapshot to batched incentive responses instead
+        # of retrieving metadata once for every rewarded slug.  Only the
+        # documented six-hour day-of window can authorize this executor, so
+        # filter by that clock before asking for incentive rows.
+        catalog = await self.gateway.list_sports_markets()
+        window_end = now + timedelta(hours=6)
+        executable_catalog = {
+            market.slug: market
+            for market in catalog
+            if self._catalog_market_is_executable(
+                market, now=now, window_end=window_end)
+        }
+        incentives = await self.gateway.fetch_incentives(
+            sorted(executable_catalog))
+        candidates: list[
+            tuple[MarketMetadata, MarketIncentive, IncentivePeriod]
+        ] = []
+        failures: list[str] = []
+        unsupported = 0
+        catalog_spread_filtered = 0
+        for slug in sorted(incentives):
+            incentive = incentives[slug]
+            if not any(
+                    str(period.period).strip().lower()
+                    in SUPPORTED_EVENT_PERIODS
+                    for period in incentive.periods):
+                # The venue currently emits values not implemented by the
+                # pregame executor, including documented ``daily`` and
+                # undocumented ``tournament_with_cutoff``. They remain visible
+                # in universe counts but cannot authorize REST fan-out or risk.
+                unsupported += 1
+                continue
+            try:
+                market = executable_catalog[slug]
+                period = self._applicable_period(market, incentive, now)
+                if period is None:
+                    continue
+                if not self._catalog_spread_can_enter(market):
+                    catalog_spread_filtered += 1
+                    continue
+                candidates.append((market, incentive, period))
+            except (KeyError, AmbiguousIncentiveError, ValueError) as exc:
+                failures.append(f"{slug}:{type(exc).__name__}")
+
+        ranked = sorted(candidates, key=_candidate_key)
+        detailed, deferred = self._detailed_candidates(ranked)
+        opportunities: list[RewardMarketOpportunity] = []
+        for market, incentive, period in detailed:
+            try:
+                book = await self.gateway.fetch_book(market.slug)
+                opportunities.append(evaluate_market_opportunity(
+                    market,
+                    incentive,
+                    book,
+                    period=period,
+                    now=now,
+                    policy=self.policy,
+                    fill_hazard_model=self.fill_hazard_model,
+                ))
+            except (AdapterError, ValueError) as exc:
+                failures.append(f"{market.slug}:book:{type(exc).__name__}")
+
+        opportunities.sort(key=_opportunity_key)
+        result = RewardMarketSelection(
+            selected=next(
+                (item for item in opportunities
+                 if item.viable_sides),
+                None,
+            ),
+            opportunities=tuple(opportunities),
+            rewarded_executable_markets=len(incentives),
+            catalog_markets=len(catalog),
+            executable_catalog_markets=len(executable_catalog),
+            unsupported_programs=unsupported,
+            eligible_pregame_markets=len(candidates),
+            books_evaluated=len(opportunities),
+            deferred_markets=deferred,
+            failures=tuple(failures),
+            catalog_spread_filtered_markets=catalog_spread_filtered,
+        )
+        if result.selected is not None:
+            self._last_selected_slug = result.selected.market.slug
+        return result
+
+    @staticmethod
+    def _catalog_market_is_executable(
+        market: MarketMetadata,
+        *,
+        now: datetime,
+        window_end: datetime,
+    ) -> bool:
+        """Apply metadata-only gates before any incentive or book fan-out."""
+
+        return (
+            market.active
+            and not market.closed
+            and market.status in OPEN_MARKET_STATUSES
+            and market.game_start is not None
+            and now < market.game_start <= window_end
+            and market.tick_size is not None
+            and market.minimum_trade_qty is not None
+            and market.minimum_trade_qty <= 1
+            and market.is_supported_moneyline
+        )
+
+    def _catalog_spread_can_enter(self, market: MarketMetadata) -> bool:
+        """Use catalog BBO only to skip known-tight rows before book reads.
+
+        Missing catalog quotes remain candidates. A fresh full book makes the
+        authoritative entry decision later, so a stale wide catalog row can
+        never authorize risk.
+        """
+
+        if (market.catalog_best_bid is None
+                or market.catalog_best_offer is None):
+            return True
+        spread = market.catalog_best_offer - market.catalog_best_bid
+        return spread + 1e-9 >= self.policy.minimum_entry_spread
+
+    def _detailed_candidates(
+        self,
+        ranked: list[
+            tuple[MarketMetadata, MarketIncentive, IncentivePeriod]
+        ],
+    ) -> tuple[
+        list[tuple[MarketMetadata, MarketIncentive, IncentivePeriod]],
+        tuple[str, ...],
+    ]:
+        """Keep the strongest head while rotating lower-pool options.
+
+        Every currently executable catalog market is checked for rewards on
+        every pass. The book budget always retains a small economically ranked
+        head and the current selection, then advances a round-robin window
+        through the remainder. Low-pool programs are therefore not permanently
+        hidden by the API cap.
+        """
+
+        budget = self.policy.max_book_candidates
+        if len(ranked) <= budget:
+            return list(ranked), ()
+        head_count = min(5, max(1, budget // 5))
+        chosen = list(ranked[:head_count])
+        chosen_slugs = {item[0].slug for item in chosen}
+        if self._last_selected_slug and len(chosen) < budget:
+            current = next(
+                (item for item in ranked
+                 if item[0].slug == self._last_selected_slug),
+                None,
+            )
+            if current is not None and current[0].slug not in chosen_slugs:
+                chosen.append(current)
+                chosen_slugs.add(current[0].slug)
+        tail = [item for item in ranked if item[0].slug not in chosen_slugs]
+        slots = budget - len(chosen)
+        if tail and slots > 0:
+            start = self._book_cursor % len(tail)
+            count = min(slots, len(tail))
+            chosen.extend(tail[(start + index) % len(tail)]
+                          for index in range(count))
+            self._book_cursor = (start + count) % len(tail)
+        selected_slugs = {item[0].slug for item in chosen}
+        deferred = tuple(
+            item[0].slug for item in ranked
+            if item[0].slug not in selected_slugs)
+        return chosen, deferred
+
+    @staticmethod
+    def _applicable_period(
+        market: MarketMetadata,
+        incentive: MarketIncentive,
+        now: datetime,
+    ) -> IncentivePeriod | None:
+        if (not market.active or market.closed
+                or market.status not in OPEN_MARKET_STATUSES
+                or market.game_start is None or market.game_start <= now
+                or market.tick_size is None
+                or market.minimum_trade_qty is None
+                or market.minimum_trade_qty > 1
+                or not market.is_supported_moneyline):
+            return None
+        period = select_applicable_period(
+            incentive.periods, market.game_start, now)
+        if period is None or period.period == "live":
+            return None
+        return period
+
+
+def reward_market_slugs(
+    selection: RewardMarketSelection,
+) -> tuple[str, ...]:
+    """Stable helper for operator summaries and tests."""
+
+    return tuple(item.market.slug for item in selection.opportunities)

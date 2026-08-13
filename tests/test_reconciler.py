@@ -29,7 +29,8 @@ def book(at=T0, *, bid=0.49, offer=0.51, depth=100) -> BookSnapshot:
 def market() -> MarketMetadata:
     return MarketMetadata(
         "market-one", T0 + timedelta(hours=5), .01, True, False,
-        "MARKET_STATE_OPEN", "moneyline")
+        "MARKET_STATE_OPEN", "moneyline",
+        sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE")
 
 
 def policy(age=15, **overrides) -> ReconcilerPolicy:
@@ -195,6 +196,53 @@ class ReconcilerTests(unittest.TestCase):
         actions = DesiredStateReconciler(policy()).plan(frame(orders=orders))
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].order_id, "bid-two")
+
+    def test_tight_spread_blocks_new_building_quotes(self):
+        tight = book(bid=.49, offer=.50)
+
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=tight))
+
+        self.assertEqual(actions, [])
+
+    def test_resting_quotes_survive_inside_hysteresis_band(self):
+        snapshot = book(bid=.49, offer=.507)
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .507, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=snapshot, orders=orders))
+
+        self.assertEqual(actions, [])
+
+    def test_resting_quotes_pull_after_spread_tightens_below_hysteresis(self):
+        snapshot = book(bid=.49, offer=.504)
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .504, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=snapshot, orders=orders))
+
+        self.assertEqual(
+            {action.order_id for action in actions},
+            {"bid-one", "offer-one"},
+        )
+        self.assertTrue(all(action.kind == ActionKind.CANCEL
+                            for action in actions))
+
+    def test_tight_spread_never_blocks_inventory_reducer(self):
+        tight = book(T0 + timedelta(seconds=1), bid=.49, offer=.50)
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="2", opened=T0,
+            entry=.49, snapshot=tight))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side, "offer")
 
     def test_duplicate_reducing_order_is_canceled_to_prevent_overclose(self):
         orders = (

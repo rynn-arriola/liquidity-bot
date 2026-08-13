@@ -8,6 +8,9 @@
     "orderPriceMinTickSize": {"value": "0.0050", "currency": "USD"},
     "minimumTradeQty": "0.25",
     "sportsMarketType": "moneyline",
+    "sportsMarketTypeV2": "SPORTS_MARKET_TYPE_MONEYLINE",
+    "bestBidQuote": {"value": "0.49", "currency": "USD"},
+    "bestAskQuote": {"value": "0.51", "currency": "USD"},
     "question": "Fixture market?"
   }
 }

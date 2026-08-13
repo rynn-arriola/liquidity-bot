@@ -60,7 +60,7 @@ Gate: a multi-hour dry run produces no path where unmatched inventory can outliv
 - Exclusive handoff of the existing account/API key; maker-lab stopped
 - Whole-account flat and open-order reconciliation before arming
 - One local process lease and fresh private-stream state
-- One named market for commissioning
+- All executable sports markets joined to their rewards; one selected market at a time for commissioning
 - Exactly one contract per quote for commissioning
 - Pregame only
 - Detached supervision, persisted recovery-only restart, and graceful operator

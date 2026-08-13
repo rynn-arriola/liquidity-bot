@@ -114,6 +114,33 @@ def _market(row: Any, *, expected_slug: str | None = None,
         else _amount(raw_minimum, field="market.minimumTradeQty")
     if minimum is not None and minimum <= 0:
         raise AdapterError("market minimum trade quantity must be positive")
+    raw_best_bid = row.get("bestBidQuote")
+    raw_best_offer = row.get("bestAskQuote")
+    if raw_best_offer is None:
+        raw_best_offer = row.get("bestOfferQuote")
+    try:
+        best_bid = (
+            None
+            if raw_best_bid is None or str(raw_best_bid).strip() == ""
+            else _amount(raw_best_bid, field="market.bestBidQuote"))
+        best_offer = (
+            None
+            if raw_best_offer is None or str(raw_best_offer).strip() == ""
+            else _amount(raw_best_offer, field="market.bestAskQuote"))
+        if best_bid is not None and not 0 < best_bid < 1:
+            raise AdapterError("market best bid must be in (0, 1)")
+        if best_offer is not None and not 0 < best_offer < 1:
+            raise AdapterError("market best offer must be in (0, 1)")
+        if (best_bid is not None and best_offer is not None
+                and best_bid >= best_offer):
+            raise AdapterError("market catalog quotes are crossed or locked")
+    except AdapterError:
+        # Catalog BBO is optional and advisory. It may only save a later book
+        # read; it never authorizes entry. Transient locked/crossed/malformed
+        # quotes therefore become unavailable metadata while the authoritative
+        # full book remains responsible for the trading decision.
+        best_bid = None
+        best_offer = None
     return MarketMetadata(
         slug=slug,
         game_start=clock,
@@ -125,6 +152,11 @@ def _market(row: Any, *, expected_slug: str | None = None,
                             if row.get("sportsMarketType") is not None else None),
         question=str(row.get("question")) if row.get("question") is not None else None,
         minimum_trade_qty=minimum,
+        sports_market_type_v2=(
+            str(row.get("sportsMarketTypeV2")).strip()
+            if row.get("sportsMarketTypeV2") is not None else None),
+        catalog_best_bid=best_bid,
+        catalog_best_offer=best_offer,
     )
 
 
@@ -262,6 +294,7 @@ class AsyncReadOnlyGateway:
         incentive_batch_size: int = 40,
         catalog_page_size: int = 500,
         max_pages: int = 100,
+        incentive_max_pages: int = 200,
         retry_attempts: int = 3,
         retry_base_seconds: float = 1.0,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
@@ -272,6 +305,8 @@ class AsyncReadOnlyGateway:
             raise ValueError("catalog_page_size must be in [1, 500]")
         if max_pages <= 0:
             raise ValueError("max_pages must be positive")
+        if incentive_max_pages <= 0:
+            raise ValueError("incentive_max_pages must be positive")
         if retry_attempts <= 0 or retry_base_seconds < 0:
             raise ValueError("retry settings are invalid")
         self.client = client
@@ -279,6 +314,7 @@ class AsyncReadOnlyGateway:
         self.incentive_batch_size = incentive_batch_size
         self.catalog_page_size = catalog_page_size
         self.max_pages = max_pages
+        self.incentive_max_pages = incentive_max_pages
         self.retry_attempts = retry_attempts
         self.retry_base_seconds = retry_base_seconds
         self._sleep = sleep
@@ -316,62 +352,53 @@ class AsyncReadOnlyGateway:
     ) -> dict[str, MarketIncentive]:
         clean = list(dict.fromkeys(str(symbol).strip() for symbol in symbols
                                    if str(symbol).strip()))
+        if not clean:
+            return {}
         found_periods: dict[str, list[IncentivePeriod]] = {}
         reported_clocks: dict[str, datetime | None] = {}
         for offset in range(0, len(clean), self.incentive_batch_size):
             chunk = clean[offset:offset + self.incentive_batch_size]
-            token: str | None = None
-            seen_tokens: set[str] = set()
-            for _ in range(self.max_pages):
-                # Incentive query parameters are snake_case. The API silently
-                # ignores camelCase query keys, which previously made our
-                # requested page size ineffective.
-                query: dict[str, Any] = {
-                    "symbols": chunk,
-                    "page_size": 100,
-                    "program_type": "liquidityProgram",
-                }
-                if token:
-                    query["page_token"] = token
-                response = await self._call(
-                    "GET /v1/incentives",
-                    lambda query=query: self.client.get(
-                        "/v1/incentives", query=query, authenticated=True),
-                )
-                if not isinstance(response, dict) or not isinstance(
-                        response.get("programs"), list):
-                    raise AdapterError("incentives response has no programs list")
-                for row in response["programs"]:
-                    if not isinstance(row, dict):
-                        raise AdapterError("incentive program is not an object")
-                    slug = str(row.get("marketSlug") or "").strip()
-                    periods = row.get("timePeriods")
-                    if not slug or not isinstance(periods, list):
-                        raise AdapterError("incentive program identity is incomplete")
-                    liquidity_periods = []
-                    for item in periods:
-                        if not isinstance(item, dict):
-                            raise AdapterError("incentive time period is not an object")
-                        program_type = str(item.get("programType") or "").strip()
-                        if not program_type:
-                            raise AdapterError("incentive period programType is missing")
-                        if program_type == "liquidityProgram":
-                            liquidity_periods.append(_period(item))
-                    if liquidity_periods:
-                        found_periods.setdefault(slug, []).extend(liquidity_periods)
-                    reported_clocks[slug] = _timestamp(
-                        row.get("eventStartTime"), field="incentive.eventStartTime")
-                next_token = response.get("nextPageToken")
-                if next_token is None or str(next_token).strip() == "":
-                    break
-                next_token = str(next_token)
-                if next_token in seen_tokens:
-                    raise AdapterError("incentives pagination repeated a page token")
-                seen_tokens.add(next_token)
-                token = next_token
-            else:
-                raise AdapterError("incentives pagination exceeded max_pages")
+            await self._collect_incentive_pages(
+                found_periods,
+                reported_clocks,
+                symbols=chunk,
+            )
+        return self._incentive_models(found_periods, reported_clocks)
 
+    async def list_incentives(
+        self,
+        *,
+        statuses: Iterable[str] = ("active",),
+    ) -> dict[str, MarketIncentive]:
+        """Enumerate liquidity programs without scanning the market catalog.
+
+        The official incentive endpoint permits an omitted ``symbols`` filter
+        and paginates the complete program universe. This diagnostic path is
+        intentionally separate from the faster catalog-first live selector;
+        one shared REST governor still owns every request.
+        """
+
+        clean_statuses = list(dict.fromkeys(
+            str(status).strip().lower() for status in statuses
+            if str(status).strip()))
+        allowed = {"active", "closed", "pending"}
+        if not clean_statuses or any(item not in allowed for item in clean_statuses):
+            raise ValueError(
+                "incentive statuses must be active, closed, or pending")
+        found_periods: dict[str, list[IncentivePeriod]] = {}
+        reported_clocks: dict[str, datetime | None] = {}
+        await self._collect_incentive_pages(
+            found_periods,
+            reported_clocks,
+            statuses=clean_statuses,
+        )
+        return self._incentive_models(found_periods, reported_clocks)
+
+    @staticmethod
+    def _incentive_models(
+        found_periods: dict[str, list[IncentivePeriod]],
+        reported_clocks: dict[str, datetime | None],
+    ) -> dict[str, MarketIncentive]:
         return {
             slug: MarketIncentive(
                 slug=slug,
@@ -380,6 +407,68 @@ class AsyncReadOnlyGateway:
             )
             for slug, periods in found_periods.items()
         }
+
+    async def _collect_incentive_pages(
+        self,
+        found_periods: dict[str, list[IncentivePeriod]],
+        reported_clocks: dict[str, datetime | None],
+        *,
+        symbols: list[str] | None = None,
+        statuses: list[str] | None = None,
+    ) -> None:
+        token: str | None = None
+        seen_tokens: set[str] = set()
+        for _ in range(self.incentive_max_pages):
+            # The deployed API was verified with snake_case pagination/filter
+            # keys.  ``symbols`` is intentionally omitted for universe-wide
+            # discovery, matching the official unfiltered endpoint contract.
+            query: dict[str, Any] = {
+                "page_size": 100,
+                "program_type": "liquidityProgram",
+            }
+            if symbols is not None:
+                query["symbols"] = symbols
+            if statuses is not None:
+                query["statuses"] = statuses
+            if token:
+                query["page_token"] = token
+            response = await self._call(
+                "GET /v1/incentives",
+                lambda query=query: self.client.get(
+                    "/v1/incentives", query=query, authenticated=True),
+            )
+            if not isinstance(response, dict) or not isinstance(
+                    response.get("programs"), list):
+                raise AdapterError("incentives response has no programs list")
+            for row in response["programs"]:
+                if not isinstance(row, dict):
+                    raise AdapterError("incentive program is not an object")
+                slug = str(row.get("marketSlug") or "").strip()
+                periods = row.get("timePeriods")
+                if not slug or not isinstance(periods, list):
+                    raise AdapterError("incentive program identity is incomplete")
+                liquidity_periods = []
+                for item in periods:
+                    if not isinstance(item, dict):
+                        raise AdapterError("incentive time period is not an object")
+                    program_type = str(item.get("programType") or "").strip()
+                    if not program_type:
+                        raise AdapterError("incentive period programType is missing")
+                    if program_type == "liquidityProgram":
+                        liquidity_periods.append(_period(item))
+                if liquidity_periods:
+                    found_periods.setdefault(slug, []).extend(liquidity_periods)
+                reported_clocks[slug] = _timestamp(
+                    row.get("eventStartTime"), field="incentive.eventStartTime")
+            next_token = response.get("nextPageToken")
+            if next_token is None or str(next_token).strip() == "":
+                return
+            next_token = str(next_token)
+            if next_token in seen_tokens:
+                raise AdapterError("incentives pagination repeated a page token")
+            seen_tokens.add(next_token)
+            token = next_token
+        raise AdapterError("incentives pagination exceeded incentive_max_pages")
 
     async def fetch_earnings(
         self,

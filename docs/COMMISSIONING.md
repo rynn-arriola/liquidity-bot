@@ -3,13 +3,24 @@
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
-## Fixed envelope
+## Fixed execution envelope
 
-- one explicit rewarded pregame market;
+- join every executable active sports market to its liquidity rewards, but
+  expose the account to only one selected rewarded market at a time;
+- refresh selection every 15 minutes, deeply evaluate at most 25 books per
+  pass through the shared governor, and round-robin deferred lower-ranked
+  programs on later passes;
+- admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
+  spreads, and drawable outcomes remain discovery-only;
 - one contract per quote (one bid and one offer may rest while flat);
-- quote a venue-eligible side only when its current normalized score share can
-  still reach the $1 payout floor and a 30-second reward projection, after a
-  50% haircut, exceeds twice the stressed immediate-exit cost;
+- require at least a 2-cent full-book spread before a new building quote;
+  retain an already-resting quote down to 1.5 cents and pull it below that
+  hysteresis boundary, while never spread-gating inventory reduction;
+- quote a venue-eligible side only when its 30-second normalized-score reward,
+  after a 50% haircut and no-fill survival factor, exceeds twice the stressed
+  immediate-exit cost weighted by a conservative first-fill probability;
+- report the venue's $1 aggregate payout floor, but never apply it to one
+  market or one order;
 - use no projected spread or maker rebate until live evidence supports it;
 - cancel the opposite building order immediately after the first fill;
 - work the exact reducing quantity passively at the active touch only when that
@@ -37,16 +48,32 @@ The command refuses before order entry unless all of these are true:
 1. `--arm-live`, `--accept-one-contract-risk`, `--exclusive-api-key`, and
    `--maker-lab-stopped` are all present.
 2. The runner is explicitly armed for operator-controlled graceful stop.
-3. The named market is open, rewarded in the lifecycle applying now, and
-   pregame.
+3. Either an explicit market is named, or automatic discovery selects an open
+   rewarded market in a documented lifecycle applying now and before event
+   start.
 4. One contract is aligned to the current venue tick and minimum quantity.
 5. The whole account has no open order, nonzero position, unresolved mutation,
    or unowned state.
 6. The balance schema is complete and marked equity is known.
 7. REST reconciliation and the private account WebSocket are fresh.
 8. Normal and critical Discord webhooks are configured.
-9. Authenticated earnings for the named liquidity program can be read and
+9. Authenticated earnings for the active liquidity program can be read and
    persisted separately from execution P&L.
+
+Automatic discovery bulk-loads active sports metadata, filters open markets to
+the documented six-hour `day_of` window and the venue's V2 moneyline enum, then
+requests incentives only for those symbols in batches. It does not retrieve
+metadata once per reward slug. `marketSides=2` is not used as a structure test
+because rewarded futures are also two-sided. Catalog BBO can reject a
+known-tight row before a full-book request, but only a fresh full book can
+authorize entry.
+Only documented early/day-of/live lifecycle names enter validation, and only
+the currently applicable pregame `day_of` period can authorize this executor.
+Lifecycle names not implemented by the pregame executor—including documented
+`daily`/`daily_event` and observed but undocumented
+`tournament_with_cutoff`—remain read-only and are reported in Discord; they do
+not trigger book fan-out or order entry. Reward amount changes ranking
+and does not exclude a program from discovery.
 
 Reward eligibility alone never authorizes an order. The runtime computes the
 proposed order's share of all discounted score inside the target-size cutoff,
@@ -54,6 +81,8 @@ reserves no more than half of the pool for either independently normalized
 side, and projects only the documented six-hour `day_of` period. Periods whose
 per-market duration cannot be proven fail closed. The process can therefore run
 normally with zero working orders; that is an economic refusal, not a fault.
+Discovery and flat-rotation durations are reported in Discord so REST scan and
+cancel/flat/rebind downtime can be measured before any concurrency change.
 
 During runtime, an explicitly recoverable private, market, or order adapter
 error enters a dormant recovery state instead of ending the process. The runner
@@ -70,8 +99,9 @@ alert every 300 seconds, and after 900 seconds it exits non-flat with code 3
 rather than holding a position silently.
 
 After a process death, a restart may enter recovery-only mode only when every
-working order and nonzero position belongs to this persisted ledger and the one
-configured market. It cancels/flattens and exits; it does not resume quoting.
+working order and nonzero position belongs to this persisted ledger and one
+identified market. Automatic selection first follows that ledger market rather
+than selecting something new. It cancels/flattens and exits; it does not resume quoting.
 Unowned or cross-market state refuses without mutation.
 
 ## Server commands
@@ -87,6 +117,7 @@ chmod +x scripts/*.sh
 Start, inspect, and stop:
 
 ```bash
+./scripts/start_commissioning.sh
 ./scripts/start_commissioning.sh MARKET-SLUG
 ./scripts/status_commissioning.sh
 ./scripts/stop_commissioning.sh

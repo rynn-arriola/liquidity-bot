@@ -88,6 +88,54 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn("pageSize", client.get_calls[0][1])
         self.assertTrue(all(call[2] for call in client.get_calls))
 
+    def test_unfiltered_incentive_discovery_omits_symbols_and_paginates(self):
+        client = FakeClient()
+        client.get_responses = [fixture("incentives_page_1.json"),
+                                fixture("incentives_page_2.json")]
+
+        found = self.run_async(
+            AsyncReadOnlyGateway(client).list_incentives(statuses=("active",)))
+
+        self.assertEqual(set(found), {"market-one", "market-two"})
+        self.assertNotIn("symbols", client.get_calls[0][1])
+        self.assertEqual(client.get_calls[0][1]["statuses"], ["active"])
+        self.assertEqual(client.get_calls[0][1]["page_size"], 100)
+        self.assertEqual(client.get_calls[1][1]["page_token"], "page-two")
+        self.assertTrue(all(call[2] for call in client.get_calls))
+
+    def test_unfiltered_incentive_discovery_rejects_unknown_status(self):
+        with self.assertRaises(ValueError):
+            self.run_async(AsyncReadOnlyGateway(FakeClient()).list_incentives(
+                statuses=("mystery",)))
+
+    def test_incentive_universe_has_a_separate_larger_page_ceiling(self):
+        client = FakeClient()
+        first = fixture("incentives_page_1.json")
+        first["nextPageToken"] = "page-two"
+        second = fixture("incentives_page_2.json")
+        second["nextPageToken"] = None
+        client.get_responses = [first, second]
+
+        found = self.run_async(AsyncReadOnlyGateway(
+            client,
+            max_pages=1,
+            incentive_max_pages=2,
+        ).list_incentives())
+
+        self.assertEqual(set(found), {"market-one", "market-two"})
+        self.assertEqual(len(client.get_calls), 2)
+
+    def test_incentive_page_ceiling_still_fails_closed(self):
+        client = FakeClient()
+        page = fixture("incentives_page_1.json")
+        page["nextPageToken"] = "more"
+        client.get_responses = [page]
+
+        with self.assertRaisesRegex(
+                AdapterError, "incentive_max_pages"):
+            self.run_async(AsyncReadOnlyGateway(
+                client, incentive_max_pages=1).list_incentives())
+
     def test_repeated_pagination_token_fails_closed(self):
         page = fixture("incentives_page_1.json")
         client = FakeClient()
@@ -206,6 +254,13 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(market.game_start.isoformat(), "2026-08-13T03:25:00+00:00")
         self.assertEqual(market.tick_size, 0.005)
         self.assertEqual(market.minimum_trade_qty, 0.25)
+        self.assertEqual(
+            market.sports_market_type_v2,
+            "SPORTS_MARKET_TYPE_MONEYLINE",
+        )
+        self.assertTrue(market.is_supported_moneyline)
+        self.assertEqual(market.catalog_best_bid, 0.49)
+        self.assertEqual(market.catalog_best_offer, 0.51)
 
     def test_missing_market_clock_fails_closed(self):
         client = FakeClient()
@@ -214,6 +269,26 @@ class GatewayTests(unittest.TestCase):
         client.markets.market_response = response
         with self.assertRaises(AdapterError):
             self.run_async(AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
+    def test_crossed_advisory_catalog_bbo_does_not_reject_active_metadata(self):
+        client = FakeClient()
+        response = fixture("market.json")
+        response["market"]["bestBidQuote"] = "0.51"
+        response["market"]["bestAskQuote"] = "0.50"
+        client.markets.market_response = response
+
+        market = self.run_async(
+            AsyncReadOnlyGateway(client).fetch_market("market-one"))
+        client.markets.list_responses = [{"markets": [response["market"]]}]
+        catalog = self.run_async(
+            AsyncReadOnlyGateway(client).list_sports_markets())
+
+        self.assertEqual(market.slug, "market-one")
+        self.assertIsNone(market.catalog_best_bid)
+        self.assertIsNone(market.catalog_best_offer)
+        self.assertEqual([item.slug for item in catalog], ["market-one"])
+        self.assertIsNone(catalog[0].catalog_best_bid)
+        self.assertIsNone(catalog[0].catalog_best_offer)
 
     def test_book_uses_market_data_wrapper_and_full_depth(self):
         client = FakeClient()
@@ -248,6 +323,9 @@ class GatewayTests(unittest.TestCase):
         rows = self.run_async(gateway.list_sports_markets())
         self.assertEqual([row.slug for row in rows],
                          ["market-one", "market-two", "market-three"])
+        self.assertEqual(rows[0].tick_size, 0.005)
+        self.assertEqual(rows[0].minimum_trade_qty, 0.25)
+        self.assertEqual(rows[0].status, "MARKET_STATE_OPEN")
         self.assertIsNone(rows[1].game_start)
         self.assertEqual([call["offset"] for call in client.markets.list_calls], [0, 2])
 

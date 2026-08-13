@@ -5,17 +5,20 @@ order, and an advertised pool is never treated as expected income.
 
 ```mermaid
 flowchart LR
-    A[Sports catalog] --> D[Strict read-only adapters]
-    B[Incentive programs] --> D
-    C[Full books and event clocks] --> D
+    A[Bulk active sports catalog] --> D[Strict read-only adapters]
+    B[Batched candidate incentives] --> D
+    C[At most 25 full books] --> D
     H[Paid reward history] --> D
-    D --> E{Applicable program now?}
+    D --> DS[Reward-market selector]
+    DS --> M{V2 moneyline and spread at least 2c?}
+    M -- No --> X[Reject candidate]
+    M -- Yes --> E{Documented applicable program now?}
     E -- No or unknown --> X[Reject candidate]
     E -- Yes --> F{Target depth and cutoff qualify?}
     F -- No --> X
     F -- Yes --> G[Eligible score-seconds]
-    G --> I[Conservative reward estimate]
-    I --> J[Subtract fill hazard, exit cost, fees, and buffer]
+    G --> I[Reward times no-fill probability]
+    I --> J[Subtract fill probability times exit cost and buffer]
     J --> K{Lower-bound expected value positive?}
     K -- No --> X
     K -- Yes --> L[Shadow candidate]
@@ -36,6 +39,12 @@ flowchart LR
     Y --> Z[Reconcile trading P&L and PAID rewards]
     Z --> H
 ```
+
+The live selector bulk-joins executable sports metadata to incentive programs
+every 15 minutes while keeping only one execution scope. It performs a bounded
+25-book deep pass and round-robins deferred programs. Before changing the selected
+slug, the existing executor cancels its quotes and proves the whole account
+flat, order-free, resolved, and owned; only then are singleton streams rebound.
 
 ## Current boundary
 

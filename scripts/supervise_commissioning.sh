@@ -5,11 +5,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-SLUG=${1:-}
-if [ -z "$SLUG" ]; then
-    echo "market slug is required"
-    exit 2
-fi
+TARGET=${1:-auto}
 
 PY=.venv/bin/python
 MAX_FAST_CRASHES=3
@@ -21,13 +17,19 @@ alert() {
     "$PY" -m liquidity_bot.supervisor_alert --critical "$1" >/dev/null 2>&1 || true
 }
 
-echo "[supervisor] one-contract commissioning market=$SLUG"
+if [ "$TARGET" = "auto" ]; then
+    MARKET_ARGS=(--auto-select-rewards)
+else
+    MARKET_ARGS=(--market-slug "$TARGET")
+fi
+
+echo "[supervisor] one-contract commissioning target=$TARGET"
 alert "Liquidity Bot supervisor started for one-contract commissioning."
 
 while true; do
     STARTED=$(date -u +%s)
     "$PY" -B -m liquidity_bot.live_commissioning \
-        --market-slug "$SLUG" \
+        "${MARKET_ARGS[@]}" \
         --database data/commissioning.db \
         --lock-file data/commissioning.lock \
         --arm-live \

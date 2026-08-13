@@ -62,6 +62,8 @@ class ReconcilerPolicy:
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: float = 30.0
     hard_exit_confirmation_timeout_seconds: float = 10.0
+    minimum_entry_spread: float = 0.02
+    spread_hysteresis: float = 0.005
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
@@ -80,6 +82,12 @@ class ReconcilerPolicy:
         if min(self.max_hard_exit_retry_seconds,
                self.hard_exit_confirmation_timeout_seconds) <= 0:
             raise ValueError("hard-exit time limits must be positive")
+        if not 0 < self.minimum_entry_spread < 1:
+            raise ValueError("minimum entry spread must be in (0, 1)")
+        if (self.spread_hysteresis < 0
+                or self.spread_hysteresis >= self.minimum_entry_spread):
+            raise ValueError(
+                "spread hysteresis must be nonnegative and below entry spread")
 
 
 @dataclass(frozen=True)
@@ -264,11 +272,26 @@ class DesiredStateReconciler:
                        and frame.market.game_start is not None
                        and frame.now < frame.market.game_start)
         desired_sides = ({"bid", "offer"} if market_open else set())
+        if not frame.market.is_supported_moneyline:
+            desired_sides.clear()
         desired_sides &= set(frame.reward_eligible)
         desired_sides = {
             side for side in desired_sides
             if math.isfinite(frame.expected_net_by_side.get(side, 0.0))
             and frame.expected_net_by_side.get(side, 0.0) > 0}
+
+        # New building quotes require the measured 2-cent regime. Resting
+        # quotes are retained down to 1.5 cents to prevent touch-noise churn,
+        # then pulled if the book tightens further. Inventory reduction is
+        # handled exclusively by _inventory_plan and is never spread-gated.
+        spread = frame.book.best_offer.price - frame.book.best_bid.price
+        resting_sides = {order.side for order in frame.working_orders}
+        for side in tuple(desired_sides):
+            threshold = self.policy.minimum_entry_spread
+            if side in resting_sides:
+                threshold -= self.policy.spread_hysteresis
+            if spread + 1e-9 < threshold:
+                desired_sides.remove(side)
 
         quote_size = self.policy.quote_size
         candidate_loss = 0.0

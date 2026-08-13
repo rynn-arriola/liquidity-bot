@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 NEW_YORK = "America/New_York"
+AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
 
 
 class CommissioningRefused(RuntimeError):
@@ -62,10 +63,15 @@ class CommissioningConfig:
     reward_projection_horizon_seconds: int = 30
     reward_projection_haircut: Decimal = Decimal("0.5")
     reward_cost_safety_multiple: Decimal = Decimal("2")
-    minimum_reward_payout_usd: Decimal = Decimal("1")
+    aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     max_taker_exit_orders: int = 1
     max_session_execution_fees_usd: Decimal = Decimal("0.02")
     earnings_refresh_seconds: int = 900
+    auto_select_reward_markets: bool = False
+    market_selection_refresh_seconds: int = 900
+    max_selection_book_candidates: int = 25
+    minimum_entry_spread: Decimal = Decimal("0.02")
+    spread_hysteresis: Decimal = Decimal("0.005")
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -80,7 +86,17 @@ class CommissioningConfig:
             problems.append("exclusive API-key use is not confirmed")
         if not self.maker_lab_stopped_confirmed:
             problems.append("maker-lab is not confirmed stopped")
-        if not self.market_slug.strip():
+        if self.auto_select_reward_markets:
+            if self.market_slug != AUTO_REWARD_MARKET:
+                problems.append(
+                    "automatic selection requires the reserved reward-market slug")
+            if (self.market_selection_refresh_seconds != 900
+                    or self.max_selection_book_candidates != 25):
+                problems.append(
+                    "automatic selection must refresh every 900 seconds and "
+                    "deeply evaluate at most 25 reward markets")
+        elif (not self.market_slug.strip()
+              or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
         if self.quote_size != 1 or self.max_markets != 1:
             problems.append("commissioning is hard-locked to one market/contract")
@@ -109,16 +125,26 @@ class CommissioningConfig:
         if (self.reward_projection_horizon_seconds != 30
                 or self.reward_projection_haircut != Decimal("0.5")
                 or self.reward_cost_safety_multiple != Decimal("2")
-                or self.minimum_reward_payout_usd != Decimal("1")):
+                or self.aggregate_reward_payout_floor_usd != Decimal("1")):
             problems.append(
                 "commissioning reward economics must remain a 30-second "
-                "projection, 50% haircut, 2x cost margin, and $1 payout floor")
+                "projection, 50% haircut, 2x probability-weighted cost "
+                "margin, and $1 aggregate reporting floor")
         if (self.max_taker_exit_orders != 1
                 or self.max_session_execution_fees_usd != Decimal("0.02")
                 or self.earnings_refresh_seconds != 900):
             problems.append(
                 "commissioning loss learning must stop after one taker exit, "
                 "cap execution fees at $0.02, and refresh earnings every 900 seconds")
+        if (self.minimum_entry_spread != Decimal("0.02")
+                or self.spread_hysteresis != Decimal("0.005")):
+            problems.append(
+                "commissioning entry spread must remain 2 cents with "
+                "0.5-cent resting-order hysteresis")
+        if (self.minimum_entry_spread <= 0
+                or self.spread_hysteresis < 0
+                or self.spread_hysteresis >= self.minimum_entry_spread):
+            problems.append("commissioning spread thresholds are invalid")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

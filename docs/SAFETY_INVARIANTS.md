@@ -47,3 +47,7 @@ These are implementation requirements, not suggestions.
     state refuses without mutation.
 27. `SIGTERM` and `SIGINT` are graceful operator-stop requests. They enter
     market-scoped cancel/flatten/reconcile rather than terminate immediately.
+28. Runtime strategy/planning/action exceptions are quarantined in-process:
+    cancel known quotes, reconcile, alert, and retry without adding risk. They
+    do not terminate the session. Manual stop, confirmed loss stops, or unsafe
+    unowned/cross-market state remain terminal.

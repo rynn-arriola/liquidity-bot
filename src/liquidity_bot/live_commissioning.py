@@ -676,6 +676,18 @@ class CommissioningRunner:
         self.reconciler.confirm_hard_exit_terminal(slug)
         return "retry"
 
+    async def _recover_strategy_state(self, reason: str) -> None:
+        """Quarantine an unexpected strategy state without ending the process."""
+
+        await self._report_runtime_error(
+            "strategy_state", AdapterError(str(reason or "unknown")))
+        try:
+            if reason in {"book_stale", "book_market_mismatch"}:
+                await self._refresh_book(self._now())
+            await self._quarantine_working_orders()
+        except Exception as exc:
+            await self._report_runtime_error("strategy_state_recovery", exc)
+
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot LIVE shutdown started: {reason}. "
@@ -858,7 +870,17 @@ class CommissioningRunner:
                     # budget. Re-enter the loop so book/state freshness is
                     # rechecked before any new decision, even if it resolved.
                     continue
-                actions = self.reconciler.plan(self._frame(now))
+                try:
+                    actions = self.reconciler.plan(self._frame(now))
+                except Exception as exc:
+                    await self._report_runtime_error("strategy_plan", exc)
+                    try:
+                        await self._quarantine_working_orders()
+                    except Exception as recovery_exc:
+                        await self._report_runtime_error(
+                            "strategy_plan_recovery", recovery_exc)
+                    await self.sleep(1)
+                    continue
                 if actions and actions[0].kind == ActionKind.CRITICAL:
                     reason = actions[0].reason
                     if reason == "hard_exit_sent_but_inventory_remains":
@@ -876,25 +898,32 @@ class CommissioningRunner:
                                 "hard_exit_confirmation", exc)
                         await self.sleep(.25)
                         continue
-                    if reason in {"book_stale", "execution_state_unknown"}:
-                        await self._report_runtime_error(
-                            "runtime_state_gate", AdapterError(reason))
-                        try:
-                            await self._quarantine_working_orders()
-                        except Exception as exc:
-                            await self._report_runtime_error(
-                                "runtime_state_quarantine", exc)
-                        await self.sleep(1)
-                        continue
-                    stop_reason = f"critical:{reason}"
-                    break
+                    await self._recover_strategy_state(reason)
+                    await self.sleep(1)
+                    continue
                 self._runtime_error_counts.pop("runtime_state_gate", None)
                 self._runtime_error_counts.pop("runtime_state_quarantine", None)
+                self._runtime_error_counts.pop("strategy_state", None)
+                self._runtime_error_counts.pop("strategy_state_recovery", None)
+                self._runtime_error_counts.pop("strategy_plan", None)
+                self._runtime_error_counts.pop("strategy_plan_recovery", None)
+                self._runtime_error_counts.pop("action_driver", None)
+                self._runtime_error_counts.pop("action_driver_recovery", None)
                 if self.driver is None or self.market is None:
                     raise RuntimeError("commissioning driver is unavailable")
-                await self.driver.apply_one(
-                    actions, market=self.market,
-                    position=self.ledger.position(self.market.slug), now=now)
+                try:
+                    await self.driver.apply_one(
+                        actions, market=self.market,
+                        position=self.ledger.position(self.market.slug), now=now)
+                except Exception as exc:
+                    await self._report_runtime_error("action_driver", exc)
+                    try:
+                        await self._quarantine_working_orders()
+                    except Exception as recovery_exc:
+                        await self._report_runtime_error(
+                            "action_driver_recovery", recovery_exc)
+                    await self.sleep(1)
+                    continue
                 if now >= next_summary:
                     await self._send_summary(now)
                     next_summary = now + timedelta(minutes=5)

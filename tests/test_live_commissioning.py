@@ -542,6 +542,19 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_unknown_strategy_critical_is_quarantined_not_terminal(self):
+        runner, client, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        await runner._recover_strategy_state("future_runtime_condition")
+
+        self.assertIsNone(runner._stop_reason(runner._now()))
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(runner.ledger.working_orders(), [])
+        self.assertTrue(any(critical for _, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_cli_refuses_before_loading_secrets_when_not_armed(self):
         args = Namespace(
             market_slug="market-one",

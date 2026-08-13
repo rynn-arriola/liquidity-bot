@@ -1,0 +1,13 @@
+{
+  "market": {
+    "slug": "market-one",
+    "active": true,
+    "closed": false,
+    "status": "MARKET_STATE_OPEN",
+    "gameStartTime": "2026-08-13T03:25:00Z",
+    "orderPriceMinTickSize": {"value": "0.0050", "currency": "USD"},
+    "minimumTradeQty": "0.25",
+    "sportsMarketType": "moneyline",
+    "question": "Fixture market?"
+  }
+}

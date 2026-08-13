@@ -1,0 +1,34 @@
+{
+  "programs": [
+    {
+      "category": "sports",
+      "eventStartTime": "",
+      "marketSlug": "market-one",
+      "timePeriods": [
+        {
+          "programId": "day-one",
+          "programType": "liquidityProgram",
+          "period": "day_of",
+          "status": "active",
+          "rewardPool": 35,
+          "discountFactor": 0.5,
+          "targetSize": 5000,
+          "start": "2026-08-12T00:00:00Z",
+          "end": "2026-08-13T00:00:00Z"
+        },
+        {
+          "programId": "live-one",
+          "programType": "liquidityProgram",
+          "period": "live",
+          "status": "active",
+          "rewardPool": 100,
+          "discountFactor": 0.5,
+          "targetSize": 7500,
+          "start": null,
+          "end": null
+        }
+      ]
+    }
+  ],
+  "nextPageToken": "page-two"
+}

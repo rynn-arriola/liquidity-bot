@@ -1,0 +1,15 @@
+{
+  "marketData": {
+    "marketSlug": "market-one",
+    "state": "MARKET_STATE_OPEN",
+    "transactTime": "2026-08-13T02:30:00Z",
+    "bids": [
+      {"px": {"value": "0.5000"}, "qty": {"value": "2500"}},
+      {"px": "0.4950", "qty": "2600"}
+    ],
+    "offers": [
+      {"px": {"value": "0.5050"}, "qty": {"value": "2400"}},
+      {"px": "0.5100", "qty": "2700"}
+    ]
+  }
+}

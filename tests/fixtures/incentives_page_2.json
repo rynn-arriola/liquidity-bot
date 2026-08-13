@@ -1,0 +1,23 @@
+{
+  "programs": [
+    {
+      "category": "sports",
+      "eventStartTime": "2026-08-14T12:00:00Z",
+      "marketSlug": "market-two",
+      "timePeriods": [
+        {
+          "programId": "early-two",
+          "programType": "liquidityProgram",
+          "period": "early",
+          "status": "active",
+          "rewardPool": 25,
+          "discountFactor": 0.4,
+          "targetSize": 10000,
+          "start": "2026-08-10T00:00:00Z",
+          "end": "2026-08-14T06:00:00Z"
+        }
+      ]
+    }
+  ],
+  "nextPageToken": null
+}

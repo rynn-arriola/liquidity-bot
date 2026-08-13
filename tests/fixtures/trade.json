@@ -1,0 +1,12 @@
+{
+  "requestId": "trade-fixture",
+  "subscriptionType": "SUBSCRIPTION_TYPE_TRADE",
+  "trade": {
+    "marketSlug": "market-one",
+    "price": {"value": "0.5000", "currency": "USD"},
+    "quantity": {"value": "4.0000", "currency": "CONTRACT"},
+    "tradeTime": "2026-08-13T02:30:01Z",
+    "maker": {"side": "ORDER_SIDE_BUY", "intent": "ORDER_INTENT_BUY_LONG"},
+    "taker": {"side": "ORDER_SIDE_SELL", "intent": "ORDER_INTENT_BUY_SHORT"}
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "balance_snapshot": {
+    "requestId": "balance-1",
+    "subscriptionType": "SUBSCRIPTION_TYPE_ACCOUNT_BALANCE",
+    "accountBalancesSnapshot": {"balances": [{"asset": "USD", "available": "100.00"}]}
+  },
+  "orders_snapshot": {
+    "requestId": "orders-1",
+    "subscriptionType": "SUBSCRIPTION_TYPE_ORDER",
+    "ordersSnapshot": {"orders": []}
+  },
+  "position_update": {
+    "requestId": "positions-1",
+    "subscriptionType": "SUBSCRIPTION_TYPE_POSITION",
+    "positionUpdate": {
+      "marketSlug": "market-one",
+      "netPosition": 2,
+      "netPositionDecimal": "1.750000"
+    }
+  },
+  "heartbeat": {"heartbeat": "2026-08-13T02:30:05Z"},
+  "error": {"requestId": "orders-1", "error": "fixture error"}
+}

@@ -1,0 +1,19 @@
+{
+  "source_project": {
+    "name": "maker-lab",
+    "path": "D:\\polybot\\maker-lab",
+    "git_commit": "82d0441cbddeddea3593eaea3c6189df8f52610c",
+    "usage": "reference_only"
+  },
+  "runtime_baseline": {
+    "python": "3.14.6",
+    "polymarket_us": "0.1.2"
+  },
+  "never_copy": [
+    "credentials.py",
+    "*.db",
+    "*.log",
+    "server configuration overrides",
+    "open-order or position state"
+  ]
+}

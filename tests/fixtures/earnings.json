@@ -1,0 +1,25 @@
+{
+  "rewards": [
+    {
+      "date": "2026-08-10",
+      "marketSlug": "market-one",
+      "programType": "liquidityProgram",
+      "reward": "0.30",
+      "status": "PAID"
+    },
+    {
+      "date": "2026-08-11",
+      "marketSlug": "market-two",
+      "programType": "liquidityProgram",
+      "reward": 0.10,
+      "status": "PENDING"
+    },
+    {
+      "date": "2026-08-11",
+      "marketSlug": "market-three",
+      "programType": "liquidityProgram",
+      "reward": 0,
+      "status": "SKIPPED"
+    }
+  ]
+}

@@ -63,3 +63,9 @@ intent. It raised `ValueError`, entered shutdown, canceled the quote, proved
 zero open orders/positions, and exited without restart. The loop now treats an
 empty post-reconciliation set as success and proceeds, with a regression test
 and persistent traceback output for future caught failures.
+
+The next fresh-ledger attempt placed two exact one-contract quotes and exited
+flat on `critical:book_stale`. The market WebSocket is change-driven and had no
+book change inside the five-second decision limit. A quiet feed now receives a
+REST full-book refresh at three seconds through the shared 4 requests/second
+governor; a newer WebSocket book suppresses that fallback call.

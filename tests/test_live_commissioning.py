@@ -365,6 +365,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "temporary", "FAILED", updated_at=NOW)
         self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
 
+    async def test_quiet_change_driven_book_refreshes_before_stale_limit(self):
+        runner, _, _ = self.build_runner()
+        runner.book_observed_at = NOW
+        self.assertFalse(runner._quiet_book_needs_rest_refresh(
+            NOW + timedelta(seconds=2)))
+        self.assertTrue(runner._quiet_book_needs_rest_refresh(
+            NOW + timedelta(seconds=3)))
+        self.assertTrue(runner._quiet_book_needs_rest_refresh(
+            NOW - timedelta(seconds=1)))
+
     async def test_cli_refuses_before_loading_secrets_when_not_armed(self):
         args = Namespace(
             market_slug="market-one",

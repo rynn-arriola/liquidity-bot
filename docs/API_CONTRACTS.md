@@ -120,6 +120,10 @@ Official references:
 - Only a confirmed HTTP 429 receives bounded read retry/backoff. State-changing
   requests never auto-retry.
 - Market books and trades are streamed after startup rather than polled.
+- Because the market WebSocket is change-driven, a quiet one-market book is
+  refreshed by REST before its five-second decision freshness limit. The
+  three-second fallback uses the same 4 requests/second gate and is skipped
+  when a newer WebSocket book already arrived.
 - The one account/key cannot be shared concurrently with maker-lab during a
   controlled session.
 

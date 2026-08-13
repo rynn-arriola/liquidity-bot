@@ -55,7 +55,14 @@ from .reconciler import (
     ReconcilerPolicy,
     WorkingOrder,
 )
-from .rewards import AmbiguousIncentiveError, evaluate_order_score, select_applicable_period
+from .rewards import (
+    AmbiguousIncentiveError,
+    RewardProjection,
+    evaluate_order_score,
+    project_order_reward,
+    select_applicable_period,
+)
+from .risk import OpportunityEconomics
 from .runtime_safety import SessionRiskGuard, SingleInstanceLease
 from .runtime_secrets import load_runtime_secrets
 from .shadow_math import cross_exit
@@ -145,8 +152,13 @@ class CommissioningRunner:
         self._shutdown_proved_flat = True
         self._reward_eligible: frozenset[str] = frozenset()
         self._score_by_side: dict[str, float] = {}
+        self._expected_net_by_side: dict[str, float] = {}
+        self._reward_projection_by_side: dict[str, RewardProjection] = {}
+        self._economic_blocker_by_side: dict[str, str] = {}
         self._score_seconds = 0.0
         self._score_observed_at: datetime | None = None
+        self._earnings_observed_at: datetime | None = None
+        self._earnings_by_status: dict[str, Decimal] = {}
         self._orders_before = 0
         self._runtime_error_counts: dict[str, int] = {}
 
@@ -199,6 +211,29 @@ class CommissioningRunner:
         build_order_payload(OrderRequest(
             self.market.slug, "offer", Decimal(str(self.book.best_offer.price)),
             Decimal("1")), self.market)
+
+    async def _refresh_earnings(self, now: datetime) -> None:
+        """Persist authenticated venue earnings without treating them as P&L."""
+
+        fetched = await self.gateway.fetch_earnings(
+            market_slug=self.config.market_slug,
+            program_type="liquidityProgram",
+        )
+        # Keep an exact local boundary even if a venue deployment silently
+        # ignores query filters. Shared-account historical rewards must never
+        # be presented or persisted as this market's earnings.
+        rows = tuple(
+            row for row in fetched
+            if row.market_slug == self.config.market_slug
+            and row.program_type == "liquidityProgram")
+        self.ledger.record_reward_earnings(rows, observed_at=now)
+        totals: dict[str, Decimal] = {}
+        for row in rows:
+            status = str(row.status).upper()
+            totals[status] = totals.get(status, Decimal("0")) + Decimal(
+                str(row.reward))
+        self._earnings_by_status = totals
+        self._earnings_observed_at = now
 
     async def _rest_reconcile(self, now: datetime) -> None:
         # First ask for terminal state on every bot-owned working order. A
@@ -284,9 +319,10 @@ class CommissioningRunner:
         await self.market_stream.start([self.config.market_slug])
         if self.ledger.working_orders(owned_only=True) or self.ledger.unresolved_intents():
             await self._rest_reconcile(now)
+        await self._refresh_earnings(now)
         accepted = ReadinessVerdict(
-            "COMMISSIONING_ECONOMIC_RISK_ACCEPTED", True, False, (),
-            ("profitability evidence waived only for one-contract commissioning",))
+            "COMMISSIONING_REWARD_ECONOMICS_ENFORCED", True, False, (),
+            ("scale remains blocked until attributable paid rewards calibrate",))
         report = await ControlledTrialStartup(
             self.account, self.ledger).reconcile(accepted, observed_at=now)
         recovery_only = (
@@ -316,7 +352,8 @@ class CommissioningRunner:
         await self._wait_for_initial_private_state()
         delivery = await self.notifier.send_async(
             "🟠 Liquidity Bot LIVE commissioning started: one market, "
-            "one contract per quote, $5 soft stop, $15 hard stop, "
+            "one contract per quote, reward-versus-exit economics enforced, "
+            "one taker exit ends the market, $5 soft stop, $15 hard stop, "
             "operator-controlled stop; pregame and loss gates remain active.")
         if not getattr(delivery, "sent", False):
             raise CommissioningRefused(
@@ -335,6 +372,9 @@ class CommissioningRunner:
         self._accrue_score(now)
         self._reward_eligible = frozenset()
         self._score_by_side = {}
+        self._expected_net_by_side = {}
+        self._reward_projection_by_side = {}
+        self._economic_blocker_by_side = {}
         if self.market is None or self.book is None or self.incentive is None:
             return
         try:
@@ -345,15 +385,69 @@ class CommissioningRunner:
         if period is None or period.period == "live" or self.market.tick_size is None:
             return
         eligible: set[str] = set()
+        working_sides = {order.side for order in self._working_orders()}
         for side, price in (("bid", self.book.best_bid.price),
                             ("offer", self.book.best_offer.price)):
+            already_resting = side in working_sides
             result = evaluate_order_score(
                 side=side, price=price, size=1,
                 levels=self.book.levels(side), incentive=period,
-                tick_size=self.market.tick_size)
+                tick_size=self.market.tick_size,
+                order_already_resting=already_resting)
             if result.eligible:
                 eligible.add(side)
                 self._score_by_side[side] = result.score
+            projection = project_order_reward(
+                side=side,
+                price=price,
+                size=1,
+                levels=self.book.levels(side),
+                incentive=period,
+                tick_size=self.market.tick_size,
+                event_start=self.market.game_start,
+                now=now,
+                horizon_seconds=self.config.reward_projection_horizon_seconds,
+                haircut=float(self.config.reward_projection_haircut),
+                minimum_payout=float(self.config.minimum_reward_payout_usd),
+                order_already_resting=already_resting,
+            )
+            self._reward_projection_by_side[side] = projection
+            if not projection.eligible:
+                self._economic_blocker_by_side[side] = projection.reason
+                continue
+            exit_result = cross_exit(
+                self.book,
+                entry_side=side,
+                entry_price=price,
+                qty=1,
+                depth_haircut=.5,
+                # If this quote fills, liquidity ahead at its entry level was
+                # consumed. Never count that same level as guaranteed exit
+                # depth, even while our order is already visible in the book.
+                exclude_entry_level=True,
+            )
+            if not exit_result.complete:
+                self._economic_blocker_by_side[side] = (
+                    "stressed_exit_incomplete")
+                continue
+            unwind_cost = max(0.0, -exit_result.pnl)
+            economics = OpportunityEconomics(
+                conservative_reward=projection.projected_reward,
+                maker_rebate=0.0,
+                # Pair-completion profit remains zero until live evidence can
+                # estimate it without optimism.
+                spread_capture=0.0,
+                fill_probability=1.0,
+                unwind_loss_if_filled=unwind_cost,
+                operational_buffer=(
+                    unwind_cost
+                    * (float(self.config.reward_cost_safety_multiple) - 1.0)),
+            )
+            if economics.should_quote:
+                self._expected_net_by_side[side] = economics.expected_net_value
+            else:
+                self._economic_blocker_by_side[side] = (
+                    "projected_reward_does_not_cover_2x_exit_cost")
         self._reward_eligible = frozenset(eligible)
 
     def _working_orders(self) -> tuple[WorkingOrder, ...]:
@@ -430,7 +524,6 @@ class CommissioningRunner:
             # state quotes would still add risk if filled. Make them undesired
             # so the reconciler cancels them while the process stays alive.
             eligible = frozenset()
-        expected = {side: 1e-9 for side in eligible}
         return MarketFrame(
             market=self.market,
             now=now,
@@ -441,10 +534,7 @@ class CommissioningRunner:
             state_known=(self.gate.ready(self.ledger, now=now)
                          and self.ledger.risk_state_known()),
             reward_eligible=eligible,
-            # The operator accepted missing profitability evidence. A tiny
-            # positive sentinel permits only venue-eligible sides; it is not
-            # stored or reported as estimated profit.
-            expected_net_by_side=expected,
+            expected_net_by_side=self._expected_net_by_side,
             existing_portfolio_worst_loss=0,
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
@@ -467,6 +557,24 @@ class CommissioningRunner:
             return "risk_guard_missing"
         if self.risk_guard.hard_stop_reached(now=now):
             return "15_USD_HARD_STOP"
+        if self.started_at is not None:
+            rows = self.ledger.query(
+                "SELECT client_order_id,fee FROM execution_fills "
+                "WHERE received_at>=? AND liquidity='TAKER' AND intent IN "
+                "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT')",
+                (self.started_at.isoformat(),),
+            )
+            taker_exit_orders = {
+                str(row["client_order_id"] or "") for row in rows
+            }
+            positive_fees = sum(
+                (max(Decimal("0"), Decimal(str(row["fee"]))) for row in rows),
+                Decimal("0"),
+            )
+            if len(taker_exit_orders) >= self.config.max_taker_exit_orders:
+                return "commissioning_taker_exit_limit"
+            if positive_fees >= self.config.max_session_execution_fees_usd:
+                return "commissioning_execution_fee_limit"
         blockers = self.risk_guard.blockers(now=now)
         # Missing/stale equity is recoverable only by staying alive with new
         # risk disabled. A confirmed loss, clock failure, or explicit critical
@@ -538,7 +646,7 @@ class CommissioningRunner:
                        if self.gate.last_message_at else None)
         payload = build_liquidity_summary(LiquiditySummary(
             mode="LIVE",
-            readiness_status="COMMISSIONING_ECONOMIC_RISK_ACCEPTED",
+            readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
             observed_at=now,
             session_started_at=self.started_at or now,
             active_markets=1,
@@ -567,8 +675,20 @@ class CommissioningRunner:
         ))
         # Expose actual create count only in the description, never imply that
         # shadow observations were venue orders.
+        economically_allowed = sorted(self._expected_net_by_side)
+        maximum_remaining = max(
+            (item.maximum_remaining_reward
+             for item in self._reward_projection_by_side.values()),
+            default=0.0,
+        )
+        paid_observed = self._earnings_by_status.get("PAID", Decimal("0"))
+        pending_observed = self._earnings_by_status.get("PENDING", Decimal("0"))
         payload["embeds"][0]["footer"]["text"] += (
-            f" • session creates {place_count - self._orders_before}")
+            f" • session creates {place_count - self._orders_before}"
+            f" • economic sides {','.join(economically_allowed) or 'none'}"
+            f" • max remaining reward ${maximum_remaining:.4f}"
+            f" • venue earnings observed paid ${paid_observed:.2f}"
+            f" pending ${pending_observed:.2f}")
         await self.notifier.send_payload_async(payload, critical=critical)
 
     async def _report_runtime_error(
@@ -945,6 +1065,8 @@ class CommissioningRunner:
             next_summary = now + timedelta(minutes=5)
             next_reconcile = now
             next_state_reconcile = now + timedelta(seconds=10)
+            next_earnings = now + timedelta(
+                seconds=self.config.earnings_refresh_seconds)
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
             while True:
@@ -1004,6 +1126,19 @@ class CommissioningRunner:
                         await self._report_runtime_error(
                             "market_incentive_refresh", exc)
                     next_contract_refresh = now + timedelta(minutes=1)
+                if now >= next_earnings:
+                    try:
+                        await self._refresh_earnings(now)
+                        self._runtime_error_counts.pop(
+                            "reward_earnings_refresh", None)
+                    except Exception as exc:
+                        # Earnings are delayed and never authorize an exit, but
+                        # every live run must preserve an auditable venue view.
+                        self._earnings_observed_at = None
+                        await self._report_runtime_error(
+                            "reward_earnings_refresh", exc)
+                    next_earnings = now + timedelta(
+                        seconds=self.config.earnings_refresh_seconds)
                 # Keep this last among periodic REST work so account/incentive
                 # latency cannot age the book before the decision below.
                 try:

@@ -30,12 +30,22 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
-permits only a non-scalable commissioning run. It is hard-locked to one named
-rewarded market, exactly one contract per quote, a 30-second inventory age, a
-$2 market stop, a $5 session stop, a $15 emergency hard stop, and an
-operator-controlled graceful stop. It cannot be armed without four explicit command
+permits only a non-scalable commissioning process. It is hard-locked to one
+named rewarded market, exactly one contract per quote, a 30-second inventory
+age, a $2 market stop, a $5 session stop, a $15 emergency hard stop, and an
+operator-controlled graceful stop. Live entry is nevertheless fail-closed: a
+venue-eligible side must also pass a book-competition reward projection, the
+$1 payout floor, a 50% reward haircut, and a 2x stressed-exit-cost margin. The
+process may remain healthy and intentionally place no orders when that economic
+proof is absent. It cannot be armed without four explicit command
 acknowledgements, an exclusive key handoff, a flat whole-account snapshot, and
 fresh private state.
+
+Authenticated earnings for the named market are snapshotted separately from
+execution P&L every 15 minutes. A passive reducer never locks in a loss: it
+rests at no worse than inventory basis. If the 30-second emergency path still
+needs a taker exit, the first such exit ends maker quoting so a one-cent test
+cost cannot repeat indefinitely.
 
 Recoverable market/private adapter failures no longer terminate the process.
 The runner logs the stack, disables new risk, cancels known working quotes,

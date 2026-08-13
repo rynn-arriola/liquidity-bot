@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS execution_position_reconciliations (
     as_of TEXT NOT NULL,
     observed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_reward_earnings (
+    date TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    program_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reward TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (date, market_slug, program_type, status, observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_reward_market_observed
+    ON execution_reward_earnings(market_slug, observed_at);
 """
 
 
@@ -229,6 +240,33 @@ class ExecutionLedger:
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return list(self.connection.execute(sql, params).fetchall())
+
+    def record_reward_earnings(
+        self, earnings: Iterable[Any], *, observed_at: datetime,
+    ) -> None:
+        """Append authenticated reward observations without calling them P&L."""
+
+        at = _time(observed_at, "observed_at")
+        rows = []
+        for item in earnings:
+            date = str(getattr(item, "date", "") or "").strip()
+            slug = str(getattr(item, "market_slug", "") or "").strip()
+            program_type = str(
+                getattr(item, "program_type", "") or "").strip()
+            status = str(getattr(item, "status", "") or "").strip().upper()
+            reward = _number(getattr(item, "reward", None), "reward")
+            if not date or not slug or not program_type or not status:
+                raise ValueError("reward earning identity is incomplete")
+            if _decimal(reward, "reward") < 0:
+                raise ValueError("reward earning cannot be negative")
+            rows.append((date, slug, program_type, status, reward, at))
+        with self.connection:
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO execution_reward_earnings"
+                "(date,market_slug,program_type,status,reward,observed_at) "
+                "VALUES (?,?,?,?,?,?)",
+                rows,
+            )
 
     def prepare_intent(
         self,

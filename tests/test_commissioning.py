@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from liquidity_bot.commissioning import (
     CommissioningConfig,
@@ -43,6 +44,12 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(self.authorized().max_shutdown_exit_attempts, 3)
         self.assertEqual(self.authorized().shutdown_alert_interval_seconds, 300)
         self.assertEqual(self.authorized().max_shutdown_seconds, 900)
+        self.assertEqual(self.authorized().reward_projection_horizon_seconds, 30)
+        self.assertEqual(
+            self.authorized().reward_cost_safety_multiple, Decimal("2"))
+        self.assertEqual(self.authorized().max_taker_exit_orders, 1)
+        self.assertEqual(
+            self.authorized().max_session_execution_fees_usd, Decimal("0.02"))
 
     def test_missing_arm_or_non_manual_mode_is_refused(self):
         overnight = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -55,6 +62,13 @@ class CommissioningTests(unittest.TestCase):
         with self.assertRaisesRegex(CommissioningRefused, "shutdown limits"):
             self.authorized(
                 max_shutdown_seconds=60).assert_authorized(now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "reward economics"):
+            self.authorized(
+                reward_projection_haircut=Decimal("0.75")).assert_authorized(
+                    now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "loss learning"):
+            self.authorized(max_taker_exit_orders=2).assert_authorized(
+                now=overnight)
 
 
 if __name__ == "__main__":

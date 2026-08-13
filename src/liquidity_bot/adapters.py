@@ -381,11 +381,30 @@ class AsyncReadOnlyGateway:
             for slug, periods in found_periods.items()
         }
 
-    async def fetch_earnings(self) -> tuple[RewardEarning, ...]:
+    async def fetch_earnings(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        market_slug: str | None = None,
+        program_type: str | None = None,
+    ) -> tuple[RewardEarning, ...]:
+        query = {
+            key: value for key, value in {
+                # The live Retail API currently honors snake_case query keys;
+                # its published camelCase examples are silently ignored.
+                "start_date": start_date,
+                "end_date": end_date,
+                "market_slug": market_slug,
+                "program_type": program_type,
+            }.items() if value is not None and str(value).strip()
+        }
         response = await self._call(
             "GET /v1/incentives/earnings",
             lambda: self.client.get(
-                "/v1/incentives/earnings", authenticated=True),
+                "/v1/incentives/earnings",
+                query=query or None,
+                authenticated=True),
         )
         if not isinstance(response, dict) or not isinstance(response.get("rewards"), list):
             raise AdapterError("earnings response has no rewards list")

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
-from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
+from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
     CommissioningResult,
     CommissioningRunner,
@@ -26,7 +26,7 @@ from liquidity_bot.reconciler import ActionKind, PlanAction
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-GAME_START = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+GAME_START = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
 
 
 class ImmediateLimiter:
@@ -127,19 +127,23 @@ class FakeClient:
         self.orders = FakeOrders()
         self.portfolio = FakePortfolio()
         self.account = FakeAccount()
+        self.reward_pool = 20000
+        self.earnings_rows = []
 
     async def get(self, path, *, query=None, authenticated=False):
+        if path == "/v1/incentives/earnings":
+            return {"rewards": self.earnings_rows}
         if path != "/v1/incentives":
             raise AssertionError(f"unexpected GET {path}")
         return {"programs": [{
             "marketSlug": "market-one",
             "eventStartTime": GAME_START.isoformat(),
             "timePeriods": [{
-                "programId": "fake-early-program",
+                "programId": "fake-day-of-program",
                 "programType": "liquidityProgram",
-                "period": "early",
+                "period": "day_of",
                 "status": "active",
-                "rewardPool": 25,
+                "rewardPool": self.reward_pool,
                 "discountFactor": 0.5,
                 "targetSize": 10,
                 "start": None,
@@ -262,6 +266,61 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         payload = client.orders.create_calls[0]
         self.assertEqual(payload["quantity"], 1)
         self.assertTrue(payload["participateDontInitiate"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_sub_dollar_reward_projection_places_no_order(self):
+        runner, client, _ = self.build_runner()
+        client.reward_pool = 200
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(actions, [])
+        self.assertEqual(runner._expected_net_by_side, {})
+        self.assertEqual(
+            {item.reason for item in runner._reward_projection_by_side.values()},
+            {"below_minimum_payout"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_ignored_earnings_query_cannot_import_other_market_rewards(self):
+        runner, client, _ = self.build_runner()
+        client.earnings_rows = [{
+            "date": "2026-08-10",
+            "marketSlug": "other-market",
+            "programType": "liquidityProgram",
+            "reward": "32.06",
+            "status": "PAID",
+        }]
+
+        await runner.preflight()
+
+        self.assertEqual(runner._earnings_by_status, {})
+        self.assertEqual(runner.ledger.query(
+            "SELECT * FROM execution_reward_earnings"), [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_first_taker_exit_stops_requoting(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        entry_at = NOW + timedelta(seconds=1)
+        exit_at = NOW + timedelta(seconds=2)
+        runner.ledger.apply_execution(Execution(
+            "maker-entry", "market-one", "ORDER_SIDE_BUY",
+            Decimal("0.49"), Decimal("1"), Decimal("0"), entry_at,
+            client_order_id="entry", liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG"), received_at=entry_at)
+        runner.ledger.apply_execution(Execution(
+            "taker-exit", "market-one", "ORDER_SIDE_SELL",
+            Decimal("0.49"), Decimal("1"), Decimal("0.01"), exit_at,
+            client_order_id="exit", liquidity="TAKER",
+            intent="ORDER_INTENT_SELL_LONG"), received_at=exit_at)
+
+        self.assertEqual(
+            runner._stop_reason(exit_at), "commissioning_taker_exit_limit")
         await runner.private_stream.close()
         await runner.market_stream.close()
 

@@ -8,6 +8,7 @@ from liquidity_bot.rewards import (
     IncentivePeriod,
     evaluate_order_score,
     phase_for_event,
+    project_order_reward,
     select_applicable_period,
 )
 
@@ -105,6 +106,60 @@ class RewardScoreTests(unittest.TestCase):
         self.assertFalse(result.eligible)
         self.assertEqual(result.reason, "outside_reward_cutoff")
         self.assertAlmostEqual(result.cutoff_price, 0.53)
+
+    def test_projection_uses_competing_score_and_half_pool(self):
+        incentive = period(
+            "day_of", target=100, pool=20_000, discount=0.5)
+        result = project_order_reward(
+            side="bid",
+            price=0.50,
+            size=1,
+            levels=[(0.50, 99)],
+            incentive=incentive,
+            tick_size=0.01,
+            event_start=NOW + timedelta(hours=1),
+            now=NOW,
+            horizon_seconds=30,
+            haircut=0.5,
+            minimum_payout=1,
+        )
+        self.assertTrue(result.eligible)
+        self.assertAlmostEqual(result.total_score, 100)
+        self.assertAlmostEqual(result.snapshot_share, 0.01)
+        self.assertAlmostEqual(result.projected_reward, 0.0694444444)
+        self.assertGreater(result.maximum_remaining_reward, 1)
+
+    def test_projection_rejects_sub_dollar_maximum_payout(self):
+        result = project_order_reward(
+            side="offer",
+            price=0.51,
+            size=1,
+            levels=[(0.51, 25_000)],
+            incentive=period(
+                "day_of", target=10_000, pool=200, discount=0.35),
+            tick_size=0.01,
+            event_start=NOW + timedelta(hours=5),
+            now=NOW,
+            horizon_seconds=30,
+        )
+        self.assertFalse(result.eligible)
+        self.assertEqual(result.reason, "below_minimum_payout")
+        self.assertLess(result.maximum_remaining_reward, 1)
+
+    def test_projection_fails_closed_without_a_proven_period_duration(self):
+        result = project_order_reward(
+            side="bid",
+            price=0.50,
+            size=1,
+            levels=[(0.50, 99)],
+            incentive=period("early", target=100, pool=20_000),
+            tick_size=0.01,
+            event_start=NOW + timedelta(hours=7),
+            now=NOW,
+            horizon_seconds=30,
+        )
+        self.assertFalse(result.eligible)
+        self.assertEqual(result.reason, "period_duration_unproven")
 
 
 if __name__ == "__main__":

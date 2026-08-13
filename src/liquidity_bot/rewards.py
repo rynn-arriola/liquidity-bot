@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable, Sequence
 
 
@@ -36,6 +36,26 @@ class RewardScore:
     ticks_from_best: int | None
     cutoff_price: float | None
     total_depth: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class RewardProjection:
+    """Conservative dollars attributable to one side over a short horizon.
+
+    Liquidity rewards are normalized independently on each side of every
+    snapshot.  The projection therefore uses no more than half of the period
+    pool for one side, discounts the current order's observed score share, and
+    refuses to count a reward that cannot reach the venue's minimum payout
+    even if the present book remained unchanged for the rest of the period.
+    """
+
+    eligible: bool
+    order_score: float
+    total_score: float
+    snapshot_share: float
+    projected_reward: float
+    maximum_remaining_reward: float
     reason: str
 
 
@@ -126,6 +146,7 @@ def evaluate_order_score(
     levels: Sequence[tuple[float, float]],
     incentive: IncentivePeriod,
     tick_size: float,
+    order_already_resting: bool = False,
 ) -> RewardScore:
     """Evaluate one proposed order against one side of the full book.
 
@@ -155,7 +176,8 @@ def evaluate_order_score(
 
     depth = _validated_levels(levels)
     order_price = round(price, 8)
-    depth[order_price] = depth.get(order_price, 0.0) + size
+    if not order_already_resting:
+        depth[order_price] = depth.get(order_price, 0.0) + size
     ordered = sorted(depth.items(), reverse=(side == "bid"))
     best_price = ordered[0][0]
 
@@ -208,3 +230,120 @@ def evaluate_order_score(
         total_depth=cumulative,
         reason="eligible",
     )
+
+
+def project_order_reward(
+    *,
+    side: str,
+    price: float,
+    size: float,
+    levels: Sequence[tuple[float, float]],
+    incentive: IncentivePeriod,
+    tick_size: float,
+    event_start: datetime,
+    now: datetime,
+    horizon_seconds: float,
+    haircut: float = 0.5,
+    minimum_payout: float = 1.0,
+    order_already_resting: bool = False,
+) -> RewardProjection:
+    """Project a conservative one-side reward from the current full book.
+
+    The documented ``day_of`` period has an exact six-hour duration.  Other
+    periods do not expose a reliable per-market start/end clock in the Retail
+    API, so they fail closed instead of dividing a headline pool by a guessed
+    duration.  This is an entry authorization estimate, not booked income.
+    """
+
+    _require_aware(event_start, "event_start")
+    _require_aware(now, "now")
+    horizon = float(horizon_seconds)
+    haircut = float(haircut)
+    minimum_payout = float(minimum_payout)
+    if horizon <= 0:
+        raise ValueError("reward projection horizon must be positive")
+    if not 0 < haircut <= 1:
+        raise ValueError("reward projection haircut must be in (0, 1]")
+    if minimum_payout < 0:
+        raise ValueError("minimum payout cannot be negative")
+
+    score = evaluate_order_score(
+        side=side,
+        price=price,
+        size=size,
+        levels=levels,
+        incentive=incentive,
+        tick_size=tick_size,
+        order_already_resting=order_already_resting,
+    )
+    if not score.eligible:
+        return RewardProjection(
+            False, 0.0, 0.0, 0.0, 0.0, 0.0, score.reason)
+
+    if _normalized_period(incentive.period) != "day_of":
+        return RewardProjection(
+            False, score.score, 0.0, 0.0, 0.0, 0.0,
+            "period_duration_unproven")
+    period_end = event_start
+    period_start = event_start - timedelta(hours=6)
+    if not period_start <= now < period_end:
+        return RewardProjection(
+            False, score.score, 0.0, 0.0, 0.0, 0.0,
+            "outside_projection_period")
+
+    side = str(side).strip().lower()
+    price = float(price)
+    size = float(size)
+    tick_size = float(tick_size)
+    discount = float(incentive.discount_factor)
+    target = float(incentive.target_size)
+    depth = _validated_levels(levels)
+    order_price = round(price, 8)
+    # A working order is normally already present in the aggregate book, but
+    # the feed does not identify our quantity. Counting it once more in the
+    # denominator is the conservative ambiguity treatment; it can only lower
+    # the projected share. Eligibility above was evaluated against the book as
+    # observed, so this extra denominator size cannot create eligibility.
+    depth[order_price] = depth.get(order_price, 0.0) + size
+    ordered = sorted(depth.items(), reverse=(side == "bid"))
+    best_price = ordered[0][0]
+
+    cumulative = 0.0
+    qualifying: list[tuple[float, float]] = []
+    for level_price, level_size in ordered:
+        cumulative += level_size
+        qualifying.append((level_price, level_size))
+        if cumulative + 1e-9 >= target:
+            break
+    if cumulative + 1e-9 < target:
+        return RewardProjection(
+            False, score.score, 0.0, 0.0, 0.0, 0.0,
+            "target_not_met")
+
+    total_score = 0.0
+    for level_price, level_size in qualifying:
+        distance = (best_price - level_price if side == "bid"
+                    else level_price - best_price)
+        ticks = max(0, math.ceil(distance / tick_size - 1e-9))
+        total_score += (discount ** ticks) * level_size
+    if total_score <= 0:
+        return RewardProjection(
+            False, score.score, total_score, 0.0, 0.0, 0.0,
+            "total_score_unknown")
+
+    share = min(1.0, score.score / total_score)
+    duration = (period_end - period_start).total_seconds()
+    remaining = (period_end - now).total_seconds()
+    # Each side is independently normalized to 1.0.  Reserving no more than
+    # half the pool for either side is conservative when both sides qualify.
+    dollars_per_second = (
+        float(incentive.reward_pool) * 0.5 * share * haircut / duration)
+    maximum = dollars_per_second * remaining
+    if maximum + 1e-12 < minimum_payout:
+        return RewardProjection(
+            False, score.score, total_score, share, 0.0, maximum,
+            "below_minimum_payout")
+    projected = dollars_per_second * min(horizon, remaining)
+    return RewardProjection(
+        True, score.score, total_score, share, projected, maximum,
+        "projected")

@@ -7,11 +7,19 @@ strategy is profitable and not permission to scale.
 
 - one explicit rewarded pregame market;
 - one contract per quote (one bid and one offer may rest while flat);
+- quote a venue-eligible side only when its current normalized score share can
+  still reach the $1 payout floor and a 30-second reward projection, after a
+  50% haircut, exceeds twice the stressed immediate-exit cost;
+- use no projected spread or maker rebate until live evidence supports it;
 - cancel the opposite building order immediately after the first fill;
-- work the exact reducing quantity at the active touch;
+- work the exact reducing quantity passively at the active touch only when that
+  is no worse than basis; otherwise wait at the break-even basis price;
 - at 30 seconds, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt;
+- end maker quoting after the first taker exit in a session, with a separate
+  $0.02 positive execution-fee ceiling, so an unmatched-fill cost cannot become
+  a repeating cycle;
 - $2 per-market soft stop, $5 marked-account-equity session stop, and $15
   emergency marked-account-equity hard stop;
 - run until an operator stop or terminal safety/loss condition, then remain
@@ -37,6 +45,15 @@ The command refuses before order entry unless all of these are true:
 6. The balance schema is complete and marked equity is known.
 7. REST reconciliation and the private account WebSocket are fresh.
 8. Normal and critical Discord webhooks are configured.
+9. Authenticated earnings for the named liquidity program can be read and
+   persisted separately from execution P&L.
+
+Reward eligibility alone never authorizes an order. The runtime computes the
+proposed order's share of all discounted score inside the target-size cutoff,
+reserves no more than half of the pool for either independently normalized
+side, and projects only the documented six-hour `day_of` period. Periods whose
+per-market duration cannot be proven fail closed. The process can therefore run
+normally with zero working orders; that is an economic refusal, not a fault.
 
 During runtime, an explicitly recoverable private, market, or order adapter
 error enters a dormant recovery state instead of ending the process. The runner

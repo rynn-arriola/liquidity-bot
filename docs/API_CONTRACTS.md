@@ -104,6 +104,11 @@ Official references:
 
 - `GET /v1/incentives/earnings` returns `{ "rewards": [...] }`.
 - Observed statuses include `PAID`, `PENDING`, and `SKIPPED`.
+- Live verification on 2026-08-13 found that `marketSlug`/`programType` query
+  keys were silently ignored while `market_slug`/`program_type` returned the
+  exact filtered result. The adapter uses the observed snake_case keys and the
+  commissioning boundary filters the returned rows again by exact market and
+  program identity.
 - Only attributable `PAID` rows can satisfy a profitability gate.
 
 ## Account balance

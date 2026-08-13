@@ -6,7 +6,10 @@ These are implementation requirements, not suggestions.
 2. No live startup is allowed without a positive, shadow-validated maximum inventory age.
 3. Every building order must fit both per-market and portfolio unmatched-loss budgets.
 4. After the first fill, all risk-building orders for that market are cancelled.
-5. After a fill, cancel every building order. Work a reducing quote at the active touch even when it realizes a small bounded loss; do not selectively close only winners.
+5. After a fill, cancel every building order. Work the exact reducing quote at
+   the active touch only when that price is no worse than inventory basis;
+   otherwise rest at the break-even basis price. Emergency loss realization is
+   reserved for the bounded hard-timeout path, not the passive reducer.
 6. If the position remains at its hard inventory-age limit, cancel and confirm the passive exit before sending a price-capped IOC. It must never drift to settlement by default.
 7. A reward order is allowed only for the lifecycle phase applying at that instant.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
@@ -68,3 +71,18 @@ These are implementation requirements, not suggestions.
     exit 3 for immediate operator inspection. Until that deadline it keeps
     reconciling and uses any remaining exit attempt when a safe exact-position
     IOC is available; it never holds a position while silent.
+33. Venue reward eligibility is necessary but not sufficient for entry. A live
+    side must also pass a normalized competing-score projection, a conservative
+    per-side pool allocation, the $1 payout floor, a 50% reward haircut, and a
+    2x stressed-exit-cost margin. Missing duration or economic evidence means
+    zero orders, not an override sentinel.
+34. Pair-completion spread and maker rebate are zero in the commissioning entry
+    forecast until attributable live evidence supports nonzero values. Published
+    pool size is never substituted for the bot's proportional share.
+35. The first confirmed taker exit in a commissioning session is terminal for
+    maker quoting. The process cancels, reconciles, proves flat, and does not
+    start another fee-paying cycle; positive execution fees also have a $0.02
+    session ceiling.
+36. Authenticated incentive earnings for the named market are sampled every 15
+    minutes and stored in a table separate from executions. Paid, pending, and
+    skipped observations do not alter inventory basis or trading P&L.

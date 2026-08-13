@@ -59,6 +59,13 @@ class CommissioningConfig:
     max_shutdown_exit_attempts: int = 3
     shutdown_alert_interval_seconds: int = 300
     max_shutdown_seconds: int = 900
+    reward_projection_horizon_seconds: int = 30
+    reward_projection_haircut: Decimal = Decimal("0.5")
+    reward_cost_safety_multiple: Decimal = Decimal("2")
+    minimum_reward_payout_usd: Decimal = Decimal("1")
+    max_taker_exit_orders: int = 1
+    max_session_execution_fees_usd: Decimal = Decimal("0.02")
+    earnings_refresh_seconds: int = 900
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -99,6 +106,19 @@ class CommissioningConfig:
             problems.append(
                 "commissioning shutdown limits must remain 3 exit attempts, "
                 "300-second alert repeats, and a 900-second window")
+        if (self.reward_projection_horizon_seconds != 30
+                or self.reward_projection_haircut != Decimal("0.5")
+                or self.reward_cost_safety_multiple != Decimal("2")
+                or self.minimum_reward_payout_usd != Decimal("1")):
+            problems.append(
+                "commissioning reward economics must remain a 30-second "
+                "projection, 50% haircut, 2x cost margin, and $1 payout floor")
+        if (self.max_taker_exit_orders != 1
+                or self.max_session_execution_fees_usd != Decimal("0.02")
+                or self.earnings_refresh_seconds != 900):
+            problems.append(
+                "commissioning loss learning must stop after one taker exit, "
+                "cap execution fees at $0.02, and refresh earnings every 900 seconds")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

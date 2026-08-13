@@ -227,7 +227,18 @@ class DesiredStateReconciler:
             ActionKind.CANCEL, slug, "cancel_building_after_fill",
             side=order.side, order_id=order.order_id)
             for order in frame.working_orders if order.side == building]
-        passive_price = self._touch(frame.book, reducing)
+        active_touch = self._touch(frame.book, reducing)
+        # A passive reducer is allowed to wait, so it must not lock in a loss.
+        # Long inventory sells no lower than basis; short inventory buys back
+        # no higher than basis.  The hard timeout remains the only path allowed
+        # to pay for an emergency flatten, and the live commissioning runner
+        # terminates the market after such an exit rather than immediately
+        # beginning another fee-paying cycle.
+        passive_price = (
+            max(active_touch, frame.entry_price)
+            if frame.position > 0
+            else min(active_touch, frame.entry_price)
+        )
         reducing_orders = [order for order in frame.working_orders
                            if order.side == reducing]
         matching = [order for order in reducing_orders

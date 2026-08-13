@@ -13,6 +13,7 @@ from liquidity_bot.execution_ledger import (
     OrderState,
     PositionState,
 )
+from liquidity_bot.models import RewardEarning
 
 
 UTC = timezone.utc
@@ -267,6 +268,21 @@ class ExecutionLedgerTests(unittest.TestCase):
             PositionState("market-one", Decimal("2"), T0 + timedelta(seconds=1)),
             received_at=T0 + timedelta(seconds=1))
         self.assertIsNone(self.ledger.inventory_basis("market-one"))
+
+    def test_reward_observations_are_separate_from_execution_pnl(self):
+        earning = RewardEarning(
+            "2026-08-13", "market-one", "liquidityProgram", 1.25, "PENDING")
+        self.ledger.record_reward_earnings([earning], observed_at=T0)
+        self.ledger.record_reward_earnings([earning], observed_at=T0)
+        rows = self.ledger.query(
+            "SELECT date,market_slug,status,reward FROM execution_reward_earnings")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(dict(rows[0]), {
+            "date": "2026-08-13",
+            "market_slug": "market-one",
+            "status": "PENDING",
+            "reward": "1.25",
+        })
 
 
 if __name__ == "__main__":

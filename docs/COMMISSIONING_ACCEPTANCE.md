@@ -4,7 +4,7 @@ No mutation or Discord endpoint was called during these checks.
 
 ## Deterministic verification
 
-- 158 unit/integration tests passed under Python 3.14 on Windows.
+- 208 unit/integration tests passed under Python 3.14 on Windows.
 - A fake venue accepted only an exact one-contract, post-only payload.
 - Fake 06:00 New York cutoff completed flat with zero new orders.
 - A $15 marked-equity drawdown selected the named emergency hard-stop path.
@@ -145,3 +145,30 @@ exit is limited to three IOC submissions within 30 seconds, each with a
 10-second confirmation deadline. Recoverable action/strategy retries back off
 exponentially under the shared REST governor. Boundary tests cover both the
 recoverable and terminal sides.
+
+## Reward-economics correction - 2026-08-13
+
+The first continuous one-contract run completed two mechanically safe but
+economically losing cycles. Each maker bid filled at $0.81, the passive
+reducing offer did not fill within 30 seconds, and the exact taker exit sold at
+$0.81 with a $0.01 fee. Gross price P&L was zero and recorded execution P&L was
+-$0.02 before delayed rewards. Because flat state was treated as success and
+the existing dollar loss limits were much larger, the runner quoted again.
+
+Read-only verification at `2026-08-13T18:02:59Z` showed why reward eligibility
+was insufficient. The selected WNBA market still had a $200 `day_of` pool and
+both one-contract touch orders scored, but the target-size walk reached roughly
+25,744 contracts on the bid and 56,945 on the offer. One contract's normalized
+share could earn only a fraction of a cent over the remaining period and could
+not reach the documented $1 payout floor. Authenticated account earnings showed
+$32.06 paid, $5.39 pending, and $0.39 skipped across prior activity; none was
+treated as income attributable to this session.
+
+The former `1e-9` profitability sentinel is removed. Commissioning now uses the
+current full-book competing score, at most half the period pool per side, a 50%
+haircut, a 30-second projection, the $1 payout floor, and a 2x stressed exit
+cost margin. It assumes zero pair-completion spread and zero maker rebate. A
+side that fails any term remains idle even when venue reward-eligible. Passive
+reducers cannot quote through basis, authenticated market earnings are stored
+separately every 15 minutes, and the first confirmed taker exit ends maker
+quoting rather than beginning another cycle.

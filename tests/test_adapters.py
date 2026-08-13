@@ -181,6 +181,23 @@ class GatewayTests(unittest.TestCase):
         self.assertTrue(rows[0].is_paid)
         self.assertFalse(rows[1].is_paid)
 
+    def test_earnings_can_be_scoped_to_one_liquidity_market(self):
+        client = FakeClient()
+        client.get_responses = [fixture("earnings.json")]
+        self.run_async(AsyncReadOnlyGateway(client).fetch_earnings(
+            start_date="2026-08-13",
+            market_slug="market-one",
+            program_type="liquidityProgram"))
+        self.assertEqual(client.get_calls, [(
+            "/v1/incentives/earnings",
+            {
+                "start_date": "2026-08-13",
+                "market_slug": "market-one",
+                "program_type": "liquidityProgram",
+            },
+            True,
+        )])
+
     def test_market_uses_nested_wrapper_clock_and_tick(self):
         client = FakeClient()
         client.markets.market_response = fixture("market.json")

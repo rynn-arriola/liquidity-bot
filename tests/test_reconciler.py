@@ -73,14 +73,23 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual((actions[0].kind, actions[0].order_id),
                          (ActionKind.CANCEL, "bid-one"))
 
-    def test_soft_exit_quotes_active_touch_even_below_entry(self):
+    def test_soft_long_exit_never_quotes_below_entry(self):
         falling = book(T0 + timedelta(seconds=1), bid=.39, offer=.41)
         actions = DesiredStateReconciler(policy()).plan(frame(
             now=T0 + timedelta(seconds=1), position="2", opened=T0,
             entry=.50, snapshot=falling))
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(actions[0].side, "offer")
-        self.assertEqual(actions[0].price, .41)
+        self.assertEqual(actions[0].price, .50)
+
+    def test_soft_short_exit_never_quotes_above_entry(self):
+        rising = book(T0 + timedelta(seconds=1), bid=.61, offer=.63)
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="-2", opened=T0,
+            entry=.50, snapshot=rising))
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side, "bid")
+        self.assertEqual(actions[0].price, .50)
 
     def test_timeout_confirms_cancel_before_ioc(self):
         reconciler = DesiredStateReconciler(policy())

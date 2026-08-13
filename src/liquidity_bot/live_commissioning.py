@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -413,6 +414,13 @@ class CommissioningRunner:
             return "risk_stop:" + ",".join(blockers)
         return None
 
+    def _oldest_unresolved_age_seconds(self, now: datetime) -> float | None:
+        rows = self.ledger.unresolved_intents()
+        if not rows:
+            return None
+        oldest = min(datetime.fromisoformat(row["updated_at"]) for row in rows)
+        return (now - oldest).total_seconds()
+
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:
         position = self.ledger.position(self.config.market_slug)
@@ -529,6 +537,7 @@ class CommissioningRunner:
                     return
             except Exception as exc:
                 if not alerted:
+                    traceback.print_exc()
                     await self.notifier.send_async(
                         "🚨 Liquidity Bot cannot yet prove flat during shutdown "
                         f"({type(exc).__name__}). Process remains in recovery.",
@@ -619,17 +628,15 @@ class CommissioningRunner:
                             # this cannot be reconciled promptly.
                             pass
                         next_reconcile = now + timedelta(seconds=2)
-                    unresolved = self.ledger.unresolved_intents()
-                    oldest = min(datetime.fromisoformat(row["updated_at"])
-                                 for row in unresolved)
-                    if ((now - oldest).total_seconds() > 10
-                            and self.risk_guard is not None):
-                        self.risk_guard.trip_critical(
-                            "order mutation unresolved for more than 10 seconds")
-                    if now >= next_summary:
-                        await self._send_summary(now)
-                        next_summary = now + timedelta(minutes=5)
-                    continue
+                    unresolved_age = self._oldest_unresolved_age_seconds(now)
+                    if unresolved_age is not None:
+                        if (unresolved_age > 10 and self.risk_guard is not None):
+                            self.risk_guard.trip_critical(
+                                "order mutation unresolved for more than 10 seconds")
+                        if now >= next_summary:
+                            await self._send_summary(now)
+                            next_summary = now + timedelta(minutes=5)
+                        continue
                 actions = self.reconciler.plan(self._frame(now))
                 if actions and actions[0].kind == ActionKind.CRITICAL:
                     stop_reason = f"critical:{actions[0].reason}"
@@ -651,6 +658,8 @@ class CommissioningRunner:
                 critical=True)
             if not preflight_complete:
                 preflight_error = exc
+            else:
+                traceback.print_exc()
         finally:
             stream_tasks = tuple(
                 task for task in (market_task, private_task) if task is not None)

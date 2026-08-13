@@ -55,3 +55,11 @@ process was stopped only after independent REST checks proved canceled, no open
 orders, and flat. Normalization now consumes the observed terminal clock, and
 startup directly retrieves every persisted exchange ID before snapshots; a
 restart with any prior place intent is recovery-only and cannot resume risk.
+
+A subsequent fresh-ledger attempt placed one one-contract quote, reconciled its
+order response, and then hit an empty-transition bug: the same loop pass tried
+to take the oldest timestamp after REST had cleared the final unresolved
+intent. It raised `ValueError`, entered shutdown, canceled the quote, proved
+zero open orders/positions, and exited without restart. The loop now treats an
+empty post-reconciliation set as success and proceeds, with a regression test
+and persistent traceback output for future caught failures.

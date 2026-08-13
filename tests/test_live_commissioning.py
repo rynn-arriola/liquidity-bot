@@ -354,6 +354,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.orders.create_calls, [])
         self.assertEqual(client.orders.cancel_calls, [])
 
+    async def test_reconciliation_can_clear_last_unresolved_intent_mid_pass(self):
+        runner, _, _ = self.build_runner()
+        self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
+        runner.ledger.prepare_intent(
+            "temporary", "PLACE", "market-one", "temporary-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        self.assertEqual(runner._oldest_unresolved_age_seconds(NOW), 0)
+        runner.ledger.transition_intent(
+            "temporary", "FAILED", updated_at=NOW)
+        self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
+
     async def test_cli_refuses_before_loading_secrets_when_not_armed(self):
         args = Namespace(
             market_slug="market-one",

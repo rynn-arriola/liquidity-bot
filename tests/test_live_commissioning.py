@@ -4,15 +4,22 @@ import asyncio
 import tempfile
 import unittest
 from argparse import Namespace
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
-from liquidity_bot.live_commissioning import CommissioningRunner, _run
+from liquidity_bot.live_commissioning import (
+    CommissioningResult,
+    CommissioningRunner,
+    _run,
+    main,
+)
+from liquidity_bot.live_orders import OrderOutcomeUncertain, OrderRequest
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 from liquidity_bot.reconciler import ActionKind, PlanAction
@@ -671,30 +678,21 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, client, notifier = self.build_runner(clock=TickingClock())
         await runner.preflight()
         slug = runner.config.market_slug
-        client.portfolio.rows = {
-            slug: {
-                "netPosition": "1",
-                "netPositionDecimal": "1.0000",
-                "updateTime": runner._now().isoformat(),
-            }
-        }
-        runner.reconciler._hard_exit_attempts[slug] = 3
-        delays = []
+        self._hold_one_contract(client, slug)
+        # Every shutdown IOC expires unfilled, so the position never clears and
+        # the loop keeps asking for another exit until its budget is spent.
+        self._expire_every_created_order(runner, client, slug)
+        runner.config = replace(runner.config, max_shutdown_seconds=120)
 
-        async def stop_on_manual_escalation(seconds):
-            delays.append(seconds)
-            raise asyncio.CancelledError()
+        await runner._shutdown("critical:hard_exit_attempt_limit_exceeded")
 
-        runner.sleep = stop_on_manual_escalation
-
-        with self.assertRaises(asyncio.CancelledError):
-            await runner._shutdown("critical:hard_exit_attempt_limit_exceeded")
-
-        self.assertEqual(delays, [30])
-        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(
+            len(client.orders.create_calls),
+            runner.config.max_shutdown_exit_attempts)
         self.assertTrue(any(
-            "IOC attempt ceiling" in message and critical
+            "shutdown exit budget" in message and critical
             for message, critical in notifier.messages))
+        self.assertFalse(runner._shutdown_proved_flat)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -706,6 +704,224 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._recovery_delay("action_driver"), 8)
         runner._runtime_error_counts["action_driver"] = 20
         self.assertEqual(runner._recovery_delay("action_driver"), 30)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    def _hold_one_contract(self, client, slug):
+        client.portfolio.rows = {slug: {
+            "netPosition": "1",
+            "netPositionDecimal": "1.0000",
+            "updateTime": NOW.isoformat(),
+        }}
+
+    def _expire_every_created_order(self, runner, client, slug):
+        """Accept each order at the venue and let it expire unfilled."""
+
+        original_create = client.orders.create
+
+        async def create_then_expire(payload):
+            response = await original_create(payload)
+            moment = runner._now().isoformat()
+            client.orders.rows[response["id"]] = {
+                "id": response["id"],
+                "marketSlug": slug,
+                "intent": payload["intent"],
+                "state": "ORDER_STATE_EXPIRED",
+                "side": "ORDER_SIDE_SELL",
+                "price": payload["price"],
+                "quantity": payload["quantity"],
+                "cumQuantity": "0",
+                "updateTime": moment,
+                "lastTransactTime": moment,
+            }
+            return response
+
+        client.orders.create = create_then_expire
+
+    def _fill_first_created_order(self, runner, client, slug):
+        """Accept the first shutdown IOC and expose terminal flat venue state."""
+
+        original_create = client.orders.create
+
+        async def create_then_fill(payload):
+            response = await original_create(payload)
+            moment = runner._now().isoformat()
+            client.orders.rows[response["id"]] = {
+                "id": response["id"],
+                "marketSlug": slug,
+                "intent": payload["intent"],
+                "state": "ORDER_STATE_FILLED",
+                "side": "ORDER_SIDE_SELL",
+                "price": payload["price"],
+                "quantity": payload["quantity"],
+                "cumQuantity": payload["quantity"],
+                "updateTime": moment,
+                "lastTransactTime": moment,
+            }
+            client.portfolio.rows = {}
+            return response
+
+        client.orders.create = create_then_fill
+
+    async def test_shutdown_flattens_on_its_own_budget_after_runtime_ceiling(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        # The quoting loop already spent its ceiling before going terminal.
+        runner.reconciler._hard_exit_attempts[slug] = (
+            runner.reconciler.policy.max_hard_exit_attempts)
+        self._hold_one_contract(client, slug)
+        self._fill_first_created_order(runner, client, slug)
+        runner.config = replace(runner.config, max_shutdown_seconds=30)
+
+        await runner._shutdown("critical:hard_exit_attempt_limit_exceeded")
+
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertEqual(
+            client.orders.create_calls[0]["tif"],
+            "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL")
+        self.assertTrue(runner._shutdown_proved_flat)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stuck_shutdown_repeats_its_critical_alert(self):
+        notifier = FakeNotifier()
+        runner, client, _ = self.build_runner(
+            clock=TickingClock(), notifier=notifier)
+        await runner.preflight()
+        slug = runner.config.market_slug
+        self._hold_one_contract(client, slug)
+        runner.config = replace(
+            runner.config, max_shutdown_exit_attempts=0,
+            shutdown_alert_interval_seconds=1, max_shutdown_seconds=30)
+
+        await runner._shutdown("critical:hard_exit_insufficient_stressed_depth")
+
+        stuck = [message for message, critical in notifier.messages
+                 if critical and "shutdown exit budget" in message]
+        self.assertGreater(len(stuck), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_nonthrowing_unowned_shutdown_state_repeats_alerts(self):
+        notifier = FakeNotifier()
+        runner, client, _ = self.build_runner(
+            clock=TickingClock(), notifier=notifier)
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.orders.rows["external"] = {
+            "id": "external",
+            "marketSlug": slug,
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "state": "ORDER_STATE_NEW",
+            "side": "ORDER_SIDE_BUY",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "1",
+            "cumQuantity": "0",
+            "updateTime": NOW.isoformat(),
+        }
+        runner.config = replace(
+            runner.config, shutdown_alert_interval_seconds=1,
+            max_shutdown_seconds=15)
+
+        await runner._shutdown("critical:unowned_working_order")
+
+        repeated = [message for message, critical in notifier.messages
+                    if critical and "still cannot prove flat" in message]
+        self.assertGreater(len(repeated), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertFalse(runner._shutdown_proved_flat)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_expired_shutdown_window_reports_a_non_flat_exit(self):
+        notifier = FakeNotifier()
+        runner, client, _ = self.build_runner(
+            clock=TickingClock(), notifier=notifier)
+        await runner.preflight()
+        slug = runner.config.market_slug
+        self._hold_one_contract(client, slug)
+        runner.config = replace(
+            runner.config, max_shutdown_exit_attempts=0, max_shutdown_seconds=10)
+
+        await runner._shutdown("critical:hard_exit_insufficient_stressed_depth")
+
+        self.assertFalse(runner._shutdown_proved_flat)
+        self.assertTrue(any(
+            critical and "shutdown window expired" in message
+            for message, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    def test_cli_returns_exit_three_for_unproven_flat_state(self):
+        result = CommissioningResult(
+            started_at=NOW,
+            cutoff_at=None,
+            stopped_at=NOW + timedelta(minutes=15),
+            stop_reason="critical:hard_exit_attempt_limit_exceeded",
+            flat=False,
+            orders_sent_to_polymarket=6,
+        )
+        argv = [
+            "live_commissioning",
+            "--market-slug", "market-one",
+            "--arm-live",
+            "--accept-one-contract-risk",
+            "--exclusive-api-key",
+            "--maker-lab-stopped",
+        ]
+
+        with patch("sys.argv", argv), patch(
+                "liquidity_bot.live_commissioning._run",
+                new=AsyncMock(return_value=result)), patch("builtins.print"):
+            self.assertEqual(main(), 3)
+
+    async def test_ambiguous_place_is_adopted_instead_of_unowned(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        async def never_answers(_payload):
+            raise AdapterError("create response never arrived")
+
+        client.orders.create = never_answers
+        with self.assertRaises(OrderOutcomeUncertain):
+            await runner.executor.place(
+                OrderRequest(slug, "bid", Decimal("0.49"), Decimal("1")),
+                runner.market, now=runner._now())
+
+        # The venue did accept it. A private order update now carries an
+        # exchange id the ledger has never seen bound to its intent.
+        raw_order = {
+            "id": "fake-ambiguous",
+            "marketSlug": slug,
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "state": "ORDER_STATE_NEW",
+            "side": "ORDER_SIDE_BUY",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "1",
+            "cumQuantity": "0",
+            "updateTime": NOW.isoformat(),
+        }
+        await runner._observe_private(PrivateEvent(
+            PrivateEventKind.ORDER_UPDATE,
+            {"execution": {
+                "id": "private-new-ambiguous",
+                "type": "EXECUTION_TYPE_NEW",
+                "order": raw_order,
+            }},
+            "private-order-update"), runner._now())
+
+        working = runner.ledger.working_orders(slug)
+        self.assertEqual(len(working), 1)
+        self.assertFalse(
+            str(working[0]["client_order_id"]).startswith("venue:"))
+        self.assertEqual(runner.ledger.unresolved_intents(), [])
+        # The ambiguous outcome must stay recoverable rather than tripping the
+        # unowned-order invariant against the bot's own order.
+        runner._assert_runtime_scope()
         await runner.private_stream.close()
         await runner.market_stream.close()
 

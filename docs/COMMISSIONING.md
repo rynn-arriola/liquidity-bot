@@ -46,6 +46,12 @@ strategy conditions default to terminal. Ownership, cross-market identity,
 exact-position, planning, loss-stop, and unexitable-inventory failures end maker
 quoting and enter cancel/flatten shutdown; they are not downgraded to warnings.
 
+Shutdown carries its own three-attempt flatten budget, independent of whatever
+the quoting loop already spent, so reaching the runtime ceiling can never stop
+the terminal path from trying. While it cannot prove flat it repeats a critical
+alert every 300 seconds, and after 900 seconds it exits non-flat with code 3
+rather than holding a position silently.
+
 After a process death, a restart may enter recovery-only mode only when every
 working order and nonzero position belongs to this persisted ledger and the one
 configured market. It cancels/flattens and exits; it does not resume quoting.

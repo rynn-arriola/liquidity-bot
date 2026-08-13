@@ -39,7 +39,8 @@ These are implementation requirements, not suggestions.
 24. Commissioning runs until operator stop or a terminal safety/loss condition.
     Recoverable adapter failures keep the process alive with new risk disabled;
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
-    may occur later only while it cancels, flattens, and proves exact flat state.
+    may occur later only after it cancels, flattens, and proves exact flat
+    state, or through the bounded non-flat exit in invariant 32.
 25. The $15 hard stop uses marked account equity (`currentBalance` plus
     `assetNotional`). Buying power is never treated as P&L or marked equity.
 26. A restart may mutate only persisted, identified orders/positions in the one
@@ -58,3 +59,12 @@ These are implementation requirements, not suggestions.
     cancel/flatten path; IOC submissions may not loop without a bound.
 30. Repeated recoverable strategy/action failures use exponential backoff capped
     at 30 seconds through the shared 4 requests/second REST governor.
+31. Shutdown owns a flatten budget separate from the quoting loop's, also
+    bounded to three submissions. An exhausted runtime exit counter must never
+    stop the terminal path from attempting a flatten, because refusing to try
+    is what leaves unmatched inventory to reach settlement.
+32. A shutdown that cannot prove flat repeats its critical alert every 300
+    seconds and ends the process non-flat after a 900-second window, reporting
+    exit 3 for immediate operator inspection. Until that deadline it keeps
+    reconciling and uses any remaining exit attempt when a safe exact-position
+    IOC is available; it never holds a position while silent.

@@ -123,6 +123,17 @@ the runner reconciles the submitted IOC, resumes when flat, or permits another
 exact-position IOC only after the prior order is proven terminal with inventory
 remaining. It never duplicates an ambiguous exit request.
 
+Review of that change found the terminal path could refuse to act. Shutdown
+seeded its exit counter from the quoting loop, so a session that stopped
+*because* it exhausted three IOC attempts reached shutdown already at its
+ceiling, never attempted a flatten, alerted once, and then held the position
+silently forever. That is the unmatched-settlement failure the whole design
+exists to prevent. Shutdown now carries its own three-attempt budget, repeats
+its critical alert every 300 seconds while it cannot prove flat, and ends the
+process non-flat after a 900-second window so the supervisor reports exit 3
+instead of a quiet hang. Total taker exposure is therefore bounded at three
+runtime plus three shutdown submissions rather than three overall.
+
 A follow-up boundary audit found that the first recovery implementation treated
 every strategy `CRITICAL` and every planning/action exception as transient. That
 contradicted the ownership and market-identity invariants and could leave an

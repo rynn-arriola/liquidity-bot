@@ -140,6 +140,9 @@ class CommissioningRunner:
                 config.hard_exit_confirmation_timeout_seconds),
         ))
         self._stop_requested: str | None = None
+        # Cleared only when shutdown gives up before proving flat, so the
+        # process can report exit 3 instead of silently looking clean.
+        self._shutdown_proved_flat = True
         self._reward_eligible: frozenset[str] = frozenset()
         self._score_by_side: dict[str, float] = {}
         self._score_seconds = 0.0
@@ -796,12 +799,43 @@ class CommissioningRunner:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot LIVE shutdown started: {reason}. "
             "New risk is disabled; reconciling to flat.",
-            critical=reason == "15_USD_HARD_STOP")
-        alerted = False
-        exit_limit_alerted = False
+            critical=(reason == "15_USD_HARD_STOP"
+                      or reason.startswith("critical:")
+                      or reason.startswith("risk_stop:")))
         shutdown_failures = 0
+        exit_budget_announced = False
         slug = self.config.market_slug
-        exit_attempts = self.reconciler.hard_exit_attempts(slug)
+        started_at = self._now()
+        deadline = started_at + timedelta(
+            seconds=self.config.max_shutdown_seconds)
+        # The start notification is the first alert in the cadence. Without
+        # this anchor, a quiet unresolved/working state would send an immediate
+        # duplicate and then go silent until the deadline.
+        last_alert_at: datetime | None = started_at
+        # Shutdown keeps a flatten budget independent of the quoting loop. It
+        # prices a freshly read book against the conservative recorded basis,
+        # so an exit the runtime could not complete may still complete here.
+        # Inheriting an exhausted runtime counter meant the terminal path
+        # never attempted a flatten at all and inventory reached settlement.
+        exit_attempts = 0
+
+        async def alert(message: str, *, force: bool = False) -> bool:
+            """Repeat a stuck-shutdown alert instead of latching it once.
+
+            A position that needs manual intervention must keep announcing
+            itself; a single message is too easy to miss overnight.
+            """
+
+            nonlocal last_alert_at
+            moment = self._now()
+            if (not force and last_alert_at is not None
+                    and (moment - last_alert_at).total_seconds()
+                    < self.config.shutdown_alert_interval_seconds):
+                return False
+            last_alert_at = moment
+            await self.notifier.send_async(message, critical=True)
+            return True
+
         while True:
             delay = 1.0
             now = self._now()
@@ -813,46 +847,47 @@ class CommissioningRunner:
                 if working and not unresolved:
                     await self.kill_switch.initiate(slug, now=now)
                 elif position != 0 and not working and not unresolved:
-                    if exit_attempts >= self.reconciler.policy.max_hard_exit_attempts:
-                        if not exit_limit_alerted:
-                            await self.notifier.send_async(
-                                "Liquidity Bot IOC attempt ceiling reached during "
-                                "shutdown. Maker quoting remains terminal; manual "
-                                "intervention is required for remaining position "
-                                f"{position} in {slug}.",
-                                critical=True)
-                            exit_limit_alerted = True
-                        await self.sleep(30)
-                        continue
-                    await self._refresh_book(now)
-                    if self.book is None or self.market is None:
-                        raise RuntimeError("shutdown book is unavailable")
-                    basis = self.ledger.inventory_basis(slug)
-                    entry_side = "bid" if position > 0 else "offer"
-                    conservative_entry = (
-                        float(basis.average_entry_price) if basis is not None
-                        else .99 if position > 0 else .01)
-                    exit_result = cross_exit(
-                        self.book, entry_side=entry_side,
-                        entry_price=conservative_entry, qty=float(abs(position)),
-                        depth_haircut=.5)
-                    if not exit_result.complete or exit_result.worst_price is None:
-                        raise RuntimeError(
-                            "insufficient stressed depth to flatten exact position")
-                    side = "offer" if position > 0 else "bid"
-                    action = PlanAction(
-                        ActionKind.PLACE_IOC, slug,
-                        "commissioning_shutdown_flatten", side=side,
-                        price=exit_result.worst_price, qty=abs(position))
-                    if self.driver is None:
-                        raise RuntimeError("action driver is unavailable")
-                    # Count before mutation because a transport failure after
-                    # send may still have reached the venue.
-                    exit_attempts += 1
-                    await self.driver.apply_one(
-                        [action], market=self.market,
-                        position=position, now=now)
-                    delay = min(2 ** max(exit_attempts - 1, 0), 5)
+                    if exit_attempts >= self.config.max_shutdown_exit_attempts:
+                        await alert(
+                            "🚨 Liquidity Bot exhausted its shutdown exit budget. "
+                            "Maker quoting remains terminal; manual intervention "
+                            f"is required for remaining position {position} in "
+                            f"{slug}.",
+                            force=not exit_budget_announced)
+                        exit_budget_announced = True
+                        delay = 30.0
+                    else:
+                        await self._refresh_book(now)
+                        if self.book is None or self.market is None:
+                            raise RuntimeError("shutdown book is unavailable")
+                        basis = self.ledger.inventory_basis(slug)
+                        entry_side = "bid" if position > 0 else "offer"
+                        conservative_entry = (
+                            float(basis.average_entry_price) if basis is not None
+                            else .99 if position > 0 else .01)
+                        exit_result = cross_exit(
+                            self.book, entry_side=entry_side,
+                            entry_price=conservative_entry,
+                            qty=float(abs(position)), depth_haircut=.5)
+                        if (not exit_result.complete
+                                or exit_result.worst_price is None):
+                            raise RuntimeError(
+                                "insufficient stressed depth to flatten exact "
+                                "position")
+                        side = "offer" if position > 0 else "bid"
+                        action = PlanAction(
+                            ActionKind.PLACE_IOC, slug,
+                            "commissioning_shutdown_flatten", side=side,
+                            price=exit_result.worst_price, qty=abs(position))
+                        if self.driver is None:
+                            raise RuntimeError("action driver is unavailable")
+                        # Count before mutation because a transport failure
+                        # after send may still have reached the venue.
+                        exit_attempts += 1
+                        await self.driver.apply_one(
+                            [action], market=self.market,
+                            position=position, now=now)
+                        delay = min(2 ** max(exit_attempts - 1, 0), 5)
                 status = self.kill_switch.status(slug)
                 if status.safe_to_stop and self.ledger.risk_state_known():
                     await self._refresh_balance(now)
@@ -865,13 +900,26 @@ class CommissioningRunner:
             except Exception as exc:
                 shutdown_failures += 1
                 delay = min(2 ** min(shutdown_failures - 1, 5), 30)
-                if not alerted:
-                    traceback.print_exc()
-                    await self.notifier.send_async(
+                if await alert(
                         "🚨 Liquidity Bot cannot yet prove flat during shutdown "
-                        f"({type(exc).__name__}). Process remains in recovery.",
-                        critical=True)
-                    alerted = True
+                        f"({type(exc).__name__}). Process remains in recovery."):
+                    traceback.print_exc()
+            # Checked after the proven-flat return above, so a healthy shutdown
+            # always completes. Staying alive forever hid the one state that
+            # needs a human, so the window ends in a non-flat exit instead.
+            if self._now() >= deadline:
+                self._shutdown_proved_flat = False
+                await self.notifier.send_async(
+                    f"🚨 Liquidity Bot shutdown window expired after {reason} "
+                    "without proving flat. Remaining position "
+                    f"{self.ledger.position(slug)} in {slug} requires immediate "
+                    "operator inspection; the process is exiting non-flat.",
+                    critical=True)
+                return
+            await alert(
+                "🚨 Liquidity Bot still cannot prove flat during shutdown. "
+                f"Position {self.ledger.position(slug)} in {slug}; maker "
+                "quoting remains terminal and reconciliation continues.")
             await self.sleep(delay)
 
     async def run(self) -> CommissioningResult:
@@ -1106,7 +1154,8 @@ class CommissioningRunner:
             self.cutoff_at,
             stopped,
             stop_reason,
-            self.ledger.position(self.config.market_slug) == 0,
+            (self.ledger.position(self.config.market_slug) == 0
+             and self._shutdown_proved_flat),
             creates - self._orders_before,
         )
 

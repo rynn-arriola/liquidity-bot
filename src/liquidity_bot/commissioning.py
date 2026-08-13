@@ -56,6 +56,9 @@ class CommissioningConfig:
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: int = 30
     hard_exit_confirmation_timeout_seconds: int = 10
+    max_shutdown_exit_attempts: int = 3
+    shutdown_alert_interval_seconds: int = 300
+    max_shutdown_seconds: int = 900
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -90,6 +93,12 @@ class CommissioningConfig:
             problems.append(
                 "commissioning hard-exit limits must remain 3 attempts, "
                 "30 seconds total, and 10 seconds for confirmation")
+        if (self.max_shutdown_exit_attempts != 3
+                or self.shutdown_alert_interval_seconds != 300
+                or self.max_shutdown_seconds != 900):
+            problems.append(
+                "commissioning shutdown limits must remain 3 exit attempts, "
+                "300-second alert repeats, and a 900-second window")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

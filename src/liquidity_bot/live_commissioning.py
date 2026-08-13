@@ -429,6 +429,17 @@ class CommissioningRunner:
         age = (now - self.book_observed_at).total_seconds()
         return age < 0 or age >= 3
 
+    async def _refresh_quiet_book_if_due(
+        self, next_refresh: datetime,
+    ) -> datetime:
+        # Read time inside this boundary, after every upstream awaited call.
+        now = self._now()
+        if now < next_refresh:
+            return next_refresh
+        if self._quiet_book_needs_rest_refresh(now):
+            await self._refresh_book(now)
+        return self._now() + timedelta(seconds=3)
+
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:
         position = self.ledger.position(self.config.market_slug)
@@ -635,15 +646,14 @@ class CommissioningRunner:
                     next_contract_refresh = now + timedelta(minutes=1)
                 # Keep this last among periodic REST work so account/incentive
                 # latency cannot age the book before the decision below.
-                if now >= next_book_refresh:
-                    try:
-                        if self._quiet_book_needs_rest_refresh(now):
-                            await self._refresh_book(now)
-                    except Exception as exc:
-                        if self.risk_guard:
-                            self.risk_guard.trip_critical(
-                                f"quiet-book REST refresh: {type(exc).__name__}")
-                    next_book_refresh = now + timedelta(seconds=3)
+                try:
+                    next_book_refresh = await self._refresh_quiet_book_if_due(
+                        next_book_refresh)
+                except Exception as exc:
+                    if self.risk_guard:
+                        self.risk_guard.trip_critical(
+                            f"quiet-book REST refresh: {type(exc).__name__}")
+                    next_book_refresh = self._now() + timedelta(seconds=3)
                 now = self._now()
                 self._evaluate_rewards(now)
                 stop_reason = self._stop_reason(now) or ""

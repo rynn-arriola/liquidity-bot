@@ -86,3 +86,8 @@ at request start; under live API latency, later account work could exhaust the
 five-second budget. Books are now stamped at response receipt, refreshed last,
 and evaluated against a newly read clock. Any intent reconciliation starts a
 fresh loop before a new quote decision.
+
+That attempt stopped at the one-minute incentive refresh boundary because the
+book-due comparison still used the clock captured before the incentive calls.
+The runner now rereads time immediately before deciding whether the final book
+refresh is due; upstream REST latency therefore cannot hide an aged book.

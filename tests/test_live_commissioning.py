@@ -375,6 +375,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._quiet_book_needs_rest_refresh(
             NOW - timedelta(seconds=1)))
 
+    async def test_periodic_rest_reconcile_backstops_quiet_private_stream(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        later = NOW + timedelta(seconds=31)
+        self.assertFalse(runner.gate.ready(runner.ledger, now=later))
+        await runner._rest_reconcile(later)
+        self.assertTrue(runner.gate.ready(runner.ledger, now=later))
+        self.assertEqual(runner.gate.last_message_at, NOW)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_cli_refuses_before_loading_secrets_when_not_armed(self):
         args = Namespace(
             market_slug="market-one",

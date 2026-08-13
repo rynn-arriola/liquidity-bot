@@ -69,3 +69,12 @@ flat on `critical:book_stale`. The market WebSocket is change-driven and had no
 book change inside the five-second decision limit. A quiet feed now receives a
 REST full-book refresh at three seconds through the shared 4 requests/second
 governor; a newer WebSocket book suppresses that fallback call.
+
+The next attempt remained mechanically healthy until the private freshness
+window expired: after its initial authenticated balance snapshot, no account
+state changed, so the change-driven private stream was silent. It canceled two
+one-contract quotes and exited flat on `critical:execution_state_unknown`.
+While that socket remains connected, the runner now performs a complete REST
+order/position reconciliation every ten seconds. REST and private timestamps
+remain distinct; either recent proof can maintain known state, and both aging
+out still disables risk.

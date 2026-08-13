@@ -573,6 +573,7 @@ class CommissioningRunner:
             next_contract_refresh = now + timedelta(minutes=1)
             next_summary = now + timedelta(minutes=5)
             next_reconcile = now
+            next_state_reconcile = now + timedelta(seconds=10)
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
             while True:
@@ -622,6 +623,15 @@ class CommissioningRunner:
                             self.risk_guard.trip_critical(
                                 f"quiet-book REST refresh: {type(exc).__name__}")
                     next_book_refresh = now + timedelta(seconds=3)
+                if now >= next_state_reconcile:
+                    try:
+                        await self._rest_reconcile(now)
+                    except Exception:
+                        # Preserve the last proven state briefly. If both the
+                        # private stream and REST remain quiet/unavailable, the
+                        # freshness gate expires and shuts down new risk.
+                        pass
+                    next_state_reconcile = now + timedelta(seconds=10)
                 if now >= next_contract_refresh:
                     try:
                         await self._refresh_contracts(now)

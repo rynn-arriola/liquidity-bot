@@ -79,6 +79,7 @@ class PrivateStateGate:
     order_snapshot_in_progress: bool = False
     balance_snapshot_seen: bool = False
     last_message_at: datetime | None = None
+    last_reconcile_at: datetime | None = None
 
     def on_connect(self) -> None:
         self.connected = True
@@ -87,10 +88,11 @@ class PrivateStateGate:
         self.order_snapshot_in_progress = False
         self.balance_snapshot_seen = False
         self.last_message_at = None
+        self.last_reconcile_at = None
 
     def on_rest_reconciled(self, at: datetime) -> None:
         self.rest_reconciled = True
-        self.last_message_at = at
+        self.last_reconcile_at = at
 
     def on_disconnect(self) -> None:
         self.connected = False
@@ -116,9 +118,11 @@ class PrivateStateGate:
         if not (self.connected and self.rest_reconciled
                 and not self.order_snapshot_in_progress
                 and self.balance_snapshot_seen
-                and ledger.risk_state_known() and self.last_message_at):
+                and ledger.risk_state_known() and self.last_message_at
+                and self.last_reconcile_at):
             return False
-        silence = (now - self.last_message_at).total_seconds()
+        freshest_state = max(self.last_message_at, self.last_reconcile_at)
+        silence = (now - freshest_state).total_seconds()
         return 0 <= silence <= self.max_silence_seconds
 
 

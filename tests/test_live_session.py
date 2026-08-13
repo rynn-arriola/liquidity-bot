@@ -159,6 +159,19 @@ class LiveSessionTests(unittest.TestCase):
         self.assertFalse(gate.order_snapshot_seen)
         self.assertTrue(gate.ready(self.ledger, now=NOW))
 
+    def test_quiet_connected_private_stream_can_be_backstopped_by_rest(self):
+        gate = PrivateStateGate(max_silence_seconds=10)
+        gate.on_connect()
+        gate.on_rest_reconciled(NOW)
+        gate.observe(PrivateEvent(
+            PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+            {"balances": []}, "balance"), received_at=NOW)
+        later = NOW + timedelta(seconds=11)
+        self.assertFalse(gate.ready(self.ledger, now=later))
+        gate.on_rest_reconciled(later)
+        self.assertTrue(gate.ready(self.ledger, now=later))
+        self.assertEqual(gate.last_message_at, NOW)
+
     def test_driver_translates_full_position_ioc_and_only_one_action(self):
         executor = Executor()
         driver = ControlledActionDriver(executor, self.ledger)

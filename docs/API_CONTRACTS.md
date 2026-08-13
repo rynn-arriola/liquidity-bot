@@ -76,6 +76,11 @@ Official references:
   risk; reconnect requires whole-account REST reconciliation plus complete,
   fresh private snapshots before risk can resume.
 - Heartbeat silence beyond the configured freshness window disables new risk.
+- The authenticated account stream can also be change-driven after its initial
+  balance snapshot. While the socket remains connected, a complete whole-
+  account REST order/position reconciliation every ten seconds can refresh
+  execution-state proof. The actual private-message timestamp remains separate;
+  if both sources age past the freshness window, new risk is disabled.
 
 ## Orders
 

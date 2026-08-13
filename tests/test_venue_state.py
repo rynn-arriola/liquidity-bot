@@ -81,6 +81,15 @@ class NormalizationTests(unittest.TestCase):
         with self.assertRaises(AdapterError):
             normalize_order(raw_order(state="ORDER_STATE_FUTURE"), observed_at=NOW)
 
+    def test_terminal_order_prefers_last_transact_time_when_update_is_absent(self):
+        item = normalize_order(raw_order(
+            state="ORDER_STATE_CANCELED",
+            createTime="2026-08-13T03:00:00Z",
+            lastTransactTime="2026-08-13T03:00:02Z"), observed_at=NOW)
+        self.assertEqual(item.status, "CANCELED")
+        self.assertEqual(
+            item.event_at, datetime(2026, 8, 13, 3, 0, 2, tzinfo=timezone.utc))
+
 
 class ProjectorTests(unittest.TestCase):
     def setUp(self):

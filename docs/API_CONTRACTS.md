@@ -91,6 +91,9 @@ Official references:
 - A create response ID acknowledges submission but private/REST order state is
   required to reconcile it. A cancel HTTP response is not terminal proof because
   a fill can win the race.
+- Terminal retrieve responses can omit `updateTime`; the observed terminal
+  clock is `lastTransactTime`. Order normalization prefers `updateTime`, then
+  `lastTransactTime`, and only then creation/insertion clocks.
 
 ## Earnings
 

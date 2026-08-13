@@ -84,7 +84,7 @@ class FakeOrders:
     async def cancel(self, order_id, payload):
         self.cancel_calls.append((order_id, payload))
         self.rows[order_id]["state"] = "ORDER_STATE_CANCELED"
-        self.rows[order_id]["updateTime"] = (
+        self.rows[order_id]["lastTransactTime"] = (
             datetime(2026, 8, 13, 5, 0, 1, tzinfo=timezone.utc).isoformat())
 
     async def retrieve(self, order_id):

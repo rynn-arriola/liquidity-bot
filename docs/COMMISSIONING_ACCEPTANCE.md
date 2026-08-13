@@ -45,3 +45,13 @@ open value `MARKET_STATUS_OPEN` while validation recognized only the book
 endpoint's `MARKET_STATE_OPEN`. The accepted open set was narrowed to exactly
 those two observed values and covered by a regression test; no arbitrary status
 or substring matching was introduced.
+
+The next bounded attempt placed one exact one-contract post-only order and then
+canceled it as eligibility/state changed. The exchange proved zero open orders
+and zero positions, but its terminal retrieve response omitted `updateTime` and
+reported `lastTransactTime`. The ledger correctly rejected terminal content
+reusing the original creation clock and remained in recovery. The operator
+process was stopped only after independent REST checks proved canceled, no open
+orders, and flat. Normalization now consumes the observed terminal clock, and
+startup directly retrieves every persisted exchange ID before snapshots; a
+restart with any prior place intent is recovery-only and cannot resume risk.

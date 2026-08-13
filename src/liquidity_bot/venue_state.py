@@ -106,6 +106,7 @@ def normalize_order(
         "order.cumQuantity")
     event_at = _timestamp(
         _wire(raw, "updateTime", "update_time")
+        or _wire(raw, "lastTransactTime", "last_transact_time")
         or _wire(raw, "createTime", "create_time")
         or _wire(raw, "insertTime", "insert_time"),
         "order event time", fallback=observed_at)

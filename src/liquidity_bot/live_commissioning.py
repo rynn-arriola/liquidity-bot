@@ -184,10 +184,17 @@ class CommissioningRunner:
     async def _rest_reconcile(self, now: datetime) -> None:
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
-        for row in tuple(self.ledger.working_orders(owned_only=True)):
-            if row["exchange_order_id"]:
-                await self.executor.reconcile_order(
-                    row["exchange_order_id"], observed_at=now)
+        exchange_ids = {
+            row["exchange_order_id"]
+            for row in tuple(self.ledger.working_orders(owned_only=True))
+            if row["exchange_order_id"]
+        }
+        exchange_ids.update(
+            row["exchange_order_id"] for row in self.ledger.unresolved_intents()
+            if row["exchange_order_id"])
+        for exchange_id in sorted(exchange_ids):
+            await self.executor.reconcile_order(
+                exchange_id, observed_at=now)
         orders = await self.account.fetch_open_orders(observed_at=now)
         positions = await self.account.fetch_positions(observed_at=now)
         stamp = now.isoformat()
@@ -244,12 +251,16 @@ class CommissioningRunner:
     async def preflight(self) -> str:
         now = self._now()
         self.started_at = now
+        had_prior_place = bool(self.ledger.query(
+            "SELECT 1 FROM execution_intents WHERE operation='PLACE' LIMIT 1"))
         self.cutoff_at = self.config.assert_authorized(now=now)
         await self._refresh_contracts(now)
         await self._refresh_book(now)
         await self.private_stream.start(None)
         self.gate.on_connect()
         await self.market_stream.start([self.config.market_slug])
+        if self.ledger.working_orders(owned_only=True) or self.ledger.unresolved_intents():
+            await self._rest_reconcile(now)
         accepted = ReadinessVerdict(
             "COMMISSIONING_ECONOMIC_RISK_ACCEPTED", True, False, (),
             ("profitability evidence waived only for one-contract commissioning",))
@@ -278,7 +289,7 @@ class CommissioningRunner:
             self.executor, self.ledger, self.risk_guard)
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
-        if recovery_only:
+        if recovery_only or had_prior_place:
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
         delivery = await self.notifier.send_async(

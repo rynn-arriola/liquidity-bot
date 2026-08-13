@@ -280,6 +280,13 @@ class CommissioningRunner:
         if recovery_only:
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
+        delivery = await self.notifier.send_async(
+            "🟠 Liquidity Bot LIVE commissioning started: one market, "
+            "one contract per quote, $5 soft stop, $15 hard stop, "
+            "06:00 America/New_York cutoff.")
+        if not getattr(delivery, "sent", False):
+            raise CommissioningRefused(
+                "Discord startup alert delivery failed before order entry")
         return "TRADE"
 
     def _accrue_score(self, now: datetime) -> None:
@@ -534,11 +541,6 @@ class CommissioningRunner:
                     critical=True)
             now = self._now()
             self._evaluate_rewards(now)
-            if startup_mode != "RECOVERY_ONLY":
-                await self.notifier.send_async(
-                    "🟠 Liquidity Bot LIVE commissioning started: one market, "
-                    "one contract per quote, $5 soft stop, $15 hard stop, "
-                    "06:00 America/New_York cutoff.")
             next_balance = now
             next_contract_refresh = now + timedelta(minutes=1)
             next_summary = now + timedelta(minutes=5)

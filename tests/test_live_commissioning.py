@@ -12,6 +12,7 @@ from unittest.mock import patch
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
 from liquidity_bot.execution_ledger import ExecutionLedger
 from liquidity_bot.live_commissioning import CommissioningRunner, _run
+from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 
 
@@ -172,15 +173,22 @@ class FakeMarketStream:
 
 
 class FakeNotifier:
-    def __init__(self):
+    def __init__(self, *, delivery_succeeds=True):
         self.messages = []
         self.payloads = []
+        self.delivery_succeeds = delivery_succeeds
 
     async def send_async(self, content, *, critical=False):
         self.messages.append((content, critical))
+        return NotificationResult(
+            self.delivery_succeeds,
+            "sent" if self.delivery_succeeds else "delivery_failed")
 
     async def send_payload_async(self, payload, *, critical=False):
         self.payloads.append((payload, critical))
+        return NotificationResult(
+            self.delivery_succeeds,
+            "sent" if self.delivery_succeeds else "delivery_failed")
 
 
 class StepClock:
@@ -205,12 +213,12 @@ class TickingClock:
 
 
 class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
-    def build_runner(self, *, clock=lambda: NOW):
+    def build_runner(self, *, clock=lambda: NOW, notifier=None):
         root = Path(tempfile.mkdtemp(prefix="liquidity-commissioning-"))
         ledger = ExecutionLedger(root / "ledger.db")
         self.addCleanup(ledger.close)
         client = FakeClient()
-        notifier = FakeNotifier()
+        notifier = notifier or FakeNotifier()
         config = CommissioningConfig(
             market_slug="market-one",
             economic_risk_accepted=True,
@@ -334,6 +342,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.orders.cancel_calls, [])
         self.assertTrue(runner.private_stream.closed)
         self.assertTrue(runner.market_stream.closed)
+
+    async def test_failed_startup_discord_delivery_blocks_first_order(self):
+        notifier = FakeNotifier(delivery_succeeds=False)
+        runner, client, _ = self.build_runner(notifier=notifier)
+
+        with self.assertRaisesRegex(
+                CommissioningRefused, "Discord startup alert delivery failed"):
+            await runner.run()
+
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
 
     async def test_cli_refuses_before_loading_secrets_when_not_armed(self):
         args = Namespace(

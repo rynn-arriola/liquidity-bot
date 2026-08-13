@@ -59,6 +59,9 @@ class ReconcilerPolicy:
     taker_theta: float = 0.06
     max_book_age_seconds: float = 5.0
     cancel_confirm_grace_seconds: float = 5.0
+    max_hard_exit_attempts: int = 3
+    max_hard_exit_retry_seconds: float = 30.0
+    hard_exit_confirmation_timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
@@ -72,6 +75,11 @@ class ReconcilerPolicy:
             raise ValueError("exit depth haircut must be in (0, 1]")
         if self.max_book_age_seconds <= 0 or self.cancel_confirm_grace_seconds < 0:
             raise ValueError("freshness and cancel grace are invalid")
+        if self.max_hard_exit_attempts <= 0:
+            raise ValueError("hard-exit attempt limit must be positive")
+        if min(self.max_hard_exit_retry_seconds,
+               self.hard_exit_confirmation_timeout_seconds) <= 0:
+            raise ValueError("hard-exit time limits must be positive")
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,8 @@ class MarketFrame:
 class DesiredStateReconciler:
     policy: ReconcilerPolicy
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
+    _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
+    _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
 
     @staticmethod
     def _reducing_side(position: Decimal) -> str:
@@ -127,6 +137,24 @@ class DesiredStateReconciler:
 
         self._hard_exit_sent.pop(str(market_slug), None)
 
+    def hard_exit_attempts(self, market_slug: str) -> int:
+        return self._hard_exit_attempts.get(str(market_slug), 0)
+
+    def hard_exit_confirmation_expired(
+        self, market_slug: str, *, now: datetime,
+    ) -> bool:
+        sent_at = self._hard_exit_sent.get(str(market_slug))
+        if sent_at is None:
+            return False
+        return (now - sent_at).total_seconds() >= (
+            self.policy.hard_exit_confirmation_timeout_seconds)
+
+    def _clear_hard_exit(self, market_slug: str) -> None:
+        slug = str(market_slug)
+        self._hard_exit_sent.pop(slug, None)
+        self._hard_exit_attempts.pop(slug, None)
+        self._hard_exit_started_at.pop(slug, None)
+
     def _critical(self, frame: MarketFrame, reason: str) -> list[PlanAction]:
         return [PlanAction(ActionKind.CRITICAL, frame.market.slug, reason)]
 
@@ -140,7 +168,7 @@ class DesiredStateReconciler:
         if age < 0 or age > self.policy.max_book_age_seconds:
             return self._critical(frame, "book_stale")
         if frame.position == 0:
-            self._hard_exit_sent.pop(slug, None)
+            self._clear_hard_exit(slug)
             return self._flat_plan(frame)
         return self._inventory_plan(frame)
 
@@ -162,15 +190,21 @@ class DesiredStateReconciler:
 
         if inventory_age >= deadline:
             if frame.working_orders:
-                actions = [PlanAction(
+                if inventory_age > deadline + self.policy.cancel_confirm_grace_seconds:
+                    return self._critical(
+                        frame, "hard_exit_blocked_cancel_unconfirmed")
+                return [PlanAction(
                     ActionKind.CANCEL, slug, "hard_timeout_cancel_confirm_first",
                     side=order.side, order_id=order.order_id)
                     for order in frame.working_orders]
-                if inventory_age > deadline + self.policy.cancel_confirm_grace_seconds:
-                    actions.append(PlanAction(
-                        ActionKind.CRITICAL, slug,
-                        "hard_exit_blocked_cancel_unconfirmed"))
-                return actions
+            attempts = self._hard_exit_attempts.get(slug, 0)
+            started_at = self._hard_exit_started_at.get(slug)
+            if attempts >= self.policy.max_hard_exit_attempts:
+                return self._critical(frame, "hard_exit_attempt_limit_exceeded")
+            if (started_at is not None
+                    and (frame.now - started_at).total_seconds()
+                    >= self.policy.max_hard_exit_retry_seconds):
+                return self._critical(frame, "hard_exit_retry_window_exceeded")
             entry_side = "bid" if frame.position > 0 else "offer"
             exit_result = cross_exit(
                 frame.book, entry_side=entry_side,
@@ -181,6 +215,8 @@ class DesiredStateReconciler:
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
             if exit_result.pnl < -self.policy.max_exit_loss:
                 return self._critical(frame, "hard_exit_price_cap_exceeded")
+            self._hard_exit_started_at.setdefault(slug, frame.now)
+            self._hard_exit_attempts[slug] = attempts + 1
             self._hard_exit_sent[slug] = frame.now
             return [PlanAction(
                 ActionKind.PLACE_IOC, slug, "hard_inventory_timeout",

@@ -47,7 +47,14 @@ These are implementation requirements, not suggestions.
     state refuses without mutation.
 27. `SIGTERM` and `SIGINT` are graceful operator-stop requests. They enter
     market-scoped cancel/flatten/reconcile rather than terminate immediately.
-28. Runtime strategy/planning/action exceptions are quarantined in-process:
-    cancel known quotes, reconcile, alert, and retry without adding risk. They
-    do not terminate the session. Manual stop, confirmed loss stops, or unsafe
-    unowned/cross-market state remain terminal.
+28. Only explicitly classified transport/adapter failures and transient stale
+    or unknown exchange state may recover in-process. Ownership, market
+    identity, exact-position, planning, and unknown future strategy failures
+    are terminal for maker quoting. They enter cancel/flatten shutdown rather
+    than being retried as if they were transport errors.
+29. Hard-exit IOC recovery is bounded to three submissions within 30 seconds,
+    with at most 10 seconds to prove each submitted IOC terminal. A ceiling or
+    unexitable-inventory condition ends maker quoting and escalates to the
+    cancel/flatten path; IOC submissions may not loop without a bound.
+30. Repeated recoverable strategy/action failures use exponential backoff capped
+    at 30 seconds through the shared 4 requests/second REST governor.

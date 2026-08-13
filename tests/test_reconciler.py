@@ -32,11 +32,13 @@ def market() -> MarketMetadata:
         "MARKET_STATE_OPEN", "moneyline")
 
 
-def policy(age=15) -> ReconcilerPolicy:
-    return ReconcilerPolicy(
+def policy(age=15, **overrides) -> ReconcilerPolicy:
+    values = dict(
         quote_size=Decimal("2"), max_inventory_age_seconds=age,
         max_market_worst_loss=5, max_portfolio_worst_loss=15,
         max_exit_loss=5, exit_depth_haircut=.5)
+    values.update(overrides)
+    return ReconcilerPolicy(**values)
 
 
 def frame(*, now=T0, position="0", orders=(), opened=None, entry=None,
@@ -99,7 +101,9 @@ class ReconcilerTests(unittest.TestCase):
         actions = reconciler.plan(frame(
             now=T0 + timedelta(seconds=21), position="2", orders=(active,),
             opened=T0, entry=.49))
-        self.assertIn(ActionKind.CRITICAL, [item.kind for item in actions])
+        self.assertEqual([item.kind for item in actions], [ActionKind.CRITICAL])
+        self.assertEqual(
+            actions[0].reason, "hard_exit_blocked_cancel_unconfirmed")
 
     def test_position_remaining_after_ioc_is_critical(self):
         reconciler = DesiredStateReconciler(policy())
@@ -122,6 +126,51 @@ class ReconcilerTests(unittest.TestCase):
         retry = reconciler.plan(pending)
         self.assertEqual(retry[0].kind, ActionKind.PLACE_IOC)
         self.assertEqual(retry[0].qty, Decimal("2"))
+
+    def test_hard_exit_ioc_attempts_are_bounded(self):
+        reconciler = DesiredStateReconciler(policy(max_hard_exit_attempts=3))
+        for offset in range(3):
+            actions = reconciler.plan(frame(
+                now=T0 + timedelta(seconds=16 + offset), position="2",
+                orders=(), opened=T0, entry=.49))
+            self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+            reconciler.confirm_hard_exit_terminal("market-one")
+
+        terminal = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=20), position="2", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertEqual(terminal[0].kind, ActionKind.CRITICAL)
+        self.assertEqual(
+            terminal[0].reason, "hard_exit_attempt_limit_exceeded")
+
+    def test_hard_exit_retry_window_is_bounded(self):
+        reconciler = DesiredStateReconciler(policy(
+            max_hard_exit_attempts=5, max_hard_exit_retry_seconds=5))
+        first = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=16), position="2", orders=(),
+            opened=T0, entry=.49))
+        self.assertEqual(first[0].kind, ActionKind.PLACE_IOC)
+        reconciler.confirm_hard_exit_terminal("market-one")
+
+        terminal = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=21), position="2", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertEqual(
+            terminal[0].reason, "hard_exit_retry_window_exceeded")
+
+    def test_pending_hard_exit_confirmation_has_a_deadline(self):
+        reconciler = DesiredStateReconciler(policy(
+            hard_exit_confirmation_timeout_seconds=10))
+        reconciler.plan(frame(
+            now=T0 + timedelta(seconds=16), position="2", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertFalse(reconciler.hard_exit_confirmation_expired(
+            "market-one", now=T0 + timedelta(seconds=25)))
+        self.assertTrue(reconciler.hard_exit_confirmation_expired(
+            "market-one", now=T0 + timedelta(seconds=26)))
 
     def test_portfolio_worst_loss_breaker_blocks_quotes(self):
         actions = DesiredStateReconciler(policy()).plan(

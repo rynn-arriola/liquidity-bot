@@ -14,6 +14,7 @@ from typing import Iterable
 
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .execution_ledger import ExecutionLedger
+from .errors import RuntimeInvariantViolation
 from .live_orders import LiveOrderExecutor, OrderRequest, SubmittedOrder
 from .models import MarketMetadata
 from .private_stream import PrivateEvent, PrivateEventKind
@@ -158,25 +159,36 @@ class ControlledActionDriver:
         if action.kind in {ActionKind.CRITICAL, ActionKind.HALT_NEW_RISK}:
             return ActionResult(action)
         if action.market_slug != market.slug:
-            raise RuntimeError("action market does not match metadata")
+            raise RuntimeInvariantViolation(
+                "action_market_mismatch",
+                "action market does not match metadata")
         if action.kind == ActionKind.CANCEL:
             if not action.order_id:
-                raise RuntimeError("cancel action has no exchange order id")
+                raise RuntimeInvariantViolation(
+                    "cancel_order_id_missing",
+                    "cancel action has no exchange order id")
             row = self._owned_order(action.order_id)
             if row is None:
-                raise RuntimeError("refusing to cancel an unowned or unknown order")
+                raise RuntimeInvariantViolation(
+                    "cancel_order_not_owned",
+                    "refusing to cancel an unowned or unknown order")
             intent = await self.executor.cancel(
                 client_order_id=row["client_order_id"],
                 exchange_order_id=row["exchange_order_id"],
                 market_slug=row["market_slug"], now=now)
             return ActionResult(action, cancel_intent_id=intent)
         if action.price is None or action.qty is None or action.side is None:
-            raise RuntimeError("place action is incomplete")
+            raise RuntimeInvariantViolation(
+                "place_action_incomplete", "place action is incomplete")
         if action.kind == ActionKind.PLACE_IOC:
             if position == 0 or action.qty != abs(position):
-                raise RuntimeError("IOC must close the entire exact position")
+                raise RuntimeInvariantViolation(
+                    "ioc_not_exact_position",
+                    "IOC must close the entire exact position")
             if self.ledger.working_orders(market.slug):
-                raise RuntimeError("IOC requires every working order to be terminal")
+                raise RuntimeInvariantViolation(
+                    "ioc_working_order_not_terminal",
+                    "IOC requires every working order to be terminal")
             request = OrderRequest(
                 market.slug, action.side, Decimal(str(action.price)), action.qty,
                 reducing=True,
@@ -192,13 +204,15 @@ class ControlledActionDriver:
             if reducing:
                 expected = "offer" if position > 0 else "bid"
                 if action.side != expected or action.qty != abs(position):
-                    raise RuntimeError(
+                    raise RuntimeInvariantViolation(
+                        "reducing_quote_not_exact_position",
                         "inventory quote must reduce the entire exact position")
             request = OrderRequest(
                 market.slug, action.side, Decimal(str(action.price)), action.qty,
                 reducing=reducing)
         else:
-            raise RuntimeError(f"unsupported action {action.kind}")
+            raise RuntimeInvariantViolation(
+                "unsupported_action", f"unsupported action {action.kind}")
         submitted = await self.executor.place(request, market, now=now)
         return ActionResult(action, submitted=submitted)
 

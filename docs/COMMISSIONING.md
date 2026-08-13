@@ -10,7 +10,8 @@ strategy is profitable and not permission to scale.
 - cancel the opposite building order immediately after the first fill;
 - work the exact reducing quantity at the active touch;
 - at 30 seconds, confirm passive cancels and flatten the exact position with a
-  stressed-depth, price-capped IOC;
+  stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
+  attempts within 30 seconds and 10 seconds to confirm an individual attempt;
 - $2 per-market soft stop, $5 marked-account-equity session stop, and $15
   emergency marked-account-equity hard stop;
 - run until an operator stop or terminal safety/loss condition, then remain
@@ -37,11 +38,13 @@ The command refuses before order entry unless all of these are true:
 7. REST reconciliation and the private account WebSocket are fresh.
 8. Normal and critical Discord webhooks are configured.
 
-During runtime, a recoverable private or market adapter error enters a dormant
-recovery state instead of ending the process. The runner records the error and
-stack, cancels known quotes, reconnects, reconciles the whole account, and only
-then permits new risk. Loss stops, unowned state, and unprovable shutdown state
-are not downgraded to recoverable warnings.
+During runtime, an explicitly recoverable private, market, or order adapter
+error enters a dormant recovery state instead of ending the process. The runner
+records the error and stack, cancels known quotes, reconnects, reconciles the
+whole account, backs off exponentially, and only then permits new risk. Unknown
+strategy conditions default to terminal. Ownership, cross-market identity,
+exact-position, planning, loss-stop, and unexitable-inventory failures end maker
+quoting and enter cancel/flatten shutdown; they are not downgraded to warnings.
 
 After a process death, a restart may enter recovery-only mode only when every
 working order and nonzero position belongs to this persisted ledger and the one

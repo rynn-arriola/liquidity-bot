@@ -28,12 +28,13 @@ from .account_snapshots import AsyncAccountSnapshotGateway
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
 from .commissioning import CommissioningConfig, CommissioningRefused
 from .discord_summary import LiquiditySummary, build_liquidity_summary
-from .errors import AdapterError
+from .errors import AdapterError, RuntimeInvariantViolation
 from .execution_ledger import ExecutionLedger
 from .live_orders import (
     AsyncTradingGateway,
     LiveOrderExecutor,
     OPEN_MARKET_STATUSES,
+    OrderOutcomeUncertain,
     OrderRequest,
     build_order_payload,
 )
@@ -63,6 +64,11 @@ from .venue_state import PrivateLedgerProjector
 
 
 Clock = Callable[[], datetime]
+
+RECOVERABLE_STRATEGY_CRITICALS = frozenset({
+    "book_stale",
+    "execution_state_unknown",
+})
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,10 @@ class CommissioningRunner:
             exit_depth_haircut=.5,
             max_book_age_seconds=5,
             cancel_confirm_grace_seconds=5,
+            max_hard_exit_attempts=config.max_hard_exit_attempts,
+            max_hard_exit_retry_seconds=config.max_hard_exit_retry_seconds,
+            hard_exit_confirmation_timeout_seconds=(
+                config.hard_exit_confirmation_timeout_seconds),
         ))
         self._stop_requested: str | None = None
         self._reward_eligible: frozenset[str] = frozenset()
@@ -357,11 +367,15 @@ class CommissioningRunner:
                 "WHERE operation='PLACE' AND client_order_id=? "
                 "ORDER BY created_at DESC LIMIT 1", (row["client_order_id"],))
             if not intent_row:
-                raise RuntimeError("working order has no owned place intent")
+                raise RuntimeInvariantViolation(
+                    "working_order_without_owned_intent",
+                    "working order has no owned place intent")
             payload = json.loads(intent_row[0]["payload_json"])
             strategy_side = side_by_intent.get(str(payload.get("intent") or ""))
             if strategy_side is None:
-                raise RuntimeError("working order intent cannot be mapped")
+                raise RuntimeInvariantViolation(
+                    "working_order_intent_unmapped",
+                    "working order intent cannot be mapped")
             remaining = Decimal(row["original_qty"]) - Decimal(row["filled_qty"])
             if remaining > 0:
                 result.append(WorkingOrder(
@@ -369,7 +383,35 @@ class CommissioningRunner:
                     float(Decimal(row["price"])), remaining))
         return tuple(result)
 
+    def _assert_runtime_scope(self) -> None:
+        """Reject ownership or market identity drift before any mutation."""
+
+        slug = self.config.market_slug
+        working = self.ledger.working_orders()
+        if any(str(row["client_order_id"]).startswith("venue:")
+               for row in working):
+            raise RuntimeInvariantViolation(
+                "unowned_working_order",
+                "runtime account contains an unowned working order")
+        if any(row["market_slug"] != slug for row in working):
+            raise RuntimeInvariantViolation(
+                "cross_market_working_order",
+                "runtime account contains a working order in another market")
+        cross_positions = self.ledger.query(
+            "SELECT market_slug FROM execution_positions "
+            "WHERE market_slug!=? AND CAST(net_qty AS REAL)!=0", (slug,))
+        if cross_positions:
+            raise RuntimeInvariantViolation(
+                "cross_market_position",
+                "runtime account contains a position in another market")
+        if any(row["market_slug"] != slug
+               for row in self.ledger.unresolved_intents()):
+            raise RuntimeInvariantViolation(
+                "cross_market_unresolved_intent",
+                "execution ledger contains an unresolved intent in another market")
+
     def _frame(self, now: datetime) -> MarketFrame:
+        self._assert_runtime_scope()
         if self.market is None or self.book is None or self.book_observed_at is None:
             raise RuntimeError("market frame is incomplete")
         position = self.ledger.position(self.market.slug)
@@ -562,12 +604,14 @@ class CommissioningRunner:
 
         now = self._now()
         await self._rest_reconcile(now)
+        self._assert_runtime_scope()
         slug = self.config.market_slug
         if self.ledger.market_has_unresolved_intent(slug):
             raise AdapterError("runtime recovery has unresolved order intents")
         if self.ledger.working_orders(slug):
             await self.kill_switch.initiate(slug, now=self._now())
             await self._rest_reconcile(self._now())
+            self._assert_runtime_scope()
         if self.ledger.market_has_unresolved_intent(slug):
             raise AdapterError("runtime recovery cancel is not yet reconciled")
         if self.ledger.working_orders(slug):
@@ -610,6 +654,10 @@ class CommissioningRunner:
                     "private state passed. Quoting may resume.")
                 self._runtime_error_counts.pop("private_stream", None)
                 return None
+            except RuntimeInvariantViolation as invariant:
+                await self._report_runtime_error(
+                    "private_stream_terminal", invariant)
+                return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 self.gate.on_disconnect()
                 exc = recovery_exc
@@ -653,6 +701,10 @@ class CommissioningRunner:
                     "Quoting may resume.")
                 self._runtime_error_counts.pop("market_stream", None)
                 return None
+            except RuntimeInvariantViolation as invariant:
+                await self._report_runtime_error(
+                    "market_stream_terminal", invariant)
+                return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 exc = recovery_exc
                 stop = self._stop_reason(self._now())
@@ -685,8 +737,60 @@ class CommissioningRunner:
             if reason in {"book_stale", "book_market_mismatch"}:
                 await self._refresh_book(self._now())
             await self._quarantine_working_orders()
+        except RuntimeInvariantViolation:
+            raise
         except Exception as exc:
             await self._report_runtime_error("strategy_state_recovery", exc)
+
+    @staticmethod
+    def _terminal_exception_reason(component: str, exc: Exception) -> str:
+        if isinstance(exc, RuntimeInvariantViolation):
+            return f"critical:{exc.code}"
+        return f"critical:{component}_{type(exc).__name__}"
+
+    def _recovery_delay(self, component: str, *, base: float = 1.0,
+                        cap: float = 30.0) -> float:
+        attempt = max(1, self._runtime_error_counts.get(component, 1))
+        return min(base * (2 ** min(attempt - 1, 5)), cap)
+
+    async def _handle_strategy_critical(self, reason: str) -> str | None:
+        """Recover only explicitly enumerated transient strategy conditions."""
+
+        if reason not in RECOVERABLE_STRATEGY_CRITICALS:
+            exc = RuntimeInvariantViolation(
+                reason, f"terminal strategy condition: {reason}")
+            await self._report_runtime_error("strategy_state_terminal", exc)
+            return f"critical:{reason}"
+        try:
+            await self._recover_strategy_state(reason)
+        except RuntimeInvariantViolation as invariant:
+            await self._report_runtime_error(
+                "strategy_state_terminal", invariant)
+            return f"critical:{invariant.code}"
+        return None
+
+    async def _handle_strategy_plan_failure(self, exc: Exception) -> str:
+        """A pure planning exception is a code/state invariant, not transport."""
+
+        await self._report_runtime_error("strategy_plan_terminal", exc)
+        return self._terminal_exception_reason("strategy_plan", exc)
+
+    async def _handle_action_failure(self, exc: Exception) -> str | None:
+        """Retry ambiguous remote outcomes; terminate local invariant failures."""
+
+        await self._report_runtime_error("action_driver", exc)
+        if not isinstance(exc, (AdapterError, OrderOutcomeUncertain)):
+            return self._terminal_exception_reason("action_driver", exc)
+        try:
+            await self._quarantine_working_orders()
+        except RuntimeInvariantViolation as invariant:
+            await self._report_runtime_error(
+                "action_driver_terminal", invariant)
+            return f"critical:{invariant.code}"
+        except Exception as recovery_exc:
+            await self._report_runtime_error(
+                "action_driver_recovery", recovery_exc)
+        return None
 
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
@@ -694,22 +798,36 @@ class CommissioningRunner:
             "New risk is disabled; reconciling to flat.",
             critical=reason == "15_USD_HARD_STOP")
         alerted = False
+        exit_limit_alerted = False
+        shutdown_failures = 0
+        slug = self.config.market_slug
+        exit_attempts = self.reconciler.hard_exit_attempts(slug)
         while True:
+            delay = 1.0
             now = self._now()
             try:
                 await self._rest_reconcile(now)
-                position = self.ledger.position(self.config.market_slug)
-                working = self.ledger.working_orders(self.config.market_slug)
-                unresolved = self.ledger.market_has_unresolved_intent(
-                    self.config.market_slug)
+                position = self.ledger.position(slug)
+                working = self.ledger.working_orders(slug)
+                unresolved = self.ledger.market_has_unresolved_intent(slug)
                 if working and not unresolved:
-                    await self.kill_switch.initiate(
-                        self.config.market_slug, now=now)
+                    await self.kill_switch.initiate(slug, now=now)
                 elif position != 0 and not working and not unresolved:
+                    if exit_attempts >= self.reconciler.policy.max_hard_exit_attempts:
+                        if not exit_limit_alerted:
+                            await self.notifier.send_async(
+                                "Liquidity Bot IOC attempt ceiling reached during "
+                                "shutdown. Maker quoting remains terminal; manual "
+                                "intervention is required for remaining position "
+                                f"{position} in {slug}.",
+                                critical=True)
+                            exit_limit_alerted = True
+                        await self.sleep(30)
+                        continue
                     await self._refresh_book(now)
                     if self.book is None or self.market is None:
                         raise RuntimeError("shutdown book is unavailable")
-                    basis = self.ledger.inventory_basis(self.config.market_slug)
+                    basis = self.ledger.inventory_basis(slug)
                     entry_side = "bid" if position > 0 else "offer"
                     conservative_entry = (
                         float(basis.average_entry_price) if basis is not None
@@ -723,15 +841,19 @@ class CommissioningRunner:
                             "insufficient stressed depth to flatten exact position")
                     side = "offer" if position > 0 else "bid"
                     action = PlanAction(
-                        ActionKind.PLACE_IOC, self.config.market_slug,
+                        ActionKind.PLACE_IOC, slug,
                         "commissioning_shutdown_flatten", side=side,
                         price=exit_result.worst_price, qty=abs(position))
                     if self.driver is None:
                         raise RuntimeError("action driver is unavailable")
+                    # Count before mutation because a transport failure after
+                    # send may still have reached the venue.
+                    exit_attempts += 1
                     await self.driver.apply_one(
                         [action], market=self.market,
                         position=position, now=now)
-                status = self.kill_switch.status(self.config.market_slug)
+                    delay = min(2 ** max(exit_attempts - 1, 0), 5)
+                status = self.kill_switch.status(slug)
                 if status.safe_to_stop and self.ledger.risk_state_known():
                     await self._refresh_balance(now)
                     self._accrue_score(now)
@@ -739,7 +861,10 @@ class CommissioningRunner:
                     await self.notifier.send_async(
                         f"✅ Liquidity Bot LIVE stopped flat after {reason}.")
                     return
+                shutdown_failures = 0
             except Exception as exc:
+                shutdown_failures += 1
+                delay = min(2 ** min(shutdown_failures - 1, 5), 30)
                 if not alerted:
                     traceback.print_exc()
                     await self.notifier.send_async(
@@ -747,7 +872,7 @@ class CommissioningRunner:
                         f"({type(exc).__name__}). Process remains in recovery.",
                         critical=True)
                     alerted = True
-            await self.sleep(1)
+            await self.sleep(delay)
 
     async def run(self) -> CommissioningResult:
         market_task: asyncio.Task | None = None
@@ -873,17 +998,12 @@ class CommissioningRunner:
                 try:
                     actions = self.reconciler.plan(self._frame(now))
                 except Exception as exc:
-                    await self._report_runtime_error("strategy_plan", exc)
-                    try:
-                        await self._quarantine_working_orders()
-                    except Exception as recovery_exc:
-                        await self._report_runtime_error(
-                            "strategy_plan_recovery", recovery_exc)
-                    await self.sleep(1)
-                    continue
+                    stop_reason = await self._handle_strategy_plan_failure(exc)
+                    break
                 if actions and actions[0].kind == ActionKind.CRITICAL:
                     reason = actions[0].reason
                     if reason == "hard_exit_sent_but_inventory_remains":
+                        delay = 1.0
                         try:
                             outcome = await self._reconcile_pending_hard_exit()
                             print(
@@ -893,13 +1013,43 @@ class CommissioningRunner:
                                 f"outcome={outcome}",
                                 flush=True,
                             )
+                            if (outcome == "pending"
+                                    and self.reconciler.hard_exit_confirmation_expired(
+                                        self.config.market_slug, now=self._now())):
+                                stop_reason = "critical:hard_exit_confirmation_timeout"
+                                await self._report_runtime_error(
+                                    "hard_exit_confirmation_terminal",
+                                    RuntimeInvariantViolation(
+                                        "hard_exit_confirmation_timeout"))
+                                break
+                            self._runtime_error_counts.pop(
+                                "hard_exit_confirmation", None)
+                            if outcome == "flat":
+                                continue
+                            attempts = self.reconciler.hard_exit_attempts(
+                                self.config.market_slug)
+                            delay = min(2 ** max(attempts - 1, 0), 5)
                         except Exception as exc:
                             await self._report_runtime_error(
                                 "hard_exit_confirmation", exc)
-                        await self.sleep(.25)
+                            if self.reconciler.hard_exit_confirmation_expired(
+                                    self.config.market_slug, now=self._now()):
+                                stop_reason = (
+                                    "critical:hard_exit_confirmation_timeout")
+                                await self._report_runtime_error(
+                                    "hard_exit_confirmation_terminal",
+                                    RuntimeInvariantViolation(
+                                        "hard_exit_confirmation_timeout"))
+                                break
+                            delay = self._recovery_delay(
+                                "hard_exit_confirmation")
+                        await self.sleep(delay)
                         continue
-                    await self._recover_strategy_state(reason)
-                    await self.sleep(1)
+                    stop_reason = (
+                        await self._handle_strategy_critical(reason) or "")
+                    if stop_reason:
+                        break
+                    await self.sleep(self._recovery_delay("strategy_state"))
                     continue
                 self._runtime_error_counts.pop("runtime_state_gate", None)
                 self._runtime_error_counts.pop("runtime_state_quarantine", None)
@@ -916,13 +1066,10 @@ class CommissioningRunner:
                         actions, market=self.market,
                         position=self.ledger.position(self.market.slug), now=now)
                 except Exception as exc:
-                    await self._report_runtime_error("action_driver", exc)
-                    try:
-                        await self._quarantine_working_orders()
-                    except Exception as recovery_exc:
-                        await self._report_runtime_error(
-                            "action_driver_recovery", recovery_exc)
-                    await self.sleep(1)
+                    stop_reason = await self._handle_action_failure(exc) or ""
+                    if stop_reason:
+                        break
+                    await self.sleep(self._recovery_delay("action_driver"))
                     continue
                 if now >= next_summary:
                     await self._send_summary(now)

@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from liquidity_bot.execution_ledger import ExecutionLedger, OrderState, PositionState
+from liquidity_bot.errors import RuntimeInvariantViolation
 from liquidity_bot.live_orders import SubmittedOrder
 from liquidity_bot.live_session import (
     ControlledActionDriver,
@@ -197,6 +198,37 @@ class LiveSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "entire exact position"):
             self.run_async(driver.apply_one(
                 [action], market=market(), position=Decimal("2"), now=NOW))
+
+    def test_driver_marks_cross_market_action_as_terminal_invariant(self):
+        driver = ControlledActionDriver(Executor(), self.ledger)
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "other-market", "bad-market",
+            side="bid", price=.50, qty=Decimal("1"))
+
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            self.run_async(driver.apply_one(
+                [action], market=market(), position=Decimal("0"), now=NOW))
+
+        self.assertEqual(raised.exception.code, "action_market_mismatch")
+
+    def test_driver_marks_unowned_cancel_as_terminal_invariant(self):
+        unowned = OrderState(
+            client_order_id="venue:external", exchange_order_id="external",
+            market_slug="market-one", side="ORDER_SIDE_BUY",
+            price=Decimal("0.50"), original_qty=Decimal("1"),
+            filled_qty=Decimal("0"), status="OPEN", event_at=NOW)
+        self.ledger.apply_order_event(
+            "ws", "external-for-driver", unowned, received_at=NOW)
+        driver = ControlledActionDriver(Executor(), self.ledger)
+        action = PlanAction(
+            ActionKind.CANCEL, "market-one", "cancel-external",
+            order_id="external")
+
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            self.run_async(driver.apply_one(
+                [action], market=market(), position=Decimal("0"), now=NOW))
+
+        self.assertEqual(raised.exception.code, "cancel_order_not_owned")
 
     def test_tripped_runtime_guard_blocks_building_but_allows_reducing(self):
         guard = SessionRiskGuard(

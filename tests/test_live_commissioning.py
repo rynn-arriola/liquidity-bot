@@ -10,11 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
-from liquidity_bot.errors import AdapterError
-from liquidity_bot.execution_ledger import ExecutionLedger
+from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
+from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import CommissioningRunner, _run
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
+from liquidity_bot.reconciler import ActionKind, PlanAction
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -542,16 +543,169 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_unknown_strategy_critical_is_quarantined_not_terminal(self):
+    async def test_confirmation_errors_escalate_at_the_deadline(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        slug = runner.config.market_slug
+        runner.reconciler._hard_exit_sent[slug] = NOW
+        runner.reconciler.plan = lambda _frame: [PlanAction(
+            ActionKind.CRITICAL, slug,
+            "hard_exit_sent_but_inventory_remains")]
+
+        async def fail_confirmation():
+            raise AdapterError("confirmation endpoint unavailable")
+
+        runner._reconcile_pending_hard_exit = fail_confirmation
+
+        result = await runner.run()
+
+        self.assertEqual(
+            result.stop_reason, "critical:hard_exit_confirmation_timeout")
+        self.assertTrue(result.flat)
+        self.assertEqual(client.orders.create_calls, [])
+
+    async def test_unknown_strategy_critical_is_terminal_by_default(self):
         runner, client, notifier = self.build_runner(clock=TickingClock())
         await runner.preflight()
 
-        await runner._recover_strategy_state("future_runtime_condition")
+        stop = await runner._handle_strategy_critical(
+            "future_runtime_condition")
 
-        self.assertIsNone(runner._stop_reason(runner._now()))
+        self.assertEqual(stop, "critical:future_runtime_condition")
         self.assertEqual(client.orders.create_calls, [])
-        self.assertEqual(runner.ledger.working_orders(), [])
         self.assertTrue(any(critical for _, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_only_named_transient_strategy_critical_recovers(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        stop = await runner._handle_strategy_critical(
+            "execution_state_unknown")
+
+        self.assertIsNone(stop)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unexitable_inventory_conditions_are_terminal(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        for reason in (
+            "hard_exit_insufficient_stressed_depth",
+            "hard_exit_price_cap_exceeded",
+            "inventory_basis_or_clock_unknown",
+            "inventory_clock_in_future",
+            "hard_exit_attempt_limit_exceeded",
+            "hard_exit_retry_window_exceeded",
+        ):
+            with self.subTest(reason=reason):
+                self.assertEqual(
+                    await runner._handle_strategy_critical(reason),
+                    f"critical:{reason}")
+
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_runtime_unowned_order_is_terminal_without_mutation(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.ledger.apply_order_event(
+            "ws", "runtime-unowned",
+            OrderState(
+                client_order_id="venue:external",
+                exchange_order_id="external",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.50"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            runner._frame(runner._now())
+        stop = await runner._handle_strategy_plan_failure(raised.exception)
+
+        self.assertEqual(stop, "critical:unowned_working_order")
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_cross_market_action_is_terminal_without_mutation(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "other-market", "bad-market",
+            side="bid", price=.49, qty=Decimal("1"))
+
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            await runner.driver.apply_one(
+                [action], market=runner.market, position=Decimal("0"),
+                now=runner._now())
+        stop = await runner._handle_action_failure(raised.exception)
+
+        self.assertEqual(stop, "critical:action_market_mismatch")
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_adapter_action_failure_remains_recoverable(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        stop = await runner._handle_action_failure(
+            AdapterError("temporary order adapter failure"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_shutdown_does_not_submit_a_fourth_ioc(self):
+        runner, client, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.portfolio.rows = {
+            slug: {
+                "netPosition": "1",
+                "netPositionDecimal": "1.0000",
+                "updateTime": runner._now().isoformat(),
+            }
+        }
+        runner.reconciler._hard_exit_attempts[slug] = 3
+        delays = []
+
+        async def stop_on_manual_escalation(seconds):
+            delays.append(seconds)
+            raise asyncio.CancelledError()
+
+        runner.sleep = stop_on_manual_escalation
+
+        with self.assertRaises(asyncio.CancelledError):
+            await runner._shutdown("critical:hard_exit_attempt_limit_exceeded")
+
+        self.assertEqual(delays, [30])
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(
+            "IOC attempt ceiling" in message and critical
+            for message, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_runtime_recovery_delay_is_exponential_and_capped(self):
+        runner, _, _ = self.build_runner()
+        runner._runtime_error_counts["action_driver"] = 1
+        self.assertEqual(runner._recovery_delay("action_driver"), 1)
+        runner._runtime_error_counts["action_driver"] = 4
+        self.assertEqual(runner._recovery_delay("action_driver"), 8)
+        runner._runtime_error_counts["action_driver"] = 20
+        self.assertEqual(runner._recovery_delay("action_driver"), 30)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

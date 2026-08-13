@@ -122,3 +122,15 @@ already committed to exit. That state is now a no-new-risk confirmation loop:
 the runner reconciles the submitted IOC, resumes when flat, or permits another
 exact-position IOC only after the prior order is proven terminal with inventory
 remaining. It never duplicates an ambiguous exit request.
+
+A follow-up boundary audit found that the first recovery implementation treated
+every strategy `CRITICAL` and every planning/action exception as transient. That
+contradicted the ownership and market-identity invariants and could leave an
+unexitable one-contract position in an infinite recovery loop. Runtime recovery
+now uses an explicit allow-list (`execution_state_unknown` and `book_stale`);
+unknown strategy conditions and ownership, cross-market, exact-position,
+planning, inventory-basis, and hard-exit failures end maker quoting. The hard
+exit is limited to three IOC submissions within 30 seconds, each with a
+10-second confirmation deadline. Recoverable action/strategy retries back off
+exponentially under the shared REST governor. Boundary tests cover both the
+recoverable and terminal sides.

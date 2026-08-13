@@ -53,6 +53,9 @@ class CommissioningConfig:
     max_session_loss_usd: Decimal = Decimal("5")
     hard_stop_loss_usd: Decimal = Decimal("15")
     rest_requests_per_second: Decimal = Decimal("4")
+    max_hard_exit_attempts: int = 3
+    max_hard_exit_retry_seconds: int = 30
+    hard_exit_confirmation_timeout_seconds: int = 10
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -81,6 +84,12 @@ class CommissioningConfig:
             problems.append("hard stop must exceed the normal session stop")
         if self.rest_requests_per_second > 4:
             problems.append("commissioning REST budget cannot exceed 4 requests/second")
+        if (self.max_hard_exit_attempts != 3
+                or self.max_hard_exit_retry_seconds != 30
+                or self.hard_exit_confirmation_timeout_seconds != 10):
+            problems.append(
+                "commissioning hard-exit limits must remain 3 attempts, "
+                "30 seconds total, and 10 seconds for confirmation")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

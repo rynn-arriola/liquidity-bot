@@ -36,6 +36,10 @@ class CommissioningTests(unittest.TestCase):
         self.assertTrue(self.authorized().manual_stop_only)
         self.assertEqual(str(self.authorized().quote_size), "1")
         self.assertEqual(str(self.authorized().hard_stop_loss_usd), "15")
+        self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
+        self.assertEqual(self.authorized().max_hard_exit_retry_seconds, 30)
+        self.assertEqual(
+            self.authorized().hard_exit_confirmation_timeout_seconds, 10)
 
     def test_missing_arm_or_non_manual_mode_is_refused(self):
         overnight = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -43,6 +47,8 @@ class CommissioningTests(unittest.TestCase):
             self.authorized(arm_live=False).assert_authorized(now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "operator stop"):
             self.authorized(manual_stop_only=False).assert_authorized(now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "hard-exit limits"):
+            self.authorized(max_hard_exit_attempts=4).assert_authorized(now=overnight)
 
 
 if __name__ == "__main__":

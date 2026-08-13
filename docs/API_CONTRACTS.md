@@ -129,6 +129,10 @@ Official references:
   refreshed by REST before its five-second decision freshness limit. The
   three-second fallback uses the same 4 requests/second gate and is skipped
   when a newer WebSocket book already arrived.
+- REST books are timestamped at response receipt, not request start, and their
+  refresh runs after slower account/incentive work. The decision clock is read
+  again after all awaited calls; an unresolved-intent reconciliation always
+  begins a fresh loop before any quote decision.
 - The one account/key cannot be shared concurrently with maker-lab during a
   controlled session.
 

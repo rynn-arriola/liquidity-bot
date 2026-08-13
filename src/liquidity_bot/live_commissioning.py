@@ -170,7 +170,9 @@ class CommissioningRunner:
 
     async def _refresh_book(self, now: datetime) -> None:
         self.book = await self.gateway.fetch_book(self.config.market_slug)
-        self.book_observed_at = now
+        # Stamp receipt, not request start. REST and limiter latency can be a
+        # material fraction of the five-second decision freshness budget.
+        self.book_observed_at = self._now()
         if self.market is None:
             raise RuntimeError("market metadata is unavailable")
         # Validate both possible one-contract passive wire payloads before the
@@ -614,15 +616,6 @@ class CommissioningRunner:
                         # normal risk stop. Never substitute buying power.
                         pass
                     next_balance = now + timedelta(seconds=5)
-                if now >= next_book_refresh:
-                    try:
-                        if self._quiet_book_needs_rest_refresh(now):
-                            await self._refresh_book(now)
-                    except Exception as exc:
-                        if self.risk_guard:
-                            self.risk_guard.trip_critical(
-                                f"quiet-book REST refresh: {type(exc).__name__}")
-                    next_book_refresh = now + timedelta(seconds=3)
                 if now >= next_state_reconcile:
                     try:
                         await self._rest_reconcile(now)
@@ -640,6 +633,18 @@ class CommissioningRunner:
                             self.risk_guard.trip_critical(
                                 f"market/incentive refresh: {type(exc).__name__}")
                     next_contract_refresh = now + timedelta(minutes=1)
+                # Keep this last among periodic REST work so account/incentive
+                # latency cannot age the book before the decision below.
+                if now >= next_book_refresh:
+                    try:
+                        if self._quiet_book_needs_rest_refresh(now):
+                            await self._refresh_book(now)
+                    except Exception as exc:
+                        if self.risk_guard:
+                            self.risk_guard.trip_critical(
+                                f"quiet-book REST refresh: {type(exc).__name__}")
+                    next_book_refresh = now + timedelta(seconds=3)
+                now = self._now()
                 self._evaluate_rewards(now)
                 stop_reason = self._stop_reason(now) or ""
                 if stop_reason:
@@ -654,6 +659,7 @@ class CommissioningRunner:
                             # this cannot be reconciled promptly.
                             pass
                         next_reconcile = now + timedelta(seconds=2)
+                    now = self._now()
                     unresolved_age = self._oldest_unresolved_age_seconds(now)
                     if unresolved_age is not None:
                         if (unresolved_age > 10 and self.risk_guard is not None):
@@ -662,7 +668,10 @@ class CommissioningRunner:
                         if now >= next_summary:
                             await self._send_summary(now)
                             next_summary = now + timedelta(minutes=5)
-                        continue
+                    # A reconciliation pass may consume most of the book-age
+                    # budget. Re-enter the loop so book/state freshness is
+                    # rechecked before any new decision, even if it resolved.
+                    continue
                 actions = self.reconciler.plan(self._frame(now))
                 if actions and actions[0].kind == ActionKind.CRITICAL:
                     stop_reason = f"critical:{actions[0].reason}"

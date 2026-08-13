@@ -78,3 +78,11 @@ While that socket remains connected, the runner now performs a complete REST
 order/position reconciliation every ten seconds. REST and private timestamps
 remain distinct; either recent proof can maintain known state, and both aging
 out still disables risk.
+
+The following attempt remained healthy beyond the private threshold and had
+two exact one-contract post-only quotes, but later stopped flat on another book
+freshness edge. The decision reused its pre-await clock and stamped REST books
+at request start; under live API latency, later account work could exhaust the
+five-second budget. Books are now stamped at response receipt, refreshed last,
+and evaluated against a newly read clock. Any intent reconciliation starts a
+fresh loop before a new quote decision.

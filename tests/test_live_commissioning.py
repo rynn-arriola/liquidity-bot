@@ -375,6 +375,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._quiet_book_needs_rest_refresh(
             NOW - timedelta(seconds=1)))
 
+    async def test_rest_book_timestamp_is_response_receipt_not_request_start(self):
+        received = NOW + timedelta(seconds=4)
+        runner, _, _ = self.build_runner(clock=lambda: received)
+        runner.market = await runner.gateway.fetch_market("market-one")
+        await runner._refresh_book(NOW)
+        self.assertEqual(runner.book_observed_at, received)
+
     async def test_periodic_rest_reconcile_backstops_quiet_private_stream(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

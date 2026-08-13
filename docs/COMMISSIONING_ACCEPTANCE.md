@@ -113,3 +113,12 @@ fresh stream state must pass before quoting resumes. Runtime errors retain a
 credential-redacted stack in `commissioning.log` with bounded Discord alerts.
 The former 06:00 cutoff is replaced by graceful operator stop; the $2 market,
 $5 session, and $15 hard loss stops remain terminal.
+
+The first operator-controlled run later exposed an IOC confirmation race. The
+30-second exact-position exit filled, but the next strategy pass saw its local
+position before REST confirmation and treated `hard_exit_sent_but_inventory_remains`
+as terminal. Shutdown reconciled the fill and proved flat, but the process had
+already committed to exit. That state is now a no-new-risk confirmation loop:
+the runner reconciles the submitted IOC, resumes when flat, or permits another
+exact-position IOC only after the prior order is proven terminal with inventory
+remaining. It never duplicates an ambiguous exit request.

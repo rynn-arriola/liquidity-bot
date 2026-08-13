@@ -92,8 +92,11 @@ class FakeOrders:
 
 
 class FakePortfolio:
+    def __init__(self):
+        self.rows = {}
+
     async def positions(self, params):
-        return {"positions": {}, "eof": True}
+        return {"positions": self.rows, "eof": True}
 
 
 class FakeAccount:
@@ -498,6 +501,43 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         frame = runner._frame(later)
         self.assertEqual(frame.reward_eligible, frozenset())
         self.assertEqual(runner.reconciler.plan(frame), [])
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_pending_hard_exit_confirmation_flat_is_recoverable(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        runner.reconciler._hard_exit_sent[slug] = NOW
+
+        outcome = await runner._reconcile_pending_hard_exit()
+
+        self.assertEqual(outcome, "flat")
+        self.assertNotIn(slug, runner.reconciler._hard_exit_sent)
+        self.assertIsNone(runner._stop_reason(runner._now()))
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_terminal_unfilled_hard_exit_can_retry_without_process_stop(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        runner.reconciler._hard_exit_sent[slug] = NOW
+        client.portfolio.rows = {
+            slug: {
+                "netPosition": "1",
+                "netPositionDecimal": "1.0000",
+                "updateTime": NOW.isoformat(),
+            }
+        }
+
+        outcome = await runner._reconcile_pending_hard_exit()
+
+        self.assertEqual(outcome, "retry")
+        self.assertEqual(runner.ledger.position(slug), Decimal("1.0000"))
+        self.assertNotIn(slug, runner.reconciler._hard_exit_sent)
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

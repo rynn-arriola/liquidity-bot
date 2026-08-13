@@ -111,6 +111,18 @@ class ReconcilerTests(unittest.TestCase):
             opened=T0, entry=.49))
         self.assertEqual(actions[0].reason, "hard_exit_sent_but_inventory_remains")
 
+    def test_terminal_hard_exit_confirmation_allows_exact_retry(self):
+        reconciler = DesiredStateReconciler(policy())
+        pending = frame(
+            now=T0 + timedelta(seconds=16), position="2", orders=(),
+            opened=T0, entry=.49)
+        first = reconciler.plan(pending)
+        self.assertEqual(first[0].kind, ActionKind.PLACE_IOC)
+        reconciler.confirm_hard_exit_terminal("market-one")
+        retry = reconciler.plan(pending)
+        self.assertEqual(retry[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(retry[0].qty, Decimal("2"))
+
     def test_portfolio_worst_loss_breaker_blocks_quotes(self):
         actions = DesiredStateReconciler(policy()).plan(
             frame(portfolio_loss=14.5))

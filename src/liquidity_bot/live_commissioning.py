@@ -660,6 +660,22 @@ class CommissioningRunner:
                     return stop
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
+    async def _reconcile_pending_hard_exit(self) -> str:
+        """Confirm a submitted IOC without converting latency into shutdown."""
+
+        slug = self.config.market_slug
+        await self._rest_reconcile(self._now())
+        if (self.ledger.market_has_unresolved_intent(slug)
+                or self.ledger.working_orders(slug)):
+            return "pending"
+        if self.ledger.position(slug) == 0:
+            self.reconciler.confirm_hard_exit_terminal(slug)
+            return "flat"
+        # Venue state is terminal and exact inventory remains. This is a safe
+        # retry boundary, not permission to duplicate an ambiguous mutation.
+        self.reconciler.confirm_hard_exit_terminal(slug)
+        return "retry"
+
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot LIVE shutdown started: {reason}. "
@@ -845,6 +861,21 @@ class CommissioningRunner:
                 actions = self.reconciler.plan(self._frame(now))
                 if actions and actions[0].kind == ActionKind.CRITICAL:
                     reason = actions[0].reason
+                    if reason == "hard_exit_sent_but_inventory_remains":
+                        try:
+                            outcome = await self._reconcile_pending_hard_exit()
+                            print(
+                                "[runtime-recovery] "
+                                f"at={self._now().isoformat()} "
+                                "component=hard_exit_confirmation "
+                                f"outcome={outcome}",
+                                flush=True,
+                            )
+                        except Exception as exc:
+                            await self._report_runtime_error(
+                                "hard_exit_confirmation", exc)
+                        await self.sleep(.25)
+                        continue
                     if reason in {"book_stale", "execution_state_unknown"}:
                         await self._report_runtime_error(
                             "runtime_state_gate", AdapterError(reason))

@@ -115,6 +115,18 @@ class DesiredStateReconciler:
     def _matches(order: WorkingOrder, *, price: float, qty: Decimal) -> bool:
         return abs(order.price - price) < 1e-9 and order.remaining_qty == qty
 
+    def confirm_hard_exit_terminal(self, market_slug: str) -> None:
+        """Permit another exact-position exit after venue terminal proof.
+
+        The sent marker prevents duplicate IOC submissions while the first
+        mutation is still ambiguous. The live runner may clear it only after
+        REST/private reconciliation proves that IOC terminal and no order is
+        still working. If inventory remains (for example after a partial or
+        expired IOC), the next plan can safely price a new exact-position exit.
+        """
+
+        self._hard_exit_sent.pop(str(market_slug), None)
+
     def _critical(self, frame: MarketFrame, reason: str) -> list[PlanAction]:
         return [PlanAction(ActionKind.CRITICAL, frame.market.slug, reason)]
 

@@ -133,6 +133,9 @@ Official references:
   refresh runs after slower account/incentive work. The decision clock is read
   again after all awaited calls; an unresolved-intent reconciliation always
   begins a fresh loop before any quote decision.
+- A skipped REST refresh caused by a recent WebSocket book schedules its next
+  check from that book's receipt time, not from the check time, so the
+  five-second decision limit cannot arrive before the next refresh opportunity.
 - The one account/key cannot be shared concurrently with maker-lab during a
   controlled session.
 

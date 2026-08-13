@@ -438,7 +438,11 @@ class CommissioningRunner:
             return next_refresh
         if self._quiet_book_needs_rest_refresh(now):
             await self._refresh_book(now)
-        return self._now() + timedelta(seconds=3)
+        # Anchor the next check to the actual book receipt. If a due check was
+        # skipped because a WebSocket book arrived 2.9 seconds ago, scheduling
+        # three seconds from *now* would cross the five-second stale limit.
+        anchor = self.book_observed_at or self._now()
+        return anchor + timedelta(seconds=3)
 
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:

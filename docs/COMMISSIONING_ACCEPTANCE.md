@@ -91,3 +91,8 @@ That attempt stopped at the one-minute incentive refresh boundary because the
 book-due comparison still used the clock captured before the incentive calls.
 The runner now rereads time immediately before deciding whether the final book
 refresh is due; upstream REST latency therefore cannot hide an aged book.
+
+One more attempt exposed a scheduler edge: a due check could see a WebSocket
+book just under three seconds old, skip REST, and then schedule three seconds
+from the check time, allowing the five-second limit to arrive first. The next
+deadline is now anchored to the book's actual receipt timestamp.

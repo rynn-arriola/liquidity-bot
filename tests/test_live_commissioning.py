@@ -393,6 +393,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.book_observed_at, after_slow_io)
         self.assertEqual(next_refresh, after_slow_io + timedelta(seconds=3))
 
+    async def test_recent_ws_book_anchors_next_check_to_its_receipt(self):
+        check_at = NOW + timedelta(seconds=4)
+        runner, client, _ = self.build_runner(clock=lambda: check_at)
+        runner.book_observed_at = NOW + timedelta(seconds=2)
+        next_refresh = await runner._refresh_quiet_book_if_due(
+            NOW + timedelta(seconds=3))
+        self.assertEqual(client.markets.book_calls, 0)
+        self.assertEqual(next_refresh, NOW + timedelta(seconds=5))
+
     async def test_periodic_rest_reconcile_backstops_quiet_private_stream(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

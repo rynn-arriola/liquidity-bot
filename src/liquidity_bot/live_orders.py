@@ -29,6 +29,16 @@ class OrderOutcomeUncertain(RuntimeError):
     """The remote result is ambiguous and the market remains quarantined."""
 
 
+# The market metadata endpoint currently emits MARKET_STATUS_OPEN while the
+# full-book endpoint emits MARKET_STATE_OPEN. Accept only these two observed
+# documented-open families; every other value remains fail-closed.
+OPEN_MARKET_STATUSES = frozenset({
+    None,
+    "MARKET_STATE_OPEN",
+    "MARKET_STATUS_OPEN",
+})
+
+
 @dataclass(frozen=True)
 class OrderRequest:
     market_slug: str
@@ -84,7 +94,7 @@ def build_order_payload(request: OrderRequest,
         raise OrderValidationError("order market does not match metadata")
     if not market.active or market.closed:
         raise OrderValidationError("market is not active for order entry")
-    if market.status not in {None, "MARKET_STATE_OPEN"}:
+    if market.status not in OPEN_MARKET_STATUSES:
         raise OrderValidationError(f"market state {market.status} is not open")
     if market.tick_size is None or market.minimum_trade_qty is None:
         raise OrderValidationError(

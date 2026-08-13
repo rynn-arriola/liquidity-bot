@@ -38,3 +38,10 @@ clock was `2026-08-13T23:00:00Z`, after the shutdown cutoff.
 Pool and eligibility are not guaranteed payout or profitability. The live
 runner revalidates market, incentive, book, account, balance, and private-stream
 state immediately before its first order.
+
+The first server start attempt at approximately `2026-08-13T05:01Z` refused
+before order entry because the market metadata endpoint returned the observed
+open value `MARKET_STATUS_OPEN` while validation recognized only the book
+endpoint's `MARKET_STATE_OPEN`. The accepted open set was narrowed to exactly
+those two observed values and covered by a regression test; no arbitrary status
+or substring matching was introduced.

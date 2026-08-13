@@ -31,6 +31,7 @@ from .execution_ledger import ExecutionLedger
 from .live_orders import (
     AsyncTradingGateway,
     LiveOrderExecutor,
+    OPEN_MARKET_STATUSES,
     OrderRequest,
     build_order_payload,
 )
@@ -149,7 +150,7 @@ class CommissioningRunner:
             raise CommissioningRefused(
                 "selected market has no liquidityProgram incentive")
         if (not self.market.active or self.market.closed
-                or self.market.status not in {None, "MARKET_STATE_OPEN"}):
+                or self.market.status not in OPEN_MARKET_STATUSES):
             raise CommissioningRefused("selected market is not open")
         if self.market.game_start is None or self.cutoff_at is None:
             raise CommissioningRefused("market or cutoff clock is unavailable")

@@ -107,6 +107,13 @@ class LiveOrderPayloadTests(unittest.TestCase):
             "MANUAL_ORDER_INDICATOR_AUTOMATIC")
         self.assertFalse(payload["synchronousExecution"])
 
+    def test_observed_market_status_open_family_is_accepted(self):
+        payload = build_order_payload(OrderRequest(
+            "market-one", "bid", Decimal("0.505"), Decimal("1")),
+            market(status="MARKET_STATUS_OPEN"))
+        self.assertEqual(payload["quantity"], 1)
+        self.assertTrue(payload["participateDontInitiate"])
+
     def test_reducing_ioc_uses_sell_intent_and_never_post_only(self):
         payload = build_order_payload(OrderRequest(
             "market-one", "offer", Decimal("0.495"), Decimal("1.00"),

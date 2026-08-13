@@ -46,6 +46,10 @@ Official references:
 
 - `markets.retrieve_by_slug(slug)` returns `{ "market": {...} }`.
 - The verified start clock is `market.gameStartTime`.
+- The market metadata endpoint has emitted `MARKET_STATUS_OPEN`, while the
+  full-book endpoint emits `MARKET_STATE_OPEN`. Live validation accepts only
+  those two observed open values (plus an absent optional metadata status) and
+  fails closed on every other value.
 - Live validation requires both `market.orderPriceMinTickSize` and
   `market.minimumTradeQty`; prices must also remain inside 0.01–0.99.
 - `markets.book(slug)` returns `{ "marketData": {...} }`. Bids and offers are

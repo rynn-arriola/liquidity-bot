@@ -375,13 +375,28 @@ day_of   pool $35   discount 0.5   targetSize 5,000
 1 contract at the touch = 0.020% of target = $0.007 for the whole 6h period
 ```
 
-Eight markets quoted perfectly for a full period is about **$0.056**, against
-the venue's **$1 aggregate payout floor**. Roughly 18 flawless days to reach
-the minimum payout. Venue earnings after 5.7 hours: **$0.00**, which is what
-the arithmetic predicts rather than a defect.
+The $1 payout floor is **aggregate across all markets and it accumulates**, so
+the number that matters is the accrual rate, not any single market. Eight slots
+running continuously keep covering new six-hour windows as games approach:
+
+```
+$0.007 per market per 6h period  =  $0.001167 per market-hour
+8 slots x 24h                    =  192 market-hours/day
+                                 =  $0.224/day  ->  $1 every 4-5 days
+```
+
+Venue earnings after 5.7 hours: **$0.00**, consistent with the arithmetic
+rather than a defect.
+
+Two things make $0.224/day a **ceiling, not an expectation**. It assumes 100%
+resting uptime, and this run had `viable=0` for long stretches plus 1,817
+place/cancel cycles. It also assumes a clean 1/5,000 score share: score
+accumulates outward from the touch until `targetSize` is reached, so on a deep
+book the target is filled by orders at or inside our price and we earn nothing
+at all for that period.
 
 **This is the scale problem, not a bug.** The machinery works; one contract
-cannot earn. Note that section 6 measured `gate_ratio` as nearly size-invariant
+earns on the order of a dollar every few days at best. Note that section 6 measured `gate_ratio` as nearly size-invariant
 (0.0310 -> 0.0305 across 25x), so size changes what a qualifying book pays
 without changing whether it qualifies.
 

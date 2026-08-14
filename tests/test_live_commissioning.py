@@ -617,6 +617,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_stale_book_recovery_refreshes_the_market_that_went_stale(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+
+        refreshed: list[str | None] = []
+
+        async def record(now, slug=None):
+            refreshed.append(slug)
+
+        runner._refresh_book = record
+
+        await runner._recover_strategy_state("book_stale", "market-two")
+
+        # Refreshing the primary would leave market-two stale forever: it would
+        # report book_stale on every pass and never quote again.
+        self.assertEqual(refreshed, ["market-two"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_recovery_backoff_is_tracked_per_market(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+
+        for _ in range(6):
+            await runner._report_runtime_error(
+                "strategy_state:market-one", AdapterError("flapping"))
+
+        # One market failing repeatedly must not push another market's sweep
+        # onto the 30-second cap; that would cost score-seconds everywhere.
+        self.assertEqual(
+            runner._recovery_delay("strategy_state:market-one"), 30.0)
+        self.assertEqual(
+            runner._recovery_delay("strategy_state:market-two"), 1.0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_rotation_gate_sees_inventory_on_a_non_primary_market(self):
         from liquidity_bot.execution_ledger import PositionState
 
@@ -1264,7 +1304,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
 
         stop = await runner._handle_strategy_critical(
-            "future_runtime_condition")
+            "future_runtime_condition", runner.market_slug)
 
         self.assertEqual(stop, "critical:future_runtime_condition")
         self.assertEqual(client.orders.create_calls, [])
@@ -1292,7 +1332,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
 
         stop = await runner._handle_strategy_critical(
-            "execution_state_unknown")
+            "execution_state_unknown", runner.market_slug)
 
         self.assertIsNone(stop)
         self.assertEqual(client.orders.create_calls, [])
@@ -1313,7 +1353,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(reason=reason):
                 self.assertEqual(
-                    await runner._handle_strategy_critical(reason),
+                    await runner._handle_strategy_critical(
+                        reason, runner.market_slug),
                     f"critical:{reason}")
 
         self.assertEqual(client.orders.create_calls, [])
@@ -1481,7 +1522,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             await runner.driver.apply_one(
                 [action], market=runner.market, position=Decimal("0"),
                 now=runner._now())
-        stop = await runner._handle_action_failure(raised.exception)
+        stop = await runner._handle_action_failure(
+            raised.exception, runner.market_slug)
 
         self.assertEqual(stop, "critical:action_market_mismatch")
         self.assertEqual(client.orders.create_calls, [])
@@ -1494,7 +1536,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
 
         stop = await runner._handle_action_failure(
-            AdapterError("temporary order adapter failure"))
+            AdapterError("temporary order adapter failure"),
+            runner.market_slug)
 
         self.assertIsNone(stop)
         self.assertEqual(client.orders.create_calls, [])

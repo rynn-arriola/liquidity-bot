@@ -1195,15 +1195,19 @@ class CommissioningRunner:
                         return "critical:hard_exit_confirmation_timeout", 0.0
                     return None, self._recovery_delay(
                         f"hard_exit_confirmation:{slug}")
-            stop = await self._handle_strategy_critical(reason)
+            stop = await self._handle_strategy_critical(reason, slug)
             if stop:
                 return stop, 0.0
-            return None, self._recovery_delay("strategy_state")
+            return None, self._recovery_delay(f"strategy_state:{slug}")
+        # Per market. A shared counter let one market's repeated failure
+        # inflate every market's backoff toward the 30s cap, and let any one
+        # market's success reset a different market's escalation.
         for key in ("runtime_state_gate", "runtime_state_quarantine",
-                    "strategy_state", "strategy_state_recovery",
-                    "strategy_plan", "strategy_plan_recovery",
-                    "action_driver", "action_driver_recovery"):
+                    "strategy_plan", "strategy_plan_recovery"):
             self._runtime_error_counts.pop(key, None)
+        for key in ("strategy_state", "strategy_state_recovery",
+                    "action_driver", "action_driver_recovery"):
+            self._runtime_error_counts.pop(f"{key}:{slug}", None)
         if self.driver is None or state.market is None:
             raise RuntimeError("commissioning driver is unavailable")
         try:
@@ -1211,10 +1215,10 @@ class CommissioningRunner:
                 actions, market=state.market,
                 position=self.ledger.position(slug), now=now)
         except Exception as exc:
-            stop = await self._handle_action_failure(exc)
+            stop = await self._handle_action_failure(exc, slug)
             if stop:
                 return stop, 0.0
-            return None, self._recovery_delay("action_driver")
+            return None, self._recovery_delay(f"action_driver:{slug}")
         return None, 0.0
 
     async def _service_market_state(self, slug: str, now: datetime) -> None:
@@ -1719,19 +1723,25 @@ class CommissioningRunner:
         self.reconciler.confirm_hard_exit_terminal(slug)
         return "retry"
 
-    async def _recover_strategy_state(self, reason: str) -> None:
-        """Quarantine an unexpected strategy state without ending the process."""
+    async def _recover_strategy_state(self, reason: str, slug: str) -> None:
+        """Quarantine an unexpected strategy state without ending the process.
+
+        The refresh must target the market that actually went stale. Refreshing
+        the primary would leave a stale book on any other slot untouched, so it
+        would report the same condition forever and never quote again.
+        """
 
         await self._report_runtime_error(
-            "strategy_state", AdapterError(str(reason or "unknown")))
+            f"strategy_state:{slug}", AdapterError(str(reason or "unknown")))
         try:
             if reason in {"book_stale", "book_market_mismatch"}:
-                await self._refresh_book(self._now())
+                await self._refresh_book(self._now(), slug)
             await self._quarantine_working_orders()
         except RuntimeInvariantViolation:
             raise
         except Exception as exc:
-            await self._report_runtime_error("strategy_state_recovery", exc)
+            await self._report_runtime_error(
+                f"strategy_state_recovery:{slug}", exc)
 
     @staticmethod
     def _terminal_exception_reason(component: str, exc: Exception) -> str:
@@ -1744,7 +1754,9 @@ class CommissioningRunner:
         attempt = max(1, self._runtime_error_counts.get(component, 1))
         return min(base * (2 ** min(attempt - 1, 5)), cap)
 
-    async def _handle_strategy_critical(self, reason: str) -> str | None:
+    async def _handle_strategy_critical(
+        self, reason: str, slug: str,
+    ) -> str | None:
         """Recover only explicitly enumerated transient strategy conditions."""
 
         if reason not in RECOVERABLE_STRATEGY_CRITICALS:
@@ -1753,7 +1765,7 @@ class CommissioningRunner:
             await self._report_runtime_error("strategy_state_terminal", exc)
             return f"critical:{reason}"
         try:
-            await self._recover_strategy_state(reason)
+            await self._recover_strategy_state(reason, slug)
         except RuntimeInvariantViolation as invariant:
             await self._report_runtime_error(
                 "strategy_state_terminal", invariant)
@@ -1766,10 +1778,12 @@ class CommissioningRunner:
         await self._report_runtime_error("strategy_plan_terminal", exc)
         return self._terminal_exception_reason("strategy_plan", exc)
 
-    async def _handle_action_failure(self, exc: Exception) -> str | None:
+    async def _handle_action_failure(
+        self, exc: Exception, slug: str,
+    ) -> str | None:
         """Retry ambiguous remote outcomes; terminate local invariant failures."""
 
-        await self._report_runtime_error("action_driver", exc)
+        await self._report_runtime_error(f"action_driver:{slug}", exc)
         if not isinstance(exc, (AdapterError, OrderOutcomeUncertain)):
             return self._terminal_exception_reason("action_driver", exc)
         try:
@@ -1780,7 +1794,7 @@ class CommissioningRunner:
             return f"critical:{invariant.code}"
         except Exception as recovery_exc:
             await self._report_runtime_error(
-                "action_driver_recovery", recovery_exc)
+                f"action_driver_recovery:{slug}", recovery_exc)
         return None
 
     def _shutdown_slugs(self) -> tuple[str, ...]:

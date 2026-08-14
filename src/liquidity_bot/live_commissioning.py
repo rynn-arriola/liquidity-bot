@@ -1328,15 +1328,20 @@ class CommissioningRunner:
         # ledger records that an order was cancelled but never the reason, so
         # the 2026-08-14 place/cancel churn could not be diagnosed from the
         # data it left behind -- only guessed at.
-        chosen = actions[0]
-        print(
-            f"[action] at={now.isoformat()} market={slug} "
-            f"kind={chosen.kind.name} reason={chosen.reason} "
-            f"side={chosen.side} price={chosen.price} "
-            f"working={len(self._working_orders(slug))} "
-            f"pending={len(actions)}",
-            flush=True,
-        )
+        # An empty plan is the normal healthy case -- the desired state already
+        # matches, so there is nothing to do and nothing to log. Indexing it
+        # unconditionally crashed the runner every time the planner was
+        # satisfied, which is most passes.
+        if actions:
+            chosen = actions[0]
+            print(
+                f"[action] at={now.isoformat()} market={slug} "
+                f"kind={chosen.kind.name} reason={chosen.reason} "
+                f"side={chosen.side} price={chosen.price} "
+                f"working={len(self._working_orders(slug))} "
+                f"pending={len(actions)}",
+                flush=True,
+            )
         try:
             await self.driver.apply_one(
                 actions, market=state.market,

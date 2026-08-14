@@ -930,6 +930,24 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_an_empty_plan_is_the_healthy_case_and_does_not_crash(self):
+        # apply_one already treats an empty plan as a no-op. The action log
+        # added alongside it indexed actions[0] unconditionally and raised
+        # IndexError on every satisfied pass, which is most of them -- it
+        # crash-looped the runner in production on 2026-08-14T11:29Z.
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.reconciler.plan = lambda _frame: []
+
+        stop, delay = await runner._decide_for_market(slug, runner._now())
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 0.0)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_ledger_with_past_orders_still_trades(self):
         # "This ledger has ever placed an order" was treated as recovery state.
         # It is true forever after the first order, so every later session

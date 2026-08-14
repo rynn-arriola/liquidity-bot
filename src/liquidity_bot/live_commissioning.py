@@ -613,7 +613,15 @@ class CommissioningRunner:
             "private stream did not become reconciled and fresh")
 
     def _startup_recovery_is_scoped(self, blockers: tuple[str, ...]) -> bool:
-        """Allow restart only to retire this bot's identified one-market risk."""
+        """Allow restart only to retire this bot's identified risk.
+
+        Scoped to the whole active set, not the primary market. Checking only
+        slot zero refused recovery whenever a crash left a position on any
+        other slot, which raises CommissioningRefused and exits 2 -- a code the
+        supervisor never restarts. The bot would stay down for exactly the
+        state it was built to recover. See invariant 58: the authorized scope
+        is the active set.
+        """
 
         allowed = {
             "shared account has open orders",
@@ -622,14 +630,17 @@ class CommissioningRunner:
         }
         if not blockers or not set(blockers).issubset(allowed):
             return False
+        authorized = set(self.active_slugs)
+        if not authorized:
+            return False
         working = self.ledger.working_orders()
         if any(str(row["client_order_id"]).startswith("venue:")
-               or row["market_slug"] != self.market_slug for row in working):
+               or row["market_slug"] not in authorized for row in working):
             return False
         nonzero = self.ledger.query(
             "SELECT market_slug FROM execution_positions "
             "WHERE CAST(net_qty AS REAL)!=0")
-        if any(row["market_slug"] != self.market_slug for row in nonzero):
+        if any(row["market_slug"] not in authorized for row in nonzero):
             return False
         for row in nonzero:
             try:
@@ -642,7 +653,7 @@ class CommissioningRunner:
                 # reconstruct its exact quantity before shutdown may mutate it.
                 return False
         unresolved = self.ledger.unresolved_intents()
-        if any(row["market_slug"] != self.market_slug
+        if any(row["market_slug"] not in authorized
                or not row["exchange_order_id"] for row in unresolved):
             return False
         return bool(working or nonzero)
@@ -1317,9 +1328,25 @@ class CommissioningRunner:
 
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:
-        position = self.ledger.position(self.market_slug)
-        basis = self.ledger.inventory_basis(self.market_slug)
-        working = self.ledger.working_orders(self.market_slug)
+        # Whole-account, not the primary market. Reporting only slot zero
+        # meant a position on any other slot showed as open_positions 0 and an
+        # inventory age of 0 -- the two numbers an operator watches to decide
+        # whether to intervene.
+        reported_slugs = self._shutdown_slugs() or self.active_slugs
+        positions_by_slug = {
+            slug: self.ledger.position(slug) for slug in reported_slugs}
+        open_positions = sum(
+            1 for value in positions_by_slug.values() if value != 0)
+        position = positions_by_slug.get(self.market_slug, Decimal("0"))
+        oldest_inventory_age = 0.0
+        for slug in reported_slugs:
+            slug_basis = self.ledger.inventory_basis(slug)
+            if slug_basis is None:
+                continue
+            oldest_inventory_age = max(
+                oldest_inventory_age,
+                max(0.0, (now - slug_basis.opened_at).total_seconds()))
+        working = self.ledger.working_orders()
         unresolved = self.ledger.unresolved_intents()
         unknown = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_orders "
@@ -1339,8 +1366,12 @@ class CommissioningRunner:
             "SELECT COUNT(*) n FROM execution_fills WHERE intent IN "
             "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT') "
             "AND received_at>=?", (session_start,))[0]["n"]
-        market_age = ((now - self.book_observed_at).total_seconds()
-                      if self.book_observed_at else None)
+        observed = [self.state_for(slug).book_observed_at
+                    for slug in self.active_slugs]
+        oldest_book = min((at for at in observed if at is not None),
+                          default=None)
+        market_age = ((now - oldest_book).total_seconds()
+                      if oldest_book is not None else None)
         private_age = ((now - self.gate.last_message_at).total_seconds()
                        if self.gate.last_message_at else None)
         payload = build_liquidity_summary(LiquiditySummary(
@@ -1348,18 +1379,19 @@ class CommissioningRunner:
             readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
             observed_at=now,
             session_started_at=self.started_at or now,
-            active_markets=1,
-            reward_eligible_sides=len(self._reward_eligible),
+            active_markets=len(self.active_slugs),
+            reward_eligible_sides=sum(
+                len(self.state_for(slug).reward_eligible)
+                for slug in self.active_slugs),
             score_seconds=self._score_seconds,
             entry_fills=entry_fills,
             exit_samples=exit_fills,
             exit_completion_rate=(
-                1.0 if position == 0 and entry_fills
+                1.0 if open_positions == 0 and entry_fills
                 else min(exit_fills / entry_fills, 1.0) if entry_fills else 0.0),
-            open_positions=int(position != 0),
+            open_positions=open_positions,
             working_orders=len(working),
-            max_inventory_age_seconds=(
-                max(0, (now - basis.opened_at).total_seconds()) if basis else 0),
+            max_inventory_age_seconds=oldest_inventory_age,
             unresolved_intents=len(unresolved),
             unknown_orders=unknown,
             trading_realized_usd=equity_change,
@@ -1374,23 +1406,32 @@ class CommissioningRunner:
         ))
         # Expose actual create count only in the description, never imply that
         # shadow observations were venue orders.
-        economically_allowed = sorted(self._expected_net_by_side)
+        economically_allowed = sorted({
+            side for slug in self.active_slugs
+            for side in self.state_for(slug).expected_net_by_side})
         maximum_remaining = max(
             (item.maximum_remaining_reward
-             for item in self._reward_projection_by_side.values()),
+             for slug in self.active_slugs
+             for item in self.state_for(
+                 slug).reward_projection_by_side.values()),
             default=0.0,
         )
         paid_observed = self._earnings_by_status.get("PAID", Decimal("0"))
         pending_observed = self._earnings_by_status.get("PENDING", Decimal("0"))
+        risk_by_market_side = {
+            (slug, side): value
+            for slug in self.active_slugs
+            for side, value in self.state_for(
+                slug).fill_probability_by_side.items()}
         maximum_fill_probability = max(
-            self._fill_probability_by_side.values(), default=0.0)
+            risk_by_market_side.values(), default=0.0)
         fill_driver = "none"
-        if self._fill_probability_by_side:
-            riskiest_side = max(
-                self._fill_probability_by_side,
-                key=self._fill_probability_by_side.__getitem__)
-            fill_driver = self._fill_risk_driver_by_side.get(
-                riskiest_side, "unknown")
+        if risk_by_market_side:
+            riskiest = max(
+                risk_by_market_side, key=risk_by_market_side.__getitem__)
+            fill_driver = self.state_for(
+                riskiest[0]).fill_risk_driver_by_side.get(
+                    riskiest[1], "unknown")
         payload["embeds"][0]["footer"]["text"] += (
             f" • session creates {place_count - self._orders_before}"
             f" • economic sides {','.join(economically_allowed) or 'none'}"
@@ -1400,6 +1441,10 @@ class CommissioningRunner:
             f" pending ${pending_observed:.2f}"
             f" • venue aggregate payout floor "
             f"${self.config.aggregate_reward_payout_floor_usd:.2f} reporting-only")
+        if self._retired_ever:
+            payload["embeds"][0]["footer"]["text"] += (
+                f" • retired {len(self._retired_ever)}"
+                f" ({','.join(sorted(self._retired_ever))})")
         if self._market_selection is not None:
             payload["embeds"][0]["footer"]["text"] += (
                 f" • catalog {self._market_selection.catalog_markets}"
@@ -2389,8 +2434,10 @@ class CommissioningRunner:
             self.cutoff_at,
             stopped,
             stop_reason,
-            (self.ledger.position(self.market_slug) == 0
-             and self._shutdown_proved_flat),
+            # Whole-account. This value picks the exit code: a false "flat"
+            # reports a clean stop while a contract sits at the venue, and
+            # exit 3 is the only signal that says check the exchange now.
+            (not self._has_open_position() and self._shutdown_proved_flat),
             creates - self._orders_before,
         )
 

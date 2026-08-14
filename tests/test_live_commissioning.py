@@ -1449,6 +1449,168 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_shutdown_still_flattens_an_abandoned_market(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.ledger.apply_position_event(
+            "ws", "abandoned-position",
+            PositionState(slug, Decimal("1"), runner._now()),
+            received_at=runner._now())
+
+        for _ in range(MAX_RETIREMENT_ROUNDS):
+            await runner._retire_market(slug, "hard_exit_stuck")
+
+        # Abandonment stops the runner *planning* the market. It must not hide
+        # the position from shutdown, which is the last thing standing between
+        # an unexitable contract and settlement.
+        self.assertIn(slug, runner._shutdown_slugs())
+        self.assertFalse(runner._whole_account_safe_to_stop())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_retired_market_accrues_no_score(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+
+        # Stand in for a resting order that was scoring at retirement time.
+        # Score only populates from working orders, which this fixture has
+        # none of, so set it directly rather than assert a vacuous baseline.
+        runner.state_for(slug).score_by_side = {"bid": 12.5}
+        before = runner._score_seconds
+
+        await runner._retire_market(slug, "hard_exit_attempt_limit_exceeded")
+        runner._evaluate_rewards(runner._now(), slug)
+        runner._accrue_score(runner._now() + timedelta(seconds=60))
+
+        # Score is a time integral over resting orders. A retired market rests
+        # nothing, so continuing to accrue for it would overstate the session.
+        self.assertEqual(runner.state_for(slug).score_by_side, {})
+        self.assertEqual(runner._score_seconds, before)
+        self.assertNotIn(slug, runner._score_seconds_by_market)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_retiring_every_market_idles_rather_than_spinning(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        slugs = ("market-one", "market-two")
+        runner._bind_markets(slugs)
+
+        for slug in slugs:
+            await runner._retire_market(slug, "hard_exit_stuck")
+
+        # Every slot barred: the sweep must stay quiet rather than quote or
+        # escalate. Two retirements is well inside the systemic cap.
+        for slug in slugs:
+            runner._evaluate_rewards(runner._now(), slug)
+            stop, _delay = await runner._decide_for_market(slug, runner._now())
+            self.assertIsNone(stop)
+            self.assertEqual(runner.state_for(slug).reward_eligible, frozenset())
+        self.assertTrue(runner._discovery_is_free())
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_summary_reports_a_position_on_a_non_primary_market(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_position_event(
+            "ws", "position-slot-two",
+            PositionState("market-two", Decimal("1"), runner._now()),
+            received_at=runner._now())
+
+        await runner._send_summary(runner._now())
+
+        payload, _critical = notifier.payloads[-1]
+        rendered = "\n".join(
+            field["value"] for field in payload["embeds"][0]["fields"])
+        # Reporting slot zero only showed no open position here, which is the
+        # number an operator reads to decide whether to intervene.
+        self.assertIn(f"{'Positions open':<16}{1:>10}", rendered)
+        self.assertIn(f"Markets active   {2:>10}", rendered)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_summary_names_retired_markets(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        await runner._retire_market(slug, "hard_exit_attempt_limit_exceeded")
+
+        await runner._send_summary(runner._now())
+
+        footer = notifier.payloads[-1][0]["embeds"][0]["footer"]["text"]
+        # A silently retired slot looks identical to an idle one otherwise.
+        self.assertIn("retired 1", footer)
+        self.assertIn(slug, footer)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_restart_recovers_risk_left_on_a_non_primary_market(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_order_event(
+            "ws", "order-left-on-slot-two",
+            OrderState(
+                client_order_id="liquidity-resting",
+                exchange_order_id="resting-2",
+                market_slug="market-two",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        scoped = runner._startup_recovery_is_scoped(
+            ("shared account has open orders",))
+
+        # Scoping this to slot zero refused recovery for a position on any
+        # other slot. Refusal raises CommissioningRefused, which exits 2, and
+        # the supervisor never restarts exit 2 -- the bot would stay down for
+        # exactly the state restart recovery exists to retire.
+        self.assertTrue(scoped)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_restart_still_refuses_risk_outside_the_active_set(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one",))
+        runner.ledger.apply_order_event(
+            "ws", "someone-elses-order",
+            OrderState(
+                client_order_id="liquidity-resting",
+                exchange_order_id="resting-x",
+                market_slug="not-ours",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        # Widening to the active set must not become "any market": this is a
+        # shared account and that order belongs to something else.
+        self.assertFalse(runner._startup_recovery_is_scoped(
+            ("shared account has open orders",)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unrecognised_critical_still_stops_the_session(self):
         runner, _, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()

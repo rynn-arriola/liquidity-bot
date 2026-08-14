@@ -43,11 +43,12 @@ def policy(age=15, **overrides) -> ReconcilerPolicy:
 
 
 def frame(*, now=T0, position="0", orders=(), opened=None, entry=None,
-          state_known=True, snapshot=None, portfolio_loss=0) -> MarketFrame:
+          state_known=True, snapshot=None, portfolio_loss=0,
+          eligible=frozenset({"bid", "offer"})) -> MarketFrame:
     snapshot = snapshot or book(now)
     return MarketFrame(
         market(), now, snapshot, now, Decimal(position), tuple(orders),
-        state_known, frozenset({"bid", "offer"}), {"bid": .01, "offer": .01},
+        state_known, eligible, {"bid": .01, "offer": .01},
         portfolio_loss, opened, entry)
 
 
@@ -157,6 +158,41 @@ class ReconcilerTests(unittest.TestCase):
         from liquidity_bot.live_commissioning import (
             RECOVERABLE_STRATEGY_CRITICALS)
         self.assertNotIn(actions[0].reason, RECOVERABLE_STRATEGY_CRITICALS)
+
+    def test_a_retired_market_still_works_its_exit(self):
+        # Retirement clears reward eligibility so no side can be quoted. The
+        # position must still be reduced: a market that stops quoting but also
+        # stops exiting would hold inventory to settlement, which is the most
+        # expensive failure either project has measured.
+        actions = DesiredStateReconciler(policy(age=900)).plan(frame(
+            now=T0 + timedelta(seconds=30), position="2", orders=(),
+            opened=T0, entry=.49, eligible=frozenset()))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+        self.assertEqual(actions[0].side, "offer")
+
+    def test_a_retired_market_still_hard_exits_at_the_deadline(self):
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        near_kickoff = T0 + timedelta(hours=5) - timedelta(seconds=200)
+
+        actions = reconciler.plan(frame(
+            now=near_kickoff, position="2", orders=(),
+            opened=near_kickoff - timedelta(seconds=5), entry=.49,
+            eligible=frozenset()))
+
+        # The pre-kickoff flatten is what stops a retired market settling.
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+
+    def test_a_flat_retired_market_plans_nothing_at_all(self):
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(eligible=frozenset()))
+
+        # No eligibility, no position: nothing to do. Not a critical, which
+        # would churn the retirement counter for a market that is simply done.
+        self.assertEqual(actions, [])
 
     def test_unknown_state_fails_closed_for_new_risk(self):
         actions = DesiredStateReconciler(policy()).plan(frame(state_known=False))

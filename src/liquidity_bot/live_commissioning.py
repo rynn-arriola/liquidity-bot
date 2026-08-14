@@ -1157,8 +1157,11 @@ class CommissioningRunner:
             book_observed_at=state.book_observed_at,
             position=position,
             working_orders=self._working_orders(state.slug),
-            state_known=(self.gate.ready(self.ledger, now=now)
-                         and self.ledger.risk_state_known()),
+            # Scoped to this market. The gate stays account-wide because it
+            # measures whether our whole view is fresh and reconciled; only
+            # the intent test is per market. See FINDINGS 6g.
+            state_known=self.gate.ready(
+                self.ledger, now=now, market_slug=state.slug),
             reward_eligible=eligible,
             expected_net_by_side=state.expected_net_by_side,
             existing_portfolio_worst_loss=0,

@@ -948,6 +948,78 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_one_markets_cancel_does_not_blank_another_market(self):
+        """FINDINGS 6g: the cross-market blackout, as a test.
+
+        A cancel in flight leaves its intent unresolved. Both that test and
+        the absent-order test were account-wide, so every routine cancel made
+        every market report execution_state_unknown and quarantine its resting
+        quote. Sampled live, that held state "unknown" 35% of wall-clock time.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        # Give the neighbour a complete frame so state_known is what decides.
+        primary = runner.state_for("market-one")
+        neighbour = runner.state_for("market-two")
+        neighbour.market = replace(primary.market, slug="market-two")
+        neighbour.incentive = primary.incentive
+        neighbour.book = replace(primary.book, slug="market-two")
+        neighbour.book_observed_at = primary.book_observed_at
+        runner.ledger.prepare_intent(
+            "cancel-in-flight", "CANCEL", "market-one", "liquidity-one", {},
+            created_at=runner._now())
+        runner.ledger.transition_intent(
+            "cancel-in-flight", "SUBMITTING", updated_at=runner._now())
+        runner.ledger.transition_intent(
+            "cancel-in-flight", "ACKNOWLEDGED", updated_at=runner._now(),
+            exchange_order_id="exchange-one")
+
+        # The market with the mutation in flight is genuinely unknown.
+        self.assertFalse(runner.ledger.risk_state_known("market-one"))
+        # Its neighbour is not, and must keep its quote.
+        self.assertTrue(runner.ledger.risk_state_known("market-two"))
+        # Account-wide callers still see the truth, so stopping and rotating
+        # remain as conservative as before.
+        self.assertFalse(runner.ledger.risk_state_known())
+
+        # And the value the reconciler actually reads, which reaches
+        # risk_state_known through PrivateStateGate.ready rather than
+        # directly. Scoping the ledger alone changes nothing if the gate
+        # keeps asking account-wide.
+        self.assertFalse(runner._frame(runner._now(), "market-one").state_known)
+        self.assertTrue(runner._frame(runner._now(), "market-two").state_known)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unowned_order_still_blanks_every_market(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_order_event(
+            "ws", "someone-elses",
+            OrderState(
+                client_order_id="venue:not-ours",
+                exchange_order_id="venue-1",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        # Ownership is never scoped: an order this bot did not place means
+        # something else is trading the account, and that stops everything.
+        self.assertFalse(runner.ledger.risk_state_known("market-two"))
+        self.assertFalse(runner.ledger.risk_state_known())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_ledger_with_past_orders_still_trades(self):
         # "This ledger has ever placed an order" was treated as recovery state.
         # It is true forever after the first order, so every later session

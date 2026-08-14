@@ -115,11 +115,21 @@ class PrivateStateGate:
         elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
             self.balance_snapshot_seen = True
 
-    def ready(self, ledger: ExecutionLedger, *, now: datetime) -> bool:
+    def ready(self, ledger: ExecutionLedger, *, now: datetime,
+              market_slug: str | None = None) -> bool:
+        """Whether the private view is fresh and execution state provable.
+
+        Connection, snapshot and silence checks are account-wide: they measure
+        whether our whole view of the venue can be trusted. ``market_slug``
+        scopes only the execution-state test, because an in-flight cancel in
+        one market says nothing about another. See FINDINGS 6g.
+        """
+
         if not (self.connected and self.rest_reconciled
                 and not self.order_snapshot_in_progress
                 and self.balance_snapshot_seen
-                and ledger.risk_state_known() and self.last_message_at
+                and ledger.risk_state_known(market_slug)
+                and self.last_message_at
                 and self.last_reconcile_at):
             return False
         freshest_state = max(self.last_message_at, self.last_reconcile_at)

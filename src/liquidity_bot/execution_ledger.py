@@ -340,11 +340,23 @@ class ExecutionLedger:
                 (state, _time(updated_at, "updated_at"), exchange_order_id,
                  error, intent_id))
 
-    def unresolved_intents(self) -> list[sqlite3.Row]:
+    def unresolved_intents(
+        self, market_slug: str | None = None,
+    ) -> list[sqlite3.Row]:
+        """Intents whose venue outcome is not yet proven.
+
+        ``market_slug`` narrows to one market. Callers deciding whether the
+        whole account is safe to stop or rotate must keep passing nothing;
+        only per-market planning may scope it.
+        """
+
         placeholders = ",".join("?" for _ in UNRESOLVED_INTENTS)
-        return self.query(
-            f"SELECT * FROM execution_intents WHERE state IN ({placeholders}) "
-            "ORDER BY created_at", tuple(sorted(UNRESOLVED_INTENTS)))
+        sql = (f"SELECT * FROM execution_intents WHERE state IN ({placeholders})")
+        params: list[Any] = list(sorted(UNRESOLVED_INTENTS))
+        if market_slug is not None:
+            sql += " AND market_slug=?"
+            params.append(market_slug)
+        return self.query(sql + " ORDER BY created_at", tuple(params))
 
     @staticmethod
     def _intent_matches_raw_order(payload: Mapping[str, Any],
@@ -840,8 +852,25 @@ class ExecutionLedger:
             self._finish_event("position_snapshot", snapshot_id, True)
         return True
 
-    def risk_state_known(self) -> bool:
-        if self.unresolved_intents():
+    def risk_state_known(self, market_slug: str | None = None) -> bool:
+        """True when execution state is provable enough to build new risk.
+
+        ``market_slug`` scopes the *intent* test to one market. Ownership tests
+        stay account-wide whatever is passed: a ``venue:`` order or an order
+        stuck absent anywhere means something is true of the account that we
+        cannot explain, and that must stop every market.
+
+        Scoping matters at eight markets. An in-flight cancel leaves its intent
+        unresolved and its order briefly absent from the open-order snapshot,
+        and both conditions are part of the ordinary cancel lifecycle. Measured
+        2026-08-14: the two together held account-wide state "unknown" for 35%
+        of wall-clock time, and every market quarantined its resting quote for
+        each of those windows. What we know about market B does not actually
+        change because a cancel is in flight in market A -- the durable-intent
+        ledger is per order and per market.
+        """
+
+        if self.unresolved_intents(market_slug):
             return False
         unknown_orders = self.connection.execute(
             "SELECT COUNT(*) FROM execution_orders WHERE status='UNKNOWN_ABSENT'"

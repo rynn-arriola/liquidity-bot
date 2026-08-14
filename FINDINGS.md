@@ -461,25 +461,45 @@ That reframes the open question. It is not "can this strategy earn" -- measured
 yes, $32-33 on a good day. It is whether it can earn without giving it back at
 settlement, which has never been tested with the flatten in place.
 
-### The pregame-only design is not locked out
+### Live versus pregame is UNRESOLVED, and fills cannot resolve it
 
 The `live` period carries the 8x pool and the pregame design forbids it
-(section 4), so the split mattered. Measured 2026-08-14 against maker-lab's
-fills, comparing `filled_at` to `game_start`:
+(section 4), so this split decides whether scaling the current design is worth
+doing. **The venue does not expose it.** `GET /v1/incentives/earnings` accepts
+only `start_date`, `end_date`, `market_slug`, `program_type` and returns only
+`reward`, `programType`, `marketSlug`, `date`, `status` -- confirmed against
+the published reference on 2026-08-14. There is no period field to fetch.
+
+An earlier note here claimed "two thirds pregame" from maker-lab's aggregate
+fill timing. **That was wrong and is retracted.** Attributing all 166 earning
+markets by fill timing:
 
 ```
-fills with a known game clock  197
-  before game start (pregame)  132   67%
-  after  game start (live)      65   33%
+                                              amount   share
+no fills at all (pure resting)                $34.68     49%
+fills only AFTER game start (live)            $28.40     40%
+fills only BEFORE game start (pregame)         $3.42      5%
+fills on both sides                            $4.36      6%
+                                              ------
+                                              $70.86
 ```
 
-**Two-thirds of maker-lab's activity was in the same window liquidity-bot is
-restricted to.** The live pool is a bonus being forgone, not the whole prize.
+**Fills are a bad proxy for reward attribution**: half the money came from
+markets that never filled, because reward pays for resting, not trading. The
+aggregate pregame share was high only because pregame fills clustered on
+markets that earned little; the largest earners ($5.38, $4.85, $4.02, $3.22)
+had *zero* pregame fills.
 
-This measures fills rather than resting time, and reward accrues from resting,
-so treat it as a strong proxy rather than an exact split. It is decisive enough
-for the question it was asked: scaling breadth and size inside the pregame
-design is not scaling in a doomed direction.
+What can be said: at most 5-11% is clearly pregame, 40% is clearly
+live-associated, and 49% is unattributable by this method. That leans against
+a pregame-only executor reaching these numbers, and it does not settle it.
+
+Settling it needs resting time per period, which neither the venue nor
+maker-lab's schema records. The practical answer is to run the pregame
+executor at size and measure what it earns.
+
+Raw data: `data/venue_reward_earnings_2026-08-14.csv`, 168 rows, the full
+per-market per-day breakdown behind every number above.
 
 ### Order of work this implies
 

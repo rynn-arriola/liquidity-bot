@@ -1035,7 +1035,7 @@ class CommissioningRunner:
                     fill_hazard.probability * unwind_cost
                     * (float(self.config.reward_cost_safety_multiple) - 1.0)),
             )
-            if economics.should_quote:
+            if economics.should_quote or not self.config.enforce_reward_cost_gate:
                 state.expected_net_by_side[side] = economics.expected_net_value
                 # Live score-seconds represent actual attributable resting
                 # exposure, not a hypothetical candidate. A newly authorized
@@ -1053,6 +1053,13 @@ class CommissioningRunner:
                 state.economic_blocker_by_side[side] = (
                     "projected_reward_does_not_cover_probability_"
                     "weighted_exit_cost")
+        if not self.config.enforce_reward_cost_gate:
+            # Keep the measurement, drop the veto: the blocker above is still
+            # computed and logged so the gate can be re-armed from evidence.
+            state.economic_blocker_by_side = {
+                side: reason
+                for side, reason in state.economic_blocker_by_side.items()
+                if not reason.startswith("projected_reward_does_not_cover")}
         state.reward_eligible = frozenset(eligible)
 
     def _portfolio_worst_loss(self, *, excluding: str) -> float:

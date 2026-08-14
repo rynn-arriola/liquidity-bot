@@ -130,6 +130,23 @@ class CommissioningConfig:
     # Operator-approved 2026-08-14. The haircut stays: projected reward is the
     # least-padded quantity in the expression.
     reward_cost_safety_multiple: Decimal = Decimal("1")
+    # maker-lab's entry rule, adopted 2026-08-14 by operator decision. It asks
+    # two things before quoting: is the spread at least 2c, and do the risk and
+    # capital caps allow it. It never asks whether the quote is expected to be
+    # profitable, and it collected 201 fills and $70.92 of rewards.
+    #
+    # Ours asked a third question -- does projected reward beat the
+    # probability-weighted exit cost -- and the 2026-08-14 census measured that
+    # rejecting 94% of every side on the venue, best gate_ratio 0.392 against
+    # the 1.0 needed. 2,500 placements produced 2 fills.
+    #
+    # Turning it off does NOT adopt maker-lab's losses. Those came from
+    # carrying positions into the game (-$443.88 over four days), and the
+    # pre-kickoff flatten and 900-second exit already prevent that here. The
+    # economics still get computed and logged on every pass, so the gate can be
+    # re-armed from measured data rather than from the arbitrary 0.5 and 2x it
+    # was built on.
+    enforce_reward_cost_gate: bool = False
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     # A single permitted taker exit ended the session on its first crossed
     # fill, which made exit evidence impossible to collect: SCALE_REVIEW asks

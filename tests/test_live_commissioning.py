@@ -416,6 +416,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # under test is "economically blocked means no accrual", so the fixture
         # has to be genuinely blocked; 100 still is.
         client.reward_pool = 100
+        # Armed explicitly: this test is about the gate itself, which is
+        # advisory by default now (maker-lab's entry rule).
+        runner.config = replace(runner.config, enforce_reward_cost_gate=True)
         await runner.preflight()
         working = WorkingOrder(
             "owned-bid", "bid", .49, Decimal("1"))
@@ -911,6 +914,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_sub_dollar_reward_is_evaluated_but_risk_can_block_order(self):
         runner, client, _ = self.build_runner()
         client.reward_pool = 100
+        # Armed explicitly: this test is about the gate itself, which is
+        # advisory by default now (maker-lab's entry rule).
+        runner.config = replace(runner.config, enforce_reward_cost_gate=True)
         await runner.preflight()
         runner._evaluate_rewards(NOW)
 
@@ -1043,6 +1049,35 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # Nothing is open, nothing is unresolved, nothing is held: trade.
         self.assertEqual(mode, "TRADE")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_default_entry_is_maker_labs_rule_not_the_reward_gate(self):
+        """maker-lab's entry rule: 2c spread and risk caps, nothing else.
+
+        It never asked whether a quote was expected to be profitable, and
+        collected 201 fills and $70.92. Ours asked that third question and the
+        2026-08-14 census measured it rejecting 94% of every side on the
+        venue -- 2,500 placements produced 2 fills.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        self.assertFalse(runner.config.enforce_reward_cost_gate)
+
+        runner._evaluate_rewards(NOW, slug)
+
+        state = runner.state_for(slug)
+        # The economics are still measured and still recorded -- only the veto
+        # is gone, so the gate can be re-armed from evidence later.
+        self.assertTrue(state.reward_projection_by_side)
+        self.assertNotIn(
+            "projected_reward_does_not_cover_probability_weighted_exit_cost",
+            state.economic_blocker_by_side.values())
+        # And the safety entry checks are untouched: a side may still be
+        # blocked for spread or for an exit it could not complete.
+        self.assertEqual(sorted(state.expected_net_by_side), ["bid", "offer"])
         await runner.private_stream.close()
         await runner.market_stream.close()
 

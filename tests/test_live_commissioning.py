@@ -19,6 +19,7 @@ from liquidity_bot.commissioning import (
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
+    MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
     CommissioningResult,
     CommissioningRunner,
@@ -1052,6 +1053,35 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_gate_blocked_side_is_still_quotable_when_advisory(self):
+        """The case that mattered live: economics say no, gate is advisory.
+
+        The reconciler only quotes a side whose expected net is strictly
+        positive. Storing the raw value here left it negative, so a market was
+        selected and then refused to quote -- and because the sign flickered
+        between passes, resting quotes were cancelled seconds after being
+        placed. Sampled at the venue: zero orders resting, while 27 markets
+        had been "quoted" in fifteen minutes.
+        """
+
+        runner, client, _ = self.build_runner()
+        # A pool this small fails the reward-cost test outright.
+        client.reward_pool = 100
+        await runner.preflight()
+        self.assertFalse(runner.config.enforce_reward_cost_gate)
+
+        runner._evaluate_rewards(NOW, runner.market_slug)
+
+        state = runner.state_for(runner.market_slug)
+        self.assertTrue(
+            state.expected_net_by_side,
+            "an advisory gate must leave the side quotable")
+        self.assertTrue(
+            all(v > 0 for v in state.expected_net_by_side.values()),
+            "expected net must be positive or the reconciler will not quote")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_default_entry_is_maker_labs_rule_not_the_reward_gate(self):
         """maker-lab's entry rule: 2c spread and risk caps, nothing else.
 
@@ -1078,6 +1108,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # And the safety entry checks are untouched: a side may still be
         # blocked for spread or for an exit it could not complete.
         self.assertEqual(sorted(state.expected_net_by_side), ["bid", "offer"])
+        # Strictly positive, because the reconciler only quotes a side whose
+        # expected net is > 0. Leaving the raw (often negative) value here
+        # meant a market was selected and then refused to quote, and the sign
+        # flickered between passes so resting quotes died in seconds.
+        self.assertTrue(
+            all(v > 0 for v in state.expected_net_by_side.values()),
+            "an advisory gate must not leave a side unquotable")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1858,6 +1895,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # shared account and that order belongs to something else.
         self.assertFalse(runner._startup_recovery_is_scoped(
             ("shared account has open orders",)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_condition_that_never_recovers_retires_the_market(self):
+        """Measured 2026-08-14: 371 consecutive book_stale recoveries.
+
+        Each failed on `book is not two-sided` -- 3,416 across the session.
+        Thin books here are routinely one-sided (FINDINGS 5 records bid 23,388
+        against ask 1.0) and parse_book_response rejects them, so the market
+        could never refresh, never quoted, and held a slot while paging
+        Discord on every attempt. A "recoverable" condition that never
+        recovers is not recoverable.
+        """
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner._runtime_error_counts[f"strategy_state:{slug}"] = (
+            MAX_RECOVERY_ATTEMPTS)
+
+        stop = await runner._handle_strategy_critical("book_stale", slug)
+
+        self.assertIsNone(stop, "one bad book must not end the session")
+        self.assertTrue(runner._is_retired(slug))
+        self.assertEqual(
+            runner._retired[slug].reason, "unrecoverable_book_stale")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_recoverable_condition_still_gets_its_retries(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner._runtime_error_counts[f"strategy_state:{slug}"] = 1
+
+        self.assertIsNone(
+            await runner._handle_strategy_critical("book_stale", slug))
+        self.assertFalse(
+            runner._is_retired(slug),
+            "a transient stale book must recover, not retire on first sight")
         await runner.private_stream.close()
         await runner.market_stream.close()
 

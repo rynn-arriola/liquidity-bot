@@ -98,6 +98,10 @@ MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 # A retired market waits this long before its exit is planned again. Long
 # enough that a failing exit cannot spin the loop, short enough that many
 # retries still fit inside the 300-second pre-kickoff flatten window.
+# How many times a "recoverable" strategy condition may fail to recover for
+# one market before that market is retired instead of retried forever.
+MAX_RECOVERY_ATTEMPTS = 12
+
 RETIRED_EXIT_RETRY_SECONDS = 60
 
 # After this many failed rounds the runner stops planning a retired market at
@@ -1038,7 +1042,22 @@ class CommissioningRunner:
                     * (float(self.config.reward_cost_safety_multiple) - 1.0)),
             )
             if economics.should_quote or not self.config.enforce_reward_cost_gate:
-                state.expected_net_by_side[side] = economics.expected_net_value
+                # The reconciler only quotes a side whose expected net is
+                # strictly positive. With the gate advisory this value is
+                # frequently negative, so a market would be selected and then
+                # refuse to quote -- and because the sign flickers between
+                # passes, a resting quote got cancelled seconds after being
+                # placed. Measured: zero orders resting at the venue across
+                # repeated samples, while 27 markets were "quoted" in 15
+                # minutes. Reward is paid for resting, so that earned nothing.
+                #
+                # Floored the same way the selector already floors it. The
+                # true value stays in reward_projection_by_side for the census
+                # and the summary, so nothing measurable is lost.
+                expected = economics.expected_net_value
+                if not economics.should_quote:
+                    expected = max(expected, 1e-9)
+                state.expected_net_by_side[side] = expected
                 # Live score-seconds represent actual attributable resting
                 # exposure, not a hypothetical candidate. A newly authorized
                 # side begins accruing only after its owned order is observed
@@ -2107,6 +2126,18 @@ class CommissioningRunner:
 
         if reason in RETIRING_STRATEGY_CRITICALS:
             return await self._retire_market(slug, reason)
+        # A "recoverable" condition that never recovers is not recoverable.
+        # Measured 2026-08-14: one market reached 371 consecutive book_stale
+        # recoveries, each failing on `book is not two-sided` -- 3,416 of those
+        # across the session. Thin books here are routinely one-sided (section
+        # 5 records bid 23,388 against ask 1.0) and parse_book_response rejects
+        # them outright, so the market can never refresh, never quotes, and
+        # holds a slot forever while paging Discord on every attempt.
+        if (reason in RECOVERABLE_STRATEGY_CRITICALS
+                and self._runtime_error_counts.get(
+                    f"strategy_state:{slug}", 0) >= MAX_RECOVERY_ATTEMPTS):
+            return await self._retire_market(
+                slug, f"unrecoverable_{reason}", reset_exit_budget=False)
         if reason not in RECOVERABLE_STRATEGY_CRITICALS:
             exc = RuntimeInvariantViolation(
                 reason, f"terminal strategy condition: {reason}")

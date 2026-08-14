@@ -93,6 +93,11 @@ MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 RECOVERABLE_STRATEGY_CRITICALS = frozenset({
     "book_stale",
     "execution_state_unknown",
+    # The exit book was too thin to cross before the kickoff deadline. Holding
+    # is the correct response and the pre-kickoff flatten still forces the
+    # position out, so ending the session here would trade a bounded
+    # one-contract hold for hours of lost quoting across every other market.
+    "hard_exit_deferred_thin_book",
     # Reachable only while flat, and repaired by refetching the book and
     # rebinding the singleton stream scope. Every remaining critical implies
     # either held inventory or an ownership violation, which stay terminal.
@@ -1734,7 +1739,8 @@ class CommissioningRunner:
         await self._report_runtime_error(
             f"strategy_state:{slug}", AdapterError(str(reason or "unknown")))
         try:
-            if reason in {"book_stale", "book_market_mismatch"}:
+            if reason in {"book_stale", "book_market_mismatch",
+                          "hard_exit_deferred_thin_book"}:
                 await self._refresh_book(self._now(), slug)
             await self._quarantine_working_orders()
         except RuntimeInvariantViolation:

@@ -123,10 +123,40 @@ class ReconcilerTests(unittest.TestCase):
             opened=T0, entry=.49))
 
         # Hours from kickoff the book can still improve, so the conservative
-        # refusal is correct and must not be relaxed.
+        # refusal is correct and must not be relaxed: no IOC is sent.
+        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
+        # But refusing to cross must not end the session. The reason is the
+        # recoverable one, so the position keeps its passive reducer and every
+        # other market keeps quoting; the pre-kickoff flatten is the deadline
+        # that actually forces the exit.
+        self.assertEqual(actions[0].reason, "hard_exit_deferred_thin_book")
+        from liquidity_bot.live_commissioning import (
+            RECOVERABLE_STRATEGY_CRITICALS)
+        self.assertIn(actions[0].reason, RECOVERABLE_STRATEGY_CRITICALS)
+
+    def test_thin_book_at_kickoff_is_still_terminal(self):
+        thin = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 1.0),),
+            (BookLevel(.51, 1.0),),
+            state="MARKET_STATE_OPEN")
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        near_kickoff = T0 + timedelta(hours=5) - timedelta(seconds=200)
+
+        actions = reconciler.plan(frame(
+            now=near_kickoff, position="2", orders=(), snapshot=thin,
+            opened=near_kickoff - timedelta(seconds=5), entry=.49))
+
+        # At the kickoff deadline the alternative to crossing is settlement,
+        # so an exit that still cannot complete against displayed depth is a
+        # genuine emergency and stays terminal.
         self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
         self.assertEqual(
             actions[0].reason, "hard_exit_insufficient_stressed_depth")
+        from liquidity_bot.live_commissioning import (
+            RECOVERABLE_STRATEGY_CRITICALS)
+        self.assertNotIn(actions[0].reason, RECOVERABLE_STRATEGY_CRITICALS)
 
     def test_unknown_state_fails_closed_for_new_risk(self):
         actions = DesiredStateReconciler(policy()).plan(frame(state_known=False))

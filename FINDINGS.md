@@ -133,6 +133,32 @@ entry maker 0.81  ->  exit taker 0.81  ->  realized -$0.01 (the commission)
 Three of four were price-flat: the loss was purely the crossing fee. The
 exit was never a bad price, it was an unnecessary crossing.
 
+### A thin exit book used to end the whole session
+
+Measured 2026-08-14 against `cross_exit`: at one contract with the 0.5 stress
+haircut, the hard exit cannot complete whenever **exit-side depth is under
+2.0** contracts.
+
+```
+exit-side depth   1.0  -> incomplete
+                  1.5  -> incomplete
+                  2.0  -> completes
+```
+
+That is not a corner case. The universe sample in section 5 contains live books
+with exit-side depth of exactly `1.0`. Entry is gated on exit depth existing,
+but depth can vanish during the 900-second hold.
+
+It used to be terminal: `hard_exit_insufficient_stressed_depth` returned
+`critical:`, which exits 4, and the supervisor does **not** restart exit 4. One
+thin book on one market ended the session and left the process down until an
+operator noticed -- while the other seven markets were healthy.
+
+Now the inventory clock defers instead (`hard_exit_deferred_thin_book`,
+recoverable). Refusing to cross into a thin book is still correct; ending the
+session over it was not. The pre-kickoff flatten at T-300s remains the real
+deadline and still re-prices against displayed depth.
+
 ## 3. Spread regime
 
 maker-lab markout at 900s, by the spread the fill landed on:

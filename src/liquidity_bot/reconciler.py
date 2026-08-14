@@ -257,6 +257,17 @@ class DesiredStateReconciler:
                     depth_haircut=1.0,
                     taker_theta=self.policy.taker_theta)
             if not exit_result.complete or exit_result.worst_price is None:
+                if not pre_kickoff_due:
+                    # A book too thin to absorb the exit is not a reason to end
+                    # the session. The inventory clock is a preference for
+                    # leaving early; the pre-kickoff flatten is the deadline
+                    # that actually matters, and it re-prices against displayed
+                    # depth above. Keep holding, keep the passive reducer
+                    # working, and retry when the book refills. Measured: at
+                    # one contract this fires whenever exit-side depth is under
+                    # 2.0, and the observed universe contains live books with
+                    # exit-side depth of 1.0 (FINDINGS section 5).
+                    return self._critical(frame, "hard_exit_deferred_thin_book")
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
             if (exit_result.pnl < -self.policy.max_exit_loss
                     and not pre_kickoff_due):

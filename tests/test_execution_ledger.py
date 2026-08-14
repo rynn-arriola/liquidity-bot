@@ -76,6 +76,52 @@ class ExecutionLedgerTests(unittest.TestCase):
                 "intent-one", "PLACE", "market-one", "client-one",
                 {"price": "0.51", "qty": "2.00"}, created_at=T0)
 
+    def test_venue_cancel_resolves_an_order_marked_absent_first(self):
+        # Reproduces the live failure of 2026-08-14T04:21:56Z exactly. The
+        # cancel confirmed at the venue at .923; our own open-order snapshot
+        # noticed the order missing at .941 and marked it UNKNOWN_ABSENT with
+        # that local wall clock. The authoritative CANCELED event then looked
+        # older than our own guess and was dropped, so the order never left
+        # UNKNOWN_ABSENT and its CANCEL intent never reconciled -- which trips
+        # the 10-second unresolved-mutation guard and kills the session. Every
+        # quote cycle ends in a cancel, so this happened on the first one.
+        placed = T0
+        cancelled_at_venue = T0 + timedelta(microseconds=923497)
+        snapshot_at = T0 + timedelta(microseconds=941940)
+
+        self.ledger.apply_order_event(
+            "ws", "open", order(status="OPEN", at=placed), received_at=placed)
+        self.ledger.prepare_intent(
+            "cancel-one", "CANCEL", "market-one", "client-one", {},
+            created_at=placed)
+        self.ledger.transition_intent(
+            "cancel-one", "SUBMITTING", updated_at=placed)
+        self.ledger.transition_intent(
+            "cancel-one", "ACKNOWLEDGED", updated_at=placed,
+            exchange_order_id="exchange-one")
+
+        # Complete snapshot that no longer contains the cancelled order.
+        self.ledger.apply_order_snapshot(
+            "snapshot-one", [], as_of=snapshot_at,
+            observed_at=snapshot_at, complete=True)
+        self.assertEqual(self._status(), "UNKNOWN_ABSENT")
+        self.assertFalse(self.ledger.risk_state_known())
+
+        # The venue's own terminal record, timestamped before our snapshot.
+        self.ledger.apply_order_event(
+            "rest_reconcile", "retrieve",
+            order(status="CANCELED", at=cancelled_at_venue),
+            received_at=snapshot_at + timedelta(seconds=1))
+
+        self.assertEqual(self._status(), "CANCELED")
+        self.assertTrue(self.ledger.risk_state_known())
+        self.assertEqual(self.ledger.unresolved_intents(), [])
+
+    def _status(self) -> str:
+        return str(self.ledger.query(
+            "SELECT status FROM execution_orders WHERE "
+            "client_order_id='client-one'")[0]["status"])
+
     def test_timeout_requires_reconciliation_and_blocks_risk(self):
         self.ledger.prepare_intent(
             "intent-one", "PLACE", "market-one", "client-one", {}, created_at=T0)

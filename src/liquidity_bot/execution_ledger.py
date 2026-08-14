@@ -544,9 +544,19 @@ class ExecutionLedger:
             "SELECT * FROM execution_orders WHERE client_order_id=?",
             (order.client_order_id,)).fetchone()
         if row is not None:
-            if event_at < row["event_at"]:
-                return False
             current_status = str(row["status"])
+            # UNKNOWN_ABSENT records our failure to see an order, not a venue
+            # transition, so it must never outrank the venue's own terminal
+            # record. It was stamped with local wall clock; a cancel confirmed
+            # microseconds earlier then looked "stale" and was dropped, leaving
+            # the order stuck absent and its CANCEL intent unreconciled for the
+            # rest of the session. That trips the 10-second unresolved-mutation
+            # guard, and every quote cycle ends in a cancel.
+            resolves_absence = (
+                current_status == "UNKNOWN_ABSENT"
+                and status in TERMINAL_ORDER_STATES)
+            if event_at < row["event_at"] and not resolves_absence:
+                return False
             if current_status in TERMINAL_ORDER_STATES and status not in TERMINAL_ORDER_STATES:
                 return False
             stored_filled = _decimal(row["filled_qty"], "stored filled_qty")
@@ -640,11 +650,14 @@ class ExecutionLedger:
                 for item in active:
                     if item["client_order_id"] in seen or snapshot_at < item["event_at"]:
                         continue
+                    # Deliberately does not advance event_at. Absence is not
+                    # venue evidence and must not take a position on the
+                    # venue's event timeline ahead of a real terminal state.
                     self.connection.execute(
                         "UPDATE execution_orders SET status='UNKNOWN_ABSENT',"
                         "unknown_reason='missing_from_complete_snapshot',"
-                        "event_at=?,received_at=? WHERE client_order_id=?",
-                        (snapshot_at, received, item["client_order_id"]))
+                        "received_at=? WHERE client_order_id=?",
+                        (received, item["client_order_id"]))
                     applied_any = True
             self._finish_event("order_snapshot", snapshot_id, True,
                                "snapshot_applied" if applied_any else "snapshot_no_change")

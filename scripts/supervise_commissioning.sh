@@ -28,7 +28,11 @@ alert "Liquidity Bot supervisor started for one-contract commissioning."
 
 while true; do
     STARTED=$(date -u +%s)
-    "$PY" -B -m liquidity_bot.live_commissioning \
+    # -u matters: stdout to a file is block-buffered, so during the
+    # 2026-08-14 incident the log was four minutes stale while the process was
+    # actively failing. Only the prints that pass flush=True got through, and
+    # the diagnosis had to come from the ledger instead.
+    "$PY" -B -u -m liquidity_bot.live_commissioning \
         "${MARKET_ARGS[@]}" \
         --database data/commissioning.db \
         --lock-file data/commissioning.lock \

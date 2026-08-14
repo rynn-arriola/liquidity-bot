@@ -161,6 +161,35 @@ class RewardScoreTests(unittest.TestCase):
         self.assertFalse(result.eligible)
         self.assertEqual(result.reason, "period_duration_unproven")
 
+    def test_eligibility_does_not_flip_on_our_own_resting_order(self):
+        """The place/cancel churn of 2026-08-14, isolated.
+
+        Eligibility turns on cumulative depth reaching `target_size`, and our
+        own size is added to that depth only when we are flat. On a book
+        sitting exactly on the boundary the answer therefore changes the moment
+        our order rests: eligible while flat, `target_not_met` while resting.
+
+        Live that produced place, cancel, place at the loop tick -- 1,817
+        cycles in 5.7 hours, all at the same price -- and reward pays for
+        resting time, so the churn attacked the only thing that earns.
+
+        The two calls must answer the same question about the same book.
+        """
+
+        levels = [(0.74, 9.0)]          # 9 resting, target 10, our size 1
+        flat = evaluate_order_score(
+            side="offer", price=0.74, size=1.0, levels=levels,
+            incentive=period("day_of", target=10, pool=35),
+            tick_size=0.01, order_already_resting=False)
+        resting = evaluate_order_score(
+            side="offer", price=0.74, size=1.0, levels=levels,
+            incentive=period("day_of", target=10, pool=35),
+            tick_size=0.01, order_already_resting=True)
+
+        self.assertEqual(
+            (flat.eligible, resting.eligible), (True, True),
+            "a resting quote that was worth placing is still worth keeping")
+
 
 if __name__ == "__main__":
     unittest.main()

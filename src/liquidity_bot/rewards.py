@@ -177,8 +177,23 @@ def evaluate_order_score(
 
     depth = _validated_levels(levels)
     order_price = round(price, 8)
-    if not order_already_resting:
-        depth[order_price] = depth.get(order_price, 0.0) + size
+    # Our size counts toward depth whether or not the order is already
+    # resting. The public book does contain a resting order of ours, so in
+    # principle skipping it here avoids double-counting -- but the book is
+    # only eventually consistent, and in the window before it catches up the
+    # depth is short by exactly our size. Eligibility turns on cumulative
+    # depth reaching targetSize, so on a book near that boundary the answer
+    # flipped the instant our order rested: eligible while flat,
+    # `target_not_met` while resting, eligible again once cancelled. Live that
+    # was 1,817 place/cancel cycles in 5.7 hours at the same price, and reward
+    # pays for resting time.
+    #
+    # Counting it in both cases makes the two questions -- "worth placing?"
+    # and "worth keeping?" -- answer the same thing. The residual error is
+    # over-counting one contract against a targetSize in the thousands once
+    # the book has caught up, which biases toward leaving a quote resting.
+    # That is the safe direction: resting is what earns.
+    depth[order_price] = depth.get(order_price, 0.0) + size
     ordered = sorted(depth.items(), reverse=(side == "bid"))
     best_price = ordered[0][0]
 

@@ -930,6 +930,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_ledger_with_past_orders_still_trades(self):
+        # "This ledger has ever placed an order" was treated as recovery state.
+        # It is true forever after the first order, so every later session
+        # became recovery-only and the bot could never trade again without a
+        # fresh database. Survivable while recovery exited 0 and stopped; once
+        # recovery exited 5 to restart it became an infinite restart loop.
+        runner, _, _ = self.build_runner()
+        runner.ledger.prepare_intent(
+            "old-place", "PLACE", "market-one", "client-old", {},
+            created_at=NOW - timedelta(days=1))
+        runner.ledger.transition_intent(
+            "old-place", "SUBMITTING", updated_at=NOW - timedelta(days=1))
+        runner.ledger.transition_intent(
+            "old-place", "ACKNOWLEDGED", updated_at=NOW - timedelta(days=1),
+            exchange_order_id="old-exchange")
+        runner.ledger.transition_intent(
+            "old-place", "RECONCILED", updated_at=NOW - timedelta(days=1))
+
+        mode = await runner.preflight()
+
+        # Nothing is open, nothing is unresolved, nothing is held: trade.
+        self.assertEqual(mode, "TRADE")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_halved_cost_margin_authorizes_a_pool_that_was_refused(self):
         # The change that made this pass, stated as behaviour rather than as a
         # constant. The gate is projected_reward x (1-P) > multiple x P x

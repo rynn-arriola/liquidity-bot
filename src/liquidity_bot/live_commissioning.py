@@ -741,8 +741,15 @@ class CommissioningRunner:
     async def preflight(self) -> str:
         now = self._now()
         self.started_at = now
-        had_prior_place = bool(self.ledger.query(
-            "SELECT 1 FROM execution_intents WHERE operation='PLACE' LIMIT 1"))
+        # Deliberately not gated on "this ledger ever placed an order". That
+        # test is true forever once a single order has been placed, so every
+        # later session became recovery-only and the bot could never trade
+        # again without a fresh database. It was survivable while recovery
+        # exited 0 and simply stopped; once recovery started exiting 5 to
+        # restart, it became an infinite loop that the supervisor's fast-crash
+        # guard killed -- observed 2026-08-14T05:07-05:09Z. Genuine leftover
+        # state is already detected by `recovery_only` below, from live venue
+        # orders, positions and unresolved intents.
         self.config.assert_authorized(now=now)
         self.cutoff_at = None
         if self.config.auto_select_reward_markets:
@@ -806,7 +813,7 @@ class CommissioningRunner:
             self.executor, self.ledger, self.risk_guard)
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
-        if recovery_only or had_prior_place:
+        if recovery_only:
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
         selection_note = ""

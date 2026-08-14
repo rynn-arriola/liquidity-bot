@@ -352,6 +352,54 @@ across many passes and measure how often a market would clear at 3x, 2x and 1x
 Touch depth across the same sample: median 141 contracts, minimum 0.02. Depth
 is not the scarce thing; the margin is.
 
+## 6c. First stable multi-market run, 2026-08-14 05:15-10:58Z
+
+**5h43m on a single process, no restarts.** Every prior attempt died in 22-27
+seconds.
+
+```
+PLACE 1,817 | CANCEL 1,817 | all CANCELED | unresolved 0
+fills 0 | positions 0 | markets quoted 16 | retirements 0
+```
+
+The place -> cancel -> reconcile cycle that deadlocked the ledger on its very
+first attempt now completes 1,817 times with nothing stuck. That question is
+closed.
+
+### Reward at one contract is arithmetically negligible
+
+Measured programme parameters on the markets actually quoted:
+
+```
+day_of   pool $35   discount 0.5   targetSize 5,000
+1 contract at the touch = 0.020% of target = $0.007 for the whole 6h period
+```
+
+Eight markets quoted perfectly for a full period is about **$0.056**, against
+the venue's **$1 aggregate payout floor**. Roughly 18 flawless days to reach
+the minimum payout. Venue earnings after 5.7 hours: **$0.00**, which is what
+the arithmetic predicts rather than a defect.
+
+**This is the scale problem, not a bug.** The machinery works; one contract
+cannot earn. Note that section 6 measured `gate_ratio` as nearly size-invariant
+(0.0310 -> 0.0305 across 25x), so size changes what a qualifying book pays
+without changing whether it qualifies.
+
+### A cancelled order is briefly unreadable
+
+246 `GET /v1/order/{id}` 404s in 5.7 hours. Every id that 404'd returned a
+proper terminal state when retried later, so the window is eventual
+consistency, not absence.
+
+It was expensive. The generic retry in `_call` covers only HTTP 429, so a 404
+left the CANCEL intent unresolved, `risk_state_known()` went false, and the
+runner treated it as `execution_state_unknown`: **539 strategy-state
+recoveries, each quarantining every working order and cancelling resting
+quotes.** Reward pays for resting time, so this churn attacked the only thing
+that earns. `retrieve` now waits the window out, bounded at four attempts --
+which assumes nothing about the order's state, unlike reading absence as
+cancellation.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

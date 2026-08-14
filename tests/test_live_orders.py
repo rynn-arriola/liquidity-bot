@@ -9,6 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from liquidity_bot.adapters import AsyncReadOnlyGateway
+from liquidity_bot.errors import AdapterError
 from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
 from liquidity_bot.live_orders import (
     AsyncTradingGateway,
@@ -69,6 +70,7 @@ class Orders:
         self.create_calls = []
         self.cancel_calls = []
         self.retrieve_calls = []
+        self.retrieve_errors = []
 
     async def create(self, payload):
         self.create_calls.append(payload)
@@ -86,6 +88,8 @@ class Orders:
 
     async def retrieve(self, order_id):
         self.retrieve_calls.append(order_id)
+        if self.retrieve_errors:
+            raise self.retrieve_errors.pop(0)
         return self.retrieve_result
 
 
@@ -159,6 +163,41 @@ class LiveOrderExecutorTests(unittest.TestCase):
     def request(self):
         return OrderRequest(
             "market-one", "bid", Decimal("0.500"), Decimal("1.00"))
+
+    def test_retrieve_waits_out_the_post_cancel_not_found_window(self):
+        # Measured 2026-08-14: a cancelled order is briefly unreadable, 246
+        # times in 5.7 hours, and every id that 404'd resolved to a proper
+        # terminal state later. Escalating on the first 404 left the intent
+        # unresolved, which quarantined every working order and cancelled
+        # resting quotes -- and resting is the only thing that earns.
+        class NotFoundError(Exception):
+            pass
+
+        self.client.orders.retrieve_errors = [
+            NotFoundError("Order not found"),
+            NotFoundError("Order not found"),
+        ]
+        self.client.orders.retrieve_result = {
+            "order": {"id": "exchange-one", "state": "ORDER_STATE_CANCELED"}}
+
+        response = self.run_async(self.gateway.retrieve("exchange-one"))
+
+        self.assertEqual(response["order"]["state"], "ORDER_STATE_CANCELED")
+        self.assertEqual(len(self.client.orders.retrieve_calls), 3)
+
+    def test_retrieve_still_fails_when_the_order_never_appears(self):
+        class NotFoundError(Exception):
+            pass
+
+        # Bounded, not infinite: a genuinely absent order must still surface.
+        self.client.orders.retrieve_errors = [
+            NotFoundError("Order not found") for _ in range(10)]
+
+        with self.assertRaisesRegex(AdapterError, "NotFound"):
+            self.run_async(self.gateway.retrieve("exchange-one"))
+        self.assertEqual(
+            len(self.client.orders.retrieve_calls),
+            self.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS)
 
     def test_acknowledged_create_uses_one_gate_and_waits_for_exchange_state(self):
         self.client.orders.create_results = [{"id": "exchange-one", "executions": []}]

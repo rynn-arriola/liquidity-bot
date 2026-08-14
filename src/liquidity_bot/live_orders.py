@@ -8,6 +8,7 @@ and is never retried automatically.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -164,14 +165,36 @@ class AsyncTradingGateway:
             lambda: self.client.orders.cancel(
                 exchange_order_id, {"marketSlug": market_slug}))
 
+    # A cancelled order is briefly unreadable. Measured 2026-08-14: 246 of
+    # these in 5.7 hours, and every id that 404'd was retrievable later with a
+    # proper terminal state. The generic retry in `_call` only covers HTTP 429,
+    # so the 404 escalated: the intent stayed unresolved, risk_state_known went
+    # false, and the runner quarantined every working order -- 539 recoveries,
+    # each one cancelling resting quotes. Reward pays for resting, so that
+    # churn was expensive. We hold this id from an acknowledged mutation, so
+    # the order exists; a 404 is consistency lag, not absence. Waiting assumes
+    # nothing about its state, unlike treating absence as cancellation.
+    RETRIEVE_NOT_FOUND_ATTEMPTS = 4
+    RETRIEVE_NOT_FOUND_BASE_SECONDS = 0.5
+
     async def retrieve(self, exchange_order_id: str) -> Mapping[str, Any]:
-        response = await self.gateway._call(
-            f"GET /v1/order/{exchange_order_id}",
-            lambda: self.client.orders.retrieve(exchange_order_id))
-        if not isinstance(response, Mapping) or not isinstance(
-                response.get("order"), Mapping):
-            raise AdapterError("get-order response has no order")
-        return response
+        attempts = self.RETRIEVE_NOT_FOUND_ATTEMPTS
+        for attempt in range(attempts):
+            try:
+                response = await self.gateway._call(
+                    f"GET /v1/order/{exchange_order_id}",
+                    lambda: self.client.orders.retrieve(exchange_order_id))
+            except AdapterError as exc:
+                if "NotFound" not in str(exc) or attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(
+                    self.RETRIEVE_NOT_FOUND_BASE_SECONDS * (2 ** attempt))
+                continue
+            if not isinstance(response, Mapping) or not isinstance(
+                    response.get("order"), Mapping):
+                raise AdapterError("get-order response has no order")
+            return response
+        raise AssertionError("unreachable retrieve retry loop")
 
 
 class LiveOrderExecutor:

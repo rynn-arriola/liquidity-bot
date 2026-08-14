@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -116,6 +117,35 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(self._status(), "CANCELED")
         self.assertTrue(self.ledger.risk_state_known())
         self.assertEqual(self.ledger.unresolved_intents(), [])
+
+    def test_an_event_recorded_but_not_applied_can_be_retried(self):
+        # The live ledger held exactly this row after the 2026-08-14 failure:
+        #   order:BVX54B6RRDK1:...923497  applied=0  note='stale_order_event'
+        # Dedup then skipped it forever. A venue order id embeds a fixed
+        # lastTransactTime, so the cancel could never be re-offered under a new
+        # id, and the code fix could not heal the ledger because the retry
+        # never reached the corrected logic.
+        late = T0 + timedelta(seconds=5)
+        self.ledger.apply_order_event(
+            "ws", "late", order(status="OPEN", at=late), received_at=late)
+
+        stale = order(status="OPEN", at=T0)
+        self.assertFalse(self.ledger.apply_order_event(
+            "rest", "retry-me", stale, received_at=late))
+        self.assertEqual(
+            self.ledger.query(
+                "SELECT applied FROM execution_events "
+                "WHERE event_id='retry-me'")[0]["applied"], 0)
+
+        # Same id, same payload, offered again: dedup must let it through to
+        # the upsert rather than reporting it already handled.
+        self.assertTrue(self.ledger._accept_event(
+            "rest", "retry-me", late.isoformat(), asdict(stale)))
+
+        # And an id that did apply is still deduped, so nothing lands twice.
+        self.assertFalse(self.ledger._accept_event(
+            "ws", "late", late.isoformat(),
+            asdict(order(status="OPEN", at=late))))
 
     def _status(self) -> str:
         return str(self.ledger.query(

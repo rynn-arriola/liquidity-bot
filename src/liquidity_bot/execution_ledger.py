@@ -520,10 +520,20 @@ class ExecutionLedger:
         if cursor.rowcount == 1:
             return True
         prior = self.connection.execute(
-            "SELECT payload_hash FROM execution_events WHERE source=? AND event_id=?",
+            "SELECT payload_hash,applied FROM execution_events "
+            "WHERE source=? AND event_id=?",
             (source, event_id)).fetchone()
         if prior is None or prior["payload_hash"] != digest:
             raise LedgerConflict("event id was reused with different content")
+        # An event that was recorded but never applied may be retried. Dedup
+        # exists to stop the same effect landing twice; a rejected event had no
+        # effect, and refusing to reprocess it makes the rejection permanent.
+        # A venue order id embeds a fixed lastTransactTime, so a cancel that
+        # was rejected once could never be re-offered under a new id -- the
+        # order stayed unreconcilable for the life of the ledger, and no code
+        # fix could heal it because the retry never reached the fixed logic.
+        if not int(prior["applied"]):
+            return True
         return False
 
     def _finish_event(self, source: str, event_id: str, applied: bool,

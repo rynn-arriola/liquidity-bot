@@ -457,7 +457,16 @@ class CommissioningRunner:
             if selection.selected is not None:
                 self._market_selection = selection
                 self._market_selection_observed_at = self._now()
-                self._bind_markets((selection.selected.market.slug,))
+                # Bind the whole authorized set, not just the best one.
+                # Binding a single market meant the session quoted one market
+                # until the first rotation 900 seconds later, so the measured
+                # constraint -- authorized uptime, not per-market size -- went
+                # untouched for the first quarter hour of every run.
+                chosen = tuple(
+                    item.market.slug for item in selection.top_viable(
+                        self.config.max_markets, exclude=self._retired_ever))
+                self._bind_markets(
+                    chosen or (selection.selected.market.slug,))
                 self._runtime_error_counts.pop("startup_market_wait", None)
                 return self.market_slug
             self._market_selection = selection
@@ -465,13 +474,28 @@ class CommissioningRunner:
             if self._stop_requested:
                 raise CommissioningRefused(
                     "operator stopped while waiting for a viable reward market")
-            await self._report_runtime_error(
-                "startup_market_wait",
-                AdapterError(
-                    "no economically viable pregame reward market yet; "
-                    f"scanned {selection.executable_catalog_markets} executable "
-                    f"catalog markets and {selection.books_evaluated} books"),
-                attempt)
+            # Not a fault. The gate rejected every book it scanned, which is
+            # the common case -- the backtest authorized one quote in 24 hours.
+            # Routing it through _report_runtime_error paged Discord as
+            # critical with "new risk is disabled until reconnect and
+            # reconciliation pass", which describes a broken connection and is
+            # simply untrue here. Alerts that cry wolf on the normal idle state
+            # are how a real one gets ignored. Log every scan; say it out loud
+            # only once, and only so a silent night is distinguishable from a
+            # dead process.
+            print(
+                f"[market-wait] at={self._now().isoformat()} attempt={attempt} "
+                f"executable={selection.executable_catalog_markets} "
+                f"books={selection.books_evaluated} viable=0",
+                flush=True,
+            )
+            if attempt == 1:
+                await self.notifier.send_async(
+                    "Liquidity Bot is scanning and waiting: no market clears "
+                    f"the reward gate yet ({selection.executable_catalog_markets} "
+                    f"executable, {selection.books_evaluated} books). Nothing is "
+                    "wrong; it will quote when one qualifies.",
+                    critical=False)
             await self.sleep(
                 float(self.config.market_selection_refresh_seconds))
 
@@ -728,8 +752,24 @@ class CommissioningRunner:
             else:
                 await self._select_reward_market(now)
                 now = self._now()
+        # The primary must prove out; the rest are best effort. Requiring all
+        # eight would let one unlucky market block startup entirely, and
+        # startup failure is the most expensive kind -- nothing quotes at all.
         await self._refresh_contracts(now)
         await self._refresh_book(now)
+        extras = self.active_slugs[1:]
+        if extras:
+            healthy = [self.market_slug]
+            for slug in extras:
+                try:
+                    await self._refresh_contracts(now, slug)
+                    await self._refresh_book(now, slug)
+                    healthy.append(slug)
+                except Exception as exc:
+                    await self._report_runtime_error(
+                        f"startup_market_dropped:{slug}", exc)
+            if len(healthy) != len(self.active_slugs):
+                self._bind_markets(tuple(healthy))
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
         # account REST reconciliation remains the authoritative safety check.

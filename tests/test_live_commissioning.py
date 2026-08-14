@@ -288,6 +288,15 @@ def fake_selection(slug: str, *, discovered: int = 4) -> RewardMarketSelection:
     )
 
 
+def multi_selection(*slugs: str) -> RewardMarketSelection:
+    """A scan in which several markets are viable, ranked in the given order."""
+
+    parts = [fake_selection(slug) for slug in slugs]
+    opportunities = tuple(part.selected for part in parts)
+    return replace(
+        parts[0], selected=opportunities[0], opportunities=opportunities)
+
+
 def no_viable_selection(slug: str = "monitor-only") -> RewardMarketSelection:
     # Nothing viable means nothing to bind: no selected market and no
     # opportunity a top-N accessor could pick up either.
@@ -518,6 +527,67 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.market_slug, "market-one")
         self.assertGreaterEqual(len(selector.calls), 3)
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_binds_the_whole_authorized_set_not_just_the_best(self):
+        # Binding one market meant the session quoted a single market until the
+        # first rotation 900 seconds later. Authorized uptime is the measured
+        # constraint, so a quarter hour on one slot is the expensive part.
+        slugs = tuple(f"market-{i}" for i in range(8))
+        selector = FakeRewardSelector(multi_selection(*slugs))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+
+        await runner.preflight()
+
+        self.assertEqual(runner.active_slugs, slugs)
+        # And the streams cover every bound market, not just the primary.
+        self.assertEqual(tuple(runner.private_stream.started_with), slugs)
+        self.assertEqual(tuple(runner.market_stream.started_with), slugs)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_never_binds_more_than_the_authorized_maximum(self):
+        slugs = tuple(f"market-{i}" for i in range(12))
+        selector = FakeRewardSelector(multi_selection(*slugs))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+
+        await runner.preflight()
+
+        # Ten private subscriptions is the measured connection ceiling, and
+        # eight markets is exactly what fits alongside orders and balance.
+        self.assertEqual(len(runner.active_slugs), runner.config.max_markets)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_waiting_for_a_viable_market_does_not_page_as_critical(self):
+        # Every scan used to fire a critical Discord alert reading "new risk is
+        # disabled until reconnect and reconciliation pass", which describes a
+        # broken connection. Nothing is broken: the gate rejected every book,
+        # which the backtest says is the common case. Alerts that cry wolf on
+        # the normal idle state are how a real one gets ignored.
+        selector = FakeRewardSelector(
+            no_viable_selection(),
+            no_viable_selection(),
+            no_viable_selection(),
+            fake_selection("market-one"),
+        )
+        runner, _, notifier = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+
+        await runner.preflight()
+
+        waiting = [message for message, critical in notifier.messages
+                   if "clears the reward gate" in message]
+        self.assertEqual(len(waiting), 1, "should say it once, not per scan")
+        self.assertFalse(any(
+            critical for message, critical in notifier.messages
+            if "clears the reward gate" in message))
+        self.assertFalse(any(
+            "until reconnect and reconciliation" in message
+            for message, _ in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

@@ -921,9 +921,25 @@ class ExecutionLedger:
 
         if self.unresolved_intents(market_slug):
             return False
+        # Scoped like the intent test above, and for the same reason. An order
+        # is marked UNKNOWN_ABSENT for the moment between leaving the
+        # open-order snapshot and `retrieve` confirming its terminal state --
+        # which happens on every cancel. Left account-wide, one market's
+        # ordinary cancel made every market read as unknown, and the runner
+        # responded by quarantining, which cancels the quote it had just
+        # placed. Measured 2026-08-14: orders cancelled about two seconds
+        # after placement, nothing ever resting at the venue, nothing earning.
+        #
+        # Ownership below stays account-wide: a `venue:` order is one this bot
+        # never placed, which is an account-level fact and must stop everything.
+        absent_sql = ("SELECT COUNT(*) FROM execution_orders "
+                      "WHERE status='UNKNOWN_ABSENT'")
+        absent_params: tuple[Any, ...] = ()
+        if market_slug is not None:
+            absent_sql += " AND market_slug=?"
+            absent_params = (market_slug,)
         unknown_orders = self.connection.execute(
-            "SELECT COUNT(*) FROM execution_orders WHERE status='UNKNOWN_ABSENT'"
-        ).fetchone()[0]
+            absent_sql, absent_params).fetchone()[0]
         unowned_working = self.connection.execute(
             "SELECT COUNT(*) FROM execution_orders WHERE client_order_id LIKE "
             "'venue:%' AND status IN "

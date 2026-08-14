@@ -1002,6 +1002,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_one_markets_absent_order_does_not_blank_another(self):
+        """The reason quotes died two seconds after being placed.
+
+        An order sits in UNKNOWN_ABSENT between leaving the open-order
+        snapshot and `retrieve` confirming it terminal -- which happens on
+        every cancel. Account-wide, that made every market read as unknown,
+        and the runner answers unknown state by quarantining, which cancels
+        the quote it just placed. Sampled at the venue: zero orders resting
+        while the ledger claimed 27 markets quoted in fifteen minutes.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_order_event(
+            "ws", "leaving-the-book",
+            OrderState(
+                client_order_id="liquidity-absent",
+                exchange_order_id="exchange-absent",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.ledger.apply_order_snapshot(
+            "snapshot-without-it", [], as_of=runner._now(),
+            observed_at=runner._now(), complete=True)
+
+        self.assertFalse(runner.ledger.risk_state_known("market-one"))
+        self.assertTrue(
+            runner.ledger.risk_state_known("market-two"),
+            "a cancel in one market must not blank its neighbours")
+        self.assertFalse(runner.ledger.risk_state_known())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_unowned_order_still_blanks_every_market(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

@@ -682,8 +682,24 @@ directly and never goes through the planner, so it leaves no action record.
 Safety is unaffected throughout: zero open orders at the venue, position flat,
 no accumulation. The cost is opportunity, and reward pays for resting time.
 
-**Proposed fix**, deliberately left for a decision. Scope the unresolved-intent
-test to the market being planned, and keep the ownership tests account-wide:
+### Fixed, in maker-lab's style
+
+maker-lab already solved this and we did not copy it. Its quarantine is scoped
+to **one side of one market**, and the loop then carries on:
+
+```python
+_quarantine_other_side(run_id, slug, side, ...)
+    "**This side is durably blocked**"
+stats["failed"] += 1
+continue                      # skip this side, keep every other one running
+```
+
+liquidity-bot instead blanked the whole account on any unprovable state. That
+is the difference between 201 fills and $70.92 of rewards on one side, and 2
+fills on the other.
+
+The fix scopes the unresolved-intent test to the market being planned and keeps
+the ownership tests account-wide:
 
 ```
 per market   unresolved intents for that slug

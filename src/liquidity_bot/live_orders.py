@@ -77,13 +77,35 @@ def _aligned(value: Decimal, increment: Decimal) -> bool:
 
 
 def _intent(strategy_side: str, reducing: bool) -> str:
+    """Map a book side to a venue intent. Two intents only, never four.
+
+    ``reducing`` is accepted and deliberately ignored. It used to select
+    ``SELL_SHORT`` / ``SELL_LONG``, and those are the exact two intents
+    maker-lab never sends -- because the venue reads the price in the opposite
+    frame for them.
+
+    Confirmed live 2026-08-14: holding a short of 5 entered at 0.36, the
+    reducing quote went out as SELL_SHORT at 0.36 and the venue rested it at
+    **0.64**, which is 1 - 0.36. At that price it adds to the short instead of
+    closing it. maker-lab hit the same thing and recorded it in their
+    `to_intent` docstring: "the exchange read our 0.29 as the YES price and
+    charged us the NO side of it", roughly 41 cents per contract given away,
+    after "three wrong diagnoses before the arithmetic gave it away".
+
+    Their resolution, running for days across 201 fills, is the mapping below:
+    both sides are BUY intents and the price is sent unchanged. The venue nets
+    a BUY on the opposite outcome against an open position, so this closes as
+    well as opens -- reduction needs no separate intent.
+
+    ``preview`` does not catch the inversion. It echoes which OUTCOME an order
+    takes and says nothing about which FRAME its price is in.
+    """
+
     side = strategy_side.lower()
     if side == "bid":
-        return ("ORDER_INTENT_SELL_SHORT" if reducing
-                else "ORDER_INTENT_BUY_LONG")
+        return "ORDER_INTENT_BUY_LONG"
     if side == "offer":
-        return ("ORDER_INTENT_SELL_LONG" if reducing
-                else "ORDER_INTENT_BUY_SHORT")
+        return "ORDER_INTENT_BUY_SHORT"
     raise OrderValidationError("strategy_side must be 'bid' or 'offer'")
 
 
@@ -212,10 +234,17 @@ class LiveOrderExecutor:
                     now: datetime, intent_id: str | None = None,
                     client_order_id: str | None = None) -> SubmittedOrder:
         payload = build_order_payload(request, market)
-        if not self.ledger.risk_state_known():
-            raise OrderOutcomeUncertain("execution state is not known")
+        # Name the ordinary same-market race before the broader state gate so
+        # the runner can wait for reconciliation without quarantining (and
+        # cancelling) the order that is still becoming visible at the venue.
         if self.ledger.market_has_unresolved_intent(request.market_slug):
             raise OrderOutcomeUncertain("market has an unresolved order intent")
+        # A mutation in another market does not make this market's durable
+        # execution state unknown. Ownership violations remain account-wide
+        # inside risk_state_known(), while intents and briefly absent orders
+        # are deliberately scoped to the market being mutated.
+        if not self.ledger.risk_state_known(request.market_slug):
+            raise OrderOutcomeUncertain("execution state is not known")
         intent_id = intent_id or self._id("intent")
         client_order_id = client_order_id or self._id("liquidity")
         self.ledger.prepare_intent(

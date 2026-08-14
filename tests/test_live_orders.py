@@ -118,16 +118,44 @@ class LiveOrderPayloadTests(unittest.TestCase):
         self.assertEqual(payload["quantity"], 1)
         self.assertTrue(payload["participateDontInitiate"])
 
-    def test_reducing_ioc_uses_sell_intent_and_never_post_only(self):
+    def test_reducing_uses_a_buy_intent_because_sell_inverts_the_price(self):
+        """Confirmed live 2026-08-14, and the reason for the two-intent map.
+
+        Holding a short of 5 entered at 0.36, the reducing quote went out as
+        SELL_SHORT at 0.36 and the venue rested it at **0.64** -- 1 - 0.36 --
+        where it adds to the short instead of closing it. maker-lab recorded
+        the same inversion in their `to_intent` docstring and resolved it by
+        sending only BUY intents with the price unchanged.
+
+        The venue nets a BUY on the opposite outcome against an open position,
+        so reduction needs no separate intent.
+        """
+
         payload = build_order_payload(OrderRequest(
             "market-one", "offer", Decimal("0.495"), Decimal("1.00"),
             reducing=True,
             time_in_force="TIME_IN_FORCE_IMMEDIATE_OR_CANCEL",
             post_only=False), market())
-        self.assertEqual(payload["intent"], "ORDER_INTENT_SELL_LONG")
+        self.assertEqual(payload["intent"], "ORDER_INTENT_BUY_SHORT")
+        # The price is sent unchanged, in the frame we chose it in. The
+        # inversion was the venue reinterpreting it, not us rewriting it.
+        self.assertEqual(payload["price"]["value"], "0.495")
         self.assertEqual(
             payload["tif"], "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL")
         self.assertFalse(payload["participateDontInitiate"])
+
+    def test_reducing_and_building_send_the_same_intent_per_side(self):
+        """The flag must not change the intent -- that was the whole bug."""
+
+        for side, expected in (("bid", "ORDER_INTENT_BUY_LONG"),
+                               ("offer", "ORDER_INTENT_BUY_SHORT")):
+            building = build_order_payload(OrderRequest(
+                "market-one", side, Decimal("0.50"), Decimal("1.00")), market())
+            reducing = build_order_payload(OrderRequest(
+                "market-one", side, Decimal("0.50"), Decimal("1.00"),
+                reducing=True), market())
+            self.assertEqual(building["intent"], expected)
+            self.assertEqual(reducing["intent"], expected)
 
     def test_missing_or_misaligned_metadata_fails_before_network(self):
         bad = (
@@ -214,6 +242,48 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.ledger.apply_order_event(
             "private_ws", "exchange-new", order_state(), received_at=NOW)
         self.assertEqual(self.ledger.unresolved_intents(), [])
+
+    def test_same_market_pending_place_reports_wait_without_network(self):
+        """The specific wait path must be reachable before the state gate."""
+
+        self.ledger.prepare_intent(
+            "pending-place", "PLACE", "market-one", "client-pending", {},
+            created_at=NOW)
+        self.ledger.transition_intent(
+            "pending-place", "SUBMITTING", updated_at=NOW)
+        self.ledger.transition_intent(
+            "pending-place", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="exchange-pending")
+
+        with self.assertRaisesRegex(
+                OrderOutcomeUncertain,
+                "market has an unresolved order intent"):
+            self.run_async(self.executor.place(self.request(), market(), now=NOW))
+
+        self.assertEqual(self.client.orders.create_calls, [])
+
+    def test_other_market_pending_place_does_not_block_order_entry(self):
+        """One market's confirmation window must not blank its neighbours."""
+
+        self.ledger.prepare_intent(
+            "pending-place", "PLACE", "market-one", "client-pending", {},
+            created_at=NOW)
+        self.ledger.transition_intent(
+            "pending-place", "SUBMITTING", updated_at=NOW)
+        self.ledger.transition_intent(
+            "pending-place", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="exchange-pending")
+        self.client.orders.create_results = [
+            {"id": "exchange-two", "executions": []}]
+        request = OrderRequest(
+            "market-two", "bid", Decimal("0.500"), Decimal("1.00"))
+
+        submitted = self.run_async(self.executor.place(
+            request, market(slug="market-two"), now=NOW,
+            intent_id="intent-two", client_order_id="client-two"))
+
+        self.assertEqual(submitted.exchange_order_id, "exchange-two")
+        self.assertEqual(len(self.client.orders.create_calls), 1)
 
     def test_create_timeout_is_not_retried_and_quarantines_market(self):
         self.client.orders.create_results = [TimeoutError("lost response")]

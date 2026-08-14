@@ -770,6 +770,51 @@ much maker-lab rested in each market. The value is a ranking key only, so
 relative order is what matters. Replace it with true contract-hours if resting
 time is ever recorded.
 
+## 6i. The venue inverts the price on SELL intents
+
+Confirmed live 2026-08-14. Holding a short of 5 entered at **0.36**, the
+reducing quote was sent as `ORDER_INTENT_SELL_SHORT` at **0.36** and the venue
+rested it at **0.64**, shown in the app as `64c 0/5 filled`.
+
+```
+0.64 = 1 - 0.36
+```
+
+At that price the order **adds to the short instead of closing it**. The
+position can never flatten, and every reducing quote is a new position in
+disguise.
+
+maker-lab hit this and documented it in `live_orders.to_intent`: *"the exchange
+read our 0.29 as the YES price and charged us the NO side of it"* -- about 41
+cents per contract given away on the one fill it got, after *"three wrong
+diagnoses before the arithmetic gave it away"*. Their note also warns that
+`preview` does not catch it: it echoes which OUTCOME an order takes and says
+nothing about which FRAME its price is in.
+
+**Their resolution, and now ours: two intents, never four.**
+
+```python
+bid   -> ORDER_INTENT_BUY_LONG     price unchanged
+offer -> ORDER_INTENT_BUY_SHORT    price unchanged
+```
+
+`SELL_SHORT` and `SELL_LONG` are exactly the two intents maker-lab never sends,
+and they are the two whose price convention was never validated here. The venue
+nets a BUY on the opposite outcome against an open position, so reduction needs
+no separate intent -- maker-lab ran this for days across 201 fills and 101
+exits.
+
+The `reducing` flag is retained in `OrderRequest` and deliberately ignored when
+choosing the intent. It still governs post-only, time in force, and the
+exact-position invariants.
+
+**Note the earlier round trip that appeared to work.** On 2026-08-14 a short of
+0.52 entered at 0.74 was closed by `SELL_SHORT` at 0.85 and the position did go
+flat. Under inversion that order rested at 0.15, not 0.85 -- deep enough
+through the bid to fill immediately and close the position, which is why it
+looked correct. It closed at a far worse price than the books recorded, the
+same way maker-lab's `+$0.02 close` was really nearer `-$0.82`.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

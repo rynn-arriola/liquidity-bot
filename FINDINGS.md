@@ -549,9 +549,30 @@ Measured margin at the moment of a place: `net={'offer': 0.002705}` -- three
 tenths of a cent. At that thinness any asymmetry between the flat and resting
 calculations flips the sign, so this is not a rare edge.
 
-**Not yet fixed.** The candidate fix is to make the two paths symmetric so the
-decision cannot depend on whether we are already resting. That is a change to
-the reward mathematics and wants a test that reproduces the oscillation first.
+### Fixed and confirmed live
+
+`rewards.py` now counts our size in both cases. The public book does contain a
+resting order of ours, so skipping it avoids double-counting in principle --
+but the book is only eventually consistent, and the window before it catches up
+is exactly the window the runner evaluates in, leaving depth short by our own
+size. Counting it always makes "worth placing?" and "worth keeping?" answer the
+same question. The residual error is over-counting one contract against a
+targetSize in the thousands, which biases toward leaving a quote resting: the
+safe direction, because resting is what earns.
+
+Measured before and after on the same runner:
+
+```
+before   place -> cancel -> place at the loop tick, ~2 per second
+after    a quote rested 4 minutes (12:19:27 -> 12:23:25) before any cancel
+```
+
+and the cancel that ended it was legitimate -- the bid's blocker had genuinely
+become `projected_reward_does_not_cover_probability_weighted_exit_cost`, the
+economics had moved, rather than the eligibility flipping on our own presence.
+
+The reproduction lives in `test_eligibility_does_not_flip_on_our_own_resting_order`:
+nine resting against a target of ten, our one contract deciding it.
 
 ## 6f. First fill, 2026-08-14T11:48:39Z
 

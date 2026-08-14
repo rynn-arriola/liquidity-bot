@@ -656,8 +656,31 @@ markets affected          2 of 8
 ```
 
 Recovery outnumbers real work 2.6 to 1, about one spurious unknown-state every
-96 seconds. The cost is lost resting time, not risk: the account stayed flat
-and the bot kept placing, resting and exiting correctly throughout.
+96 seconds.
+
+**Sampled directly, it is far worse than that ratio suggests.** Polling the
+three inputs to `risk_state_known()` once a second for a minute:
+
+```
+state KNOWN    39/60 samples
+state UNKNOWN  21/60 samples          -> 35% of wall-clock time
+during unknown: unresolved=1, unknown_absent=1
+```
+
+That pairing is the **ordinary cancel lifecycle**, not an anomaly: a cancel is
+issued so its intent is unresolved, the order stops appearing in the open-order
+snapshot so it is marked `UNKNOWN_ABSENT`, and both clear once `retrieve`
+confirms the terminal state. `risk_state_known()` fails on either condition and
+both are account-wide, so **every routine cancel blanks quoting for all eight
+markets, about a third of the time.**
+
+This is why placements do not survive. The observable signature is a run of
+`PLACE_POST_ONLY` at the same price with `working=0` and *no* `CANCEL` in the
+action log -- the cancels come from `_quarantine_working_orders`, which acts
+directly and never goes through the planner, so it leaves no action record.
+
+Safety is unaffected throughout: zero open orders at the venue, position flat,
+no accumulation. The cost is opportunity, and reward pays for resting time.
 
 **Proposed fix**, deliberately left for a decision. Scope the unresolved-intent
 test to the market being planned, and keep the ownership tests account-wide:

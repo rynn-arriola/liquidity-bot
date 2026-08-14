@@ -461,10 +461,38 @@ That reframes the open question. It is not "can this strategy earn" -- measured
 yes, $32-33 on a good day. It is whether it can earn without giving it back at
 settlement, which has never been tested with the flatten in place.
 
-**Caveat before acting**: the `live` period is where the 8x pool sits, and the
-pregame design forbids it (section 4). How much of the $70.92 came from `live`
-rather than `day_of` is not yet separated, and that split decides whether a
-pregame-only executor can reach these numbers at all.
+### The pregame-only design is not locked out
+
+The `live` period carries the 8x pool and the pregame design forbids it
+(section 4), so the split mattered. Measured 2026-08-14 against maker-lab's
+fills, comparing `filled_at` to `game_start`:
+
+```
+fills with a known game clock  197
+  before game start (pregame)  132   67%
+  after  game start (live)      65   33%
+```
+
+**Two-thirds of maker-lab's activity was in the same window liquidity-bot is
+restricted to.** The live pool is a bonus being forgone, not the whole prize.
+
+This measures fills rather than resting time, and reward accrues from resting,
+so treat it as a strong proxy rather than an exact split. It is decisive enough
+for the question it was asked: scaling breadth and size inside the pregame
+design is not scaling in a doomed direction.
+
+### Order of work this implies
+
+1. Fix the place/cancel churn. Reward pays for resting time and the runner is
+   currently cancelling its own quotes about twice a second, so any size
+   increase multiplies risk without multiplying reward.
+2. Breadth before size. Breadth is the larger lever (20x against 15x) and the
+   safer one: more markets at one contract concentrates no more risk per
+   market. Connections are independent and each carries its own
+   10-subscription quota (section 7), so 16 markets is two connections.
+3. Size last, bounded by capital. Exposure is roughly `size x markets` dollars
+   at two sides near $0.50. Against sub-$100 capital that is size 6 at eight
+   markets, or size 3 at sixteen. Breadth and size trade against each other.
 
 ## 7. API limits
 

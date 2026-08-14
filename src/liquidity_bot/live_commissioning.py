@@ -223,8 +223,11 @@ class CommissioningRunner:
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
             quote_size=config.quote_size,
             max_inventory_age_seconds=config.max_inventory_age_seconds,
-            max_market_worst_loss=float(config.max_market_loss_usd),
-            max_portfolio_worst_loss=float(config.max_session_loss_usd),
+            # Exposure budgets, not the loss stops. The stops live in
+            # SessionRiskGuard and fire on realised P&L; these bound how much
+            # open worst case may exist at once.
+            max_market_worst_loss=float(config.max_market_exposure_usd),
+            max_portfolio_worst_loss=float(config.max_portfolio_exposure_usd),
             max_exit_loss=float(config.max_market_loss_usd),
             exit_depth_haircut=.5,
             max_book_age_seconds=5,
@@ -1052,6 +1055,38 @@ class CommissioningRunner:
                     "weighted_exit_cost")
         state.reward_eligible = frozenset(eligible)
 
+    def _portfolio_worst_loss(self, *, excluding: str) -> float:
+        """Worst-case open exposure across every market except one.
+
+        Hardcoded to 0 until 2026-08-14, which silently disabled the portfolio
+        half of invariant 3: each market checked its own candidate against the
+        whole portfolio budget and nothing ever accumulated. Harmless at one
+        contract, where eight markets totalled $8. At forty it is the
+        difference between a bounded book and $320 of exposure behind a $40
+        stop that can only react after the loss.
+
+        Worst case per market mirrors the candidate calculation in the
+        reconciler: a long loses its full entry price if the market settles to
+        zero, a short loses the complement, and a resting order is valued as
+        though it fills.
+        """
+
+        total = 0.0
+        for slug in self._shutdown_slugs():
+            if slug == excluding:
+                continue
+            position = self.ledger.position(slug)
+            if position:
+                basis = self.ledger.inventory_basis(slug)
+                price = (float(basis.average_entry_price)
+                         if basis is not None else 1.0)
+                total += (float(abs(position))
+                          * (price if position > 0 else 1.0 - price))
+            for order in self._working_orders(slug):
+                total += float(order.remaining_qty) * (
+                    order.price if order.side == "bid" else 1.0 - order.price)
+        return total
+
     def _working_orders(
         self, slug: str | None = None,
     ) -> tuple[WorkingOrder, ...]:
@@ -1164,7 +1199,8 @@ class CommissioningRunner:
                 self.ledger, now=now, market_slug=state.slug),
             reward_eligible=eligible,
             expected_net_by_side=state.expected_net_by_side,
-            existing_portfolio_worst_loss=0,
+            existing_portfolio_worst_loss=self._portfolio_worst_loss(
+                excluding=state.slug),
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
         )
@@ -1175,9 +1211,13 @@ class CommissioningRunner:
         self.balance = await self.account.fetch_balance(observed_at=now)
         self.risk_guard.observe_equity(
             self.balance.marked_equity, observed_at=now)
-        change = self.balance.marked_equity - self.risk_guard.starting_equity
-        self.risk_guard.observe_market_realized({
-            self.market_slug: min(change, Decimal("0"))})
+        # Realised P&L from the fill ledger, per market and in total. This
+        # used to attribute the whole account's marked-equity change to the
+        # primary market, which was wrong twice over: marked equity is not
+        # realised, and one market is not all of them.
+        self.risk_guard.observe_realized(self.ledger.realized_pnl())
+        self.risk_guard.observe_market_realized(
+            self.ledger.realized_by_market())
 
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:
@@ -2477,8 +2517,22 @@ class CommissioningRunner:
             stop_reason = "process_cancelled"
         except Exception as exc:
             stop_reason = f"runner_failure:{type(exc).__name__}"
+            # Say WHERE. This alert used to carry the exception type alone, so
+            # when the runner crash-looped on 2026-08-14 Discord reported
+            # "IndexError" three times with no message and no location -- true,
+            # useless, and impossible to act on without shell access. The last
+            # frame is the one that actually failed.
+            frame = ""
+            tb = exc.__traceback__
+            while tb is not None:
+                name = tb.tb_frame.f_code.co_filename.rsplit("/", 1)[-1]
+                frame = f"{name}:{tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
+                tb = tb.tb_next
+            location = f" at {frame}" if frame else ""
             await self.notifier.send_async(
-                f"🚨 Liquidity Bot LIVE runner failure: {type(exc).__name__}.",
+                f"🚨 Liquidity Bot LIVE runner failure: "
+                f"{type(exc).__name__}: {str(exc)[:200]}{location}. "
+                "The supervisor restarts this if the account proved flat.",
                 critical=True)
             if not preflight_complete:
                 preflight_error = exc

@@ -69,7 +69,13 @@ class CommissioningConfig:
     exclusive_api_key_confirmed: bool
     maker_lab_stopped_confirmed: bool
     arm_live: bool = False
-    quote_size: Decimal = Decimal("1")
+    # Raised 1 -> 5 on 2026-08-14, matching maker-lab's QUOTE_SIZE. At one
+    # contract both the maker rebate and the taker fee round to zero (section 1
+    # of FINDINGS: per-contract economics are ~37% worse at size 1), and reward
+    # share is size-linear, so size 1 earns a rounding error. Worst case is
+    # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
+    # stop below is set to.
+    quote_size: Decimal = Decimal("40")
     # Eight is the measured ceiling, not a preference. The private
     # WebSocket accepts 10 subscriptions per connection; positions must be
     # scoped one market per subscription because positionSubscription
@@ -87,12 +93,24 @@ class CommissioningConfig:
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
-    # One operative stop. Both tiers sit at $30 so exactly one threshold
-    # can fire; the $35 ceiling exists only because the emergency stop is
-    # required to sit above the normal stop, and it should never trigger.
-    max_market_loss_usd: Decimal = Decimal("30")
-    max_session_loss_usd: Decimal = Decimal("30")
-    hard_stop_loss_usd: Decimal = Decimal("35")
+    # One operative stop, raised to $40 on 2026-08-14 alongside quote size 5.
+    # $40 is the fully-adverse exposure of the whole authorized set: five
+    # contracts across eight markets on both sides, each contract able to lose
+    # about a dollar. Both tiers sit at $40 so exactly one threshold can fire;
+    # the $45 ceiling exists only because the emergency stop is required to sit
+    # above the normal stop, and it should never trigger.
+    max_market_loss_usd: Decimal = Decimal("40")
+    max_session_loss_usd: Decimal = Decimal("40")
+    hard_stop_loss_usd: Decimal = Decimal("45")
+    # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
+    # one pair of numbers served as both, which is incoherent once size grows:
+    # "stop after losing $40" and "never hold more than $40 of worst case" are
+    # different statements, and capital cannot be deployed while they share a
+    # value. The stops stay at $40 of *realised* loss; these bound *open*
+    # worst-case exposure and are sized to the $385.88 balance with a ~10%
+    # buffer, following maker-lab's CAPITAL_BUFFER_PCT.
+    max_market_exposure_usd: Decimal = Decimal("45")
+    max_portfolio_exposure_usd: Decimal = Decimal("340")
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: int = 30
@@ -119,7 +137,13 @@ class CommissioningConfig:
     # times in 24 hours, so 20 is a real sample at a bounded cost of about
     # $0.20 in commission at one contract.
     max_taker_exit_orders: int = 20
-    max_session_execution_fees_usd: Decimal = Decimal("0.25")
+    # Rescaled with quote size on 2026-08-14. The taker fee is
+    # 0.06 x qty x p x (1-p), which peaks at p = 0.5: $0.01 per exit at one
+    # contract, $0.60 at forty. The old $0.25 cap was calibrated for one
+    # contract and would have tripped on the FIRST taker exit, stopping maker
+    # quoting before any exit evidence could be collected. $12 is the same 20
+    # exits at the new size.
+    max_session_execution_fees_usd: Decimal = Decimal("12")
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -156,16 +180,24 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 1 or self.max_markets != 8:
+        if self.quote_size != 40 or self.max_markets != 8:
             problems.append(
-                "commissioning is hard-locked to one contract per quote "
+                "commissioning is hard-locked to forty contracts per quote "
                 "across at most eight markets")
+        if (self.max_market_exposure_usd != 45
+                or self.max_portfolio_exposure_usd != 340):
+            problems.append(
+                "commissioning exposure budgets must remain $45 per market "
+                "and $340 across the portfolio")
+        if self.max_portfolio_exposure_usd < self.max_market_exposure_usd:
+            problems.append(
+                "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 30 or self.max_market_loss_usd != 30
-                or self.hard_stop_loss_usd != 35):
+        if (self.max_session_loss_usd != 40 or self.max_market_loss_usd != 40
+                or self.hard_stop_loss_usd != 45):
             problems.append(
-                "commissioning must keep a single $30 stop with a $35 "
+                "commissioning must keep a single $40 stop with a $45 "
                 "emergency equity ceiling above it")
         if self.hard_stop_loss_usd <= self.max_session_loss_usd:
             problems.append("hard stop must exceed the normal session stop")
@@ -192,11 +224,11 @@ class CommissioningConfig:
                 "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
         if (self.max_taker_exit_orders != 20
-                or self.max_session_execution_fees_usd != Decimal("0.25")
+                or self.max_session_execution_fees_usd != Decimal("12")
                 or self.earnings_refresh_seconds != 900):
             problems.append(
                 "commissioning loss learning must stop after 20 taker exits, "
-                "cap execution fees at $0.25, and refresh earnings every 900 seconds")
+                "cap execution fees at $12, and refresh earnings every 900 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300):
             problems.append(

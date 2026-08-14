@@ -852,6 +852,55 @@ class ExecutionLedger:
             self._finish_event("position_snapshot", snapshot_id, True)
         return True
 
+    def realized_pnl(self, market_slug: str | None = None) -> Decimal:
+        """Realised trading P&L: closed round trips only, net of fees.
+
+        Open inventory is excluded by valuing it at its own average entry, so
+        an unrealised mark never reaches a loss stop. That distinction matters
+        once size grows: 320 open contracts move $38 on a twelve-cent mark, and
+        a stop reading marked equity would fire on paper movement with nothing
+        traded.
+
+            realised = cash from fills + position x average entry
+
+        A long has paid `q x basis` that is not yet a loss, so it is added
+        back; a short has received it, so it is subtracted. Both fall out of
+        the signed position.
+        """
+
+        where = "" if market_slug is None else " WHERE market_slug=?"
+        params = () if market_slug is None else (market_slug,)
+        cash = Decimal("0")
+        for row in self.query(
+                "SELECT side,price,qty,fee FROM execution_fills" + where,
+                params):
+            qty = _decimal(row["qty"], "fill qty")
+            price = _decimal(str(row["price"]), "fill price")
+            fee = _decimal(str(row["fee"] or 0), "fill fee")
+            signed = qty if "SELL" in str(row["side"]).upper() else -qty
+            cash += signed * price - fee
+        slugs = ([market_slug] if market_slug is not None
+                 else [str(r["market_slug"]) for r in self.query(
+                     "SELECT DISTINCT market_slug FROM execution_fills")])
+        for slug in slugs:
+            position = self.position(slug)
+            if not position:
+                continue
+            basis = self.inventory_basis(slug)
+            if basis is None:
+                continue
+            cash += position * basis.average_entry_price
+        return cash
+
+    def realized_by_market(self) -> dict[str, Decimal]:
+        """Realised P&L per market, for the per-market loss stop."""
+
+        return {
+            str(row["market_slug"]): self.realized_pnl(str(row["market_slug"]))
+            for row in self.query(
+                "SELECT DISTINCT market_slug FROM execution_fills")
+        }
+
     def risk_state_known(self, market_slug: str | None = None) -> bool:
         """True when execution state is provable enough to build new risk.
 

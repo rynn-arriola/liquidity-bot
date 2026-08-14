@@ -236,6 +236,7 @@ class LiveSessionTests(unittest.TestCase):
             max_session_loss=Decimal("5"), max_market_loss=Decimal("2"),
             max_duration_seconds=1800)
         guard.observe_equity("95", observed_at=NOW)
+        guard.observe_realized(Decimal("-5"))
         executor = Executor()
         driver = ControlledActionDriver(executor, self.ledger, guard)
         building = PlanAction(

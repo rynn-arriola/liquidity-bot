@@ -95,6 +95,7 @@ class SessionRiskGuard:
     current_equity: Decimal | None = None
     equity_observed_at: datetime | None = None
     realized_by_market: dict[str, Decimal] = field(default_factory=dict)
+    realized_pnl: Decimal = Decimal("0")
     critical_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -120,6 +121,11 @@ class SessionRiskGuard:
             raise ValueError("equity observation must be timezone-aware")
         self.current_equity = _decimal(equity, "equity")
         self.equity_observed_at = observed_at
+
+    def observe_realized(self, value: Decimal | str | int | float) -> None:
+        """Record realised session P&L, which is what the session stop reads."""
+
+        self.realized_pnl = _decimal(value, "realized_pnl")
 
     def observe_market_realized(
         self, values: Mapping[str, Decimal | str | int | float],
@@ -149,8 +155,13 @@ class SessionRiskGuard:
             age = (now - self.equity_observed_at).total_seconds()
             if age < 0 or age > self.max_equity_age_seconds:
                 result.append("marked account equity is stale")
-            if self.starting_equity - self.current_equity >= self.max_session_loss:
-                result.append("session loss limit reached")
+        # The session stop fires on REALISED trading loss, not on marked
+        # equity. Marked equity moves with every unrealised tick: 320 open
+        # contracts swing $38 on twelve cents, so an equity-based stop trips on
+        # paper movement with nothing traded. Marked equity still backs the
+        # emergency hard stop below, which is what it is for.
+        if -self.realized_pnl >= self.max_session_loss:
+            result.append("session loss limit reached")
         if any(value <= -self.max_market_loss
                for value in self.realized_by_market.values()):
             result.append("market loss limit reached")

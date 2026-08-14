@@ -358,7 +358,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
-    async def test_preflight_then_first_fake_order_is_exactly_one_contract(self):
+    async def test_preflight_then_first_fake_order_is_exactly_the_quote_size(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         self.assertEqual(client.orders.create_calls, [])
@@ -368,13 +368,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._evaluate_rewards(NOW)
         actions = runner.reconciler.plan(runner._frame(NOW))
         self.assertEqual({action.side for action in actions}, {"bid", "offer"})
-        self.assertTrue(all(action.qty == Decimal("1") for action in actions))
+        self.assertTrue(all(
+            action.qty == runner.config.quote_size for action in actions))
         await runner.driver.apply_one(
             actions, market=runner.market, position=Decimal("0"), now=NOW)
 
         self.assertEqual(len(client.orders.create_calls), 1)
         payload = client.orders.create_calls[0]
-        self.assertEqual(payload["quantity"], 1)
+        self.assertEqual(payload["quantity"], 40)
         self.assertTrue(payload["participateDontInitiate"])
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -1200,24 +1201,29 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
 
-    async def test_single_stop_fires_at_thirty_then_the_ceiling(self):
+    async def test_single_stop_fires_at_forty_then_the_ceiling(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         start = Decimal("100")
 
-        # Below the single operative stop nothing fires: there is no tiered
-        # soft stop underneath it any more.
-        client.account.current_balance = start - Decimal("8")
+        # A marked-equity drop is NOT the session stop any more. Open inventory
+        # marks against us constantly -- 320 contracts move $38 on twelve cents
+        # -- and stopping on paper movement would end sessions that never lost
+        # a trade. Marked equity still backs the emergency ceiling below.
+        client.account.current_balance = start - runner.config.max_session_loss_usd
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
-        # At the $30 stop the session ends.
-        client.account.current_balance = start - runner.config.max_session_loss_usd
+        # Realised trading loss at the stop ends the session.
+        client.account.current_balance = start
+        runner.ledger.realized_pnl = lambda slug=None: -runner.config.max_session_loss_usd
+        runner.ledger.realized_by_market = lambda: {}
         await runner._refresh_balance(NOW)
         self.assertTrue(runner._stop_reason(NOW).startswith("risk_stop:"))
 
-        # The $35 ceiling sits above it only because the emergency stop must
-        # exceed the normal stop; in practice the $30 stop fires first.
+        # The ceiling is the one thing that still reads marked equity, because
+        # its job is to catch what the ledger cannot explain.
+        runner.ledger.realized_pnl = lambda slug=None: Decimal("0")
         client.account.current_balance = (
             start - runner.config.hard_stop_loss_usd - Decimal("1"))
         await runner._refresh_balance(NOW)

@@ -48,8 +48,14 @@ class SessionRiskGuardTests(unittest.TestCase):
 
     def test_session_market_time_and_critical_limits_trip_independently(self):
         guard = self.guard()
+        # The session stop reads REALISED P&L now. Marked equity moving is
+        # not a loss until a trade closes; at 320 open contracts a twelve-cent
+        # mark is $38 and would have tripped this on paper movement alone.
         guard.observe_equity("95", observed_at=NOW)
+        self.assertNotIn("session loss limit reached", guard.blockers(now=NOW))
+        guard.observe_realized(Decimal("-5"))
         self.assertIn("session loss limit reached", guard.blockers(now=NOW))
+        guard.observe_realized(Decimal("0"))
         guard.observe_equity("100", observed_at=NOW)
         guard.observe_market_realized({"market-one": "-2"})
         self.assertIn("market loss limit reached", guard.blockers(now=NOW))
@@ -61,10 +67,17 @@ class SessionRiskGuardTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("critical failure")
                             for item in guard.blockers(now=NOW)))
 
-    def test_fifteen_dollar_hard_stop_is_separate_from_soft_stop(self):
+    def test_hard_stop_is_separate_from_the_realised_session_stop(self):
         guard = self.guard()
+        # Equity alone no longer blocks new risk: the session stop reads
+        # realised P&L. The hard stop is the one thing that still watches
+        # marked equity, because it exists to catch what the ledger cannot
+        # explain.
         guard.observe_equity("95", observed_at=NOW)
+        self.assertTrue(guard.can_add_new_risk(now=NOW))
+        guard.observe_realized(Decimal("-5"))
         self.assertFalse(guard.can_add_new_risk(now=NOW))
+        guard.observe_realized(Decimal("0"))
         self.assertFalse(guard.hard_stop_reached(now=NOW))
         guard.observe_equity("85", observed_at=NOW)
         self.assertTrue(guard.hard_stop_reached(now=NOW))

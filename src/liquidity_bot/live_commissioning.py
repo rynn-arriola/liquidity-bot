@@ -1339,7 +1339,10 @@ class CommissioningRunner:
                 f"kind={chosen.kind.name} reason={chosen.reason} "
                 f"side={chosen.side} price={chosen.price} "
                 f"working={len(self._working_orders(slug))} "
-                f"pending={len(actions)}",
+                f"pending={len(actions)} "
+                f"blockers={state.economic_blocker_by_side or '{}'} "
+                f"net={ {k: round(v, 6) for k, v in
+                         state.expected_net_by_side.items()} }",
                 flush=True,
             )
         try:

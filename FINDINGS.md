@@ -52,18 +52,40 @@ p = 0.81, so mid-priced markets pay **62% more rebate per contract**.
 
 ## 2. Exit behaviour
 
-### Passive exits work, and they are the only profitable line
+### The passive-vs-crossed comparison is a selection artifact
 
 maker-lab live data, 2026-08-11/12, 101 exits:
 
 ```
-kind      n     pnl        fees
-passive  61   +$20.16     $0.00
-cross    40   -$34.81     $6.05
+kind      n     pnl        fees      winners   losers
+passive  61   +$20.16     $0.00        60         1
+cross    40   -$34.81     $6.05         2        38
+settle   16   -$88.20        -          2        14
 ```
 
-Per event: **passive +$0.33, crossed -$0.87.** Same session, same books,
-opposite sign.
+Per event that reads as **passive +$0.33 vs crossed -$0.87** — and it is
+**not a comparison of exit policies.** maker-lab ran
+`FLATTEN_NEVER_AT_A_LOSS = True` (`config.py:396`), so its reducing quote was
+floored at cost basis. A floored quote can only fill when the market rises to
+meet it. Winners therefore exit passively; losers cannot fill at all and leave
+only by crossing or by settling.
+
+maker-lab documented this themselves, in `live_runner.py:1609`: the settlement
+pool is *"79% losers BY CONSTRUCTION."* The 60-1 and 2-38 splits above are that
+construction, measured. Any strategy with a basis floor produces this table
+regardless of whether passive exits are actually better.
+
+**So the floor does not avoid losses, it defers and concentrates them.** In
+this session it routed -$88.20 into settlement — 86% of the session loss —
+while booking the winners as passive-exit profit. maker-lab measured the same
+effect at larger scale: 234 positions settled for -$443.88 where crossing at
+T-15 would have cost -$64.18, **a +$379.70 swing with 78% of positions
+improving** (`live_runner.py:1604`).
+
+**Conclusion: the reducing quote must rest at the touch, with no basis floor.**
+liquidity-bot already does this. This is not the code disagreeing with the
+safety rule — it is the rule carrying maker-lab's most expensive defect.
+See `docs/SAFETY_INVARIANTS.md` invariant 5.
 
 ### The 30-second window captured almost none of them
 
@@ -81,7 +103,10 @@ Cumulative share of passive exits captured by timeout:
 
 The median passive exit took **100 seconds** — more than three times the
 window that was in place. `max_inventory_age_seconds` was raised 30 -> 900 on
-this evidence.
+this evidence. Caveat: these latencies are times-to-fill for quotes that were
+basis-floored, so they describe how long a *winning* position took to come
+back. An unfloored quote at the touch should fill faster, not slower, which
+makes 900s a conservative bound rather than an optimistic one.
 
 ### Not crossing is also wrong
 
@@ -303,14 +328,9 @@ profitability claim or scaling decision.
 3. **Is the 50% reward haircut and the 2x cost margin justified?** Neither has
    any evidence. Together they are 4x, and 13 sides in the backtest sat within
    10x of authorization.
-5. **Should the reducing quote rest at the touch or at break-even basis?** The
-   code rests at the touch. maker-lab's `FLATTEN_NEVER_AT_A_LOSS` argues for a
-   basis floor, because chasing a falling touch is a self-inflicted loss. But
-   maker-lab measured passive exits at **+$0.33/event** against crossed at
-   **-$0.87**, and a basis floor that never fills ends in the crossing anyway —
-   so refusing a one-cent passive loss can buy an eight-cent crossed one. The
-   30s -> 900s window widens the gap between the two policies. Settle it by
-   replaying maker-lab's 101 exits under both anchors, not by argument.
 4. ~~Does the venue accept multiple private connections?~~ **Answered**
    2026-08-14: yes, and each connection carries its own 10-subscription
    quota. See §7.
+5. ~~Should the reducing quote rest at the touch or at break-even basis?~~
+   **Answered** 2026-08-14: the touch, no floor. A basis floor sorts winners
+   into passive exits and strands losers until they settle. See §2.

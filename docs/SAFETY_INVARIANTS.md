@@ -7,9 +7,11 @@ These are implementation requirements, not suggestions.
 3. Every building order must fit both per-market and portfolio unmatched-loss budgets.
 4. After the first fill, all risk-building orders for that market are cancelled.
 5. After a fill, cancel every building order and work the exact reducing quote
-   at the active touch. Emergency loss realization is reserved for the bounded
-   hard-timeout path, not the passive reducer. (Whether the touch or the
-   break-even basis is the right anchor is unsettled — FINDINGS open question 5.)
+   at the active touch, with **no cost-basis floor**. A floor only fills when
+   the market comes back, so it exits winners and strands losers until they
+   settle: maker-lab ran one and reached settlement 79% losers by construction,
+   for -$88.20 in one session. Emergency loss realization stays reserved for
+   the bounded hard-timeout path, not the passive reducer.
 6. If the position remains at its hard inventory-age limit, cancel and confirm the passive exit before sending a price-capped IOC. It must never drift to settlement by default.
 7. A reward order is allowed only for the lifecycle phase applying at that instant.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.

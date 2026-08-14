@@ -266,15 +266,17 @@ the socket, so a naive client believes it succeeded.
 This constrains multi-market directly:
 
 ```
-1 x orders    account-wide   (order events always carry marketSlug)
+1 x orders    all slugs      (order events always carry marketSlug)
 N x positions per-market     (positionSubscription OMITS marketSlug)
 1 x balance   account-wide
 -------------------------------------------------
 N + 2 <= 10   ->   N <= 8 markets per connection
 ```
 
-Positions must be scoped one market per subscription, because the projector may
-only infer an omitted slug when the request covers exactly one market. A single
+`PrivateReadOnlyStream.start` refuses above 10 rather than let the venue drop
+the overflow silently. Positions must be scoped one market per subscription,
+because the projector may only infer an omitted slug when the request covers
+exactly one market. A single
 multi-slug positions subscription re-creates the defect that ended the
 2026-08-13T05:39Z session on its first fill.
 

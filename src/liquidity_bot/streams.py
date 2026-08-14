@@ -18,6 +18,12 @@ from .models import BookSnapshot, TradePrint
 from .private_stream import PrivateEvent, decode_private_message
 
 
+# Measured 2026-08-14 by adding subscriptions one at a time: the 11th is
+# rejected with "max subscriptions per connection reached". The rejection
+# arrives asynchronously on the socket, not from the subscribe call.
+MAX_PRIVATE_SUBSCRIPTIONS = 10
+
+
 class MarketReadOnlyStream:
     """Full-book snapshots for an explicit set of subscribed markets."""
 
@@ -139,19 +145,32 @@ class PrivateReadOnlyStream:
             planned.append(("orders", order_request_id, None))
             planned.append(("positions", position_request_id, None))
         else:
-            # One subscription per market, never one covering several. The
-            # documented positionSubscription update omits marketSlug, and the
-            # projector may only infer it when the request itself covers
-            # exactly one market. A single multi-slug subscription would make
-            # every such update ambiguous again, which is the defect that
-            # ended the 2026-08-13T05:39Z session on its first fill.
+            # Orders ride a single subscription carrying every slug. Order
+            # events always include marketSlug, so `market_scope` is never
+            # consulted to attribute them (see venue_state), and subscriptions
+            # are the scarce resource here.
+            order_request_id = f"liquidity-orders-{base}"
+            scopes[order_request_id] = tuple(clean)
+            planned.append(("orders", order_request_id, list(clean)))
+            # Positions get one subscription per market, never one covering
+            # several. The documented positionSubscription update omits
+            # marketSlug, and the projector may only infer it when the request
+            # itself covers exactly one market. A single multi-slug
+            # subscription would make every such update ambiguous again, which
+            # is the defect that ended the 2026-08-13T05:39Z session on its
+            # first fill.
             for index, slug in enumerate(clean):
-                order_request_id = f"liquidity-orders-{base}-{index}"
                 position_request_id = f"liquidity-positions-{base}-{index}"
-                scopes[order_request_id] = (slug,)
                 scopes[position_request_id] = (slug,)
-                planned.append(("orders", order_request_id, [slug]))
                 planned.append(("positions", position_request_id, [slug]))
+        # The venue accepts 10 subscriptions per private connection and
+        # reports the 11th asynchronously on the socket -- the subscribe call
+        # itself succeeds. Nothing downstream would notice the missing feed,
+        # so refuse here rather than run half-blind to our own fills.
+        if len(planned) + 1 > MAX_PRIVATE_SUBSCRIPTIONS:
+            raise ValueError(
+                f"{len(planned) + 1} private subscriptions exceed the "
+                f"{MAX_PRIVATE_SUBSCRIPTIONS} the venue accepts per connection")
         # Install request metadata before subscribing because an initial
         # snapshot can arrive as soon as the subscribe call is awaited.
         self._market_scope_by_request_id = scopes

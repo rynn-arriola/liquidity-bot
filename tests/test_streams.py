@@ -201,6 +201,43 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(
             sorted(scope[0] for scope in scopes), sorted(slugs))
 
+    def test_eight_markets_fit_the_ten_subscription_connection_budget(self):
+        async def scenario(count):
+            client = FakeClient()
+            stream = PrivateReadOnlyStream(client)
+            await stream.start([f"market-{i}" for i in range(count)])
+            try:
+                return [call for call in client.private_socket.calls
+                        if call[0] in ("orders", "positions", "balance")]
+            finally:
+                await stream.close()
+
+        calls = self.run_async(scenario(8))
+        kinds = [call[0] for call in calls]
+        # Orders carry marketSlug on every event, so one subscription covering
+        # all eight is unambiguous. Positions do not, so they cost one each.
+        # 1 + 8 + 1 is the entire connection budget: splitting orders per
+        # market too would need 17 and the venue would drop seven silently.
+        self.assertEqual(kinds.count("orders"), 1)
+        self.assertEqual(kinds.count("positions"), 8)
+        self.assertEqual(kinds.count("balance"), 1)
+        self.assertEqual(len(calls), 10)
+        order_call = next(c for c in calls if c[0] == "orders")
+        self.assertEqual(len(order_call[2]), 8)
+
+    def test_more_markets_than_the_connection_allows_is_refused(self):
+        async def scenario():
+            client = FakeClient()
+            stream = PrivateReadOnlyStream(client)
+            with self.assertRaisesRegex(ValueError, "exceed the 10"):
+                await stream.start([f"market-{i}" for i in range(9)])
+            return client
+
+        # It must fail before connecting: the venue reports the overflow
+        # asynchronously, so a half-subscribed connection looks healthy.
+        client = self.run_async(scenario())
+        self.assertEqual(client.private_socket.calls, [])
+
     def test_private_stream_surfaces_unknown_schema_as_error(self):
         async def scenario():
             client = FakeClient()

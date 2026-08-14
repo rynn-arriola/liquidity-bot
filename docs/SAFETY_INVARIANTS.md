@@ -184,10 +184,13 @@ These are implementation requirements, not suggestions.
 57. Commissioning quotes at most eight markets at once and one contract per
     quote. Eight is measured, not chosen: the private WebSocket accepts 10
     subscriptions per connection, and positions must be scoped one market per
-    subscription because `positionSubscription` omits `marketSlug`. Orders may
-    be account-wide because order events always carry it, so the budget is
-    1 orders + 8 positions + 1 balance. Public market data needs one
-    subscription for any number of markets.
+    subscription because `positionSubscription` omits `marketSlug`. Orders ride
+    a single subscription carrying every bound slug, because order events
+    always include `marketSlug` and never need scope to be attributed, so the
+    budget is 1 orders + 8 positions + 1 balance. Splitting orders per market
+    too would need 17 and the venue drops the overflow *asynchronously*, so
+    the stream must refuse to start above 10 rather than run half-blind.
+    Public market data needs one subscription for any number of markets.
 58. The authorized scope is the active set, never "any market". An owned order
     in a second selected market is legitimate; a `venue:` prefixed row or any
     market outside the set remains a terminal ownership violation, including

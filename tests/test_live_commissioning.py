@@ -617,6 +617,36 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_rotation_gate_sees_inventory_on_a_non_primary_market(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=selector)
+        runner.config = replace(runner.config, max_markets=8)
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner._expected_net_by_side = {}
+
+        # Inventory on the second slot, nothing on the primary. Gating on
+        # self.market_slug alone would call this flat and tear both streams
+        # down for a universe scan while the position sat unhedged.
+        runner.ledger.apply_position_event(
+            "ws", "position-on-slot-two",
+            PositionState("market-two", Decimal("1"), runner._now()),
+            received_at=runner._now())
+
+        # The primary reads flat, so a per-primary gate would let the scan run.
+        self.assertEqual(runner.ledger.position(runner.market_slug), 0)
+        self.assertTrue(runner._discovery_is_free())
+        # The whole-account gate must still refuse.
+        self.assertTrue(runner._has_open_position())
+        self.assertFalse(runner._safe_to_scan())
+        self.assertIn(
+            "a nonzero position remains", runner._rotation_blockers())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_zero_viable_scan_stays_idle_when_bound_market_expired(self):
         selector = FakeRewardSelector(
             fake_selection("market-one"),

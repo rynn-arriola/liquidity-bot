@@ -1421,9 +1421,7 @@ class CommissioningRunner:
             blockers.append("working orders remain")
         if self.ledger.unresolved_intents():
             blockers.append("order intents remain unresolved")
-        if self.ledger.query(
-                "SELECT 1 FROM execution_positions "
-                "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1"):
+        if self._has_open_position():
             blockers.append("a nonzero position remains")
         if not self.ledger.risk_state_known():
             blockers.append("whole-account execution state is not known")
@@ -1556,10 +1554,13 @@ class CommissioningRunner:
         await old_private.close()
         await old_market.close()
         self.gate.on_disconnect()
-        # Per-slot replacement: markets that still qualify keep their state and
-        # their accrual. _bind_markets preserves retained entries and discards
-        # only the ones being dropped, so a market that is still earning is not
-        # reset just because a different slot changed.
+        # Per-slot replacement: _bind_markets discards only the entries being
+        # dropped, so a retained market keeps its identity rather than being
+        # torn down because a different slot changed. Its *contracts* are still
+        # forgotten below -- both streams were just closed, so every book is
+        # potentially stale and must be re-proven before it can authorize a
+        # quote. Accrual is unaffected either way: score-seconds live in
+        # _score_seconds_by_market, not in MarketState.
         self._bind_markets(chosen)
         for slug in chosen:
             self.state_for(slug).forget_contracts()
@@ -1803,6 +1804,33 @@ class CommissioningRunner:
                 "WHERE CAST(net_qty AS REAL)!=0"))
         slugs.discard("")
         return tuple(sorted(slugs))
+
+    def _safe_to_scan(self) -> bool:
+        """True when a universe scan can run without abandoning live risk.
+
+        A scan cancels every resting quote and stops draining both streams for
+        its whole duration, so it may only run from a genuinely idle account.
+        All three checks are whole-account: with several markets bound, an
+        unresolved intent, a position or an authorized side on *any* slot makes
+        the scan unsafe, and the primary market is not a proxy for the rest.
+        """
+
+        return (not self.ledger.unresolved_intents()
+                and not self._has_open_position()
+                and self._discovery_is_free())
+
+    def _has_open_position(self) -> bool:
+        """True when any market on the account still holds inventory.
+
+        Rotation is gated on this rather than on the primary market: with
+        several markets bound, a position on any one of them makes a scan
+        unsafe, and checking only the primary would tear both streams down
+        while inventory sits unhedged on another slot.
+        """
+
+        return bool(self.ledger.query(
+            "SELECT 1 FROM execution_positions "
+            "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1"))
 
     def _whole_account_safe_to_stop(self) -> bool:
         """True only when every market is proven flat and state is known."""
@@ -2059,9 +2087,7 @@ class CommissioningRunner:
                     break
                 if (self.config.auto_select_reward_markets
                         and now >= next_selection
-                        and not self.ledger.unresolved_intents()
-                        and self.ledger.position(self.market_slug) == 0
-                        and self._discovery_is_free()):
+                        and self._safe_to_scan()):
                     stream_tasks = (market_task, private_task)
                     for task in stream_tasks:
                         task.cancel()

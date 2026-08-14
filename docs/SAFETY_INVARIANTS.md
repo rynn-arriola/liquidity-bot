@@ -6,10 +6,10 @@ These are implementation requirements, not suggestions.
 2. No live startup is allowed without a positive, shadow-validated maximum inventory age.
 3. Every building order must fit both per-market and portfolio unmatched-loss budgets.
 4. After the first fill, all risk-building orders for that market are cancelled.
-5. After a fill, cancel every building order. Work the exact reducing quote at
-   the active touch only when that price is no worse than inventory basis;
-   otherwise rest at the break-even basis price. Emergency loss realization is
-   reserved for the bounded hard-timeout path, not the passive reducer.
+5. After a fill, cancel every building order and work the exact reducing quote
+   at the active touch. Emergency loss realization is reserved for the bounded
+   hard-timeout path, not the passive reducer. (Whether the touch or the
+   break-even basis is the right anchor is unsettled — FINDINGS open question 5.)
 6. If the position remains at its hard inventory-age limit, cancel and confirm the passive exit before sending a price-capped IOC. It must never drift to settlement by default.
 7. A reward order is allowed only for the lifecycle phase applying at that instant.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
@@ -18,9 +18,10 @@ These are implementation requirements, not suggestions.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only, uses one exclusively held API key with
-    maker-lab stopped, and is hard-locked to one active market at a time and
-    one contract per quote. Read-only reward discovery may inspect many
-    markets; any later concurrent-exposure path is a separate authorization.
+    maker-lab stopped, and is hard-locked to one contract per quote across at
+    most eight concurrently bound markets. Eight is the measured private
+    WebSocket ceiling (invariant 57), not a preference. Raising either limit is
+    a separate authorization.
 14. `cancel-all` and account-wide close operations are forbidden on a shared account.
 15. A realized-P&L breaker does not replace open-exposure and worst-case-loss limits.
 16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its per-market loss and slippage budgets.
@@ -45,8 +46,10 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. The $15 hard stop uses marked account equity (`currentBalance` plus
-    `assetNotional`). Buying power is never treated as P&L or marked equity.
+25. Losses are stopped at a single $30 threshold. The $35 hard stop exists only
+    because the emergency ceiling must sit above the normal stop, and is
+    measured on marked account equity (`currentBalance` plus `assetNotional`).
+    Buying power is never treated as P&L or marked equity.
 26. A restart may mutate only persisted, identified orders/positions in one
     ledger-selected recovery market, and then only to recover flat. Unowned or cross-market
     state refuses without mutation.
@@ -81,10 +84,10 @@ These are implementation requirements, not suggestions.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published
     pool size is never substituted for the bot's proportional share.
-35. The first confirmed taker exit in a commissioning session is terminal for
-    maker quoting. The process cancels, reconciles, proves flat, and does not
-    start another fee-paying cycle; positive execution fees also have a $0.02
-    session ceiling.
+35. A session stops maker quoting after 20 confirmed taker exits or $0.25 of
+    session execution fees, whichever comes first, then cancels, reconciles and
+    proves flat. The budget exists to collect exit evidence; it is a ceiling,
+    not a target.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.
@@ -176,3 +179,28 @@ These are implementation requirements, not suggestions.
     disabled its forced exit on the same holding-is-cheaper evidence and the
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
+57. Commissioning quotes at most eight markets at once and one contract per
+    quote. Eight is measured, not chosen: the private WebSocket accepts 10
+    subscriptions per connection, and positions must be scoped one market per
+    subscription because `positionSubscription` omits `marketSlug`. Orders may
+    be account-wide because order events always carry it, so the budget is
+    1 orders + 8 positions + 1 balance. Public market data needs one
+    subscription for any number of markets.
+58. The authorized scope is the active set, never "any market". An owned order
+    in a second selected market is legitimate; a `venue:` prefixed row or any
+    market outside the set remains a terminal ownership violation, including
+    inside the set. Widening this further would stop the bot noticing that
+    something else is trading the shared account.
+59. Every market carries its own REST cadence and its own book freshness. The
+    decision clock is re-read per market, because issuing eight mutations
+    through a 4 requests/second governor takes real time and a market whose
+    book aged meanwhile must report `book_stale` and be skipped rather than
+    quote on data that is no longer fresh.
+60. Rotation replaces slots, not the whole set. A market that still qualifies
+    keeps its state and its accrual; only markets that stopped qualifying are
+    dropped, and only while flat and order-free. Cancelling seven earning
+    markets to replace one would violate invariant 51 seven times over.
+61. Shutdown and quarantine retire every market that could hold risk, not just
+    the active set. A slug dropped by rotation can still own a working order,
+    a nonzero position or an unresolved intent, and flat is only proven when
+    the whole account is flat.

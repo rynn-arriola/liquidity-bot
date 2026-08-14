@@ -89,6 +89,45 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(
             actions[0].reason, "soft_reducing_quote_at_active_touch")
 
+    def test_kickoff_exit_uses_displayed_depth_rather_than_settling(self):
+        # Thin book: half the displayed depth is not enough to clear the
+        # position, so the stressed check alone would refuse and hold into the
+        # game. Settlement is worse than any crossing price.
+        thin = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 3.0), BookLevel(.48, 1.0)),
+            (BookLevel(.51, 3.0), BookLevel(.52, 1.0)),
+            state="MARKET_STATE_OPEN")
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        at_deadline = T0 + timedelta(hours=5) - timedelta(seconds=200)
+
+        actions = reconciler.plan(frame(
+            now=at_deadline, position="2", orders=(), snapshot=thin,
+            opened=at_deadline - timedelta(seconds=5), entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+
+    def test_stressed_depth_still_refuses_away_from_kickoff(self):
+        thin = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 1.0),),
+            (BookLevel(.51, 1.0),),
+            state="MARKET_STATE_OPEN")
+        reconciler = DesiredStateReconciler(
+            policy(age=15, force_exit_before_start_seconds=300))
+        early = T0 + timedelta(seconds=30)
+
+        actions = reconciler.plan(frame(
+            now=early, position="2", orders=(), snapshot=thin,
+            opened=T0, entry=.49))
+
+        # Hours from kickoff the book can still improve, so the conservative
+        # refusal is correct and must not be relaxed.
+        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
+        self.assertEqual(
+            actions[0].reason, "hard_exit_insufficient_stressed_depth")
+
     def test_unknown_state_fails_closed_for_new_risk(self):
         actions = DesiredStateReconciler(policy()).plan(frame(state_known=False))
         self.assertEqual([action.kind for action in actions], [ActionKind.CRITICAL])

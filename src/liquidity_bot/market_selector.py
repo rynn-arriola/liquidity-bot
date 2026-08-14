@@ -153,6 +153,20 @@ class RewardMarketSelection:
     failures: tuple[str, ...]
     catalog_spread_filtered_markets: int = 0
 
+    def top_viable(self, limit: int) -> tuple[RewardMarketOpportunity, ...]:
+        """Return the best economically viable markets, ranked.
+
+        ``opportunities`` is already ordered by ``_opportunity_key``, which
+        sorts viable markets first. Monitoring-only rows are excluded here for
+        the same reason ``selected`` excludes them: binding a market that
+        cannot be quoted spends a rotation and earns nothing.
+        """
+
+        if limit <= 0:
+            raise ValueError("selection limit must be positive")
+        return tuple(
+            item for item in self.opportunities if item.viable_sides)[:limit]
+
     @property
     def viable_markets(self) -> int:
         return sum(bool(item.viable_sides) for item in self.opportunities)
@@ -419,8 +433,8 @@ class RewardMarketSelector:
             self._last_selected_slug = result.selected.market.slug
         return result
 
-    @staticmethod
     def _catalog_market_is_executable(
+        self,
         market: MarketMetadata,
         *,
         now: datetime,
@@ -436,7 +450,9 @@ class RewardMarketSelector:
             and now < market.game_start <= window_end
             and market.tick_size is not None
             and market.minimum_trade_qty is not None
-            and market.minimum_trade_qty <= 1
+            # The venue minimum must fit inside one quote, so this scales
+            # with quote size rather than assuming a single contract.
+            and market.minimum_trade_qty <= self.policy.quote_size
             and market.is_supported_moneyline
         )
 

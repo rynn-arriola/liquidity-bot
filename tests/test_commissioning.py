@@ -37,7 +37,9 @@ class CommissioningTests(unittest.TestCase):
         self.assertIsNone(self.authorized().assert_authorized(now=now))
         self.assertTrue(self.authorized().manual_stop_only)
         self.assertEqual(str(self.authorized().quote_size), "1")
-        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "15")
+        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "35")
+        self.assertEqual(str(self.authorized().max_session_loss_usd), "30")
+        self.assertEqual(str(self.authorized().max_market_loss_usd), "30")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
         self.assertEqual(self.authorized().max_hard_exit_retry_seconds, 30)
         self.assertEqual(
@@ -87,7 +89,7 @@ class CommissioningTests(unittest.TestCase):
                 minimum_entry_spread=Decimal("0.01")).assert_authorized(
                     now=overnight)
 
-    def test_auto_selection_expands_discovery_not_live_exposure(self):
+    def test_auto_selection_caps_markets_at_the_measured_ceiling(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
         config = self.authorized(
             market_slug=AUTO_REWARD_MARKET,
@@ -95,10 +97,20 @@ class CommissioningTests(unittest.TestCase):
         )
 
         self.assertIsNone(config.assert_authorized(now=now))
-        self.assertEqual(config.max_markets, 1)
+        # Eight is the measured private-WebSocket ceiling: 10 subscriptions per
+        # connection, of which one is account-wide orders and one is balance,
+        # leaving eight per-market position subscriptions.
+        self.assertEqual(config.max_markets, 8)
+        # Size per quote is unchanged. Breadth expands, exposure per market
+        # does not.
         self.assertEqual(config.quote_size, Decimal("1"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
         self.assertEqual(config.max_selection_book_candidates, 25)
+
+    def test_more_markets_than_the_subscription_ceiling_is_refused(self):
+        now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
+        with self.assertRaisesRegex(CommissioningRefused, "eight markets"):
+            self.authorized(max_markets=9).assert_authorized(now=now)
 
     def test_auto_selection_constants_and_reserved_slug_are_locked(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)

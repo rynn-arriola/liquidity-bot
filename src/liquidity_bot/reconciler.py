@@ -243,9 +243,27 @@ class DesiredStateReconciler:
                 entry_price=frame.entry_price, qty=float(qty),
                 depth_haircut=self.policy.exit_depth_haircut,
                 taker_theta=self.policy.taker_theta)
+            if ((not exit_result.complete or exit_result.worst_price is None)
+                    and pre_kickoff_due):
+                # The stress haircut exists to pick a price we could still get
+                # if half the displayed depth vanished. At the kickoff deadline
+                # the alternative is no longer a better fill later, it is
+                # settlement: maker-lab's residue settled at -$5.51 per event
+                # while a crossing costs cents. Re-price against displayed
+                # depth rather than refuse and hold into the game.
+                exit_result = cross_exit(
+                    frame.book, entry_side=entry_side,
+                    entry_price=frame.entry_price, qty=float(qty),
+                    depth_haircut=1.0,
+                    taker_theta=self.policy.taker_theta)
             if not exit_result.complete or exit_result.worst_price is None:
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
-            if exit_result.pnl < -self.policy.max_exit_loss:
+            if (exit_result.pnl < -self.policy.max_exit_loss
+                    and not pre_kickoff_due):
+                # Before the kickoff deadline a too-expensive exit can wait for
+                # a better book. At the deadline it cannot: refusing here holds
+                # the position into the game, and settlement is unbounded up to
+                # the full contract value while the cap is a policy choice.
                 return self._critical(frame, "hard_exit_price_cap_exceeded")
             self._hard_exit_started_at.setdefault(slug, frame.now)
             self._hard_exit_attempts[slug] = attempts + 1

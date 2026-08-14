@@ -31,6 +31,7 @@ from .commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
     CommissioningRefused,
+    CommissioningUnavailable,
 )
 from .discord_summary import LiquiditySummary, build_liquidity_summary
 from .errors import AdapterError, RuntimeInvariantViolation
@@ -50,6 +51,7 @@ from .live_session import (
     MarketKillSwitch,
     PrivateStateGate,
 )
+from .market_state import MarketState
 from .market_selector import (
     RewardMarketSelection,
     RewardMarketSelector,
@@ -83,6 +85,10 @@ from .venue_state import PrivateLedgerProjector
 
 
 Clock = Callable[[], datetime]
+
+# Generous: with backoff capped at 60s this is roughly an hour of retrying
+# before a transient startup condition is finally treated as a refusal.
+MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 
 RECOVERABLE_STRATEGY_CRITICALS = frozenset({
     "book_stale",
@@ -162,20 +168,20 @@ class CommissioningRunner:
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
         self.private_stream = private_stream_factory(client)
-        self._active_market_slug: str | None = (
-            None if config.auto_select_reward_markets else config.market_slug)
+        self._markets: dict[str, MarketState] = {}
+        self._active_market_slugs: tuple[str, ...] = (
+            () if config.auto_select_reward_markets
+            else (config.market_slug,))
+        for slug in self._active_market_slugs:
+            self._markets[slug] = MarketState(slug)
         self._market_selection: RewardMarketSelection | None = None
         self._market_selection_observed_at: datetime | None = None
-        self.market: MarketMetadata | None = None
-        self.incentive: MarketIncentive | None = None
-        self.book: BookSnapshot | None = None
-        self.book_observed_at: datetime | None = None
         self.balance: AccountBalance | None = None
         self.started_at: datetime | None = None
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
-            quote_size=Decimal("1"),
+            quote_size=config.quote_size,
             max_inventory_age_seconds=config.max_inventory_age_seconds,
             max_market_worst_loss=float(config.max_market_loss_usd),
             max_portfolio_worst_loss=float(config.max_session_loss_usd),
@@ -196,14 +202,8 @@ class CommissioningRunner:
         # Cleared only when shutdown gives up before proving flat, so the
         # process can report exit 3 instead of silently looking clean.
         self._shutdown_proved_flat = True
-        self._reward_eligible: frozenset[str] = frozenset()
-        self._score_by_side: dict[str, float] = {}
-        self._expected_net_by_side: dict[str, float] = {}
-        self._reward_projection_by_side: dict[str, RewardProjection] = {}
-        self._economic_blocker_by_side: dict[str, str] = {}
-        self._fill_probability_by_side: dict[str, float] = {}
-        self._fill_risk_driver_by_side: dict[str, str] = {}
         self._score_seconds = 0.0
+        self._score_seconds_by_market: dict[str, float] = {}
         self._score_observed_at: datetime | None = None
         self._earnings_observed_at: datetime | None = None
         self._earnings_by_status: dict[str, Decimal] = {}
@@ -216,11 +216,149 @@ class CommissioningRunner:
         self._stop_requested = str(reason or "operator_requested")
 
     @property
+    def active_slugs(self) -> tuple[str, ...]:
+        """Every market this session may currently hold risk in."""
+
+        return tuple(
+            slug for slug in self._active_market_slugs
+            if slug and slug != AUTO_REWARD_MARKET)
+
+    @property
     def market_slug(self) -> str:
-        slug = str(self._active_market_slug or "").strip()
-        if not slug or slug == AUTO_REWARD_MARKET:
+        """The primary bound market.
+
+        Multi-market work migrates call sites onto explicit slugs one at a
+        time; until then this keeps single-market behaviour exactly as it was.
+        """
+
+        slugs = self.active_slugs
+        if not slugs:
             raise RuntimeError("an active reward market has not been selected")
-        return slug
+        return slugs[0]
+
+    def state_for(self, slug: str) -> MarketState:
+        """Return the per-market state, creating it on first use."""
+
+        existing = self._markets.get(slug)
+        if existing is None:
+            existing = MarketState(slug)
+            self._markets[slug] = existing
+        return existing
+
+    def _bind_markets(self, slugs: tuple[str, ...]) -> None:
+        """Replace the active set, discarding state for markets left behind.
+
+        Dropping the old entries matters: a stale book or incentive from a
+        market this session no longer holds must never be able to authorize a
+        quote or satisfy a freshness check.
+        """
+
+        clean = tuple(dict.fromkeys(
+            slug for slug in slugs
+            if slug and slug != AUTO_REWARD_MARKET))
+        if len(clean) > self.config.max_markets:
+            raise RuntimeInvariantViolation(
+                "market_count_exceeds_authorization",
+                f"{len(clean)} markets exceeds the authorized "
+                f"{self.config.max_markets}")
+        self._active_market_slugs = clean
+        self._markets = {
+            slug: self._markets.get(slug) or MarketState(slug)
+            for slug in clean}
+
+    @property
+    def _primary(self) -> MarketState:
+        return self.state_for(self.market_slug)
+
+    @property
+    def market(self) -> MarketMetadata | None:
+        return self._primary.market
+
+    @market.setter
+    def market(self, value: MarketMetadata | None) -> None:
+        self._primary.market = value
+
+    @property
+    def incentive(self) -> MarketIncentive | None:
+        return self._primary.incentive
+
+    @incentive.setter
+    def incentive(self, value: MarketIncentive | None) -> None:
+        self._primary.incentive = value
+
+    @property
+    def book(self) -> BookSnapshot | None:
+        return self._primary.book
+
+    @book.setter
+    def book(self, value: BookSnapshot | None) -> None:
+        self._primary.book = value
+
+    @property
+    def book_observed_at(self) -> datetime | None:
+        return self._primary.book_observed_at
+
+    @book_observed_at.setter
+    def book_observed_at(self, value: datetime | None) -> None:
+        self._primary.book_observed_at = value
+
+    @property
+    def _reward_eligible(self) -> frozenset[str]:
+        return self._primary.reward_eligible
+
+    @_reward_eligible.setter
+    def _reward_eligible(self, value: frozenset[str]) -> None:
+        self._primary.reward_eligible = value
+
+    @property
+    def _score_by_side(self) -> dict[str, float]:
+        return self._primary.score_by_side
+
+    @_score_by_side.setter
+    def _score_by_side(self, value: dict[str, float]) -> None:
+        self._primary.score_by_side = value
+
+    @property
+    def _expected_net_by_side(self) -> dict[str, float]:
+        return self._primary.expected_net_by_side
+
+    @_expected_net_by_side.setter
+    def _expected_net_by_side(self, value: dict[str, float]) -> None:
+        self._primary.expected_net_by_side = value
+
+    @property
+    def _reward_projection_by_side(self) -> dict[str, RewardProjection]:
+        return self._primary.reward_projection_by_side
+
+    @_reward_projection_by_side.setter
+    def _reward_projection_by_side(
+        self, value: dict[str, RewardProjection],
+    ) -> None:
+        self._primary.reward_projection_by_side = value
+
+    @property
+    def _economic_blocker_by_side(self) -> dict[str, str]:
+        return self._primary.economic_blocker_by_side
+
+    @_economic_blocker_by_side.setter
+    def _economic_blocker_by_side(self, value: dict[str, str]) -> None:
+        self._primary.economic_blocker_by_side = value
+
+    @property
+    def _fill_probability_by_side(self) -> dict[str, float]:
+        return self._primary.fill_probability_by_side
+
+    @_fill_probability_by_side.setter
+    def _fill_probability_by_side(self, value: dict[str, float]) -> None:
+        self._primary.fill_probability_by_side = value
+
+    @property
+    def _fill_risk_driver_by_side(self) -> dict[str, str]:
+        return self._primary.fill_risk_driver_by_side
+
+    @_fill_risk_driver_by_side.setter
+    def _fill_risk_driver_by_side(self, value: dict[str, str]) -> None:
+        self._primary.fill_risk_driver_by_side = value
 
     def _now(self) -> datetime:
         value = self.clock()
@@ -279,7 +417,7 @@ class CommissioningRunner:
             if selection.selected is not None:
                 self._market_selection = selection
                 self._market_selection_observed_at = self._now()
-                self._active_market_slug = selection.selected.market.slug
+                self._bind_markets((selection.selected.market.slug,))
                 self._runtime_error_counts.pop("startup_market_wait", None)
                 return self.market_slug
             self._market_selection = selection
@@ -297,63 +435,94 @@ class CommissioningRunner:
             await self.sleep(
                 float(self.config.market_selection_refresh_seconds))
 
-    async def _refresh_contracts(self, now: datetime) -> None:
-        slug = self.market_slug
-        self.market = await self.gateway.fetch_market(slug)
+    async def _refresh_contracts(
+        self, now: datetime, slug: str | None = None,
+    ) -> None:
+        state = self.state_for(slug or self.market_slug)
+        slug = state.slug
+        state.market = await self.gateway.fetch_market(slug)
         incentives = await self.gateway.fetch_incentives([slug])
-        self.incentive = incentives.get(slug)
-        if self.incentive is None:
-            raise CommissioningRefused(
-                "selected market has no liquidityProgram incentive")
-        if (not self.market.active or self.market.closed
-                or self.market.status not in OPEN_MARKET_STATUSES):
-            raise CommissioningRefused("selected market is not open")
-        if self.market.game_start is None:
-            raise CommissioningRefused("market start clock is unavailable")
-        if self.market.game_start <= now:
-            raise CommissioningRefused("selected market is no longer pregame")
+        state.incentive = incentives.get(slug)
+        if state.incentive is None:
+            raise CommissioningUnavailable(
+                f"{slug} has no liquidityProgram incentive")
+        if (not state.market.active or state.market.closed
+                or state.market.status not in OPEN_MARKET_STATUSES):
+            raise CommissioningUnavailable(f"{slug} is not open")
+        if state.market.game_start is None:
+            raise CommissioningUnavailable(
+                f"{slug} start clock is unavailable")
+        if state.market.game_start <= now:
+            raise CommissioningUnavailable(f"{slug} is no longer pregame")
         try:
             period = select_applicable_period(
-                self.incentive.periods, self.market.game_start, now)
+                state.incentive.periods, state.market.game_start, now)
         except AmbiguousIncentiveError as exc:
-            raise CommissioningRefused(
-                "selected market has ambiguous incentive periods") from exc
+            raise CommissioningUnavailable(
+                f"{slug} has ambiguous incentive periods") from exc
         if period is None or period.period == "live":
-            raise CommissioningRefused(
-                "selected market has no applicable pregame liquidity period")
+            raise CommissioningUnavailable(
+                f"{slug} has no applicable pregame liquidity period")
 
-    async def _refresh_book(self, now: datetime) -> None:
-        self.book = await self.gateway.fetch_book(self.market_slug)
+    async def _refresh_book(
+        self, now: datetime, slug: str | None = None,
+    ) -> None:
+        state = self.state_for(slug or self.market_slug)
+        state.book = await self.gateway.fetch_book(state.slug)
         # Stamp receipt, not request start. REST and limiter latency can be a
         # material fraction of the five-second decision freshness budget.
-        self.book_observed_at = self._now()
-        if self.market is None:
+        state.book_observed_at = self._now()
+        if state.market is None:
             raise RuntimeError("market metadata is unavailable")
-        # Validate both possible one-contract passive wire payloads before the
-        # first private subscription can authorize mutation.
+        # Validate both possible passive wire payloads before the first
+        # private subscription can authorize mutation.
+        size = self.config.quote_size
         build_order_payload(OrderRequest(
-            self.market.slug, "bid", Decimal(str(self.book.best_bid.price)),
-            Decimal("1")), self.market)
+            state.market.slug, "bid",
+            Decimal(str(state.book.best_bid.price)), size), state.market)
         build_order_payload(OrderRequest(
-            self.market.slug, "offer", Decimal(str(self.book.best_offer.price)),
-            Decimal("1")), self.market)
+            state.market.slug, "offer",
+            Decimal(str(state.book.best_offer.price)), size), state.market)
+
+    def _accept_book(self, book: BookSnapshot) -> None:
+        """Route a streamed book to the market it belongs to.
+
+        The stream already rejects slugs outside its subscription, so an
+        unknown slug here means the active set moved on mid-flight. Dropping it
+        is correct: binding a book to a market this session no longer holds
+        would let stale depth satisfy a freshness check.
+        """
+
+        state = self._markets.get(book.slug)
+        if state is None:
+            return
+        state.book = book
+        state.book_observed_at = self._now()
 
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
 
-        fetched = await self.gateway.fetch_earnings(
-            market_slug=self.market_slug,
-            program_type="liquidityProgram",
-        )
-        # Keep an exact local boundary even if a venue deployment silently
-        # ignores query filters. Shared-account historical rewards must never
-        # be presented or persisted as this market's earnings.
-        rows = tuple(
-            row for row in fetched
-            if row.market_slug == self.market_slug
-            and row.program_type == "liquidityProgram")
-        self.ledger.record_reward_earnings(rows, observed_at=now)
+        authorized = set(self.active_slugs)
+        if not authorized:
+            self._earnings_by_status = {}
+            self._earnings_observed_at = now
+            return
         totals: dict[str, Decimal] = {}
+        collected: list[Any] = []
+        for slug in sorted(authorized):
+            fetched = await self.gateway.fetch_earnings(
+                market_slug=slug,
+                program_type="liquidityProgram",
+            )
+            # Keep an exact local boundary even if a venue deployment silently
+            # ignores query filters. Shared-account historical rewards must
+            # never be presented or persisted as this session's earnings.
+            collected.extend(
+                row for row in fetched
+                if row.market_slug == slug
+                and row.program_type == "liquidityProgram")
+        rows = tuple(collected)
+        self.ledger.record_reward_earnings(rows, observed_at=now)
         for row in rows:
             status = str(row.status).upper()
             totals[status] = totals.get(status, Decimal("0")) + Decimal(
@@ -400,7 +569,7 @@ class CommissioningRunner:
             await self._observe_private(event, now)
             if self.gate.ready(self.ledger, now=now):
                 return
-        raise CommissioningRefused(
+        raise CommissioningUnavailable(
             "private stream did not become reconciled and fresh")
 
     def _startup_recovery_is_scoped(self, blockers: tuple[str, ...]) -> bool:
@@ -438,6 +607,62 @@ class CommissioningRunner:
             return False
         return bool(working or nonzero)
 
+    async def preflight_until_ready(self) -> str:
+        """Retry startup while the only obstacle is a transient condition.
+
+        A market that has not opened, an unpublished incentive programme, a
+        late private snapshot or a Discord blip all clear on their own, but
+        each used to exit 2, which the supervisor never restarts. One bad
+        moment therefore ended an entire run before a single order.
+
+        Nothing unsafe is retried: ownership, cross-market state and config
+        drift raise ``CommissioningRefused`` and still exit 2 immediately. The
+        wait itself carries no risk, because a runner that has not completed
+        preflight holds no orders and no position, and each attempt re-proves
+        the whole account from scratch.
+        """
+
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                mode = await self.preflight()
+                self._runtime_error_counts.pop("startup_unavailable", None)
+                return mode
+            except CommissioningUnavailable as exc:
+                if attempt >= MAX_STARTUP_UNAVAILABLE_ATTEMPTS:
+                    raise CommissioningRefused(
+                        f"startup blocked after {attempt} attempts: {exc}"
+                    ) from exc
+                if self._stop_requested:
+                    raise CommissioningRefused(
+                        f"operator stopped during startup: {exc}") from exc
+                await self._report_runtime_error(
+                    "startup_unavailable", exc, attempt)
+                # Discard anything the partial attempt bound so the retry
+                # re-selects and re-proves rather than trusting stale state.
+                await self._release_partial_startup()
+                await self.sleep(self._recovery_delay(
+                    "startup_unavailable", base=5.0, cap=60.0))
+
+    async def _release_partial_startup(self) -> None:
+        """Drop streams and market state left by a failed startup attempt."""
+
+        for stream in (self.private_stream, self.market_stream):
+            try:
+                await stream.close()
+            except Exception:
+                pass
+        self.gate.on_disconnect()
+        self.market_stream = self.market_stream_factory(self.client)
+        self.private_stream = self.private_stream_factory(self.client)
+        self.market = None
+        self.incentive = None
+        self.book = None
+        self.book_observed_at = None
+        if self.config.auto_select_reward_markets:
+            self._bind_markets(())
+
     async def preflight(self) -> str:
         now = self._now()
         self.started_at = now
@@ -448,7 +673,7 @@ class CommissioningRunner:
         if self.config.auto_select_reward_markets:
             recovery_slug = self._identified_recovery_market()
             if recovery_slug is not None:
-                self._active_market_slug = recovery_slug
+                self._bind_markets((recovery_slug,))
             else:
                 await self._select_reward_market(now)
                 now = self._now()
@@ -457,9 +682,9 @@ class CommissioningRunner:
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
         # account REST reconciliation remains the authoritative safety check.
-        await self.private_stream.start([self.market_slug])
+        await self.private_stream.start(list(self.active_slugs))
         self.gate.on_connect()
-        await self.market_stream.start([self.market_slug])
+        await self.market_stream.start(list(self.active_slugs))
         if self.ledger.working_orders(owned_only=True) or self.ledger.unresolved_intents():
             await self._rest_reconcile(now)
         await self._refresh_earnings(now)
@@ -515,11 +740,24 @@ class CommissioningRunner:
         return "TRADE"
 
     def _accrue_score(self, now: datetime) -> None:
+        """Accrue resting score across every bound market.
+
+        Score is a time integral over orders actually resting, so with several
+        markets the session total is the sum of their rates. Per-market totals
+        are kept alongside it: a session number alone cannot tell you which
+        market earned the exposure the phase is judged on.
+        """
+
         if self._score_observed_at is not None:
             seconds = (now - self._score_observed_at).total_seconds()
             if seconds < 0:
                 raise RuntimeError("commissioning score clock moved backwards")
-            self._score_seconds += seconds * sum(self._score_by_side.values())
+            for slug, state in self._markets.items():
+                earned = seconds * sum(state.score_by_side.values())
+                if earned:
+                    self._score_seconds += earned
+                    self._score_seconds_by_market[slug] = (
+                        self._score_seconds_by_market.get(slug, 0.0) + earned)
         self._score_observed_at = now
 
     @staticmethod
@@ -542,6 +780,7 @@ class CommissioningRunner:
     def _resting_score(
         self,
         *,
+        state: MarketState,
         side: str,
         period: IncentivePeriod,
         touch_price: float,
@@ -557,67 +796,65 @@ class CommissioningRunner:
         on. An order that has drifted outside the reward cutoff earns nothing.
         """
 
-        if (resting_price is None or self.book is None
-                or self.market is None or self.market.tick_size is None):
+        if (resting_price is None or state.book is None
+                or state.market is None or state.market.tick_size is None):
             return touch_score
         if abs(resting_price - touch_price) < 1e-9:
             return touch_score
         drifted = evaluate_order_score(
-            side=side, price=resting_price, size=1,
-            levels=self.book.levels(side), incentive=period,
-            tick_size=self.market.tick_size,
+            side=side, price=resting_price,
+            size=float(self.config.quote_size),
+            levels=state.book.levels(side), incentive=period,
+            tick_size=state.market.tick_size,
             order_already_resting=True)
         return drifted.score if drifted.eligible else 0.0
 
-    def _evaluate_rewards(self, now: datetime) -> None:
+    def _evaluate_rewards(
+        self, now: datetime, slug: str | None = None,
+    ) -> None:
         self._accrue_score(now)
-        self._reward_eligible = frozenset()
-        self._score_by_side = {}
-        self._expected_net_by_side = {}
-        self._reward_projection_by_side = {}
-        self._economic_blocker_by_side = {}
-        self._fill_probability_by_side = {}
-        self._fill_risk_driver_by_side = {}
-        if self.market is None or self.book is None or self.incentive is None:
+        state = self.state_for(slug or self.market_slug)
+        state.clear_economics()
+        if state.market is None or state.book is None or state.incentive is None:
             return
-        if not self.market.is_supported_moneyline:
-            self._economic_blocker_by_side = {
+        if not state.market.is_supported_moneyline:
+            state.economic_blocker_by_side = {
                 "bid": "unsupported_market_structure",
                 "offer": "unsupported_market_structure",
             }
             return
         try:
             period = select_applicable_period(
-                self.incentive.periods, self.market.game_start, now)
+                state.incentive.periods, state.market.game_start, now)
         except AmbiguousIncentiveError:
             return
-        if period is None or period.period == "live" or self.market.tick_size is None:
+        if period is None or period.period == "live" or state.market.tick_size is None:
             return
         eligible: set[str] = set()
-        working_orders = self._working_orders()
+        working_orders = self._working_orders(state.slug)
         working_sides = {order.side for order in working_orders}
         resting_price_by_side = {
             side: self._furthest_resting_price(working_orders, side)
             for side in ("bid", "offer")}
-        spread = self.book.best_offer.price - self.book.best_bid.price
-        for side, price in (("bid", self.book.best_bid.price),
-                            ("offer", self.book.best_offer.price)):
+        spread = state.book.best_offer.price - state.book.best_bid.price
+        for side, price in (("bid", state.book.best_bid.price),
+                            ("offer", state.book.best_offer.price)):
             already_resting = side in working_sides
             result = evaluate_order_score(
-                side=side, price=price, size=1,
-                levels=self.book.levels(side), incentive=period,
-                tick_size=self.market.tick_size,
+                side=side, price=price, size=float(self.config.quote_size),
+                levels=state.book.levels(side), incentive=period,
+                tick_size=state.market.tick_size,
                 order_already_resting=already_resting)
             if result.eligible:
                 eligible.add(side)
             projection = project_order_reward(
                 side=side,
                 price=price,
-                size=1,
-                levels=self.book.levels(side),
+                size=float(self.config.quote_size),
+                levels=state.book.levels(side),
                 incentive=period,
-                tick_size=self.market.tick_size,
-                event_start=self.market.game_start,
+                tick_size=state.market.tick_size,
+                event_start=state.market.game_start,
                 now=now,
                 horizon_seconds=self.config.reward_projection_horizon_seconds,
                 haircut=float(self.config.reward_projection_haircut),
@@ -626,15 +863,15 @@ class CommissioningRunner:
                 minimum_payout=0.0,
                 order_already_resting=already_resting,
             )
-            self._reward_projection_by_side[side] = projection
+            state.reward_projection_by_side[side] = projection
             queue_ahead = (
-                self.book.best_bid.size
+                state.book.best_bid.size
                 if side == "bid"
-                else self.book.best_offer.size)
+                else state.book.best_offer.size)
             seconds_to_event = max(
-                0.0, (self.market.game_start - now).total_seconds())
+                0.0, (state.market.game_start - now).total_seconds())
             fill_hazard = self.fill_hazard_model.estimate(
-                slug=self.market.slug,
+                slug=state.market.slug,
                 side=side,
                 price=price,
                 spread=spread,
@@ -643,25 +880,25 @@ class CommissioningRunner:
                 horizon_seconds=(
                     self.config.reward_projection_horizon_seconds),
             )
-            self._fill_probability_by_side[side] = fill_hazard.probability
-            self._fill_risk_driver_by_side[side] = fill_hazard.driver
+            state.fill_probability_by_side[side] = fill_hazard.probability
+            state.fill_risk_driver_by_side[side] = fill_hazard.driver
             spread_threshold = float(self.config.minimum_entry_spread)
             if already_resting:
                 spread_threshold -= float(self.config.spread_hysteresis)
             if spread + 1e-9 < spread_threshold:
-                self._economic_blocker_by_side[side] = (
+                state.economic_blocker_by_side[side] = (
                     "spread_below_resting_minimum"
                     if already_resting
                     else "spread_below_entry_minimum")
                 continue
             if not projection.eligible:
-                self._economic_blocker_by_side[side] = projection.reason
+                state.economic_blocker_by_side[side] = projection.reason
                 continue
             exit_result = cross_exit(
-                self.book,
+                state.book,
                 entry_side=side,
                 entry_price=price,
-                qty=1,
+                qty=float(self.config.quote_size),
                 depth_haircut=.5,
                 # If this quote fills, liquidity ahead at its entry level was
                 # consumed. Never count that same level as guaranteed exit
@@ -669,7 +906,7 @@ class CommissioningRunner:
                 exclude_entry_level=True,
             )
             if not exit_result.complete:
-                self._economic_blocker_by_side[side] = (
+                state.economic_blocker_by_side[side] = (
                     "stressed_exit_incomplete")
                 continue
             unwind_cost = max(0.0, -exit_result.pnl)
@@ -690,25 +927,28 @@ class CommissioningRunner:
                     * (float(self.config.reward_cost_safety_multiple) - 1.0)),
             )
             if economics.should_quote:
-                self._expected_net_by_side[side] = economics.expected_net_value
+                state.expected_net_by_side[side] = economics.expected_net_value
                 # Live score-seconds represent actual attributable resting
                 # exposure, not a hypothetical candidate. A newly authorized
                 # side begins accruing only after its owned order is observed
                 # working; a newly blocked side stops at this evaluation.
                 if already_resting:
-                    self._score_by_side[side] = self._resting_score(
+                    state.score_by_side[side] = self._resting_score(
+                        state=state,
                         side=side,
                         period=period,
                         touch_price=price,
                         touch_score=result.score,
                         resting_price=resting_price_by_side[side])
             else:
-                self._economic_blocker_by_side[side] = (
+                state.economic_blocker_by_side[side] = (
                     "projected_reward_does_not_cover_probability_"
                     "weighted_exit_cost")
-        self._reward_eligible = frozenset(eligible)
+        state.reward_eligible = frozenset(eligible)
 
-    def _working_orders(self) -> tuple[WorkingOrder, ...]:
+    def _working_orders(
+        self, slug: str | None = None,
+    ) -> tuple[WorkingOrder, ...]:
         result: list[WorkingOrder] = []
         side_by_intent = {
             "ORDER_INTENT_BUY_LONG": "bid",
@@ -716,7 +956,7 @@ class CommissioningRunner:
             "ORDER_INTENT_BUY_SHORT": "offer",
             "ORDER_INTENT_SELL_LONG": "offer",
         }
-        for row in self.ledger.working_orders(self.market_slug):
+        for row in self.ledger.working_orders(slug or self.market_slug):
             intent_row = self.ledger.query(
                 "SELECT payload_json FROM execution_intents "
                 "WHERE operation='PLACE' AND client_order_id=? "
@@ -739,43 +979,65 @@ class CommissioningRunner:
         return tuple(result)
 
     def _assert_runtime_scope(self) -> None:
-        """Reject ownership or market identity drift before any mutation."""
+        """Reject ownership or market identity drift before any mutation.
 
-        slug = self.market_slug
+        The authorized scope is the whole active set, not one slug, so several
+        markets may legitimately hold risk at once. Two things are unchanged
+        and must stay that way: a ``venue:`` prefixed row means the account has
+        an order this bot never placed, and a market outside the active set
+        means risk exists somewhere the session did not authorize. Both remain
+        terminal. Widening this to "any market" would stop the bot noticing
+        that something else is trading the shared account.
+        """
+
+        authorized = set(self.active_slugs)
         working = self.ledger.working_orders()
         if any(str(row["client_order_id"]).startswith("venue:")
                for row in working):
             raise RuntimeInvariantViolation(
                 "unowned_working_order",
                 "runtime account contains an unowned working order")
-        if any(row["market_slug"] != slug for row in working):
+        outside = sorted({
+            str(row["market_slug"]) for row in working
+            if str(row["market_slug"]) not in authorized})
+        if outside:
             raise RuntimeInvariantViolation(
                 "cross_market_working_order",
-                "runtime account contains a working order in another market")
-        cross_positions = self.ledger.query(
-            "SELECT market_slug FROM execution_positions "
-            "WHERE market_slug!=? AND CAST(net_qty AS REAL)!=0", (slug,))
+                "runtime account contains a working order outside the "
+                f"authorized set: {', '.join(outside)}")
+        cross_positions = sorted({
+            str(row["market_slug"]) for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0")
+            if str(row["market_slug"]) not in authorized})
         if cross_positions:
             raise RuntimeInvariantViolation(
                 "cross_market_position",
-                "runtime account contains a position in another market")
-        if any(row["market_slug"] != slug
-               for row in self.ledger.unresolved_intents()):
+                "runtime account contains a position outside the authorized "
+                f"set: {', '.join(cross_positions)}")
+        stray_intents = sorted({
+            str(row["market_slug"]) for row in self.ledger.unresolved_intents()
+            if str(row["market_slug"]) not in authorized})
+        if stray_intents:
             raise RuntimeInvariantViolation(
                 "cross_market_unresolved_intent",
-                "execution ledger contains an unresolved intent in another market")
+                "execution ledger contains an unresolved intent outside the "
+                f"authorized set: {', '.join(stray_intents)}")
 
-    def _frame(self, now: datetime) -> MarketFrame:
+    def _frame(
+        self, now: datetime, slug: str | None = None,
+    ) -> MarketFrame:
         self._assert_runtime_scope()
-        if self.market is None or self.book is None or self.book_observed_at is None:
+        state = self.state_for(slug or self.market_slug)
+        if state.market is None or state.book is None or state.book_observed_at is None:
             raise RuntimeError("market frame is incomplete")
-        position = self.ledger.position(self.market.slug)
-        basis = self.ledger.inventory_basis(self.market.slug)
+        position = self.ledger.position(state.market.slug)
+        basis = self.ledger.inventory_basis(state.market.slug)
         if position != 0 and basis is None:
             return MarketFrame(
-                self.market, now, self.book, self.book_observed_at, position,
-                self._working_orders(), False, self._reward_eligible, {}, 0)
-        eligible = self._reward_eligible
+                state.market, now, state.book, state.book_observed_at, position,
+                self._working_orders(state.slug), False, state.reward_eligible, {}, 0)
+        eligible = state.reward_eligible
         if (position == 0 and self.risk_guard is not None
                 and not self.risk_guard.can_add_new_risk(now=now)):
             # A stale/unknown marked balance is recoverable, but existing flat-
@@ -783,16 +1045,16 @@ class CommissioningRunner:
             # so the reconciler cancels them while the process stays alive.
             eligible = frozenset()
         return MarketFrame(
-            market=self.market,
+            market=state.market,
             now=now,
-            book=self.book,
-            book_observed_at=self.book_observed_at,
+            book=state.book,
+            book_observed_at=state.book_observed_at,
             position=position,
-            working_orders=self._working_orders(),
+            working_orders=self._working_orders(state.slug),
             state_known=(self.gate.ready(self.ledger, now=now)
                          and self.ledger.risk_state_known()),
             reward_eligible=eligible,
-            expected_net_by_side=self._expected_net_by_side,
+            expected_net_by_side=state.expected_net_by_side,
             existing_portfolio_worst_loss=0,
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
@@ -814,7 +1076,7 @@ class CommissioningRunner:
         if self.risk_guard is None:
             return "risk_guard_missing"
         if self.risk_guard.hard_stop_reached(now=now):
-            return "15_USD_HARD_STOP"
+            return "EMERGENCY_EQUITY_HARD_STOP"
         if self.started_at is not None:
             rows = self.ledger.query(
                 "SELECT client_order_id,fee FROM execution_fills "
@@ -860,19 +1122,134 @@ class CommissioningRunner:
         return age < 0 or age >= 3
 
     async def _refresh_quiet_book_if_due(
-        self, next_refresh: datetime,
+        self, next_refresh: datetime, slug: str | None = None,
     ) -> datetime:
         # Read time inside this boundary, after every upstream awaited call.
+        state = self.state_for(slug or self.market_slug)
         now = self._now()
         if now < next_refresh:
             return next_refresh
-        if self._quiet_book_needs_rest_refresh(now):
-            await self._refresh_book(now)
+        if state.book_is_quiet(now, max_age_seconds=3):
+            await self._refresh_book(now, state.slug)
         # Anchor the next check to the actual book receipt. If a due check was
         # skipped because a WebSocket book arrived 2.9 seconds ago, scheduling
         # three seconds from *now* would cross the five-second stale limit.
-        anchor = self.book_observed_at or self._now()
+        anchor = state.book_observed_at or self._now()
         return anchor + timedelta(seconds=3)
+
+    async def _decide_for_market(
+        self, slug: str, now: datetime,
+    ) -> tuple[str | None, float]:
+        """Plan and apply at most one mutation for one market.
+
+        Returns ``(stop_reason, backoff_seconds)``. A stop reason is terminal
+        for the whole session; a backoff is this market asking the sweep to
+        pause. Recoverable conditions are handled here so one market's stale
+        book or pending exit cannot stall the other seven.
+
+        The clock is read per market rather than once per sweep: issuing eight
+        mutations through a 4 requests/second governor takes real time, and a
+        market whose book aged meanwhile must report ``book_stale`` and be
+        skipped rather than quote on data that is no longer fresh.
+        """
+
+        state = self.state_for(slug)
+        try:
+            actions = self.reconciler.plan(self._frame(now, slug))
+        except Exception as exc:
+            return await self._handle_strategy_plan_failure(exc), 0.0
+        if actions and actions[0].kind == ActionKind.CRITICAL:
+            reason = actions[0].reason
+            if reason == "hard_exit_sent_but_inventory_remains":
+                try:
+                    outcome = await self._reconcile_pending_hard_exit(slug)
+                    print(
+                        "[runtime-recovery] "
+                        f"at={self._now().isoformat()} market={slug} "
+                        f"component=hard_exit_confirmation outcome={outcome}",
+                        flush=True,
+                    )
+                    if (outcome == "pending"
+                            and self.reconciler.hard_exit_confirmation_expired(
+                                slug, now=self._now())):
+                        await self._report_runtime_error(
+                            "hard_exit_confirmation_terminal",
+                            RuntimeInvariantViolation(
+                                "hard_exit_confirmation_timeout"))
+                        return "critical:hard_exit_confirmation_timeout", 0.0
+                    self._runtime_error_counts.pop(
+                        f"hard_exit_confirmation:{slug}", None)
+                    if outcome == "flat":
+                        return None, 0.0
+                    attempts = self.reconciler.hard_exit_attempts(slug)
+                    return None, float(min(2 ** max(attempts - 1, 0), 5))
+                except Exception as exc:
+                    await self._report_runtime_error(
+                        f"hard_exit_confirmation:{slug}", exc)
+                    if self.reconciler.hard_exit_confirmation_expired(
+                            slug, now=self._now()):
+                        await self._report_runtime_error(
+                            "hard_exit_confirmation_terminal",
+                            RuntimeInvariantViolation(
+                                "hard_exit_confirmation_timeout"))
+                        return "critical:hard_exit_confirmation_timeout", 0.0
+                    return None, self._recovery_delay(
+                        f"hard_exit_confirmation:{slug}")
+            stop = await self._handle_strategy_critical(reason)
+            if stop:
+                return stop, 0.0
+            return None, self._recovery_delay("strategy_state")
+        for key in ("runtime_state_gate", "runtime_state_quarantine",
+                    "strategy_state", "strategy_state_recovery",
+                    "strategy_plan", "strategy_plan_recovery",
+                    "action_driver", "action_driver_recovery"):
+            self._runtime_error_counts.pop(key, None)
+        if self.driver is None or state.market is None:
+            raise RuntimeError("commissioning driver is unavailable")
+        try:
+            await self.driver.apply_one(
+                actions, market=state.market,
+                position=self.ledger.position(slug), now=now)
+        except Exception as exc:
+            stop = await self._handle_action_failure(exc)
+            if stop:
+                return stop, 0.0
+            return None, self._recovery_delay("action_driver")
+        return None, 0.0
+
+    async def _service_market_state(self, slug: str, now: datetime) -> None:
+        """Bring one market's contracts, book and economics up to date.
+
+        Each market carries its own REST cadence. A shared schedule would let a
+        single quiet book consume the governor on behalf of all of them, and a
+        single failing market would reset everyone else's timers.
+        """
+
+        state = self.state_for(slug)
+        if state.next_contract_refresh is None or now >= state.next_contract_refresh:
+            try:
+                await self._refresh_contracts(now, slug)
+                self._runtime_error_counts.pop(
+                    f"market_incentive_refresh:{slug}", None)
+            except Exception as exc:
+                # Only this market stops quoting. The others are unaffected.
+                state.incentive = None
+                state.reward_eligible = frozenset()
+                await self._report_runtime_error(
+                    f"market_incentive_refresh:{slug}", exc)
+            state.next_contract_refresh = self._now() + timedelta(minutes=1)
+        # Keep the book last among this market's REST work so metadata latency
+        # cannot age the book before the decision that follows.
+        try:
+            state.next_book_refresh = await self._refresh_quiet_book_if_due(
+                state.next_book_refresh or now, slug)
+            self._runtime_error_counts.pop(
+                f"quiet_book_rest_refresh:{slug}", None)
+        except Exception as exc:
+            await self._report_runtime_error(
+                f"quiet_book_rest_refresh:{slug}", exc)
+            state.next_book_refresh = self._now() + timedelta(seconds=3)
+        self._evaluate_rewards(self._now(), slug)
 
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:
@@ -1015,17 +1392,26 @@ class CommissioningRunner:
         now = self._now()
         await self._rest_reconcile(now)
         self._assert_runtime_scope()
-        slug = self.market_slug
-        if self.ledger.market_has_unresolved_intent(slug):
-            raise AdapterError("runtime recovery has unresolved order intents")
-        if self.ledger.working_orders(slug):
-            await self.kill_switch.initiate(slug, now=self._now())
-            await self._rest_reconcile(self._now())
-            self._assert_runtime_scope()
-        if self.ledger.market_has_unresolved_intent(slug):
-            raise AdapterError("runtime recovery cancel is not yet reconciled")
-        if self.ledger.working_orders(slug):
-            raise AdapterError("runtime recovery order is still working")
+        # Retire quotes in every market that could hold them, not just the
+        # primary. Resuming with one market's order still working would let it
+        # fill unobserved while the others rebind.
+        # Nothing bound and nothing in the ledger means nothing to retire.
+        slugs = self._shutdown_slugs()
+        for slug in slugs:
+            if self.ledger.market_has_unresolved_intent(slug):
+                raise AdapterError(
+                    f"runtime recovery has unresolved order intents in {slug}")
+            if self.ledger.working_orders(slug):
+                await self.kill_switch.initiate(slug, now=self._now())
+        await self._rest_reconcile(self._now())
+        self._assert_runtime_scope()
+        for slug in slugs:
+            if self.ledger.market_has_unresolved_intent(slug):
+                raise AdapterError(
+                    f"runtime recovery cancel is not yet reconciled in {slug}")
+            if self.ledger.working_orders(slug):
+                raise AdapterError(
+                    f"runtime recovery order is still working in {slug}")
 
     def _rotation_blockers(self) -> tuple[str, ...]:
         """Require whole-account flat, owned, resolved state before rebinding."""
@@ -1051,9 +1437,9 @@ class CommissioningRunner:
         self.private_stream = private
         self.market_stream = market
         try:
-            await private.start([self.market_slug])
+            await private.start(list(self.active_slugs))
             self.gate.on_connect()
-            await market.start([self.market_slug])
+            await market.start(list(self.active_slugs))
             await self._rest_reconcile(self._now())
             await self._wait_for_initial_private_state()
         except Exception:
@@ -1065,13 +1451,8 @@ class CommissioningRunner:
     def _reset_selected_market_observations(self, now: datetime) -> None:
         self._accrue_score(now)
         self._score_observed_at = now
-        self._score_by_side = {}
-        self._reward_eligible = frozenset()
-        self._expected_net_by_side = {}
-        self._reward_projection_by_side = {}
-        self._economic_blocker_by_side = {}
-        self._fill_probability_by_side = {}
-        self._fill_risk_driver_by_side = {}
+        for state in self._markets.values():
+            state.clear_economics()
         self._earnings_observed_at = None
         self._earnings_by_status = {}
 
@@ -1092,9 +1473,15 @@ class CommissioningRunner:
         replaced as soon as its quotes are retired rather than at the next tick.
         """
 
-        if self._expected_net_by_side:
-            return False
-        return not self.ledger.working_orders(self.market_slug)
+        # Any market still authorized to quote, or still resting an order,
+        # makes a scan expensive. Checking only the primary would let seven
+        # earning markets be cancelled to re-scan on behalf of one idle one.
+        for slug in self.active_slugs:
+            if self.state_for(slug).expected_net_by_side:
+                return False
+            if self.ledger.working_orders(slug):
+                return False
+        return True
 
     async def _rotate_reward_market(self, now: datetime) -> bool:
         transition_started = time.monotonic()
@@ -1115,7 +1502,6 @@ class CommissioningRunner:
 
         if not self.config.auto_select_reward_markets:
             return False
-        old_slug = self.market_slug
         await self._quarantine_working_orders()
         await self._rest_reconcile(self._now())
         blockers = self._rotation_blockers()
@@ -1154,10 +1540,14 @@ class CommissioningRunner:
                 await self._report_runtime_error("idle_market_refresh", exc)
             await self._rest_reconcile(self._now())
             return False
-        selected_slug = selection.selected.market.slug
-        if selected_slug == old_slug:
-            await self._refresh_contracts(self._now())
-            await self._refresh_book(self._now())
+        chosen = tuple(
+            item.market.slug
+            for item in selection.top_viable(self.config.max_markets))
+        previous = tuple(self.active_slugs)
+        if chosen == previous:
+            for slug in previous:
+                await self._refresh_contracts(self._now(), slug)
+                await self._refresh_book(self._now(), slug)
             await self._rest_reconcile(self._now())
             return False
 
@@ -1166,43 +1556,46 @@ class CommissioningRunner:
         await old_private.close()
         await old_market.close()
         self.gate.on_disconnect()
-        self._active_market_slug = selected_slug
-        self.market = None
-        self.incentive = None
-        self.book = None
-        self.book_observed_at = None
+        # Per-slot replacement: markets that still qualify keep their state and
+        # their accrual. _bind_markets preserves retained entries and discards
+        # only the ones being dropped, so a market that is still earning is not
+        # reset just because a different slot changed.
+        self._bind_markets(chosen)
+        for slug in chosen:
+            self.state_for(slug).forget_contracts()
         self._reset_selected_market_observations(self._now())
         try:
-            await self._refresh_contracts(self._now())
-            await self._refresh_book(self._now())
+            for slug in chosen:
+                await self._refresh_contracts(self._now(), slug)
+                await self._refresh_book(self._now(), slug)
             await self._open_streams_for_active_market()
             await self._refresh_earnings(self._now())
         except Exception as selection_error:
             # No mutation occurred after the flat proof. Restore the prior
-            # singleton scope so a transient discovery/bind failure leaves the
-            # process safely monitoring instead of silently streamless.
-            self._active_market_slug = old_slug
-            self.market = None
-            self.incentive = None
-            self.book = None
-            self.book_observed_at = None
+            # scope so a transient discovery/bind failure leaves the process
+            # safely monitoring instead of silently streamless.
+            self._bind_markets(previous)
+            for slug in previous:
+                self.state_for(slug).forget_contracts()
             try:
-                await self._refresh_contracts(self._now())
-                await self._refresh_book(self._now())
+                for slug in previous:
+                    await self._refresh_contracts(self._now(), slug)
+                    await self._refresh_book(self._now(), slug)
                 await self._open_streams_for_active_market()
                 await self._refresh_earnings(self._now())
             except Exception as restore_error:
                 raise RuntimeInvariantViolation(
                     "market_rotation_restore_failed",
                     "automatic market rotation could not restore a safe "
-                    "singleton stream scope",
+                    "stream scope",
                 ) from restore_error
             raise AdapterError(
-                "selected reward market could not be safely bound: "
+                "selected reward markets could not be safely bound: "
                 f"{type(selection_error).__name__}") from selection_error
         await self.notifier.send_async(
             "🔄 Liquidity Bot rotated while flat from "
-            f"{old_slug} to rewarded market {selected_slug}. "
+            f"[{', '.join(previous) or 'none'}] to "
+            f"[{', '.join(chosen)}]. "
             f"Joined {selection.catalog_markets} catalog markets to "
             f"{selection.rewarded_executable_markets} executable reward programs, "
             f"evaluated {selection.books_evaluated} books, and "
@@ -1240,7 +1633,7 @@ class CommissioningRunner:
                 await self._quarantine_working_orders()
                 stream = self.private_stream_factory(self.client)
                 self.private_stream = stream
-                await stream.start([self.market_slug])
+                await stream.start(list(self.active_slugs))
                 self.gate.on_connect()
                 await self._rest_reconcile(self._now())
                 await self._wait_for_initial_private_state()
@@ -1288,7 +1681,7 @@ class CommissioningRunner:
                 await self._quarantine_working_orders()
                 stream = self.market_stream_factory(self.client)
                 self.market_stream = stream
-                await stream.start([self.market_slug])
+                await stream.start(list(self.active_slugs))
                 self.book = await stream.next_book(timeout=15)
                 self.book_observed_at = self._now()
                 await self.notifier.send_async(
@@ -1307,10 +1700,12 @@ class CommissioningRunner:
                     return stop
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
-    async def _reconcile_pending_hard_exit(self) -> str:
+    async def _reconcile_pending_hard_exit(
+        self, slug: str | None = None,
+    ) -> str:
         """Confirm a submitted IOC without converting latency into shutdown."""
 
-        slug = self.market_slug
+        slug = slug or self.market_slug
         await self._rest_reconcile(self._now())
         if (self.ledger.market_has_unresolved_intent(slug)
                 or self.ledger.working_orders(slug)):
@@ -1387,11 +1782,43 @@ class CommissioningRunner:
                 "action_driver_recovery", recovery_exc)
         return None
 
+    def _shutdown_slugs(self) -> tuple[str, ...]:
+        """Every market that could still hold risk, not just the active set.
+
+        A market dropped by rotation can still own a working order, a nonzero
+        position or an unresolved intent. Shutdown must retire all of them, so
+        this unions the active set with everything the ledger still shows.
+        """
+
+        slugs = set(self.active_slugs)
+        slugs.update(
+            str(row["market_slug"])
+            for row in self.ledger.working_orders())
+        slugs.update(
+            str(row["market_slug"])
+            for row in self.ledger.unresolved_intents())
+        slugs.update(
+            str(row["market_slug"]) for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0"))
+        slugs.discard("")
+        return tuple(sorted(slugs))
+
+    def _whole_account_safe_to_stop(self) -> bool:
+        """True only when every market is proven flat and state is known."""
+
+        if not self.ledger.risk_state_known():
+            return False
+        # An empty set is genuinely safe: no market holds risk.
+        return all(
+            self.kill_switch.status(slug).safe_to_stop
+            for slug in self._shutdown_slugs())
+
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot LIVE shutdown started: {reason}. "
             "New risk is disabled; reconciling to flat.",
-            critical=(reason == "15_USD_HARD_STOP"
+            critical=(reason == "EMERGENCY_EQUITY_HARD_STOP"
                       or reason.startswith("critical:")
                       or reason.startswith("risk_stop:")))
         shutdown_failures = 0
@@ -1433,55 +1860,63 @@ class CommissioningRunner:
             now = self._now()
             try:
                 await self._rest_reconcile(now)
-                position = self.ledger.position(slug)
-                working = self.ledger.working_orders(slug)
-                unresolved = self.ledger.market_has_unresolved_intent(slug)
-                if working and not unresolved:
-                    await self.kill_switch.initiate(slug, now=now)
-                elif position != 0 and not working and not unresolved:
+                # Every market that ever held risk must be retired, not just
+                # the primary. A slug the session has already dropped can still
+                # own an order or a position, and leaving it behind is exactly
+                # how inventory reaches settlement.
+                for market_slug in self._shutdown_slugs():
+                    position = self.ledger.position(market_slug)
+                    working = self.ledger.working_orders(market_slug)
+                    unresolved = self.ledger.market_has_unresolved_intent(
+                        market_slug)
+                    if working and not unresolved:
+                        await self.kill_switch.initiate(market_slug, now=now)
+                        continue
+                    if position == 0 or working or unresolved:
+                        continue
                     if exit_attempts >= self.config.max_shutdown_exit_attempts:
                         await alert(
                             "🚨 Liquidity Bot exhausted its shutdown exit budget. "
                             "Maker quoting remains terminal; manual intervention "
                             f"is required for remaining position {position} in "
-                            f"{slug}.",
+                            f"{market_slug}.",
                             force=not exit_budget_announced)
                         exit_budget_announced = True
                         delay = 30.0
-                    else:
-                        await self._refresh_book(now)
-                        if self.book is None or self.market is None:
-                            raise RuntimeError("shutdown book is unavailable")
-                        basis = self.ledger.inventory_basis(slug)
-                        entry_side = "bid" if position > 0 else "offer"
-                        conservative_entry = (
-                            float(basis.average_entry_price) if basis is not None
-                            else .99 if position > 0 else .01)
-                        exit_result = cross_exit(
-                            self.book, entry_side=entry_side,
-                            entry_price=conservative_entry,
-                            qty=float(abs(position)), depth_haircut=.5)
-                        if (not exit_result.complete
-                                or exit_result.worst_price is None):
-                            raise RuntimeError(
-                                "insufficient stressed depth to flatten exact "
-                                "position")
-                        side = "offer" if position > 0 else "bid"
-                        action = PlanAction(
-                            ActionKind.PLACE_IOC, slug,
-                            "commissioning_shutdown_flatten", side=side,
-                            price=exit_result.worst_price, qty=abs(position))
-                        if self.driver is None:
-                            raise RuntimeError("action driver is unavailable")
-                        # Count before mutation because a transport failure
-                        # after send may still have reached the venue.
-                        exit_attempts += 1
-                        await self.driver.apply_one(
-                            [action], market=self.market,
-                            position=position, now=now)
-                        delay = min(2 ** max(exit_attempts - 1, 0), 5)
-                status = self.kill_switch.status(slug)
-                if status.safe_to_stop and self.ledger.risk_state_known():
+                        continue
+                    await self._refresh_book(now, market_slug)
+                    state = self.state_for(market_slug)
+                    if state.book is None or state.market is None:
+                        raise RuntimeError("shutdown book is unavailable")
+                    basis = self.ledger.inventory_basis(market_slug)
+                    entry_side = "bid" if position > 0 else "offer"
+                    conservative_entry = (
+                        float(basis.average_entry_price) if basis is not None
+                        else .99 if position > 0 else .01)
+                    exit_result = cross_exit(
+                        state.book, entry_side=entry_side,
+                        entry_price=conservative_entry,
+                        qty=float(abs(position)), depth_haircut=.5)
+                    if (not exit_result.complete
+                            or exit_result.worst_price is None):
+                        raise RuntimeError(
+                            "insufficient stressed depth to flatten exact "
+                            "position")
+                    side = "offer" if position > 0 else "bid"
+                    action = PlanAction(
+                        ActionKind.PLACE_IOC, market_slug,
+                        "commissioning_shutdown_flatten", side=side,
+                        price=exit_result.worst_price, qty=abs(position))
+                    if self.driver is None:
+                        raise RuntimeError("action driver is unavailable")
+                    # Count before mutation because a transport failure
+                    # after send may still have reached the venue.
+                    exit_attempts += 1
+                    await self.driver.apply_one(
+                        [action], market=state.market,
+                        position=position, now=now)
+                    delay = min(2 ** max(exit_attempts - 1, 0), 5)
+                if self._whole_account_safe_to_stop():
                     await self._refresh_balance(now)
                     self._accrue_score(now)
                     await self._send_summary(now)
@@ -1521,7 +1956,7 @@ class CommissioningRunner:
         preflight_complete = False
         preflight_error: Exception | None = None
         try:
-            startup_mode = await self.preflight()
+            startup_mode = await self.preflight_until_ready()
             preflight_complete = True
             if startup_mode == "RECOVERY_ONLY":
                 self.request_stop("startup_recovery_only")
@@ -1560,8 +1995,7 @@ class CommissioningRunner:
                     return_when=asyncio.FIRST_COMPLETED)
                 if market_task in done:
                     try:
-                        self.book = market_task.result()
-                        self.book_observed_at = self._now()
+                        self._accept_book(market_task.result())
                     except Exception as exc:
                         stop_reason = await self._recover_market_stream(exc) or ""
                         if stop_reason:
@@ -1596,19 +2030,6 @@ class CommissioningRunner:
                         # freshness gate expires and shuts down new risk.
                         pass
                     next_state_reconcile = now + timedelta(seconds=10)
-                if now >= next_contract_refresh:
-                    try:
-                        await self._refresh_contracts(now)
-                        self._runtime_error_counts.pop(
-                            "market_incentive_refresh", None)
-                    except Exception as exc:
-                        self.incentive = None
-                        self._reward_eligible = frozenset()
-                        if self.config.auto_select_reward_markets:
-                            next_selection = now
-                        await self._report_runtime_error(
-                            "market_incentive_refresh", exc)
-                    next_contract_refresh = now + timedelta(minutes=1)
                 if now >= next_earnings:
                     try:
                         await self._refresh_earnings(now)
@@ -1622,23 +2043,17 @@ class CommissioningRunner:
                             "reward_earnings_refresh", exc)
                     next_earnings = now + timedelta(
                         seconds=self.config.earnings_refresh_seconds)
-                # Keep this last among periodic REST work so account/incentive
-                # latency cannot age the book before the decision below.
+                # Service every bound market on its own cadence. Keep this
+                # last among periodic REST work so account latency cannot age a
+                # book before the decisions below.
                 try:
-                    next_book_refresh = await self._refresh_quiet_book_if_due(
-                        next_book_refresh)
-                    self._runtime_error_counts.pop(
-                        "quiet_book_rest_refresh", None)
-                except Exception as exc:
-                    await self._report_runtime_error(
-                        "quiet_book_rest_refresh", exc)
-                    next_book_refresh = self._now() + timedelta(seconds=3)
-                now = self._now()
-                try:
-                    self._evaluate_rewards(now)
-                except Exception as exc:
-                    stop_reason = await self._handle_strategy_plan_failure(exc)
+                    for slug in self.active_slugs:
+                        await self._service_market_state(slug, self._now())
+                except RuntimeInvariantViolation as invariant:
+                    stop_reason = await self._handle_strategy_plan_failure(
+                        invariant)
                     break
+                now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 if stop_reason:
                     break
@@ -1704,82 +2119,18 @@ class CommissioningRunner:
                     # budget. Re-enter the loop so book/state freshness is
                     # rechecked before any new decision, even if it resolved.
                     continue
-                try:
-                    actions = self.reconciler.plan(self._frame(now))
-                except Exception as exc:
-                    stop_reason = await self._handle_strategy_plan_failure(exc)
+                sweep_delay = 0.0
+                for slug in self.active_slugs:
+                    outcome, delay = await self._decide_for_market(
+                        slug, self._now())
+                    if outcome:
+                        stop_reason = outcome
+                        break
+                    sweep_delay = max(sweep_delay, delay)
+                if stop_reason:
                     break
-                if actions and actions[0].kind == ActionKind.CRITICAL:
-                    reason = actions[0].reason
-                    if reason == "hard_exit_sent_but_inventory_remains":
-                        delay = 1.0
-                        try:
-                            outcome = await self._reconcile_pending_hard_exit()
-                            print(
-                                "[runtime-recovery] "
-                                f"at={self._now().isoformat()} "
-                                "component=hard_exit_confirmation "
-                                f"outcome={outcome}",
-                                flush=True,
-                            )
-                            if (outcome == "pending"
-                                    and self.reconciler.hard_exit_confirmation_expired(
-                                        self.market_slug, now=self._now())):
-                                stop_reason = "critical:hard_exit_confirmation_timeout"
-                                await self._report_runtime_error(
-                                    "hard_exit_confirmation_terminal",
-                                    RuntimeInvariantViolation(
-                                        "hard_exit_confirmation_timeout"))
-                                break
-                            self._runtime_error_counts.pop(
-                                "hard_exit_confirmation", None)
-                            if outcome == "flat":
-                                continue
-                            attempts = self.reconciler.hard_exit_attempts(
-                                self.market_slug)
-                            delay = min(2 ** max(attempts - 1, 0), 5)
-                        except Exception as exc:
-                            await self._report_runtime_error(
-                                "hard_exit_confirmation", exc)
-                            if self.reconciler.hard_exit_confirmation_expired(
-                                    self.market_slug, now=self._now()):
-                                stop_reason = (
-                                    "critical:hard_exit_confirmation_timeout")
-                                await self._report_runtime_error(
-                                    "hard_exit_confirmation_terminal",
-                                    RuntimeInvariantViolation(
-                                        "hard_exit_confirmation_timeout"))
-                                break
-                            delay = self._recovery_delay(
-                                "hard_exit_confirmation")
-                        await self.sleep(delay)
-                        continue
-                    stop_reason = (
-                        await self._handle_strategy_critical(reason) or "")
-                    if stop_reason:
-                        break
-                    await self.sleep(self._recovery_delay("strategy_state"))
-                    continue
-                self._runtime_error_counts.pop("runtime_state_gate", None)
-                self._runtime_error_counts.pop("runtime_state_quarantine", None)
-                self._runtime_error_counts.pop("strategy_state", None)
-                self._runtime_error_counts.pop("strategy_state_recovery", None)
-                self._runtime_error_counts.pop("strategy_plan", None)
-                self._runtime_error_counts.pop("strategy_plan_recovery", None)
-                self._runtime_error_counts.pop("action_driver", None)
-                self._runtime_error_counts.pop("action_driver_recovery", None)
-                if self.driver is None or self.market is None:
-                    raise RuntimeError("commissioning driver is unavailable")
-                try:
-                    await self.driver.apply_one(
-                        actions, market=self.market,
-                        position=self.ledger.position(self.market.slug), now=now)
-                except Exception as exc:
-                    stop_reason = await self._handle_action_failure(exc) or ""
-                    if stop_reason:
-                        break
-                    await self.sleep(self._recovery_delay("action_driver"))
-                    continue
+                if sweep_delay:
+                    await self.sleep(sweep_delay)
                 if now >= next_summary:
                     await self._send_summary(now)
                     next_summary = now + timedelta(minutes=5)

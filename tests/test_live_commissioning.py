@@ -14,6 +14,7 @@ from liquidity_bot.commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
     CommissioningRefused,
+    CommissioningUnavailable,
 )
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
@@ -27,12 +28,13 @@ from liquidity_bot.live_orders import OrderOutcomeUncertain, OrderRequest
 from liquidity_bot.market_selector import (
     RewardMarketOpportunity,
     RewardMarketSelection,
+    SideOpportunity,
 )
 from liquidity_bot.models import BookLevel, BookSnapshot, MarketIncentive, MarketMetadata
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 from liquidity_bot.reconciler import ActionKind, PlanAction, WorkingOrder
-from liquidity_bot.rewards import IncentivePeriod
+from liquidity_bot.rewards import IncentivePeriod, RewardProjection
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -253,8 +255,24 @@ def fake_selection(slug: str, *, discovered: int = 4) -> RewardMarketSelection:
         (BookLevel(.49, 100), BookLevel(.48, 100)),
         (BookLevel(.51, 100), BookLevel(.52, 100)),
     )
+    # The real selector only ever sets `selected` to an opportunity with a
+    # viable side, so the fake must produce one too or it tests a state
+    # that cannot occur.
+    viable_side = SideOpportunity(
+        side="bid",
+        price=.49,
+        reward_score_eligible=True,
+        projection=RewardProjection(
+            True, 1.0, 10.0, .1, .001, 1.0, "projected"),
+        stressed_exit_complete=True,
+        stressed_exit_pnl=-.01,
+        expected_net_value=.0005,
+        blocker=None,
+        fill_probability=.01,
+        fill_risk_driver="test",
+    )
     opportunity = RewardMarketOpportunity(
-        market, incentive, period, book, ())
+        market, incentive, period, book, (viable_side,))
     return RewardMarketSelection(
         selected=opportunity,
         opportunities=(opportunity,),
@@ -270,7 +288,9 @@ def fake_selection(slug: str, *, discovered: int = 4) -> RewardMarketSelection:
 
 
 def no_viable_selection(slug: str = "monitor-only") -> RewardMarketSelection:
-    return replace(fake_selection(slug), selected=None)
+    # Nothing viable means nothing to bind: no selected market and no
+    # opportunity a top-N accessor could pick up either.
+    return replace(fake_selection(slug), selected=None, opportunities=())
 
 
 class FakeRewardSelector:
@@ -419,6 +439,67 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_transient_startup_condition_retries_instead_of_exiting(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        calls = []
+        original = runner.preflight
+
+        async def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                # A late private snapshot or a Discord blip used to exit 2,
+                # which the supervisor never restarts, ending the whole run.
+                raise CommissioningUnavailable(
+                    "private stream did not become reconciled and fresh")
+            return await original()
+
+        runner.preflight = flaky
+
+        mode = await runner.preflight_until_ready()
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unsafe_startup_refusal_is_never_retried(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        calls = []
+
+        async def unowned():
+            calls.append(1)
+            raise CommissioningRefused(
+                "shared account has open orders")
+
+        runner.preflight = unowned
+
+        with self.assertRaisesRegex(CommissioningRefused, "open orders"):
+            await runner.preflight_until_ready()
+
+        # Ownership and account-state refusals must stay terminal: retrying
+        # them would be retrying into a known-unsafe account.
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_operator_stop_ends_startup_retries(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+
+        async def unavailable():
+            runner.request_stop("operator_sigterm")
+            raise CommissioningUnavailable("selected market is not open")
+
+        runner.preflight = unavailable
+
+        with self.assertRaisesRegex(CommissioningRefused, "operator stopped"):
+            await runner.preflight_until_ready()
+
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_auto_preflight_waits_for_a_viable_market_then_binds(self):
         # An empty universe is the normal case, not a misconfiguration. The
         # runner must hold, not exit 2 and stay down until an operator notices.
@@ -457,7 +538,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             await runner.preflight()
 
         self.assertEqual(client.orders.create_calls, [])
-        self.assertIsNone(runner._active_market_slug)
+        self.assertEqual(runner.active_slugs, ())
 
     async def test_auto_rotation_rebinds_only_after_whole_account_flat(self):
         selector = FakeRewardSelector(
@@ -839,12 +920,29 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
 
-    async def test_fifteen_dollar_drawdown_is_named_hard_stop(self):
+    async def test_single_stop_fires_at_thirty_then_the_ceiling(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
-        client.account.current_balance = Decimal("85")
+        start = Decimal("100")
+
+        # Below the single operative stop nothing fires: there is no tiered
+        # soft stop underneath it any more.
+        client.account.current_balance = start - Decimal("8")
         await runner._refresh_balance(NOW)
-        self.assertEqual(runner._stop_reason(NOW), "15_USD_HARD_STOP")
+        self.assertIsNone(runner._stop_reason(NOW))
+
+        # At the $30 stop the session ends.
+        client.account.current_balance = start - runner.config.max_session_loss_usd
+        await runner._refresh_balance(NOW)
+        self.assertTrue(runner._stop_reason(NOW).startswith("risk_stop:"))
+
+        # The $35 ceiling sits above it only because the emergency stop must
+        # exceed the normal stop; in practice the $30 stop fires first.
+        client.account.current_balance = (
+            start - runner.config.hard_stop_loss_usd - Decimal("1"))
+        await runner._refresh_balance(NOW)
+        self.assertEqual(
+            runner._stop_reason(NOW), "EMERGENCY_EQUITY_HARD_STOP")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1048,12 +1146,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_hard_stop_remains_terminal_during_stream_recovery(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
-        client.account.current_balance = Decimal("85")
+        floor = Decimal(100) - runner.config.hard_stop_loss_usd
+        client.account.current_balance = floor - Decimal(1)
 
         stop = await runner._recover_private_stream(
             AdapterError("private WebSocket disconnected"))
 
-        self.assertEqual(stop, "15_USD_HARD_STOP")
+        self.assertEqual(stop, "EMERGENCY_EQUITY_HARD_STOP")
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -1211,9 +1310,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         touch = runner.book.best_bid.price
 
         at_touch = runner._resting_score(
+            state=runner.state_for(runner.market_slug),
             side="bid", period=period, touch_price=touch,
             touch_score=1.0, resting_price=touch)
         drifted = runner._resting_score(
+            state=runner.state_for(runner.market_slug),
             side="bid", period=period, touch_price=touch,
             touch_score=1.0, resting_price=touch - .01)
 
@@ -1232,10 +1333,83 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         touch = runner.book.best_bid.price
 
         outside = runner._resting_score(
+            state=runner.state_for(runner.market_slug),
             side="bid", period=period, touch_price=touch,
             touch_score=1.0, resting_price=.05)
 
         self.assertEqual(outside, 0.0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    def _owned_order_in(self, runner, slug, suffix):
+        runner.ledger.apply_order_event(
+            "ws", "scope-" + suffix,
+            OrderState(
+                client_order_id="liquidity-" + suffix,
+                exchange_order_id="ex-" + suffix,
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+    async def test_owned_order_in_a_second_authorized_market_passes(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        self._owned_order_in(runner, "market-two", "two")
+
+        # Several markets may legitimately hold risk once the set authorizes
+        # them; this must no longer be an ownership violation.
+        runner._assert_runtime_scope()
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_order_outside_the_authorized_set_is_still_terminal(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        self._owned_order_in(runner, "market-three", "three")
+
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            runner._assert_runtime_scope()
+
+        self.assertEqual(
+            raised.exception.code, "cross_market_working_order")
+        self.assertIn("market-three", str(raised.exception))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unowned_row_is_terminal_even_inside_the_set(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_order_event(
+            "ws", "scope-venue",
+            OrderState(
+                client_order_id="venue:external",
+                exchange_order_id="external",
+                market_slug="market-two",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        # An authorized market is not permission to adopt someone else's
+        # order on the shared account.
+        with self.assertRaises(RuntimeInvariantViolation) as raised:
+            runner._assert_runtime_scope()
+
+        self.assertEqual(raised.exception.code, "unowned_working_order")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1535,7 +1709,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self._exit_code_for("risk_stop:marked account equity"), 0)
         self.assertEqual(
-            self._exit_code_for("15_USD_HARD_STOP"), 0)
+            self._exit_code_for("EMERGENCY_EQUITY_HARD_STOP"), 0)
         # Never restart while inventory state is unproven, whatever the reason.
         self.assertEqual(
             self._exit_code_for("runner_failure:ValueError", flat=False), 3)

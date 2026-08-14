@@ -21,6 +21,20 @@ class CommissioningRefused(RuntimeError):
     """The requested experimental live session is not narrowly authorized."""
 
 
+class CommissioningUnavailable(CommissioningRefused):
+    """Startup cannot proceed *yet*, but nothing unsafe was observed.
+
+    A market that has not opened, an incentive programme that has not
+    published, a private snapshot that arrived late, or a Discord blip are all
+    conditions that clear on their own. Treating them like a refusal exits 2,
+    which the supervisor never restarts, so one bad moment ended a whole run
+    before a single order. These retry instead.
+
+    Ownership, cross-market state, and configuration drift are never this:
+    they stay ``CommissioningRefused`` and remain terminal.
+    """
+
+
 def next_six_am_new_york(now: datetime) -> datetime:
     """Return the next 06:00 New York cutoff as an aware datetime."""
 
@@ -40,7 +54,15 @@ def next_six_am_new_york(now: datetime) -> datetime:
 
 @dataclass(frozen=True)
 class CommissioningConfig:
-    """Non-scalable one-market/one-contract experimental authorization."""
+    """Non-scalable one-contract experimental authorization.
+
+    Three loss limits, one operative threshold. ``max_market_loss_usd`` and
+    ``max_session_loss_usd`` are both stops -- they appear in
+    ``runtime_safety.blockers()`` and halt quoting -- and both sit at $30 so
+    exactly one number can fire. ``hard_stop_loss_usd`` is the emergency
+    ceiling on marked account equity; it sits at $35 only because it is
+    required to exceed the normal stop, and should never trigger.
+    """
 
     market_slug: str
     economic_risk_accepted: bool
@@ -48,7 +70,12 @@ class CommissioningConfig:
     maker_lab_stopped_confirmed: bool
     arm_live: bool = False
     quote_size: Decimal = Decimal("1")
-    max_markets: int = 1
+    # Eight is the measured ceiling, not a preference. The private
+    # WebSocket accepts 10 subscriptions per connection; positions must be
+    # scoped one market per subscription because positionSubscription
+    # omits marketSlug, while orders can be account-wide because order
+    # events always carry it. 1 orders + 8 positions + 1 balance = 10.
+    max_markets: int = 8
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -60,9 +87,12 @@ class CommissioningConfig:
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
-    max_market_loss_usd: Decimal = Decimal("2")
-    max_session_loss_usd: Decimal = Decimal("5")
-    hard_stop_loss_usd: Decimal = Decimal("15")
+    # One operative stop. Both tiers sit at $30 so exactly one threshold
+    # can fire; the $35 ceiling exists only because the emergency stop is
+    # required to sit above the normal stop, and it should never trigger.
+    max_market_loss_usd: Decimal = Decimal("30")
+    max_session_loss_usd: Decimal = Decimal("30")
+    hard_stop_loss_usd: Decimal = Decimal("35")
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: int = 30
@@ -113,14 +143,17 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 1 or self.max_markets != 1:
-            problems.append("commissioning is hard-locked to one market/contract")
+        if self.quote_size != 1 or self.max_markets != 8:
+            problems.append(
+                "commissioning is hard-locked to one contract per quote "
+                "across at most eight markets")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 5 or self.max_market_loss_usd != 2
-                or self.hard_stop_loss_usd != 15):
+        if (self.max_session_loss_usd != 30 or self.max_market_loss_usd != 30
+                or self.hard_stop_loss_usd != 35):
             problems.append(
-                "commissioning loss limits must remain $5 soft, $2 market, $15 hard")
+                "commissioning must keep a single $30 stop with a $35 "
+                "emergency equity ceiling above it")
         if self.hard_stop_loss_usd <= self.max_session_loss_usd:
             problems.append("hard stop must exceed the normal session stop")
         if self.rest_requests_per_second > 4:

@@ -1,0 +1,316 @@
+# Findings — liquidity-bot
+
+Empirically established facts, with the measurement that produced each one.
+Nothing here is a plan or an intention. If a number appears without a source,
+it does not belong in this file.
+
+Companion to `docs/SAFETY_INVARIANTS.md` (rules the code must obey) and
+`docs/SCALE_REVIEW.md` (what is and is not proven). This file is the evidence
+those two rest on.
+
+---
+
+## Current status — 2026-08-14
+
+**Bot: stopped.** Account verified flat at the venue (0 open orders, 0 nonzero
+positions). Deployed commit recorded in `/root/liquidity-bot/DEPLOYED_COMMIT`.
+
+**Multi-market support is complete**, all 9 steps, 281 tests passing.
+`max_markets` is now **8** — the measured private-WebSocket ceiling, see
+§7. Quote size is unchanged at one contract: breadth expanded, per-market
+exposure did not. Not yet committed, deployed or run.
+
+**The open question is not correctness, it is whether the opportunity exists.**
+The machinery works. A backtest over 24 hours of real books authorized one
+quote worth about three cents. See §6.
+
+---
+
+## 1. Fee and rebate structure
+
+Verified against live commission data on our own fills, 2026-08-13.
+
+```
+taker fee   = 0.06   x qty x p x (1-p)      charged
+maker rebate= 0.0125 x qty x p x (1-p)      credited (negative commission)
+```
+
+**Rounding is asymmetric against small size.** At one contract, p=0.81:
+
+```
+taker fee    $0.0092  ->  rounds UP   to $0.01
+maker rebate $0.0019  ->  rounds DOWN to $0.00
+```
+
+Measured directly: `passiveExecution` commission was **0.0000 on all four**
+maker fills on 2026-08-13. Per-contract economics are roughly **37% worse at
+size 1** than at size 10. maker-lab only ever observed the rebate because it
+filled 4–537 contracts at a time.
+
+The rebate is maximised at p = 0.50: `p(1-p)` is 0.25 there versus 0.154 at
+p = 0.81, so mid-priced markets pay **62% more rebate per contract**.
+
+## 2. Exit behaviour
+
+### Passive exits work, and they are the only profitable line
+
+maker-lab live data, 2026-08-11/12, 101 exits:
+
+```
+kind      n     pnl        fees
+passive  61   +$20.16     $0.00
+cross    40   -$34.81     $6.05
+```
+
+Per event: **passive +$0.33, crossed -$0.87.** Same session, same books,
+opposite sign.
+
+### The 30-second window captured almost none of them
+
+112 position episodes reconstructed from fills and exits:
+
+```
+passive latency  p25 13.3s   median 100s   p75 653s   p90 1367s
+```
+
+Cumulative share of passive exits captured by timeout:
+
+```
+  30s -> 26%      300s -> 31%      900s -> 46%     1800s -> 50%
+```
+
+The median passive exit took **100 seconds** — more than three times the
+window that was in place. `max_inventory_age_seconds` was raised 30 -> 900 on
+this evidence.
+
+### Not crossing is also wrong
+
+maker-lab set `FORCE_EXIT_BEFORE_START_MIN = 0` because holding measured
+~3.13c/contract cheaper than crossing. The residue then reached settlement:
+
+```
+unpaired positions settling  -$88.20   (86% of that session's loss)
+16 settlements, every one payout = 0.0
+```
+
+Neither extreme is right. Current policy: wait 900s for the free passive exit,
+then flatten unconditionally 300s before kickoff. Settlement is never allowed.
+
+### liquidity-bot's own exits, 2026-08-13
+
+Four round trips, **every one a taker exit at the 30-second deadline**, passive
+0-for-4. Holding times 28s, 31s, 31s, 30s — the timer won every time.
+
+```
+entry maker 0.81  ->  exit taker 0.81  ->  realized -$0.01 (the commission)
+```
+
+Three of four were price-flat: the loss was purely the crossing fee. The
+exit was never a bad price, it was an unnecessary crossing.
+
+## 3. Spread regime
+
+maker-lab markout at 900s, by the spread the fill landed on:
+
+```
+under 2c   n=856   -0.00868/contract   <- the only losing regime
+2-4c       n=403   +0.00530
+4-7c       n=267   +0.01893
+7-12c      n=149   +0.00399
+12-25c     n=110   +0.05841            <- best
+over 25c    n=33   +0.04561
+```
+
+`minimum_entry_spread = 0.02` rests on this. It is the best-sampled number in
+either project. It is also expensive: it rejects **88% of market-minutes** (see
+§6). Wide books are the best fills — do not add a maximum spread.
+
+**Markout is positive at every horizon** (+0.0041 to +0.0078/contract, n=168–197
+at -1s/60s/300s/900s). Fills are not adversely selected. This does *not* mean
+spread capture is guaranteed revenue: maker-lab's paired markets still netted
+**-$15.62**, which is why `spread_capture` stays 0.
+
+## 4. Reward mechanics
+
+Score is `discountFactor ** ticks_from_best x size`, accumulated outward until
+`targetSize` is reached. **Spread does not enter the formula** on this venue —
+the quadratic-in-spread concern in maker-lab's notes came from the `.com`
+scheme and does not apply here.
+
+Reward pays for **resting**, not trading. maker-lab measured 37 of 153 minutes
+with nothing on the book — **24.2% of the clock scoring zero**.
+
+Observed programme parameters, 2026-08-13:
+
+```
+setka*   pool  $35   df 0.50   target  5,000
+itf*     pool  $30   df 0.35   target  7,500
+dota2    pool $100   df 0.35   target 15,000
+atp      pool $200   df 0.30   target 15,000
+```
+
+Period pools on one market: `day_of` $200, `early` $200, `live` $1,600. **The
+live period carries 8x the pool** and is the one period the pregame design
+forbids.
+
+Only `day_of` can be projected: other periods have no reliable per-market
+start/end clock, so the runner can only quote in the **6 hours before start**.
+
+The venue's $1 minimum payout is an **aggregate settlement threshold**, not a
+per-market entry requirement. Applying it per side per market was wrong and
+was removed.
+
+## 5. Universe shape
+
+Measured 2026-08-13:
+
+```
+active liquidityProgram markets      13,707
+with a day_of period                  7,443
+period mix   live 8,488 | day_of 7,443 | early 4,364
+             daily_event 4,474 | tournament_with_cutoff 2,576
+```
+
+Rewarded pregame **moneylines** do exist — setka, itf, atp, wta, cs2, lol,
+dota2 — the same leagues `fill_hazard.py` is calibrated on. An earlier sample
+suggesting otherwise (40/40 futures) was biased by pagination order.
+
+Books are **wildly one-sided**: `bid 23,388 / ask 1.0`, `bid 31,168 / ask 17`.
+Since the gate scores each side independently, a thin side on a deep book is a
+real opportunity — but the *opposite* side is where you must exit, so a thin
+side usually means a hopeless passive exit.
+
+Discovery cost, measured: per-slug metadata for 7,443 markets is **31 minutes**
+at 4 req/s. The bulk catalog join is ~39 requests, about 10 seconds.
+
+## 6. Backtest — liquidity-bot's gate over maker-lab's books
+
+Replay of the exact live gate over 2026-08-11/12, 9,306 in-window
+market-minutes across 712 markets. Programme parameters assumed from §4
+(historical incentive rows are a single later snapshot), everything else
+measured.
+
+```
+market-minutes sampled          9,306
+  spread >= 2c                  1,077   (11.6%)
+  reward-eligible sides           691
+  ECONOMICALLY VIABLE               1   (0.14%)
+
+best gate_ratio    1.2389        median   0.0034
+```
+
+**One authorized quote in 24 hours.** It ran 749 seconds on an ATP market
+($200 pool, 20 contracts at the touch), never filled, and accrued **$0.032**.
+
+Rejection causes: `spread_below_2c` 8,229, `target_not_met` 1,463,
+`reward_below_weighted_exit_cost` 690.
+
+`target_not_met` is a trap worth naming: a book too thin to reach `targetSize`
+earns **nothing at all**, so "thinner is better" has a floor. Too deep destroys
+your share; too thin and the programme never activates.
+
+Authorized uptime: **749s of 86,400 = 0.87%.** The reward *rate* was fine —
+$0.154/hour, ~$3.70/day if authorized continuously. Uptime is the constraint.
+
+### Quote size
+
+Sweep over the same books:
+
+```
+size    authorized market-minutes
+   1                            1
+   2                            0
+   5                            0
+  10                            0
+  25                            0
+```
+
+But on a book measured directly, **reward scales linearly with size** (25x size
+-> 24.4x reward) and unwind scales linearly too, so `gate_ratio` is nearly
+size-invariant (0.0310 -> 0.0305 across 25x). Size changes **how much you earn**
+on a qualifying book, not **whether** it qualifies. The single qualifying book
+passed at 1.24, too thin a margin to survive any increase.
+
+## 7. API limits
+
+**Private WebSocket: 10 subscriptions per connection.** Measured by adding one
+at a time; number 11 returns `max subscriptions per connection reached`. The
+subscribe call itself does *not* raise — the error arrives asynchronously on
+the socket, so a naive client believes it succeeded.
+
+This constrains multi-market directly:
+
+```
+1 x orders    account-wide   (order events always carry marketSlug)
+N x positions per-market     (positionSubscription OMITS marketSlug)
+1 x balance   account-wide
+-------------------------------------------------
+N + 2 <= 10   ->   N <= 8 markets per connection
+```
+
+Positions must be scoped one market per subscription, because the projector may
+only infer an omitted slug when the request covers exactly one market. A single
+multi-slug positions subscription re-creates the defect that ended the
+2026-08-13T05:39Z session on its first fill.
+
+**Public market data has no such problem.** Measured 2026-08-14: one
+`subscribe_market_data` call carrying 8 slugs was accepted and delivered books
+for **8 of 8** within 12 seconds, zero errors. The public side needs one
+subscription regardless of market count; only the private side is constrained.
+
+**REST budget** on the shared 4 req/s governor:
+
+```
+account-wide      ~0.40 req/s   (balance 1/5s, reconcile 2/10s)
+per market        ~0.033 req/s  with an active WebSocket book
+per market        ~0.333 req/s  when the book goes quiet and falls back to REST
+```
+
+Worst case (every book quiet) supports ~10 markets. REST is not the binding
+constraint; the WebSocket subscription cap is.
+
+**The cap is per connection, and connections are independent.** Measured
+2026-08-14: `ws.private()` returns a fresh socket object per call, and two
+sockets each held 10 subscriptions simultaneously with zero errors. Two
+consequences:
+
+- A reconnect gets its own quota, so recovery never contends with the closing
+  connection's subscriptions. Eight markets at exactly 10 subscriptions needs
+  no spare.
+- More than 8 markets is reachable with additional connections, at the cost of
+  recovering, reconciling and freshness-gating each socket separately.
+
+## 8. Accounting
+
+**Unresolved.** maker-lab carries a **$40.09** balance-versus-ledger gap that
+was never closed. liquidity-bot's 2026-08-13 trades include an unexplained
+**+$0.64** on a shared account, where the venue computed realized P&L against a
+cost basis that was not from that round trip.
+
+This does not block a one-contract safety test. It **does** block any
+profitability claim or scaling decision.
+
+---
+
+## Open questions
+
+1. **Does a book exist that clears the gate with margin?** The one that did
+   passed at 1.24. Everything about size and market count depends on the answer.
+   `reward_census.py` measures it read-only; it has not been run in anger.
+2. **Can a passive exit fill inside a usable window on *our* books?** maker-lab
+   says 46% by 900s on theirs. liquidity-bot is 0-for-4 at 30s. The 900s change
+   is untested live.
+3. **Is the 50% reward haircut and the 2x cost margin justified?** Neither has
+   any evidence. Together they are 4x, and 13 sides in the backtest sat within
+   10x of authorization.
+5. **Should the reducing quote rest at the touch or at break-even basis?** The
+   code rests at the touch. maker-lab's `FLATTEN_NEVER_AT_A_LOSS` argues for a
+   basis floor, because chasing a falling touch is a self-inflicted loss. But
+   maker-lab measured passive exits at **+$0.33/event** against crossed at
+   **-$0.87**, and a basis floor that never fills ends in the crossing anyway —
+   so refusing a one-cent passive loss can buy an eight-cent crossed one. The
+   30s -> 900s window widens the gap between the two policies. Settle it by
+   replaying maker-lab's 101 exits under both anchors, not by argument.
+4. ~~Does the venue accept multiple private connections?~~ **Answered**
+   2026-08-14: yes, and each connection carries its own 10-subscription
+   quota. See §7.

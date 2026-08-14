@@ -128,21 +128,42 @@ class PrivateReadOnlyStream:
             if not clean:
                 raise ValueError("an explicit market filter cannot be empty")
         base = uuid.uuid4().hex
-        order_request_id = f"liquidity-orders-{base}"
-        position_request_id = f"liquidity-positions-{base}"
         balance_request_id = f"liquidity-balance-{base}"
-        scope = tuple(clean) if clean is not None else None
+        scopes: dict[str, tuple[str, ...] | None] = {balance_request_id: None}
+        planned: list[tuple[str, str, list[str] | None]] = []
+        if clean is None:
+            order_request_id = f"liquidity-orders-{base}"
+            position_request_id = f"liquidity-positions-{base}"
+            scopes[order_request_id] = None
+            scopes[position_request_id] = None
+            planned.append(("orders", order_request_id, None))
+            planned.append(("positions", position_request_id, None))
+        else:
+            # One subscription per market, never one covering several. The
+            # documented positionSubscription update omits marketSlug, and the
+            # projector may only infer it when the request itself covers
+            # exactly one market. A single multi-slug subscription would make
+            # every such update ambiguous again, which is the defect that
+            # ended the 2026-08-13T05:39Z session on its first fill.
+            for index, slug in enumerate(clean):
+                order_request_id = f"liquidity-orders-{base}-{index}"
+                position_request_id = f"liquidity-positions-{base}-{index}"
+                scopes[order_request_id] = (slug,)
+                scopes[position_request_id] = (slug,)
+                planned.append(("orders", order_request_id, [slug]))
+                planned.append(("positions", position_request_id, [slug]))
         # Install request metadata before subscribing because an initial
         # snapshot can arrive as soon as the subscribe call is awaited.
-        self._market_scope_by_request_id = {
-            order_request_id: scope,
-            position_request_id: scope,
-            balance_request_id: None,
-        }
+        self._market_scope_by_request_id = scopes
         try:
             await self._socket.connect()
-            await self._socket.subscribe_orders(order_request_id, clean)
-            await self._socket.subscribe_positions(position_request_id, clean)
+            for kind, request_id, market_filter in planned:
+                if kind == "orders":
+                    await self._socket.subscribe_orders(
+                        request_id, market_filter)
+                else:
+                    await self._socket.subscribe_positions(
+                        request_id, market_filter)
             await self._socket.subscribe_account_balance(balance_request_id)
         except Exception as exc:
             self._market_scope_by_request_id.clear()

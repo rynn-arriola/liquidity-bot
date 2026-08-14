@@ -159,6 +159,48 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(event.kind, PrivateEventKind.POSITION_UPDATE)
         self.assertEqual(event.market_scope, ("market-one",))
 
+    def test_many_markets_keep_every_subscription_singleton_scoped(self):
+        slugs = ["market-one", "market-two", "market-three"]
+
+        async def scenario():
+            client = FakeClient()
+            stream = PrivateReadOnlyStream(client)
+            await stream.start(slugs)
+            position_calls = [call for call in client.private_socket.calls
+                              if call[0] == "positions"]
+            events = []
+            for call in position_calls:
+                client.private_socket.emit("message", {
+                    "requestId": call[1],
+                    "subscriptionType": "SUBSCRIPTION_TYPE_POSITION",
+                    "positionSubscription": {
+                        "beforePosition": {"netPositionDecimal": "0"},
+                        "afterPosition": {"netPositionDecimal": "-1"},
+                        "updateTime": "2026-08-13T05:39:26Z",
+                        "tradeId": "trade-" + call[1],
+                    },
+                })
+                events.append(await stream.next_event(timeout=0.1))
+            try:
+                return position_calls, events
+            finally:
+                await stream.close()
+
+        position_calls, events = self.run_async(scenario())
+
+        # One subscription per market, each filtered to exactly that market.
+        self.assertEqual(len(position_calls), len(slugs))
+        self.assertEqual(
+            sorted(call[2] for call in position_calls),
+            sorted([slug] for slug in slugs))
+        # Every scope stays a singleton, so a slugless position update remains
+        # attributable no matter how many markets are subscribed. A single
+        # multi-slug subscription would make all of these ambiguous.
+        scopes = [event.market_scope for event in events]
+        self.assertTrue(all(len(scope) == 1 for scope in scopes))
+        self.assertEqual(
+            sorted(scope[0] for scope in scopes), sorted(slugs))
+
     def test_private_stream_surfaces_unknown_schema_as_error(self):
         async def scenario():
             client = FakeClient()

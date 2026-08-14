@@ -107,15 +107,37 @@ TIME_TO_EVENT_CELLS = {
 }
 
 
+# Recalibrated 2026-08-14 from what the venue actually paid: $70.92 across 168
+# market-days, in `data/venue_reward_earnings_2026-08-14.csv`. The previous
+# table came from 2-28 shadow observations per league and disagreed badly with
+# the payouts. Even after shrinkage `cs2` ranked first on a sample of two while
+# measuring last of nine, and `setkamemd` -- the best earner at $1.08 per
+# market-day across fourteen -- ranked sixth.
+#
+# Units caveat, deliberately tolerated: these are reward per market-day scaled
+# so the corpus mean matches GLOBAL below, not reward per contract-hour. They
+# are not the same quantity, because we cannot recover how long or how much
+# maker-lab rested in each market. This value is a **ranking key only** (see
+# `_candidate_key`), so relative order is what matters and absolute scale does
+# not. Replace this with true contract-hours if resting time ever gets
+# recorded.
+#
+# What the ordering says: the money is in thin, obscure books. Table tennis and
+# lower-tier tennis are 93% of everything paid, while `atp` and `mlb` -- deep,
+# liquid, heavily quoted -- paid one cent each. Reward share is our score over
+# the competing score up to targetSize, so low competition is the whole edge.
 HISTORICAL_REWARD_YIELD_PER_CONTRACT_HOUR = {
-    "cs2": (0.2131, 2),
-    "setkamecz": (0.0914, 2),
-    "valorant": (0.0599, 3),
-    "wtt": (0.0480, 11),
-    "setkamemd": (0.0429, 7),
-    "setkameua": (0.0422, 11),
-    "itfwo": (0.0248, 22),
-    "itfme": (0.0217, 28),
+    "setkamemd": (0.0777, 14),
+    "valorant": (0.0446, 4),
+    "setkameua": (0.0330, 45),
+    "setkawoua": (0.0326, 3),
+    "itfme": (0.0266, 35),
+    "wtt": (0.0237, 16),
+    "setkamecz": (0.0205, 8),
+    "itfwo": (0.0200, 31),
+    "cs2": (0.0161, 10),
+    "mlb": (0.0007, 1),
+    "atp": (0.0007, 1),
 }
 GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR = 0.0304
 REWARD_PRIOR_MARKETS = 10

@@ -714,6 +714,62 @@ anywhere means something else is trading the account.
 The risk is that this widens when the reconciler is willing to build new risk,
 which is a safety property, so it wants review rather than a quiet deploy.
 
+## 6h. Where the reward actually comes from: thin books
+
+Breaking the $70.92 down by league, from
+`data/venue_reward_earnings_2026-08-14.csv`:
+
+```
+setkameua   $20.59   45 market-days   avg $0.458   29.0%
+setkamemd   $15.11   14               avg $1.079   21.3%   best per market
+itfme       $12.94   35               avg $0.370   18.2%
+itfwo        $8.63   31               avg $0.278   12.2%
+wtt          $5.27   16               avg $0.329
+valorant     $2.48    4               avg $0.620
+setkamecz    $2.28    8 | cs2 $2.24 10 | setkawoua $1.36 3
+atp          $0.01    1
+mlb          $0.01    1
+```
+
+**Table tennis and lower-tier tennis are 93% of everything paid.** `atp` and
+`mlb` -- deep, liquid, heavily quoted books -- paid **one cent each**.
+
+That is the reward formula, not luck. Share is our score over the competing
+score up to `targetSize`, so a thin book with little competing maker size makes
+one contract a real fraction, and a deep book makes it a rounding error. It
+also caps the size lever: past some point our own size eats the share it is
+trying to buy.
+
+**liquidity-bot is already hunting in the right place.** The 25 markets it
+quoted on 2026-08-14 were `setkamemd`, `setkameua`, `itfwo`, `itfme` and `wtt`
+-- exactly the leagues that produced the 93%.
+
+### The ranking prior disagreed with the payouts
+
+`_candidate_key` sorts on `historical_reward_yield_prior`, which was built from
+2-28 shadow observations per league. Against 168 market-days of actual payout,
+after the existing shrinkage:
+
+```
+league       effective prior  rank    measured rank
+cs2                   0.0608     1                9    <- last
+setkamecz             0.0406     2                7
+wtt                   0.0396     3                6
+valorant              0.0372     4                2
+setkameua             0.0366     5                3
+setkamemd             0.0355     6                1    <- best
+```
+
+`cs2` ranked first on a sample of two and measured last of nine; `setkamemd`,
+the best earner, ranked sixth. Recalibrated from the payout data, normalised so
+the corpus mean matches the existing global constant.
+
+**Units caveat, deliberately tolerated**: the new numbers are reward per
+market-day, not per contract-hour, because we cannot recover how long or how
+much maker-lab rested in each market. The value is a ranking key only, so
+relative order is what matters. Replace it with true contract-hours if resting
+time is ever recorded.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

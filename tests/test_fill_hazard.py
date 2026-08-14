@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from liquidity_bot.fill_hazard import (
+    HISTORICAL_REWARD_YIELD_PER_CONTRACT_HOUR,
     CALIBRATION_ID,
     GLOBAL_CELL,
     GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR,
@@ -72,13 +73,35 @@ class FillHazardTests(unittest.TestCase):
             long.probability, 1 - (1 - short.probability) ** 2)
 
     def test_sparse_reward_yields_are_shrunk_toward_global(self):
-        cs2 = historical_reward_yield_prior("aec-cs2-a-b-2026-08-10")
-        itfme = historical_reward_yield_prior("aec-itfme-a-b-2026-08-10")
-        unknown = historical_reward_yield_prior("unseen")
-        self.assertGreater(cs2, GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR)
-        self.assertLess(cs2, .2131)
-        self.assertLess(itfme, GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR)
-        self.assertEqual(unknown, GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR)
+        """Shrinkage pulls every league toward the global mean, both ways.
+
+        Asserted as the mechanism rather than as a league ordering: the table
+        was recalibrated on 2026-08-14 from what the venue actually paid, and
+        an earlier version of this test hard-coded the old ranking (cs2 above
+        global at 0.2131) so it failed on the data rather than on a defect.
+        """
+
+        table = HISTORICAL_REWARD_YIELD_PER_CONTRACT_HOUR
+        glob = GLOBAL_REWARD_YIELD_PER_CONTRACT_HOUR
+
+        # Above the mean: pulled down toward it, never past it.
+        raw_best, _ = table["setkamemd"]
+        best = historical_reward_yield_prior("aec-setkamemd-a-b-2026-08-10")
+        self.assertGreater(raw_best, glob)
+        self.assertLess(best, raw_best)
+        self.assertGreater(best, glob)
+
+        # Below the mean: pulled up toward it, never past it.
+        raw_worst, _ = table["cs2"]
+        worst = historical_reward_yield_prior("aec-cs2-a-b-2026-08-10")
+        self.assertLess(raw_worst, glob)
+        self.assertGreater(worst, raw_worst)
+        self.assertLess(worst, glob)
+
+        # A thin sample is pulled further than a thick one from the same
+        # distance, which is the point of weighting by sample size.
+        self.assertEqual(
+            historical_reward_yield_prior("unseen"), glob)
 
 
 class MondayEconomicsReplayTests(unittest.TestCase):

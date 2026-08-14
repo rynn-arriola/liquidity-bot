@@ -415,6 +415,57 @@ that earns. `retrieve` now waits the window out, bounded at four attempts --
 which assumes nothing about the order's state, unlike reading absence as
 cancellation.
 
+## 6d. Rewards are real and material -- correcting section 6c
+
+Queried account-wide from the venue 2026-08-14 (`GET /v1/incentives/earnings`,
+no market filter). **This account has earned $70.92 in liquidity rewards.**
+
+```
+PAID $32.06 | PENDING $38.80 | SKIPPED $0.06
+
+2026-07-12   $0.01
+2026-07-16   $0.05
+2026-08-10  $32.06
+2026-08-11   $5.39
+2026-08-12  $33.41
+```
+
+166 distinct markets earned. Best single markets: **$5.38, $4.85, $4.02,
+$3.22, $2.95**.
+
+**Section 6c's arithmetic was right and its conclusion was wrong.** $0.007 per
+market per period is correct *for one contract*, and I presented it as the
+strategy's ceiling while this same account had already earned $33 in a day. The
+error was only ever querying earnings per market for the markets bound right
+now, never account-wide. Always query account-wide.
+
+Three differences compound, and size is the smallest of them:
+
+```
+                maker-lab (earning)      liquidity-bot now
+quote size      ~10-25 contracts         1
+markets         166                      capped at 8
+period          included live ($1,600)   pregame only (day_of, $200)
+```
+
+Roughly 15x x 20x x 8x. **Breadth and period dominate size.**
+
+### The failure was settlement, not the reward mechanism
+
+2026-08-12: rewards **+$33.41**, session net about **-$102**, of which
+**-$88.20 was settlement** (section 2). Rewards were never the problem. The
+residue reaching settlement was, and the 300-second pre-kickoff flatten
+(invariant 6) is the fix for exactly that leak.
+
+That reframes the open question. It is not "can this strategy earn" -- measured
+yes, $32-33 on a good day. It is whether it can earn without giving it back at
+settlement, which has never been tested with the flatten in place.
+
+**Caveat before acting**: the `live` period is where the 8x pool sits, and the
+pregame design forbids it (section 4). How much of the $70.92 came from `live`
+rather than `day_of` is not yet separated, and that split decides whether a
+pregame-only executor can reach these numbers at all.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

@@ -48,8 +48,13 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(self.authorized().shutdown_alert_interval_seconds, 300)
         self.assertEqual(self.authorized().max_shutdown_seconds, 900)
         self.assertEqual(self.authorized().reward_projection_horizon_seconds, 30)
+        # 1, not 2. P is already a Wilson upper bound and unwind is priced
+        # against stressed depth, so a 2x multiple padded the cost side a third
+        # time while the reward side carried only the 0.5 haircut.
         self.assertEqual(
-            self.authorized().reward_cost_safety_multiple, Decimal("2"))
+            self.authorized().reward_cost_safety_multiple, Decimal("1"))
+        self.assertEqual(
+            self.authorized().reward_projection_haircut, Decimal("0.5"))
         self.assertEqual(
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
         self.assertEqual(self.authorized().max_taker_exit_orders, 20)
@@ -105,7 +110,9 @@ class CommissioningTests(unittest.TestCase):
         # does not.
         self.assertEqual(config.quote_size, Decimal("1"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
-        self.assertEqual(config.max_selection_book_candidates, 25)
+        # Only ~33 markets survive the day_of and catalog-spread filters, so
+        # 25 left a blind spot for no reason. 100 covers the whole pool.
+        self.assertEqual(config.max_selection_book_candidates, 100)
 
     def test_more_markets_than_the_subscription_ceiling_is_refused(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)

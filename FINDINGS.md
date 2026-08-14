@@ -235,6 +235,28 @@ period mix   live 8,488 | day_of 7,443 | early 4,364
              daily_event 4,474 | tournament_with_cutoff 2,576
 ```
 
+**Those counts are the whole programme, not this bot's addressable universe.**
+Quoting the 13,707 on its own is misleading. Measured 2026-08-14T05:0xZ, the
+funnel to what the runner can actually act on:
+
+```
+catalog rows                    17,254
+active and not closed           17,254
+supported moneyline              1,037     -94%  most rewards are spreads/totals/props
+still pregame                    1,004
+  starting within  6h              218     -78%  only day_of has a projectable clock
+  starting within 12h              471
+  starting within 24h              659
+rewarded (of the 218)              199
+after the 2c catalog spread filter  33     -83%  matches the backtest's 88% rejection
+```
+
+**The addressable universe is roughly 200 markets at any moment, and 33 after
+the spread filter.** The +6-12h bucket held 253, so this is not a dead-of-night
+trough: the count stays near this all day as games roll forward. Widening the
+six-hour window is not a hidden win either -- it would mean quoting periods
+whose reward cannot be projected.
+
 Rewarded pregame **moneylines** do exist — setka, itf, atp, wta, cs2, lol,
 dota2 — the same leagues `fill_hazard.py` is calibrated on. An earlier sample
 suggesting otherwise (40/40 futures) was biased by pagination order.

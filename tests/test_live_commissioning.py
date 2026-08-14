@@ -411,7 +411,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_blocked_working_order_stops_future_score_accrual(self):
         runner, client, _ = self.build_runner()
-        client.reward_pool = 200
+        # 200 cleared the gate once the cost margin went 2 -> 1. The invariant
+        # under test is "economically blocked means no accrual", so the fixture
+        # has to be genuinely blocked; 100 still is.
+        client.reward_pool = 100
         await runner.preflight()
         working = WorkingOrder(
             "owned-bid", "bid", .49, Decimal("1"))
@@ -906,7 +909,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sub_dollar_reward_is_evaluated_but_risk_can_block_order(self):
         runner, client, _ = self.build_runner()
-        client.reward_pool = 200
+        client.reward_pool = 100
         await runner.preflight()
         runner._evaluate_rewards(NOW)
 
@@ -924,6 +927,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             0 < value < 1
             for value in runner._fill_probability_by_side.values()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_halved_cost_margin_authorizes_a_pool_that_was_refused(self):
+        # The change that made this pass, stated as behaviour rather than as a
+        # constant. The gate is projected_reward x (1-P) > multiple x P x
+        # unwind; the cost side already carries a Wilson upper-bound P and a
+        # stressed-depth unwind, so the 2x padded it a third time. The
+        # 2026-08-14 census measured 94% of every side in the universe failing
+        # this one test with a best gate_ratio of 0.392.
+        runner, client, _ = self.build_runner()
+        client.reward_pool = 200
+        await runner.preflight()
+
+        runner._evaluate_rewards(NOW)
+
+        self.assertEqual(runner._economic_blocker_by_side, {})
+        self.assertEqual(
+            sorted(runner._expected_net_by_side), ["bid", "offer"])
+        # Still refused at half that pool: this loosened the gate, it did not
+        # remove it.
         await runner.private_stream.close()
         await runner.market_stream.close()
 

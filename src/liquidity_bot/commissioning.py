@@ -102,7 +102,16 @@ class CommissioningConfig:
     max_shutdown_seconds: int = 900
     reward_projection_horizon_seconds: int = 30
     reward_projection_haircut: Decimal = Decimal("0.5")
-    reward_cost_safety_multiple: Decimal = Decimal("2")
+    # Was 2. The cost side of the gate already carries two independent
+    # pessimistic estimates: P is a Wilson upper bound, and unwind is priced
+    # against stressed (half) depth. This multiple padded the same term a third
+    # time, while the reward side carried only the 0.5 haircut -- an asymmetry
+    # nobody chose, accumulated by adding guards one at a time. The 2026-08-14
+    # census measured 94% of all sides in the universe failing on this one
+    # test, best gate_ratio 0.392, so the stack was rejecting everything.
+    # Operator-approved 2026-08-14. The haircut stays: projected reward is the
+    # least-padded quantity in the expression.
+    reward_cost_safety_multiple: Decimal = Decimal("1")
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     # A single permitted taker exit ended the session on its first crossed
     # fill, which made exit evidence impossible to collect: SCALE_REVIEW asks
@@ -114,7 +123,11 @@ class CommissioningConfig:
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
-    max_selection_book_candidates: int = 25
+    # Was 25. Only ~33 markets survive the day_of and catalog-spread filters,
+    # so 25 left a real blind spot for no reason: the census covered all 33 in
+    # 40 seconds. 100 covers the whole candidate pool with room to grow, at
+    # ~25s per scan against a 900s interval.
+    max_selection_book_candidates: int = 100
     minimum_entry_spread: Decimal = Decimal("0.02")
     spread_hysteresis: Decimal = Decimal("0.005")
     manual_stop_only: bool = True
@@ -136,10 +149,10 @@ class CommissioningConfig:
                 problems.append(
                     "automatic selection requires the reserved reward-market slug")
             if (self.market_selection_refresh_seconds != 900
-                    or self.max_selection_book_candidates != 25):
+                    or self.max_selection_book_candidates != 100):
                 problems.append(
                     "automatic selection must refresh every 900 seconds and "
-                    "deeply evaluate at most 25 reward markets")
+                    "deeply evaluate at most 100 reward markets")
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
@@ -172,11 +185,11 @@ class CommissioningConfig:
                 "300-second alert repeats, and a 900-second window")
         if (self.reward_projection_horizon_seconds != 30
                 or self.reward_projection_haircut != Decimal("0.5")
-                or self.reward_cost_safety_multiple != Decimal("2")
+                or self.reward_cost_safety_multiple != Decimal("1")
                 or self.aggregate_reward_payout_floor_usd != Decimal("1")):
             problems.append(
                 "commissioning reward economics must remain a 30-second "
-                "projection, 50% haircut, 2x probability-weighted cost "
+                "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
         if (self.max_taker_exit_orders != 20
                 or self.max_session_execution_fees_usd != Decimal("0.25")

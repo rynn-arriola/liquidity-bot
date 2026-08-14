@@ -160,6 +160,19 @@ class DesiredStateReconciler:
         return (now - sent_at).total_seconds() >= (
             self.policy.hard_exit_confirmation_timeout_seconds)
 
+    def restart_hard_exit_budget(self, market_slug: str) -> None:
+        """Give a retired market a fresh exit budget on a slower cadence.
+
+        The attempt and window limits stop a fast retry loop from hammering the
+        venue. They are not a verdict that the position can never leave: a book
+        too thin now can refill, and the pre-kickoff flatten is the deadline
+        that actually matters. Clearing them lets the exit be retried after the
+        operator has been told, instead of ending the session with the position
+        still open and every other market still healthy.
+        """
+
+        self._clear_hard_exit(market_slug)
+
     def _clear_hard_exit(self, market_slug: str) -> None:
         slug = str(market_slug)
         self._hard_exit_sent.pop(slug, None)

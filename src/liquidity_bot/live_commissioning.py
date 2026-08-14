@@ -51,7 +51,7 @@ from .live_session import (
     MarketKillSwitch,
     PrivateStateGate,
 )
-from .market_state import MarketState
+from .market_state import MarketState, RetiredMarket
 from .market_selector import (
     RewardMarketSelection,
     RewardMarketSelector,
@@ -89,6 +89,35 @@ Clock = Callable[[], datetime]
 # Generous: with backoff capped at 60s this is roughly an hour of retrying
 # before a transient startup condition is finally treated as a refusal.
 MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
+
+# Conditions that describe one market's inventory or exit, never the account.
+# The reconciler plans per market, so these are per-market verdicts: the right
+# response is to stop quoting that market and keep working its exit, not to end
+# a session in which every other market is healthy and flat. Kept as an
+# explicit set so an unrecognised future critical still fails closed.
+# A retired market waits this long before its exit is planned again. Long
+# enough that a failing exit cannot spin the loop, short enough that many
+# retries still fit inside the 300-second pre-kickoff flatten window.
+RETIRED_EXIT_RETRY_SECONDS = 60
+
+# After this many failed rounds the runner stops planning a retired market at
+# all. Ten rounds spans ten minutes, which covers the whole 300-second
+# pre-kickoff flatten window with room to spare. Past that the exit is not
+# coming back and replanning forever would spin the loop for the rest of the
+# session -- including after kickoff, when nothing can be done anyway. The
+# position is bounded at one contract, shutdown still makes a final attempt,
+# and every other market keeps quoting.
+MAX_RETIREMENT_ROUNDS = 10
+
+RETIRING_STRATEGY_CRITICALS = frozenset({
+    "hard_exit_attempt_limit_exceeded",
+    "hard_exit_retry_window_exceeded",
+    "hard_exit_blocked_cancel_unconfirmed",
+    "hard_exit_insufficient_stressed_depth",
+    "hard_exit_price_cap_exceeded",
+    "inventory_basis_or_clock_unknown",
+    "inventory_clock_in_future",
+})
 
 RECOVERABLE_STRATEGY_CRITICALS = frozenset({
     "book_stale",
@@ -174,6 +203,12 @@ class CommissioningRunner:
         self.market_stream = market_stream_factory(client)
         self.private_stream = private_stream_factory(client)
         self._markets: dict[str, MarketState] = {}
+        # Markets this session has stopped quoting but must still flatten.
+        # They stay in the active set so their exit keeps being worked.
+        self._retired: dict[str, RetiredMarket] = {}
+        # Retired slugs are never re-entered, even after they prove flat: an
+        # exit that failed once is evidence about that book, not bad luck.
+        self._retired_ever: set[str] = set()
         self._active_market_slugs: tuple[str, ...] = (
             () if config.auto_select_reward_markets
             else (config.market_slug,))
@@ -820,6 +855,14 @@ class CommissioningRunner:
         self._accrue_score(now)
         state = self.state_for(slug or self.market_slug)
         state.clear_economics()
+        if self._is_barred_from_quoting(state.slug):
+            # A retired market is never re-authorized. Retirement clears
+            # economics once; without this the very next evaluation would
+            # recompute them from a healthy-looking book and quote it again.
+            # The reconciler still plans its exit, which needs no economics.
+            state.economic_blocker_by_side = {
+                "bid": "market_retired", "offer": "market_retired"}
+            return
         if state.market is None or state.book is None or state.incentive is None:
             return
         if not state.market.is_supported_moneyline:
@@ -1159,6 +1202,16 @@ class CommissioningRunner:
         """
 
         state = self.state_for(slug)
+        retired = self._retired.get(slug)
+        if retired is not None and retired.rounds >= MAX_RETIREMENT_ROUNDS:
+            # Abandoned. Still flattened by shutdown, never planned again.
+            return None, 0.0
+        if (retired is not None and retired.next_retry_at is not None
+                and now < retired.next_retry_at):
+            # Inside the cooldown the position simply rests. Its reducing quote
+            # is already working and the pre-kickoff flatten is unaffected;
+            # replanning here would re-fire the same condition immediately.
+            return None, 0.0
         try:
             actions = self.reconciler.plan(self._frame(now, slug))
         except Exception as exc:
@@ -1177,11 +1230,10 @@ class CommissioningRunner:
                     if (outcome == "pending"
                             and self.reconciler.hard_exit_confirmation_expired(
                                 slug, now=self._now())):
-                        await self._report_runtime_error(
-                            "hard_exit_confirmation_terminal",
-                            RuntimeInvariantViolation(
-                                "hard_exit_confirmation_timeout"))
-                        return "critical:hard_exit_confirmation_timeout", 0.0
+                        stop = await self._retire_market(
+                            slug, "hard_exit_confirmation_timeout",
+                            reset_exit_budget=False)
+                        return stop, 0.0
                     self._runtime_error_counts.pop(
                         f"hard_exit_confirmation:{slug}", None)
                     if outcome == "flat":
@@ -1193,11 +1245,10 @@ class CommissioningRunner:
                         f"hard_exit_confirmation:{slug}", exc)
                     if self.reconciler.hard_exit_confirmation_expired(
                             slug, now=self._now()):
-                        await self._report_runtime_error(
-                            "hard_exit_confirmation_terminal",
-                            RuntimeInvariantViolation(
-                                "hard_exit_confirmation_timeout"))
-                        return "critical:hard_exit_confirmation_timeout", 0.0
+                        stop = await self._retire_market(
+                            slug, "hard_exit_confirmation_timeout",
+                            reset_exit_budget=False)
+                        return stop, 0.0
                     return None, self._recovery_delay(
                         f"hard_exit_confirmation:{slug}")
             stop = await self._handle_strategy_critical(reason, slug)
@@ -1258,6 +1309,10 @@ class CommissioningRunner:
             await self._report_runtime_error(
                 f"quiet_book_rest_refresh:{slug}", exc)
             state.next_book_refresh = self._now() + timedelta(seconds=3)
+        # Check before evaluating: a retired market that reached flat should
+        # stop being treated as retired in the same pass that would otherwise
+        # keep blocking its slot.
+        self._release_retired_if_flat(slug)
         self._evaluate_rewards(self._now(), slug)
 
     async def _send_summary(self, now: datetime, *, critical: bool = False,
@@ -1547,9 +1602,13 @@ class CommissioningRunner:
                 await self._report_runtime_error("idle_market_refresh", exc)
             await self._rest_reconcile(self._now())
             return False
+        # Markets retired earlier this session are never re-entered. The
+        # exclusion happens inside top_viable so a barred market cannot take a
+        # slot that a quotable one could have used.
         chosen = tuple(
             item.market.slug
-            for item in selection.top_viable(self.config.max_markets))
+            for item in selection.top_viable(
+                self.config.max_markets, exclude=self._retired_ever))
         previous = tuple(self.active_slugs)
         if chosen == previous:
             for slug in previous:
@@ -1760,11 +1819,129 @@ class CommissioningRunner:
         attempt = max(1, self._runtime_error_counts.get(component, 1))
         return min(base * (2 ** min(attempt - 1, 5)), cap)
 
+    def _is_retired(self, slug: str) -> bool:
+        """True while a retired market's position is still being worked."""
+
+        return slug in self._retired
+
+    def _is_barred_from_quoting(self, slug: str) -> bool:
+        """True once a market has been retired, and for the rest of the session.
+
+        Deliberately outlives ``_retired``. Releasing a retired market when it
+        reaches flat frees it from the exit machinery, but it must not become
+        quotable again: the exit failure is evidence about that book, and
+        re-entering it is how a bad market gets traded twice.
+        """
+
+        return slug in self._retired_ever
+
+    async def _retire_market(
+        self, slug: str, reason: str, *, reset_exit_budget: bool = True,
+    ) -> str | None:
+        """Stop quoting one market without stopping the session.
+
+        Every condition routed here is a statement about one market's
+        inventory or exit, not about the account. Ending the session for them
+        was a single-market habit: it exits 4, which the supervisor never
+        restarts, so one thin book on one slot took down seven healthy markets
+        and left the process dead until an operator noticed.
+
+        Retirement is strictly less permissive than quoting. The market keeps
+        its streams, book refresh and reconciler so the position is still
+        worked toward flat, and the pre-kickoff flatten still applies, but no
+        side of it may be quoted again this session. The exit budget is reset
+        so the retry happens on a slow cadence rather than never.
+
+        Returns a session stop reason only when retirement itself is no longer
+        a proportionate response -- a whole slate of failures is systemic.
+        """
+
+        state = self.state_for(slug)
+        state.clear_economics()
+        # A fresh budget, not an unlimited one: the attempt and window caps
+        # still bound each round, and max_taker_exit_orders still bounds the
+        # session's crossing overall.
+        #
+        # Not always, though. Clearing the budget also clears the sent marker,
+        # which is the only evidence that a confirmation is stuck. Reset it
+        # there and the condition stops re-firing, the round counter never
+        # advances, and the market never reaches the abandonment bound -- the
+        # runner retries forever. Callers whose condition is *detected* by that
+        # marker must keep it.
+        if reset_exit_budget:
+            self.reconciler.restart_hard_exit_budget(slug)
+        now = self._now()
+        retry_at = now + timedelta(seconds=RETIRED_EXIT_RETRY_SECONDS)
+        existing = self._retired.get(slug)
+        if existing is None:
+            self._retired[slug] = RetiredMarket(
+                slug=slug, reason=reason, retired_at=now,
+                next_retry_at=retry_at)
+        else:
+            existing.rounds += 1
+            existing.reason = reason
+            existing.next_retry_at = retry_at
+        self._retired_ever.add(slug)
+        rounds = self._retired[slug].rounds
+        position = self.ledger.position(slug)
+        print(
+            f"[market-retired] at={self._now().isoformat()} market={slug} "
+            f"reason={reason} round={rounds} position={position}",
+            flush=True,
+        )
+        if rounds >= MAX_RETIREMENT_ROUNDS:
+            print(
+                f"[market-retired] at={self._now().isoformat()} market={slug} "
+                f"abandoned_after={rounds}_rounds position={position}",
+                flush=True,
+            )
+            await self.notifier.send_async(
+                f"🚨 Liquidity Bot abandoned {slug} after {rounds} failed exit "
+                f"rounds, position {position}. It will not be planned again "
+                "this session; shutdown will make a final attempt. Every other "
+                "market keeps running.",
+                critical=True,
+            )
+        elif rounds == 1 or (rounds & (rounds - 1)) == 0:
+            await self.notifier.send_async(
+                f"⚠️ Liquidity Bot retired {slug}: {reason} (round {rounds}, "
+                f"position {position}). It will not quote again this session; "
+                "the exit keeps being worked and every other market keeps "
+                "running.",
+                critical=True,
+            )
+        # One full slate of retirements is not eight unlucky books, it is a
+        # systemic fault. Stop rather than churn every slot.
+        if len(self._retired_ever) > self.config.max_markets:
+            return "critical:market_retirement_limit_exceeded"
+        return None
+
+    def _release_retired_if_flat(self, slug: str) -> None:
+        """Free a retired market's slot once the venue proves it flat."""
+
+        if slug not in self._retired:
+            return
+        if self.ledger.position(slug) != 0:
+            return
+        if self.ledger.working_orders(slug):
+            return
+        if any(str(row["market_slug"]) == slug
+               for row in self.ledger.unresolved_intents()):
+            return
+        self._retired.pop(slug, None)
+        print(
+            f"[market-retired] at={self._now().isoformat()} market={slug} "
+            "released=flat",
+            flush=True,
+        )
+
     async def _handle_strategy_critical(
         self, reason: str, slug: str,
     ) -> str | None:
         """Recover only explicitly enumerated transient strategy conditions."""
 
+        if reason in RETIRING_STRATEGY_CRITICALS:
+            return await self._retire_market(slug, reason)
         if reason not in RECOVERABLE_STRATEGY_CRITICALS:
             exc = RuntimeInvariantViolation(
                 reason, f"terminal strategy condition: {reason}")

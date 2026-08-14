@@ -19,6 +19,7 @@ from liquidity_bot.commissioning import (
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
+    MAX_RETIREMENT_ROUNDS,
     CommissioningResult,
     CommissioningRunner,
     _run,
@@ -1281,23 +1282,51 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirmation_errors_escalate_at_the_deadline(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
-        slug = runner.config.market_slug
-        runner.reconciler._hard_exit_sent[slug] = NOW
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.reconciler._hard_exit_sent[slug] = NOW - timedelta(hours=1)
         runner.reconciler.plan = lambda _frame: [PlanAction(
             ActionKind.CRITICAL, slug,
             "hard_exit_sent_but_inventory_remains")]
 
-        async def fail_confirmation():
+        async def fail_confirmation(_slug):
             raise AdapterError("confirmation endpoint unavailable")
 
         runner._reconcile_pending_hard_exit = fail_confirmation
 
-        result = await runner.run()
+        stop, _delay = await runner._decide_for_market(slug, runner._now())
 
+        # Past the confirmation deadline this used to end the session, which
+        # exits 4 and is never restarted. It is one market's stuck exit, so it
+        # retires that market and the session carries on.
+        self.assertIsNone(stop)
+        self.assertTrue(runner._is_retired(slug))
         self.assertEqual(
-            result.stop_reason, "critical:hard_exit_confirmation_timeout")
-        self.assertTrue(result.flat)
+            runner._retired[slug].reason, "hard_exit_confirmation_timeout")
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_market_that_never_exits_is_abandoned_not_endless(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+
+        for _ in range(MAX_RETIREMENT_ROUNDS):
+            stop = await runner._retire_market(slug, "hard_exit_stuck")
+            self.assertIsNone(stop)
+
+        # Retirement resets the exit budget, so a market whose exit can never
+        # complete would otherwise be replanned forever -- including after
+        # kickoff, when nothing can be done. It stops being planned instead.
+        self.assertEqual(runner._retired[slug].rounds, MAX_RETIREMENT_ROUNDS)
+        stop, delay = await runner._decide_for_market(slug, runner._now())
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 0.0)
+        self.assertTrue(any(
+            "abandoned" in message for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_unknown_strategy_critical_is_terminal_by_default(self):
         runner, client, notifier = self.build_runner(clock=TickingClock())
@@ -1339,9 +1368,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_unexitable_inventory_conditions_are_terminal(self):
+    async def test_unexitable_inventory_conditions_retire_only_that_market(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        runner._bind_markets(("market-one", "market-two"))
+        slug = "market-one"
 
         for reason in (
             "hard_exit_insufficient_stressed_depth",
@@ -1352,12 +1384,83 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "hard_exit_retry_window_exceeded",
         ):
             with self.subTest(reason=reason):
-                self.assertEqual(
-                    await runner._handle_strategy_critical(
-                        reason, runner.market_slug),
-                    f"critical:{reason}")
+                # Each describes one market's inventory or exit. Ending the
+                # session for them exits 4, which is never restarted, so one
+                # thin book took down every other healthy market.
+                self.assertIsNone(
+                    await runner._handle_strategy_critical(reason, slug))
+                self.assertTrue(runner._is_retired(slug))
 
+        # The failing market is retired; the other one is untouched.
+        self.assertFalse(runner._is_retired("market-two"))
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_retired_market_never_quotes_again_even_after_flat(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+
+        await runner._retire_market(slug, "hard_exit_attempt_limit_exceeded")
+        # Flat, so the exit machinery releases it.
+        runner._release_retired_if_flat(slug)
+        self.assertFalse(runner._is_retired(slug))
+
+        runner._evaluate_rewards(runner._now(), slug)
+
+        # Released from the exit machinery, still barred from quoting. The
+        # exit failure is evidence about that book, not bad luck.
+        self.assertTrue(runner._is_barred_from_quoting(slug))
+        self.assertEqual(runner.state_for(slug).expected_net_by_side, {})
+        self.assertEqual(
+            runner.state_for(slug).economic_blocker_by_side,
+            {"bid": "market_retired", "offer": "market_retired"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_retired_markets_are_not_reselected(self):
+        selection = fake_selection("market-one")
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(selection))
+        await runner.preflight()
+
+        self.assertEqual(
+            [item.market.slug for item in selection.top_viable(8)],
+            ["market-one"])
+        # Once retired, it must not come back through the next scan.
+        self.assertEqual(
+            selection.top_viable(8, exclude={"market-one"}), ())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_whole_slate_of_retirements_is_systemic_and_stops(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        stop = None
+        for index in range(runner.config.max_markets + 1):
+            stop = await runner._retire_market(f"market-{index}", "stuck")
+
+        # Eight unlucky books is a coincidence; nine is a fault in us. Losing
+        # one market to keep seven is the trade retirement makes -- losing
+        # every market is not a trade, it is a broken session.
+        self.assertEqual(stop, "critical:market_retirement_limit_exceeded")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_unrecognised_critical_still_stops_the_session(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        # Retirement is opt-in by name. A condition nobody has classified is
+        # not assumed to be market-scoped just because it arrived through a
+        # per-market plan.
+        stop = await runner._handle_strategy_critical(
+            "some_condition_added_later", runner.market_slug)
+
+        self.assertEqual(stop, "critical:some_condition_added_later")
+        self.assertFalse(runner._is_retired(runner.market_slug))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

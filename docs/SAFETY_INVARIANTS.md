@@ -209,3 +209,18 @@ These are implementation requirements, not suggestions.
     the active set. A slug dropped by rotation can still own a working order,
     a nonzero position or an unresolved intent, and flat is only proven when
     the whole account is flat.
+62. A condition that describes one market's inventory or exit retires that
+    market; it never stops the session. A retired market keeps its streams,
+    book refresh and reconciler so its exit is still worked, and the
+    pre-kickoff flatten still applies, but no side of it may be quoted again
+    for the rest of the session -- including after it reaches flat. Ending the
+    session for a per-market condition exits 4, which the supervisor never
+    restarts, so one thin book took down seven healthy markets and left the
+    process dead until an operator noticed.
+63. Retirement is bounded in three directions. Retirement is opt-in by name,
+    so an unrecognised critical still fails closed to terminal. A market that
+    fails ten rounds is abandoned and never planned again --
+    shutdown makes the final attempt -- because retirement resets the exit
+    budget and would otherwise replan forever, including after kickoff. More
+    distinct retirements than `max_markets` is systemic, not unlucky, and stops
+    the session.

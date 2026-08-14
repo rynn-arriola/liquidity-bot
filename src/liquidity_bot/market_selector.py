@@ -153,19 +153,26 @@ class RewardMarketSelection:
     failures: tuple[str, ...]
     catalog_spread_filtered_markets: int = 0
 
-    def top_viable(self, limit: int) -> tuple[RewardMarketOpportunity, ...]:
+    def top_viable(
+        self, limit: int, *, exclude: frozenset[str] | set[str] = frozenset(),
+    ) -> tuple[RewardMarketOpportunity, ...]:
         """Return the best economically viable markets, ranked.
 
         ``opportunities`` is already ordered by ``_opportunity_key``, which
         sorts viable markets first. Monitoring-only rows are excluded here for
         the same reason ``selected`` excludes them: binding a market that
         cannot be quoted spends a rotation and earns nothing.
+
+        ``exclude`` drops slugs the caller has barred, and does so *before*
+        the limit so a barred market cannot consume a slot. The runner passes
+        markets it retired earlier in the session.
         """
 
         if limit <= 0:
             raise ValueError("selection limit must be positive")
         return tuple(
-            item for item in self.opportunities if item.viable_sides)[:limit]
+            item for item in self.opportunities
+            if item.viable_sides and item.market.slug not in exclude)[:limit]
 
     @property
     def viable_markets(self) -> int:

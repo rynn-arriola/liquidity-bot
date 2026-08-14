@@ -159,6 +159,19 @@ recoverable). Refusing to cross into a thin book is still correct; ending the
 session over it was not. The pre-kickoff flatten at T-300s remains the real
 deadline and still re-prices against displayed depth.
 
+More generally, **every condition that describes one market's inventory or exit
+now retires that market rather than stopping the session**: the hard-exit
+family, the inventory clock and basis checks, and the exit-confirmation
+timeout. A retired market keeps its streams and reconciler so its exit is still
+worked, but never quotes again -- not even after reaching flat, and not through
+a later scan. Seven healthy markets no longer pay for one bad book.
+
+The bound matters as much as the mechanism. Retirement resets the exit budget,
+so a market whose exit can never complete would be replanned forever, including
+after kickoff when nothing can be done. Ten failed rounds abandons it, shutdown
+makes the final attempt, and more distinct retirements than `max_markets` is
+treated as systemic and does stop the session.
+
 ## 3. Spread regime
 
 maker-lab markout at 900s, by the spread the fill landed on:

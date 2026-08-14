@@ -20,6 +20,25 @@ from .rewards import RewardProjection
 
 
 @dataclass
+class RetiredMarket:
+    """A market this session has stopped quoting but must still flatten.
+
+    Retirement is the per-market answer to a failed exit. The market keeps its
+    streams, its book refresh and its reconciler so the position keeps being
+    worked, but no side of it may ever be quoted again this session. The slot
+    is released once the venue proves it flat.
+    """
+
+    slug: str
+    reason: str
+    retired_at: datetime
+    rounds: int = 1
+    # Retirement resets the exit budget, so without a cooldown the same
+    # condition re-fires on the very next pass and the runner spins.
+    next_retry_at: datetime | None = None
+
+
+@dataclass
 class MarketState:
     """Everything the runner knows about one bound market."""
 

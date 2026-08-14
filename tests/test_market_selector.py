@@ -130,7 +130,7 @@ class OpportunityTests(unittest.TestCase):
             book("high"),
             period=incentive("high", pool=20_000).periods[0],
             now=NOW,
-            policy=RewardSelectionPolicy(),
+            policy=RewardSelectionPolicy(enforce_reward_cost_gate=True, ),
         )
 
         self.assertEqual(item.viable_sides, ("bid", "offer"))
@@ -144,7 +144,7 @@ class OpportunityTests(unittest.TestCase):
             book=book("risk"),
             period=incentive("risk", pool=100).periods[0],
             now=NOW,
-            policy=RewardSelectionPolicy(),
+            policy=RewardSelectionPolicy(enforce_reward_cost_gate=True, ),
         )
         conservative = evaluate_market_opportunity(
             **args, fill_hazard_model=FixedFillHazard(1.0))
@@ -165,7 +165,7 @@ class OpportunityTests(unittest.TestCase):
             book("tight", bid=.49, offer=.50),
             period=incentive("tight", pool=20_000).periods[0],
             now=NOW,
-            policy=RewardSelectionPolicy(),
+            policy=RewardSelectionPolicy(enforce_reward_cost_gate=True, ),
         )
 
         self.assertFalse(item.entry_spread_eligible)
@@ -214,7 +214,12 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
             {slug: book(slug, touch_size=1000) for slug in markets},
         )
 
-        result = await RewardMarketSelector(gateway).select(now=NOW)
+        # Armed explicitly: this test is about the reward-cost gate, which is
+        # advisory by default now (maker-lab's entry rule is 2c plus caps).
+        result = await RewardMarketSelector(
+            gateway,
+            RewardSelectionPolicy(enforce_reward_cost_gate=True),
+        ).select(now=NOW)
 
         self.assertEqual(result.viable_markets, 0)
         self.assertIsNone(result.selected)
@@ -289,7 +294,7 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         )
         selector = RewardMarketSelector(
             gateway,
-            RewardSelectionPolicy(max_book_candidates=2),
+            RewardSelectionPolicy(enforce_reward_cost_gate=True, max_book_candidates=2),
         )
 
         result = await selector.select(now=NOW)

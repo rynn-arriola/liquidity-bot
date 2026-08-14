@@ -187,6 +187,8 @@ class CommissioningRunner:
                         config.max_selection_book_candidates),
                     minimum_entry_spread=float(
                         config.minimum_entry_spread),
+                    enforce_reward_cost_gate=(
+                        config.enforce_reward_cost_gate),
                 ),
                 fill_hazard_model=self.fill_hazard_model,
             )

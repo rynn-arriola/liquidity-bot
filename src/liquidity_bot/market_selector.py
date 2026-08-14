@@ -53,6 +53,11 @@ class RewardSelectionPolicy:
     exit_cost_safety_multiple: float = 2.0
     max_book_candidates: int = 25
     minimum_entry_spread: float = 0.02
+    # Mirrors CommissioningConfig.enforce_reward_cost_gate. The same test
+    # existed here and in the runner's per-market pass; disabling it in one
+    # place only did nothing, because a market that never becomes viable here
+    # is never bound for the runner to evaluate at all.
+    enforce_reward_cost_gate: bool = False
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
@@ -272,8 +277,12 @@ def evaluate_market_opportunity(
                         fill_hazard.probability * unwind_cost
                         * (policy.exit_cost_safety_multiple - 1.0)),
                 )
-                if economics.should_quote:
+                if economics.should_quote or not policy.enforce_reward_cost_gate:
                     expected = economics.expected_net_value
+                    if not economics.should_quote:
+                        # Measured and carried, but not vetoed: maker-lab's
+                        # entry rule is 2c spread plus risk caps, nothing more.
+                        expected = max(expected, 1e-9)
                 else:
                     blocker = (
                         "projected_reward_does_not_cover_probability_"

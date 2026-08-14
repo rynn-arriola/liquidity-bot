@@ -35,7 +35,8 @@ class CensusTests(unittest.IsolatedAsyncioTestCase):
         gateway = FakeGateway(markets, incentives, books)
         selector = RewardMarketSelector(
             gateway,
-            RewardSelectionPolicy(max_book_candidates=CENSUS_BOOK_CANDIDATES),
+            RewardSelectionPolicy(max_book_candidates=CENSUS_BOOK_CANDIDATES,
+                                  enforce_reward_cost_gate=True),
             fill_hazard_model=hazard,
         )
         return gateway, selector

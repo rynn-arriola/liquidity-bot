@@ -281,7 +281,8 @@ async def run_census(
     selector = selector or RewardMarketSelector(
         gateway,
         policy or RewardSelectionPolicy(
-            max_book_candidates=CENSUS_BOOK_CANDIDATES),
+            max_book_candidates=CENSUS_BOOK_CANDIDATES,
+            enforce_reward_cost_gate=True),
     )
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -305,7 +306,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         limiter=AsyncIntervalLimiter.from_rate(args.requests_per_second))
     selector = RewardMarketSelector(
         gateway,
-        RewardSelectionPolicy(max_book_candidates=CENSUS_BOOK_CANDIDATES),
+        RewardSelectionPolicy(
+            max_book_candidates=CENSUS_BOOK_CANDIDATES,
+            enforce_reward_cost_gate=True),
     )
     results: list[CensusResult] = []
     try:

@@ -1946,6 +1946,53 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_losing_a_race_with_our_own_placement_cancels_nothing(self):
+        """The loop the operator watched: place, cancel 1.5 seconds later.
+
+        A just-sent order is not yet visible as working, so the next pass
+        tries to place again; place() refuses because the market has an
+        unresolved intent; and quarantining in response cancels the very order
+        that caused the refusal. Measured live: PLACE 2597 against CANCEL
+        2596, with no planner ever asking for a cancel.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.ledger.apply_order_event(
+            "ws", "just-placed",
+            OrderState(
+                client_order_id="liquidity-fresh",
+                exchange_order_id="exchange-fresh",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        before = len(client.orders.cancel_calls)
+
+        stop = await runner._handle_action_failure(
+            OrderOutcomeUncertain("market has an unresolved order intent"),
+            slug)
+
+        self.assertIsNone(stop)
+        self.assertEqual(
+            len(client.orders.cancel_calls), before,
+            "racing our own placement must not cancel the resting quote")
+
+    async def test_a_real_adapter_failure_still_quarantines(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+
+        stop = await runner._handle_action_failure(
+            AdapterError("order gateway is unreachable"), runner.market_slug)
+
+        # Genuine transport failure still retires quotes before resuming.
+        self.assertIsNone(stop)
+
     async def test_a_stale_book_does_not_cancel_a_resting_quote(self):
         """What the operator watched live: place, then cancel two seconds on.
 

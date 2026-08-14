@@ -2194,6 +2194,18 @@ class CommissioningRunner:
         await self._report_runtime_error(f"action_driver:{slug}", exc)
         if not isinstance(exc, (AdapterError, OrderOutcomeUncertain)):
             return self._terminal_exception_reason("action_driver", exc)
+        # Losing a race against our own placement is not a failure worth
+        # tearing the book down for. The order we just sent is not yet visible
+        # as working, so the next pass tries to place again, place() refuses
+        # because that market has an unresolved intent, and quarantining in
+        # response cancels the very order that caused the refusal. Measured
+        # 2026-08-14: PLACE 2597 against CANCEL 2596, each cancel about 1.5
+        # seconds after its place, with no planner ever asking for one.
+        #
+        # Nothing is unsafe here -- the mutation is durably recorded and will
+        # reconcile on its own. Waiting is the whole remedy.
+        if "unresolved order intent" in str(exc):
+            return None
         try:
             await self._quarantine_working_orders()
         except RuntimeInvariantViolation as invariant:

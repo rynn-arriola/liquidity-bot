@@ -1493,7 +1493,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.private_stream.started_with, ["market-one"])
         self.assertTrue(runner.gate.ready(runner.ledger, now=NOW))
         self.assertEqual(client.orders.create_calls, [])
-        self.assertTrue(any(critical for _, critical in notifier.messages))
+        # Routine recovery is announced but not critical: 1,517 of these
+        # in an hour, all transient, is how a real alert gets missed.
+        self.assertTrue(any(
+            "recovering" in message for message, _ in notifier.messages))
+        self.assertFalse(any(critical for _, critical in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1516,7 +1520,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(runner.market_stream, old_stream)
         self.assertIs(runner.book, recovered_book)
         self.assertEqual(client.orders.create_calls, [])
-        self.assertTrue(any(critical for _, critical in notifier.messages))
+        # Routine recovery is announced but not critical: 1,517 of these
+        # in an hour, all transient, is how a real alert gets missed.
+        self.assertTrue(any(
+            "recovering" in message for message, _ in notifier.messages))
+        self.assertFalse(any(critical for _, critical in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1937,6 +1945,43 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             ("shared account has open orders",)))
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_a_stale_book_does_not_cancel_a_resting_quote(self):
+        """What the operator watched live: place, then cancel two seconds on.
+
+        book_stale is recoverable, and recovery refreshed the book and then
+        quarantined anyway -- and quarantine cancels every working order.
+        Measured 2026-08-14: 226 book_stale events in six minutes against 45
+        placements, so nearly every quote died before it could rest, and
+        reward is paid for resting time.
+
+        A stale book means we cannot make a NEW decision. It does not make an
+        already-resting post-only order unsafe.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.ledger.apply_order_event(
+            "ws", "resting-quote",
+            OrderState(
+                client_order_id="liquidity-resting",
+                exchange_order_id="exchange-resting",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        before = len(client.orders.cancel_calls)
+
+        await runner._recover_strategy_state("book_stale", slug)
+
+        self.assertEqual(
+            len(client.orders.cancel_calls), before,
+            "a stale book must not cancel a quote that is already resting")
 
     async def test_a_condition_that_never_recovers_retires_the_market(self):
         """Measured 2026-08-14: 371 consecutive book_stale recoveries.

@@ -1625,13 +1625,28 @@ class CommissioningRunner:
             traceback.print_tb(exc.__traceback__)
         # Keep Discord useful during a long outage while every occurrence is
         # still retained in commissioning.log.
+        # Severity, not volume, is what made Discord unreadable: every runtime
+        # recovery was sent critical. Measured 2026-08-14: 1,517 of these in
+        # one hour, all transient retries -- a stale book, an incentive fetch
+        # that failed, a recovery that will run again in a second. None asked
+        # the operator to do anything, and burying the ones that do is how a
+        # real alert gets missed.
+        #
+        # Critical is reserved for what needs a human: a terminal condition, a
+        # market retired or abandoned, an ownership violation, a loss stop, or
+        # a runner failure. Those are raised by their own call sites.
+        routine = not (component.endswith("_terminal")
+                       or component.startswith("unowned")
+                       or "ownership" in component)
         if attempt <= 2 or (attempt & (attempt - 1)) == 0:
             await self.notifier.send_async(
-                "⚠️ Liquidity Bot runtime recovery: "
+                ("🔁 " if routine else "⚠️ ")
+                + f"Liquidity Bot {'recovering' if routine else 'runtime failure'}: "
                 f"{component} attempt {attempt}, {type(exc).__name__}: "
-                f"{detail[:400]}. "
-                "New risk is disabled until reconnect and reconciliation pass.",
-                critical=True,
+                f"{detail[:300]}."
+                + ("" if routine else
+                   " New risk is disabled until reconnect and reconciliation pass."),
+                critical=not routine,
             )
 
     async def _quarantine_working_orders(self) -> None:
@@ -1985,6 +2000,20 @@ class CommissioningRunner:
             if reason in {"book_stale", "book_market_mismatch",
                           "hard_exit_deferred_thin_book"}:
                 await self._refresh_book(self._now(), slug)
+                if reason == "book_stale":
+                    # Refreshing the book IS the recovery. Quarantining below
+                    # cancels every resting quote, and a stale book does not
+                    # make an already-resting post-only order unsafe -- it only
+                    # means we cannot make a NEW decision until the book
+                    # arrives. Measured 2026-08-14: 226 book_stale events in
+                    # six minutes against 45 placements, so nearly every quote
+                    # was cancelled about two seconds after being placed and
+                    # nothing ever rested. Reward is paid for resting.
+                    #
+                    # New risk is still refused for as long as the book is
+                    # stale: the reconciler returns this critical before it can
+                    # plan anything, so no quote is placed on stale data.
+                    return
             await self._quarantine_working_orders()
         except RuntimeInvariantViolation:
             raise

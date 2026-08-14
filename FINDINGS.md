@@ -514,6 +514,62 @@ per-market per-day breakdown behind every number above.
    at two sides near $0.50. Against sub-$100 capital that is size 6 at eight
    markets, or size 3 at sixteen. Breadth and size trade against each other.
 
+## 6e. The place/cancel churn: our own quote makes the side uneconomic
+
+1,817 place/cancel cycles in 5.7 hours, all at the same price, roughly two per
+second -- the loop tick. Reward pays for resting time, so this attacked the
+only thing that earns. Diagnosed 2026-08-14 by logging the plan action, its
+reason, and the per-side economics; none of it was recoverable from the ledger,
+which records that an order was cancelled but never why.
+
+The cancel reason is **`side_no_longer_desired`**: the side leaves
+`desired_sides` the instant our order becomes visible, and re-qualifies about
+250ms later once it is gone.
+
+```
+CANCEL          side_no_longer_desired      working=1
+PLACE_POST_ONLY reward_positive_candidate   price=0.74  working=0
+CANCEL          side_no_longer_desired      working=1
+PLACE_POST_ONLY reward_positive_candidate   price=0.74  working=0
+```
+
+The mechanism is in `rewards.py`:
+
+```python
+if not order_already_resting:
+    depth[order_price] = depth.get(order_price, 0.0) + size
+```
+
+Eligibility depends on cumulative depth reaching `targetSize`. Flat, our size
+is added; resting, it is not, because it is assumed already in the streamed
+book. **So our own contract decides eligibility whenever the book sits on that
+boundary**, and the side oscillates once per pass.
+
+Measured margin at the moment of a place: `net={'offer': 0.002705}` -- three
+tenths of a cent. At that thinness any asymmetry between the flat and resting
+calculations flips the sign, so this is not a rare edge.
+
+**Not yet fixed.** The candidate fix is to make the two paths symmetric so the
+decision cannot depend on whether we are already resting. That is a change to
+the reward mathematics and wants a test that reproduces the oscillation first.
+
+## 6f. First fill, 2026-08-14T11:48:39Z
+
+```
+SELL 0.5200 @ 0.7400   fee 0.0000 (maker)   intent ORDER_INTENT_BUY_SHORT
+position -0.52 on aec-wtt-manwan-yuxqin-2026-08-14
+```
+
+**Partial**: 0.52 of a 1-contract quote. Worth noting because the exit path had
+only ever been reasoned about for whole contracts.
+
+Fee was **0.0000** -- consistent with section 1, where the maker rebate at this
+size rounds to zero rather than paying.
+
+The reducing bid then chased the touch (0.55, 0.56, cancel/replace each pass),
+which is `replace_reducing_at_active_touch` rather than the eligibility
+oscillation above -- a second, distinct source of churn on the inventory path.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

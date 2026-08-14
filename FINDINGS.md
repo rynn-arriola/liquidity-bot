@@ -295,6 +295,41 @@ size-invariant (0.0310 -> 0.0305 across 25x). Size changes **how much you earn**
 on a qualifying book, not **whether** it qualifies. The single qualifying book
 passed at 1.24, too thin a margin to survive any increase.
 
+## 6b. The gate, not the search, is what rejects everything
+
+First live census, 2026-08-14T04:57Z, read-only over the whole universe:
+
+```
+executable 212 | rewarded 199 | candidate books 33 | viable 0
+coverage_complete: true          best_gate_ratio: 0.392
+```
+
+**Only 33 markets are candidates at all.** The `day_of` period filter and the
+catalog spread filter remove the rest, so the runner's 25-book window is not
+leaving a large unexamined pool behind it -- the census fetched all 33 and
+found nothing viable. Widening the search is not the lever.
+
+Where the rejections actually land, per side:
+
+```
+projected_reward_does_not_cover_probability_weighted_exit_cost   62
+spread_below_entry_minimum                                        2
+target_not_met                                                    2
+```
+
+**94% fail the economic gate itself.** The best side anywhere in the universe
+scored `gate_ratio` 0.392 against the 1.0 needed, so nothing was close.
+
+This puts the weight on open question 3. `reward_projection_haircut` 0.5 and
+`reward_cost_safety_multiple` 2 multiply to a **4x** margin, and neither number
+has any evidence behind it. At 0.392 the best market clears comfortably without
+that 4x and clears nothing with it. Before changing either, sample `gate_ratio`
+across many passes and measure how often a market would clear at 3x, 2x and 1x
+-- the census does this read-only and at no risk.
+
+Touch depth across the same sample: median 141 contracts, minimum 0.02. Depth
+is not the scarce thing; the margin is.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one
@@ -367,8 +402,10 @@ profitability claim or scaling decision.
    says 46% by 900s on theirs. liquidity-bot is 0-for-4 at 30s. The 900s change
    is untested live.
 3. **Is the 50% reward haircut and the 2x cost margin justified?** Neither has
-   any evidence. Together they are 4x, and 13 sides in the backtest sat within
-   10x of authorization.
+   any evidence. Together they are 4x. **Now the binding constraint**: the
+   2026-08-14 census measured 94% of all sides in the universe failing on this
+   one test, with the best at `gate_ratio` 0.392 -- which clears 1.0 without the
+   4x and clears nothing with it. See section 6b.
 4. ~~Does the venue accept multiple private connections?~~ **Answered**
    2026-08-14: yes, and each connection carries its own 10-subscription
    quota. See §7.

@@ -2529,6 +2529,15 @@ def main() -> int:
         return 5
     if result.stop_reason.startswith("critical:"):
         return 4
+    if result.stop_reason == "startup_recovery_only":
+        # A recovery run exists only to retire state a previous process left
+        # behind. It proved flat and did exactly that, so the work is done and
+        # a normal session should follow immediately. Exiting 0 made the
+        # supervisor stop instead, leaving the bot down after every recovery
+        # until someone restarted it by hand -- observed 2026-08-14T04:38Z.
+        # Exit 5 restarts, and the fresh process re-runs the whole flat and
+        # ownership preflight before any order.
+        return 5
     return 0
 
 

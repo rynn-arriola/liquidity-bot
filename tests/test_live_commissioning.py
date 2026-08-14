@@ -2048,9 +2048,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             self._exit_code_for("risk_stop:marked account equity"), 0)
         self.assertEqual(
             self._exit_code_for("EMERGENCY_EQUITY_HARD_STOP"), 0)
+        # A recovery run exists only to retire what a previous process left
+        # behind. Once it proves flat the work is done and a normal session
+        # should follow at once; exiting 0 left the bot down after every
+        # recovery until a human restarted it.
+        self.assertEqual(
+            self._exit_code_for("startup_recovery_only"), 5)
         # Never restart while inventory state is unproven, whatever the reason.
         self.assertEqual(
             self._exit_code_for("runner_failure:ValueError", flat=False), 3)
+        self.assertEqual(
+            self._exit_code_for("startup_recovery_only", flat=False), 3)
 
     def test_cli_accepts_automatic_reward_selection(self):
         result = CommissioningResult(

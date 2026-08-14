@@ -389,14 +389,22 @@ class DesiredStateReconciler:
         kept_sides: set[str] = set()
         for order in frame.working_orders:
             desired_price = self._touch(frame.book, order.side)
-            if (order.side not in desired_sides
-                    or not self._matches(order, price=desired_price, qty=quote_size)
-                    or order.side in kept_sides):
-                actions.append(PlanAction(
-                    ActionKind.CANCEL, slug, "working_order_not_desired",
-                    side=order.side, order_id=order.order_id))
+            # Three very different faults used to share one reason string, so
+            # the live place/cancel churn of 2026-08-14 could not be attributed
+            # from the logs: a side going uneconomic, the touch moving away,
+            # and a duplicate on one side are not the same problem.
+            if order.side in kept_sides:
+                reason = "duplicate_order_on_side"
+            elif order.side not in desired_sides:
+                reason = "side_no_longer_desired"
+            elif not self._matches(order, price=desired_price, qty=quote_size):
+                reason = "resting_price_left_the_touch"
             else:
                 kept_sides.add(order.side)
+                continue
+            actions.append(PlanAction(
+                ActionKind.CANCEL, slug, reason,
+                side=order.side, order_id=order.order_id))
         if actions:
             return actions
         if risk_halt:

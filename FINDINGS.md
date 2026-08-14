@@ -621,6 +621,60 @@ of the 900-second window, and it is the risk maker-lab's positive 900s markout
 said was acceptable. **n = 1**: one sample decides nothing, and it is the first
 real evidence either way.
 
+## 6g. One market's in-flight mutation blocks all eight
+
+Diagnosed 2026-08-14, **not fixed**, needs an explicit decision.
+
+`_frame` sets `state_known` from
+
+```python
+state_known = self.gate.ready(self.ledger, now=now) and self.ledger.risk_state_known()
+```
+
+and `risk_state_known()` begins `if self.unresolved_intents(): return False` --
+**account-wide**. So an unresolved intent in *any* market makes *every* market
+report `execution_state_unknown`, which the runner recovers from by
+quarantining. With eight markets placing and cancelling there is nearly always
+a mutation in flight somewhere, so the markets interfere with each other
+continuously. At one market this was invisible; at eight it serializes the bot.
+
+The log shows the cross-market shape plainly -- a recovery in one market
+failing on another market's cancel:
+
+```
+strategy_state_recovery:...vorvol-yurart  attempt=10
+    "runtime recovery cancel is not yet reconciled in ...ivaana-buiedu"
+```
+
+Measured over 40 minutes after the churn fix:
+
+```
+recovery events          37
+execution_state_unknown  25
+actual plan actions      14
+markets affected          2 of 8
+```
+
+Recovery outnumbers real work 2.6 to 1, about one spurious unknown-state every
+96 seconds. The cost is lost resting time, not risk: the account stayed flat
+and the bot kept placing, resting and exiting correctly throughout.
+
+**Proposed fix**, deliberately left for a decision. Scope the unresolved-intent
+test to the market being planned, and keep the ownership tests account-wide:
+
+```
+per market   unresolved intents for that slug
+account-wide UNKNOWN_ABSENT orders, venue:-prefixed working orders
+```
+
+The durable-intent design is per order and per market, so what we know about
+market B genuinely does not change because a cancel is in flight in market A.
+Ownership violations are different and must stay global -- a `venue:` order
+anywhere means something else is trading the account.
+
+The risk is that this widens when the reconciler is willing to build new risk,
+which is a safety property, so it wants review rather than a quiet deploy.
+
 ## 7. API limits
 
 **Private WebSocket: 10 subscriptions per connection.** Measured by adding one

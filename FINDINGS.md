@@ -566,9 +566,39 @@ only ever been reasoned about for whole contracts.
 Fee was **0.0000** -- consistent with section 1, where the maker rebate at this
 size rounds to zero rather than paying.
 
-The reducing bid then chased the touch (0.55, 0.56, cancel/replace each pass),
-which is `replace_reducing_at_active_touch` rather than the eligibility
+The reducing bid then chased the touch (0.55, 0.56, 0.68, cancel/replace each
+pass), which is `replace_reducing_at_active_touch` rather than the eligibility
 oscillation above -- a second, distinct source of churn on the inventory path.
+
+### The exit machinery works, first end-to-end proof
+
+```
+11:48:39.081  FILL       SELL 0.52 @ 0.74   MAKER  fee 0.0000
+11:48-12:03   passive reducer chases the touch, never fills
+12:03:39.300  CANCEL     hard_timeout_cancel_confirm_first
+12:03:39.436  PLACE_IOC  hard_inventory_timeout  bid @ 0.85
+12:03:39.604  FILL       BUY  0.52 @ 0.85   TAKER  fee 0.0000
+              position FLAT, unresolved 0
+```
+
+The 900-second clock fired to the second (11:48:39 + 900s), cancelled and
+confirmed **before** crossing as invariant 6 requires, and cleared the
+position. Nothing stuck.
+
+```
+ROUND TRIP P&L  -$0.0572
+```
+
+**The loss is entirely adverse price movement, not cost.** Both legs charged
+zero: the maker rebate rounds down as section 1 predicts, and the taker fee did
+too -- `0.06 x 0.52 x 0.85 x 0.15 = $0.004`, rounded to zero. Section 1 measured
+that fee rounding *up* at size 1 and p=0.81, so rounding cuts both ways
+depending on size and price.
+
+The market moved 11 cents against us across a 15-minute hold. That is the cost
+of the 900-second window, and it is the risk maker-lab's positive 900s markout
+said was acceptable. **n = 1**: one sample decides nothing, and it is the first
+real evidence either way.
 
 ## 7. API limits
 

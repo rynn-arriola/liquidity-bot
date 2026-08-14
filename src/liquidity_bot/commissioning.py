@@ -49,7 +49,17 @@ class CommissioningConfig:
     arm_live: bool = False
     quote_size: Decimal = Decimal("1")
     max_markets: int = 1
-    max_inventory_age_seconds: int = 30
+    # maker-lab exit latency, 112 reconstructed position episodes on
+    # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
+    # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
+    # certain ~$0.01 taker commission; holding one contract risks at most
+    # ~$0.99 and their markout was positive at 60s, 300s and 900s. Waiting is
+    # therefore the cheaper side of the trade.
+    max_inventory_age_seconds: int = 900
+    # Kickoff overrides the inventory clock. maker-lab disabled its forced
+    # exit on the same "holding is cheaper" evidence and the residue reached
+    # settlement for -$88.20, 86% of that session's loss. Never settle.
+    force_exit_before_start_seconds: int = 300
     max_market_loss_usd: Decimal = Decimal("2")
     max_session_loss_usd: Decimal = Decimal("5")
     hard_stop_loss_usd: Decimal = Decimal("15")
@@ -64,8 +74,13 @@ class CommissioningConfig:
     reward_projection_haircut: Decimal = Decimal("0.5")
     reward_cost_safety_multiple: Decimal = Decimal("2")
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
-    max_taker_exit_orders: int = 1
-    max_session_execution_fees_usd: Decimal = Decimal("0.02")
+    # A single permitted taker exit ended the session on its first crossed
+    # fill, which made exit evidence impossible to collect: SCALE_REVIEW asks
+    # for 100 exit samples and this capped it at one. maker-lab crossed 40
+    # times in 24 hours, so 20 is a real sample at a bounded cost of about
+    # $0.20 in commission at one contract.
+    max_taker_exit_orders: int = 20
+    max_session_execution_fees_usd: Decimal = Decimal("0.25")
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -130,12 +145,20 @@ class CommissioningConfig:
                 "commissioning reward economics must remain a 30-second "
                 "projection, 50% haircut, 2x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
-        if (self.max_taker_exit_orders != 1
-                or self.max_session_execution_fees_usd != Decimal("0.02")
+        if (self.max_taker_exit_orders != 20
+                or self.max_session_execution_fees_usd != Decimal("0.25")
                 or self.earnings_refresh_seconds != 900):
             problems.append(
-                "commissioning loss learning must stop after one taker exit, "
-                "cap execution fees at $0.02, and refresh earnings every 900 seconds")
+                "commissioning loss learning must stop after 20 taker exits, "
+                "cap execution fees at $0.25, and refresh earnings every 900 seconds")
+        if (self.max_inventory_age_seconds != 900
+                or self.force_exit_before_start_seconds != 300):
+            problems.append(
+                "commissioning inventory limits must remain a 900-second "
+                "passive exit window with a 300-second pre-kickoff flatten")
+        if self.force_exit_before_start_seconds >= self.max_inventory_age_seconds:
+            problems.append(
+                "the pre-kickoff flatten must fire before the inventory clock")
         if (self.minimum_entry_spread != Decimal("0.02")
                 or self.spread_hysteresis != Decimal("0.005")):
             problems.append(

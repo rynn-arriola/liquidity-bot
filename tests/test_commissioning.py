@@ -50,9 +50,12 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().reward_cost_safety_multiple, Decimal("2"))
         self.assertEqual(
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
-        self.assertEqual(self.authorized().max_taker_exit_orders, 1)
+        self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
-            self.authorized().max_session_execution_fees_usd, Decimal("0.02"))
+            self.authorized().max_session_execution_fees_usd, Decimal("0.25"))
+        self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
+        self.assertEqual(
+            self.authorized().force_exit_before_start_seconds, 300)
         self.assertEqual(
             self.authorized().minimum_entry_spread, Decimal("0.02"))
         self.assertEqual(
@@ -75,6 +78,9 @@ class CommissioningTests(unittest.TestCase):
                     now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "loss learning"):
             self.authorized(max_taker_exit_orders=2).assert_authorized(
+                now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
+            self.authorized(max_inventory_age_seconds=30).assert_authorized(
                 now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "entry spread"):
             self.authorized(

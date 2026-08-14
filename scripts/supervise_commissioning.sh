@@ -59,6 +59,15 @@ while true; do
             alert "Liquidity Bot stopped after a caught runtime failure and will not restart."
             exit 4
             ;;
+        5)
+            # An unexpected loop failure that still proved the account flat.
+            # A fresh process re-runs the whole flat/ownership preflight before
+            # any order, so restarting is safe and keeps the session alive
+            # instead of losing hours to one transient defect. The fast-crash
+            # counter below still stops a genuine crash loop.
+            echo "[supervisor] recoverable runtime failure after ${RAN}s; restarting"
+            alert "Liquidity Bot hit a recoverable runtime failure and proved flat; restarting."
+            ;;
     esac
 
     if [ "$RAN" -lt "$FAST_CRASH_SECONDS" ]; then

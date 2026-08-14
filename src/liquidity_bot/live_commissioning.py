@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from polymarket_us import AsyncPolymarketUS
 
@@ -87,6 +87,10 @@ Clock = Callable[[], datetime]
 RECOVERABLE_STRATEGY_CRITICALS = frozenset({
     "book_stale",
     "execution_state_unknown",
+    # Reachable only while flat, and repaired by refetching the book and
+    # rebinding the singleton stream scope. Every remaining critical implies
+    # either held inventory or an ownership violation, which stay terminal.
+    "book_market_mismatch",
 })
 
 
@@ -185,6 +189,8 @@ class CommissioningRunner:
                 config.hard_exit_confirmation_timeout_seconds),
             minimum_entry_spread=float(config.minimum_entry_spread),
             spread_hysteresis=float(config.spread_hysteresis),
+            force_exit_before_start_seconds=float(
+                config.force_exit_before_start_seconds),
         ))
         self._stop_requested: str | None = None
         # Cleared only when shutdown gives up before proving flat, so the
@@ -246,22 +252,50 @@ class CommissioningRunner:
         return next(iter(slugs), None)
 
     async def _select_reward_market(self, now: datetime) -> str:
+        """Wait for a viable reward market rather than refusing to start.
+
+        A universe with nothing viable right now is the normal case, not a
+        misconfiguration: economically authorized windows are short and
+        infrequent. Refusing startup returns exit 2, which the supervisor
+        treats as terminal, so the process would stay down until an operator
+        noticed. Waiting costs nothing, because a runner with no bound market
+        holds no orders, no position and no stream subscription.
+
+        Only an operator stop, a loss stop, or a genuine adapter failure ends
+        the wait. Every scan is read-only and paced by the shared governor.
+        """
+
         if self.reward_selector is None:
             raise RuntimeError("automatic reward selector is unavailable")
-        scan_started = time.monotonic()
-        try:
-            selection = await self.reward_selector.select(now=now)
-        finally:
-            self._selection_scan_seconds_last = (
-                time.monotonic() - scan_started)
-        if selection.selected is None:
-            raise CommissioningRefused(
-                "no economically viable pregame liquidity-reward market "
-                "is currently available")
-        self._market_selection = selection
-        self._market_selection_observed_at = now
-        self._active_market_slug = selection.selected.market.slug
-        return self.market_slug
+        attempt = 0
+        while True:
+            attempt += 1
+            scan_started = time.monotonic()
+            try:
+                selection = await self.reward_selector.select(now=self._now())
+            finally:
+                self._selection_scan_seconds_last = (
+                    time.monotonic() - scan_started)
+            if selection.selected is not None:
+                self._market_selection = selection
+                self._market_selection_observed_at = self._now()
+                self._active_market_slug = selection.selected.market.slug
+                self._runtime_error_counts.pop("startup_market_wait", None)
+                return self.market_slug
+            self._market_selection = selection
+            self._market_selection_observed_at = self._now()
+            if self._stop_requested:
+                raise CommissioningRefused(
+                    "operator stopped while waiting for a viable reward market")
+            await self._report_runtime_error(
+                "startup_market_wait",
+                AdapterError(
+                    "no economically viable pregame reward market yet; "
+                    f"scanned {selection.executable_catalog_markets} executable "
+                    f"catalog markets and {selection.books_evaluated} books"),
+                attempt)
+            await self.sleep(
+                float(self.config.market_selection_refresh_seconds))
 
     async def _refresh_contracts(self, now: datetime) -> None:
         slug = self.market_slug
@@ -1864,8 +1898,15 @@ def main() -> int:
     }, indent=2, sort_keys=True))
     if not result.flat:
         return 3
-    if (result.stop_reason.startswith("runner_failure:")
-            or result.stop_reason.startswith("critical:")):
+    if result.stop_reason.startswith("runner_failure:"):
+        # An unexpected loop failure that still proved the whole account flat
+        # is recoverable by a fresh process: startup re-runs the full flat and
+        # ownership preflight before any order. Treating it as terminal is what
+        # left the bot down for hours after a single transient defect. Loss
+        # stops, unowned state and every named critical stay at exit 4 and are
+        # never restarted. The supervisor still bounds fast restart loops.
+        return 5
+    if result.stop_reason.startswith("critical:"):
         return 4
     return 0
 

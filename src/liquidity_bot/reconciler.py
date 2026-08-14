@@ -7,7 +7,7 @@ required input and deliberately has no default selected for live use.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 import math
@@ -64,6 +64,7 @@ class ReconcilerPolicy:
     hard_exit_confirmation_timeout_seconds: float = 10.0
     minimum_entry_spread: float = 0.02
     spread_hysteresis: float = 0.005
+    force_exit_before_start_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
@@ -88,6 +89,8 @@ class ReconcilerPolicy:
                 or self.spread_hysteresis >= self.minimum_entry_spread):
             raise ValueError(
                 "spread hysteresis must be nonnegative and below entry spread")
+        if self.force_exit_before_start_seconds <= 0:
+            raise ValueError("pre-kickoff flatten deadline must be positive")
 
 
 @dataclass(frozen=True)
@@ -196,9 +199,30 @@ class DesiredStateReconciler:
         if sent_at is not None:
             return self._critical(frame, "hard_exit_sent_but_inventory_remains")
 
-        if inventory_age >= deadline:
+        # Kickoff is an absolute deadline that overrides the inventory clock.
+        # maker-lab measured holding as ~3.13c/contract cheaper than crossing
+        # and therefore disabled its forced exit entirely; the residue that
+        # policy left behind reached settlement and cost $88.20, 86% of that
+        # session's loss. Waiting for the free passive exit is right, but never
+        # past the point where the position can settle.
+        seconds_to_event = (
+            (frame.market.game_start - frame.now).total_seconds()
+            if frame.market.game_start is not None else None)
+        pre_kickoff_due = (
+            seconds_to_event is not None
+            and seconds_to_event <= self.policy.force_exit_before_start_seconds)
+
+        if inventory_age >= deadline or pre_kickoff_due:
             if frame.working_orders:
-                if inventory_age > deadline + self.policy.cancel_confirm_grace_seconds:
+                # Measure lateness against whichever deadline fired, so a
+                # kickoff-driven exit cannot sit forever waiting on a cancel.
+                overdue = inventory_age - deadline
+                if seconds_to_event is not None:
+                    overdue = max(
+                        overdue,
+                        self.policy.force_exit_before_start_seconds
+                        - seconds_to_event)
+                if overdue > self.policy.cancel_confirm_grace_seconds:
                     return self._critical(
                         frame, "hard_exit_blocked_cancel_unconfirmed")
                 return [PlanAction(

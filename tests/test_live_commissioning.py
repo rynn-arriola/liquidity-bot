@@ -419,13 +419,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_auto_preflight_refuses_when_no_market_is_economically_viable(self):
+    async def test_auto_preflight_waits_for_a_viable_market_then_binds(self):
+        # An empty universe is the normal case, not a misconfiguration. The
+        # runner must hold, not exit 2 and stay down until an operator notices.
+        selector = FakeRewardSelector(
+            no_viable_selection(),
+            no_viable_selection(),
+            fake_selection("market-one"),
+        )
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+
+        mode = await runner.preflight()
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner.market_slug, "market-one")
+        self.assertGreaterEqual(len(selector.calls), 3)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_operator_stop_ends_the_wait_for_a_viable_market(self):
         selector = FakeRewardSelector(no_viable_selection())
         runner, client, _ = self.build_runner(
-            auto=True, reward_selector=selector)
+            auto=True, reward_selector=selector, clock=TickingClock())
+        original = runner.sleep
 
-        with self.assertRaisesRegex(
-                CommissioningRefused, "no economically viable"):
+        async def stop_then_sleep(seconds):
+            # SIGTERM lands while the runner is waiting; handlers are installed
+            # before run(), so the wait must observe it and exit cleanly.
+            runner.request_stop("operator_sigterm")
+            return await original(seconds)
+
+        runner.sleep = stop_then_sleep
+
+        with self.assertRaisesRegex(CommissioningRefused, "operator stopped"):
             await runner.preflight()
 
         self.assertEqual(client.orders.create_calls, [])
@@ -767,24 +795,33 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_first_taker_exit_stops_requoting(self):
+    async def test_taker_exits_are_allowed_up_to_the_evidence_budget(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()
-        entry_at = NOW + timedelta(seconds=1)
-        exit_at = NOW + timedelta(seconds=2)
-        runner.ledger.apply_execution(Execution(
-            "maker-entry", "market-one", "ORDER_SIDE_BUY",
-            Decimal("0.49"), Decimal("1"), Decimal("0"), entry_at,
-            client_order_id="entry", liquidity="MAKER",
-            intent="ORDER_INTENT_BUY_LONG"), received_at=entry_at)
-        runner.ledger.apply_execution(Execution(
-            "taker-exit", "market-one", "ORDER_SIDE_SELL",
-            Decimal("0.49"), Decimal("1"), Decimal("0.01"), exit_at,
-            client_order_id="exit", liquidity="TAKER",
-            intent="ORDER_INTENT_SELL_LONG"), received_at=exit_at)
+        budget = runner.config.max_taker_exit_orders
+        at = NOW
+        for index in range(budget):
+            at = NOW + timedelta(seconds=index + 1)
+            runner.ledger.apply_execution(Execution(
+                f"maker-entry-{index}", "market-one", "ORDER_SIDE_BUY",
+                Decimal("0.49"), Decimal("1"), Decimal("0"), at,
+                client_order_id=f"entry-{index}", liquidity="MAKER",
+                intent="ORDER_INTENT_BUY_LONG"), received_at=at)
+            runner.ledger.apply_execution(Execution(
+                f"taker-exit-{index}", "market-one", "ORDER_SIDE_SELL",
+                Decimal("0.49"), Decimal("1"), Decimal("0.01"), at,
+                client_order_id=f"exit-{index}", liquidity="TAKER",
+                intent="ORDER_INTENT_SELL_LONG"), received_at=at)
+            if index < budget - 1:
+                # One crossed exit used to end the session, which capped exit
+                # evidence at a single sample. SCALE_REVIEW asks for 100.
+                self.assertIsNone(
+                    runner._stop_reason(at),
+                    "session must survive taker exit %d of %d" % (
+                        index + 1, budget))
 
         self.assertEqual(
-            runner._stop_reason(exit_at), "commissioning_taker_exit_limit")
+            runner._stop_reason(at), "commissioning_taker_exit_limit")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1463,6 +1500,45 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 "liquidity_bot.live_commissioning._run",
                 new=AsyncMock(return_value=result)), patch("builtins.print"):
             self.assertEqual(main(), 3)
+
+    def _exit_code_for(self, stop_reason, flat=True):
+        result = CommissioningResult(
+            started_at=NOW,
+            cutoff_at=None,
+            stopped_at=NOW + timedelta(minutes=5),
+            stop_reason=stop_reason,
+            flat=flat,
+            orders_sent_to_polymarket=2,
+        )
+        argv = [
+            "live_commissioning",
+            "--market-slug", "market-one",
+            "--arm-live",
+            "--accept-one-contract-risk",
+            "--exclusive-api-key",
+            "--maker-lab-stopped",
+        ]
+        with patch("sys.argv", argv), patch(
+                "liquidity_bot.live_commissioning._run",
+                new=AsyncMock(return_value=result)), patch("builtins.print"):
+            return main()
+
+    def test_flat_runner_failure_is_restartable_but_criticals_are_not(self):
+        # A transient defect that still proved the account flat must not leave
+        # the bot down: a fresh process re-runs the whole flat/ownership
+        # preflight before any order. Loss stops and named criticals stay
+        # terminal so the supervisor never restarts into a known-bad state.
+        self.assertEqual(
+            self._exit_code_for("runner_failure:ValueError"), 5)
+        self.assertEqual(
+            self._exit_code_for("critical:unowned_working_order"), 4)
+        self.assertEqual(
+            self._exit_code_for("risk_stop:marked account equity"), 0)
+        self.assertEqual(
+            self._exit_code_for("15_USD_HARD_STOP"), 0)
+        # Never restart while inventory state is unproven, whatever the reason.
+        self.assertEqual(
+            self._exit_code_for("runner_failure:ValueError", flat=False), 3)
 
     def test_cli_accepts_automatic_reward_selection(self):
         result = CommissioningResult(

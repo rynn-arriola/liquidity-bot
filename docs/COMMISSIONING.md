@@ -133,7 +133,17 @@ logs are ignored by Git. Never copy secrets into this repository.
 - `2`: startup refused; no automatic restart;
 - `3`: flat state was not proven; no automatic restart and immediate operator
   inspection required;
-- `4`: caught runtime/strategy failure after cleanup; no automatic restart;
+- `4`: named critical strategy or ownership failure after cleanup; no automatic
+  restart, because restarting would re-enter a known-bad state;
+- `5`: unexpected runtime failure that still proved the whole account flat;
+  the supervisor restarts it, since a fresh process re-runs the entire
+  flat/ownership preflight before any order. Loss stops never reach this
+  path — they exit `0` after proving flat;
 - any other unexpected process death: bounded supervisor restart so the
   persistent ledger can recover identified state, with at most three fast
   deaths before the supervisor gives up.
+
+Automatic selection waits rather than refusing when no market is economically
+viable. An empty universe is the normal case, so the runner holds with no bound
+market, no orders and no stream subscription, rescanning on the selection
+interval until a market qualifies or an operator stops it.

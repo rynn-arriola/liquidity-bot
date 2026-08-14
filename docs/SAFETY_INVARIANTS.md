@@ -157,3 +157,22 @@ These are implementation requirements, not suggestions.
     can quote and stays dormant on the normal selection interval. It must not
     escalate into the fast error-retry cadence, which would rescan the whole
     universe every 60 seconds and starve book and account freshness.
+53. Staying down is itself a failure mode. An unexpected runtime failure that
+    proved the whole account flat exits `5` and is restarted, because a fresh
+    process re-runs the entire flat and ownership preflight before any order.
+    Loss stops, unowned or cross-market state, unproven flat state, and every
+    named critical remain terminal and are never restarted.
+54. An empty viable universe is a wait, not a refusal. With no bound market the
+    runner holds no orders, no position and no stream subscription, so waiting
+    carries no risk. Only an operator stop or a genuine adapter failure ends
+    the wait; `SIGTERM`/`SIGINT` handlers are installed before the wait begins.
+55. Inventory waits 900 seconds for a free passive exit before paying to
+    cross. maker-lab's 112 reconstructed episodes resolved passively for 26%
+    of episodes within 30 seconds but 46% by 900 seconds, while crossing costs
+    a certain taker commission and their markout stayed positive at 60, 300
+    and 900 seconds. One contract risks at most about $0.99 by waiting.
+56. Kickoff overrides the inventory clock. A position within 300 seconds of
+    the event start is flattened regardless of its age, because maker-lab
+    disabled its forced exit on the same holding-is-cheaper evidence and the
+    residue reached settlement for -$88.20, 86% of that session's loss.
+    Waiting for a free exit is never permission to settle.

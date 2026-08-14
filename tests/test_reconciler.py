@@ -58,6 +58,37 @@ class ReconcilerTests(unittest.TestCase):
         self.assertTrue(all(action.kind == ActionKind.PLACE_POST_ONLY
                             for action in actions))
 
+    def test_kickoff_forces_the_exit_before_the_inventory_clock(self):
+        # maker-lab disabled its forced exit because holding beat crossing by
+        # ~3.13c/contract, and the residue then settled for -$88.20. Waiting
+        # for a free passive exit is right; settling is not. Kickoff overrides
+        # the inventory clock even when the position is seconds old.
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        just_opened = T0 + timedelta(hours=5) - timedelta(seconds=200)
+
+        actions = reconciler.plan(frame(
+            now=just_opened, position="2", orders=(),
+            opened=just_opened - timedelta(seconds=5), entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "hard_inventory_timeout")
+
+    def test_young_inventory_far_from_kickoff_still_works_passively(self):
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        early = T0 + timedelta(seconds=30)
+
+        actions = reconciler.plan(frame(
+            now=early, position="2", orders=(),
+            opened=T0, entry=.49))
+
+        # Well inside the 900s window and hours from kickoff: the reducing
+        # quote must rest rather than pay the certain crossing cost.
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+
     def test_unknown_state_fails_closed_for_new_risk(self):
         actions = DesiredStateReconciler(policy()).plan(frame(state_known=False))
         self.assertEqual([action.kind for action in actions], [ActionKind.CRITICAL])

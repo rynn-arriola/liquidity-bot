@@ -1652,6 +1652,20 @@ class CommissioningRunner:
     async def _quarantine_working_orders(self) -> None:
         """Cancel known quotes and prove their terminal state before resume."""
 
+        # Name the caller. This is one of only two paths that cancel an order,
+        # the planner never asked for a cancel in the live logs, and the live
+        # ratio was PLACE 2637 against CANCEL 2636 -- so something reaches here
+        # constantly and the logs could not say what.
+        import traceback as _tb
+        caller = "?"
+        for frame in reversed(_tb.extract_stack()[:-1]):
+            if frame.name not in {"_quarantine_working_orders"}:
+                caller = f"{frame.name}:{frame.lineno}"
+                break
+        print(
+            f"[quarantine] at={self._now().isoformat()} called_by={caller}",
+            flush=True,
+        )
         now = self._now()
         await self._rest_reconcile(now)
         self._assert_runtime_scope()

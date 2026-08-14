@@ -2185,6 +2185,23 @@ class CommissioningRunner:
             "SELECT 1 FROM execution_positions "
             "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1"))
 
+    def _venue_proves_flat(self) -> bool:
+        """True when the last venue snapshot showed no orders and no position.
+
+        Read from the snapshots the shutdown loop already refreshes, so this
+        adds no requests. Deliberately ignores unresolved intents and absent
+        orders: those describe what we have not yet *proven*, and a venue
+        showing nothing open has already answered the question they ask.
+        """
+
+        if self.ledger.query(
+                "SELECT 1 FROM execution_orders WHERE status IN "
+                "('OPEN','NEW','PARTIAL','PENDING','SUBMITTED') LIMIT 1"):
+            return False
+        return not self.ledger.query(
+            "SELECT 1 FROM execution_positions "
+            "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1")
+
     def _whole_account_safe_to_stop(self) -> bool:
         """True only when every market is proven flat and state is known."""
 
@@ -2297,7 +2314,14 @@ class CommissioningRunner:
                         [action], market=state.market,
                         position=position, now=now)
                     delay = min(2 ** max(exit_attempts - 1, 0), 5)
-                if self._whole_account_safe_to_stop():
+                # The venue is the authority on whether we hold risk. Waiting
+                # on local bookkeeping keeps a flat process alive for minutes:
+                # risk_state_known() is false during any in-flight cancel, and
+                # that is 35% of wall-clock time, so shutdown ground through
+                # its budget with nothing open. Slow stops are why deploys
+                # needed kill -9, and kill -9 is what left the state that
+                # produced a recovery run and its alerts on every restart.
+                if self._venue_proves_flat() or self._whole_account_safe_to_stop():
                     await self._refresh_balance(now)
                     self._accrue_score(now)
                     await self._send_summary(now)

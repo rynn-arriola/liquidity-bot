@@ -75,7 +75,7 @@ class CommissioningConfig:
     # share is size-linear, so size 1 earns a rounding error. Worst case is
     # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
     # stop below is set to.
-    quote_size: Decimal = Decimal("40")
+    quote_size: Decimal = Decimal("5")
     # Eight is the measured ceiling, not a preference. The private
     # WebSocket accepts 10 subscriptions per connection; positions must be
     # scoped one market per subscription because positionSubscription
@@ -137,13 +137,11 @@ class CommissioningConfig:
     # times in 24 hours, so 20 is a real sample at a bounded cost of about
     # $0.20 in commission at one contract.
     max_taker_exit_orders: int = 20
-    # Rescaled with quote size on 2026-08-14. The taker fee is
-    # 0.06 x qty x p x (1-p), which peaks at p = 0.5: $0.01 per exit at one
-    # contract, $0.60 at forty. The old $0.25 cap was calibrated for one
-    # contract and would have tripped on the FIRST taker exit, stopping maker
-    # quoting before any exit evidence could be collected. $12 is the same 20
-    # exits at the new size.
-    max_session_execution_fees_usd: Decimal = Decimal("12")
+    # Scaled to quote size. The taker fee is 0.06 x qty x p x (1-p), peaking
+    # at p = 0.5: $0.075 per exit at five contracts. $1.50 is the same twenty
+    # exits. The old $0.25 was calibrated for one contract and would have
+    # tripped before twenty exits could ever be collected.
+    max_session_execution_fees_usd: Decimal = Decimal("1.50")
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -180,9 +178,9 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 40 or self.max_markets != 8:
+        if self.quote_size != 5 or self.max_markets != 8:
             problems.append(
-                "commissioning is hard-locked to forty contracts per quote "
+                "commissioning is hard-locked to five contracts per quote "
                 "across at most eight markets")
         if (self.max_market_exposure_usd != 45
                 or self.max_portfolio_exposure_usd != 340):
@@ -224,11 +222,11 @@ class CommissioningConfig:
                 "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
         if (self.max_taker_exit_orders != 20
-                or self.max_session_execution_fees_usd != Decimal("12")
+                or self.max_session_execution_fees_usd != Decimal("1.50")
                 or self.earnings_refresh_seconds != 900):
             problems.append(
                 "commissioning loss learning must stop after 20 taker exits, "
-                "cap execution fees at $12, and refresh earnings every 900 seconds")
+                "cap execution fees at $1.50, and refresh earnings every 900 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300):
             problems.append(

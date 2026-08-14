@@ -375,7 +375,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(client.orders.create_calls), 1)
         payload = client.orders.create_calls[0]
-        self.assertEqual(payload["quantity"], 40)
+        self.assertEqual(payload["quantity"], 5)
         self.assertTrue(payload["participateDontInitiate"])
         await runner.private_stream.close()
         await runner.market_stream.close()

@@ -36,7 +36,7 @@ class CommissioningTests(unittest.TestCase):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
         self.assertIsNone(self.authorized().assert_authorized(now=now))
         self.assertTrue(self.authorized().manual_stop_only)
-        self.assertEqual(str(self.authorized().quote_size), "40")
+        self.assertEqual(str(self.authorized().quote_size), "5")
         self.assertEqual(str(self.authorized().hard_stop_loss_usd), "45")
         self.assertEqual(str(self.authorized().max_session_loss_usd), "40")
         self.assertEqual(str(self.authorized().max_market_loss_usd), "40")
@@ -66,7 +66,7 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
         self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
-            self.authorized().max_session_execution_fees_usd, Decimal("12"))
+            self.authorized().max_session_execution_fees_usd, Decimal("1.50"))
         self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
         self.assertEqual(
             self.authorized().force_exit_before_start_seconds, 300)
@@ -115,7 +115,7 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(config.max_markets, 8)
         # Size per quote is unchanged. Breadth expands, exposure per market
         # does not.
-        self.assertEqual(config.quote_size, Decimal("40"))
+        self.assertEqual(config.quote_size, Decimal("5"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
         # Only ~33 markets survive the day_of and catalog-spread filters, so
         # 25 left a blind spot for no reason. 100 covers the whole pool.

@@ -206,7 +206,36 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    (finding 12), so comparing cash delta against the ledger's computed P&L on
    any round trip settles which leg is wrong, with no inference.
 
-12. **SUPERSEDED -- the fill price frame is not derivable from
+12. **SOLVED: `BUY_SHORT` is a PURCHASE, not a sale. realized_pnl takes its
+   sign from the venue's side label instead of the intent, which flips a loss
+   into a gain.**
+
+   Both intents we send are BUY intents and the price goes unchanged --
+   documented in `live_orders._intent` and validated by maker-lab across 201
+   fills. So `BUY_SHORT` at 0.67 does not sell at 0.67; it BUYS the opposite
+   outcome for 0.67. Holding both sides nets the position out, because the
+   pair settles at exactly 1.00.
+
+   `aec-valorant-ff-ep`, worked through:
+
+       BUY_LONG   5 x 0.39  =  paid 1.95
+       BUY_SHORT  5 x 0.67  =  paid 3.35
+       paid for 5 pairs        5.30
+       5 pairs settle at       5.00
+       realised                -0.30      <- matches the venue app exactly
+
+   `realized_pnl` books the BUY_SHORT as cash IN of 3.35 because the venue
+   labels it `ORDER_SIDE_SELL`, and computes +1.34. The label describes the
+   outcome being taken, not the direction of our cash.
+
+   **The fix is the sign, not the price.** Cash out for both intents, plus
+   1.00 per netted pair. Prices are already correct (finding 11) -- fill price
+   equals our order price on every maker fill.
+
+   The session stop is already immune: it reads settled cash (finding 13).
+   What is still wrong is per-market attribution and reporting.
+
+13. **SUPERSEDED -- the fill price frame is not derivable from
    portfolio.activities.**
    Attempted 2026-08-15 across every trade on the account. Two obstacles:
 

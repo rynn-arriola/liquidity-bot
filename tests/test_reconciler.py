@@ -210,23 +210,37 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual((actions[0].kind, actions[0].order_id),
                          (ActionKind.CANCEL, "bid-one"))
 
-    def test_soft_long_exit_never_quotes_below_entry(self):
+    def test_a_losing_long_exit_rests_at_the_touch_not_at_entry(self):
+        """Invariant 5: no cost-basis floor. The code used to contradict it.
+
+        A floor can only fill when the market comes back to entry, so it exits
+        winners and strands losers -- nobody buys at 0.50 while the market is
+        0.41. maker-lab ran one and measured its settlement pool at 2 winners
+        against 14 losers, documenting it as "79% losers BY CONSTRUCTION": 234
+        settled positions cost $443.88 where crossing at T-15 would have cost
+        $64.18. Resting at the touch lets a loser leave passively, earning the
+        maker rebate instead of paying a taker fee.
+        """
         falling = book(T0 + timedelta(seconds=1), bid=.39, offer=.41)
+
         actions = DesiredStateReconciler(policy()).plan(frame(
             now=T0 + timedelta(seconds=1), position="2", opened=T0,
             entry=.50, snapshot=falling))
+
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(actions[0].side, "offer")
-        self.assertEqual(actions[0].price, .50)
+        self.assertEqual(actions[0].price, .41)
 
-    def test_soft_short_exit_never_quotes_above_entry(self):
+    def test_a_losing_short_exit_rests_at_the_touch_not_at_entry(self):
         rising = book(T0 + timedelta(seconds=1), bid=.61, offer=.63)
+
         actions = DesiredStateReconciler(policy()).plan(frame(
             now=T0 + timedelta(seconds=1), position="-2", opened=T0,
             entry=.50, snapshot=rising))
+
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(actions[0].side, "bid")
-        self.assertEqual(actions[0].price, .50)
+        self.assertEqual(actions[0].price, .61)
 
     def test_timeout_confirms_cancel_before_ioc(self):
         reconciler = DesiredStateReconciler(policy())

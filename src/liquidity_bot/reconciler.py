@@ -371,18 +371,30 @@ class DesiredStateReconciler:
             ActionKind.CANCEL, slug, "cancel_building_after_fill",
             side=order.side, order_id=order.order_id)
             for order in frame.working_orders if order.side == building]
-        active_touch = self._touch(frame.book, reducing)
-        # A passive reducer is allowed to wait, so it must not lock in a loss.
-        # Long inventory sells no lower than basis; short inventory buys back
-        # no higher than basis.  The hard timeout remains the only path allowed
-        # to pay for an emergency flatten, and the live commissioning runner
-        # terminates the market after such an exit rather than immediately
-        # beginning another fee-paying cycle.
-        passive_price = (
-            max(active_touch, frame.entry_price)
-            if frame.position > 0
-            else min(active_touch, frame.entry_price)
-        )
+        # At the touch, with NO cost-basis floor. This is invariant 5, and the
+        # code contradicted it.
+        #
+        # A floor sounds protective and is the opposite. It can only fill when
+        # the market comes back to your entry, so it exits winners and strands
+        # losers: nobody buys at 0.39 while the market is 0.25. Losing
+        # positions are then forced into the expensive paths -- crossing the
+        # spread and paying taker fees, or riding to settlement.
+        #
+        # maker-lab ran a floor and measured the result on 101 exits: passive
+        # 60 winners against 1 loser, settlement 2 winners against 14. They
+        # documented the settlement pool themselves as "79% losers BY
+        # CONSTRUCTION". The floor does not avoid losses, it defers and
+        # concentrates them -- $88.20 into settlement in one session, 86% of
+        # that session's loss. At larger scale 234 settled positions cost
+        # $443.88 where crossing at T-15 would have cost $64.18: a $379.70
+        # swing with 78% of positions individually better off.
+        #
+        # Without the floor a loser can leave passively at the touch, earning
+        # the maker rebate instead of paying a taker fee, and early instead of
+        # at a binary. The hard timeout remains the only path that pays for an
+        # emergency flatten.
+        passive_price = self._touch(frame.book, reducing)
+        active_touch = passive_price
         reducing_orders = [order for order in frame.working_orders
                            if order.side == reducing]
         matching = [order for order in reducing_orders

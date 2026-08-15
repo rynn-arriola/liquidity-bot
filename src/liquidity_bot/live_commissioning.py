@@ -1772,7 +1772,21 @@ class CommissioningRunner:
         routine = not (component.endswith("_terminal")
                        or component.startswith("unowned")
                        or "ownership" in component)
-        if attempt <= 2 or (attempt & (attempt - 1)) == 0:
+        # Volume, separately from severity. A routine recovery that clears on
+        # its first or second try never needed a human -- and `book_stale` at
+        # attempt 1 is the *normal* startup state, fired once by every market
+        # before its first book arrives, so twenty markets meant twenty
+        # messages announcing that the bot was working. Every occurrence is
+        # still in commissioning.log.
+        #
+        # Routine conditions therefore announce only once they have failed
+        # repeatedly -- attempt 4, then 8, 16, 32 -- which is a real outage
+        # rather than a retry. Non-routine keeps its early warning.
+        if routine:
+            should_alert = attempt >= 4 and (attempt & (attempt - 1)) == 0
+        else:
+            should_alert = attempt <= 2 or (attempt & (attempt - 1)) == 0
+        if should_alert:
             await self.notifier.send_async(
                 ("🔁 " if routine else "⚠️ ")
                 + f"Liquidity Bot {'recovering' if routine else 'runtime failure'}: "
@@ -1781,6 +1795,10 @@ class CommissioningRunner:
                 + ("" if routine else
                    " New risk is disabled until reconnect and reconciliation pass."),
                 critical=not routine,
+                # Operational, not a report. The summary webhook is for
+                # reporting; recoveries and failures go to the errors webhook
+                # whether or not they are critical.
+                channel="errors",
             )
 
     async def _quarantine_working_orders(

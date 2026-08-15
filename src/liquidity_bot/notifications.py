@@ -61,15 +61,26 @@ class DiscordNotifier:
         return json.dumps(
             {"content": clean}, ensure_ascii=False).encode("utf-8")
 
-    def send(self, message: str, *, critical: bool = False) -> NotificationResult:
+    def send(self, message: str, *, critical: bool = False,
+             channel: str | None = None) -> NotificationResult:
         return self.send_payload(
             {"content": json.loads(self._body(message))["content"]},
-            critical=critical)
+            critical=critical, channel=channel)
 
     def send_payload(
         self, payload: Mapping[str, Any], *, critical: bool = False,
+        channel: str | None = None,
     ) -> NotificationResult:
-        url = self._error_url if critical else self._status_url
+        # Destination and severity are separate choices. They used to be one
+        # knob -- critical went to the errors webhook, everything else to the
+        # status one -- so downgrading routine recoveries from critical also
+        # moved them into the status channel, which is meant for reporting.
+        # Operational noise belongs in the errors channel whether or not it
+        # needs a human right now.
+        if channel not in (None, "status", "errors"):
+            raise ValueError("channel must be 'status' or 'errors'")
+        to_errors = (critical if channel is None else channel == "errors")
+        url = self._error_url if to_errors else self._status_url
         if not url:
             return NotificationResult(False, "webhook_not_configured")
         if not isinstance(payload, Mapping) or not payload:
@@ -83,9 +94,11 @@ class DiscordNotifier:
 
     async def send_async(
         self, message: str, *, critical: bool = False,
+        channel: str | None = None,
     ) -> NotificationResult:
         # Never block the market/private WebSocket event loop on Discord HTTP.
-        return await asyncio.to_thread(self.send, message, critical=critical)
+        return await asyncio.to_thread(
+            self.send, message, critical=critical, channel=channel)
 
     async def send_payload_async(
         self, payload: Mapping[str, Any], *, critical: bool = False,

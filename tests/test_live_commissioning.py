@@ -224,10 +224,12 @@ class FakeNotifier:
     def __init__(self, *, delivery_succeeds=True):
         self.messages = []
         self.payloads = []
+        self.channels = []
         self.delivery_succeeds = delivery_succeeds
 
-    async def send_async(self, content, *, critical=False):
+    async def send_async(self, content, *, critical=False, channel=None):
         self.messages.append((content, critical))
+        self.channels.append(channel)
         return NotificationResult(
             self.delivery_succeeds,
             "sent" if self.delivery_succeeds else "delivery_failed")
@@ -801,9 +803,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runner.incentive)
         self.assertEqual(runner._reward_eligible, frozenset())
         self.assertEqual(client.orders.create_calls, [])
-        self.assertTrue(any(
+        # A first-attempt transient is logged, not announced. It is one
+        # market's expired incentive clearing itself on the next pass; twenty
+        # markets each announcing that at startup is how a real alert gets
+        # missed. Persistence still announces, at attempt 4, 8, 16.
+        self.assertFalse(any(
             "idle_market_refresh" in message
             for message, _ in notifier.messages))
+        self.assertEqual(
+            runner._runtime_error_counts.get("idle_market_refresh"), 1)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -1529,6 +1537,33 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
 
+    async def test_operational_noise_goes_to_the_errors_webhook(self):
+        """The summary channel is for reporting, not for retries.
+
+        Destination used to be tied to severity -- critical went to the errors
+        webhook, everything else to the status one -- so downgrading routine
+        recoveries out of critical also moved them into the reporting channel.
+        They belong in errors either way.
+        """
+        runner, _client, notifier = self.build_runner()
+        await runner.preflight()
+        before = len(notifier.messages)
+
+        # Persist past the routine threshold so it announces at all.
+        for attempt in range(1, 5):
+            await runner._report_runtime_error(
+                "strategy_state:market-one", AdapterError("book_stale"),
+                attempt)
+
+        announced = notifier.channels[before:]
+        self.assertTrue(announced, "a persistent recovery must announce")
+        self.assertTrue(all(channel == "errors" for channel in announced))
+        # Announced, but never critical -- it is a retry, not a fault.
+        self.assertFalse(any(
+            critical for _message, critical in notifier.messages[before:]))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_the_startup_banner_reports_the_real_config(self):
         """The operator's first sight of a run must not be wrong.
 
@@ -1781,9 +1816,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.private_stream.started_with, ["market-one"])
         self.assertTrue(runner.gate.ready(runner.ledger, now=NOW))
         self.assertEqual(client.orders.create_calls, [])
-        # Routine recovery is announced but not critical: 1,517 of these
-        # in an hour, all transient, is how a real alert gets missed.
-        self.assertTrue(any(
+        # A transient that clears on its first try is not announced at all.
+        # Severity was fixed first (nothing routine is critical); volume is the
+        # other half -- 1,517 of these in an hour, and twenty markets each
+        # firing book_stale once at startup, is how a real alert gets missed.
+        # Every occurrence is still in commissioning.log.
+        self.assertFalse(any(
             "recovering" in message for message, _ in notifier.messages))
         self.assertFalse(any(critical for _, critical in notifier.messages))
         await runner.private_stream.close()
@@ -1808,9 +1846,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(runner.market_stream, old_stream)
         self.assertIs(runner.book, recovered_book)
         self.assertEqual(client.orders.create_calls, [])
-        # Routine recovery is announced but not critical: 1,517 of these
-        # in an hour, all transient, is how a real alert gets missed.
-        self.assertTrue(any(
+        # A transient that clears on its first try is not announced at all.
+        # Severity was fixed first (nothing routine is critical); volume is the
+        # other half -- 1,517 of these in an hour, and twenty markets each
+        # firing book_stale once at startup, is how a real alert gets missed.
+        # Every occurrence is still in commissioning.log.
+        self.assertFalse(any(
             "recovering" in message for message, _ in notifier.messages))
         self.assertFalse(any(critical for _, critical in notifier.messages))
         await runner.private_stream.close()

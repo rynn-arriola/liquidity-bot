@@ -89,6 +89,31 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("/2/error", calls[1][0])
         self.assertEqual(calls[1][1]["content"], "money risk")
 
+    def test_channel_routes_independently_of_severity(self):
+        """Destination and severity are separate choices.
+
+        They used to be one knob -- critical went to the errors webhook and
+        everything else to the status one -- so downgrading routine recoveries
+        out of critical silently moved them into the reporting channel.
+        """
+        calls = []
+
+        def transport(url, body):
+            calls.append(url)
+            return True
+
+        notifier = DiscordNotifier(self.secrets(), transport=transport)
+        notifier.send("retrying", critical=False, channel="errors")
+        notifier.send("session summary", critical=False)
+
+        self.assertIn("/2/error", calls[0])
+        self.assertIn("/1/status", calls[1])
+
+    def test_an_unknown_channel_is_refused(self):
+        notifier = DiscordNotifier(self.secrets(), transport=lambda u, b: True)
+        with self.assertRaises(ValueError):
+            notifier.send("x", channel="somewhere")
+
     def test_liquidity_summary_excludes_pending_reward_and_leads_with_risk(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="DO_NOT_START_TRIAL",

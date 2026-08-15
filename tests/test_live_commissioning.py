@@ -853,6 +853,73 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_plan_failure_retires_one_market_not_the_session(self):
+        """One market's planning exception must not stop the other seven."""
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one", "market-two"])
+
+        def explode(frame):
+            if frame.market.slug == "market-one":
+                raise ValueError("planner blew up on this market's state")
+            return []
+
+        runner.reconciler.plan = explode
+
+        stop, _delay = await runner._decide_for_market("market-one", runner._now())
+
+        self.assertIsNone(stop)
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertFalse(runner._is_barred_from_quoting("market-two"))
+
+    async def test_quarantine_scoped_to_one_market_spares_the_others(self):
+        """One market's fault must not cancel seven healthy quotes.
+
+        Observed 2026-08-15T01:42Z: a single market reporting
+        `execution_state_unknown` drove _quarantine_working_orders, which
+        cancelled every bound market's resting order -- seconds after placement,
+        on repeat. Reward is paid for resting time, so this earned nothing.
+        """
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one", "market-two"])
+        for slug, oid in (("market-one", "order-one"), ("market-two", "order-two")):
+            payload = {
+                "marketSlug": slug,
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "type": "ORDER_TYPE_LIMIT",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": 5,
+                "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+                "participateDontInitiate": True,
+                "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC",
+                "synchronousExecution": False,
+            }
+            runner.ledger.prepare_intent(
+                oid, "PLACE", slug, f"{oid}-client", payload, created_at=NOW)
+            runner.ledger.transition_intent(oid, "SUBMITTING", updated_at=NOW)
+            runner.ledger.transition_intent(
+                oid, "ACKNOWLEDGED", updated_at=NOW, exchange_order_id=oid)
+            client.orders.rows[oid] = {
+                "id": oid,
+                "marketSlug": slug,
+                "side": "ORDER_SIDE_BUY",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "5",
+                "cumQuantity": "0",
+                "state": "ORDER_STATE_NEW",
+                "createTime": NOW.isoformat(),
+            }
+
+        await runner._quarantine_working_orders("market-one")
+
+        cancelled = [str(call) for call in client.orders.cancel_calls]
+        self.assertTrue(any("order-one" in call for call in cancelled))
+        self.assertFalse(any("order-two" in call for call in cancelled))
+
     async def test_recovery_loads_a_market_whose_game_already_started(self):
         """A leftover order does not stop being ours because the game began.
 

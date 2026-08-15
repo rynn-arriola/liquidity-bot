@@ -215,6 +215,9 @@ class CommissioningRunner:
         # Retired slugs are never re-entered, even after they prove flat: an
         # exit that failed once is evidence about that book, not bad luck.
         self._retired_ever: set[str] = set()
+        # Bound by recovery to be exited, not retired for a fault. Held in
+        # `_retired_ever` too, so they never quote and are never reselected.
+        self._recovery_slugs: set[str] = set()
         self._active_market_slugs: tuple[str, ...] = (
             () if config.auto_select_reward_markets
             else (config.market_slug,))
@@ -797,6 +800,7 @@ class CommissioningRunner:
                 # while the reconciler keeps planning its exit.
                 for slug in recovery_slugs:
                     self._retired_ever.add(slug)
+                    self._recovery_slugs.add(slug)
             else:
                 await self._select_reward_market(now)
                 now = self._now()
@@ -1379,8 +1383,21 @@ class CommissioningRunner:
             return None, 0.0
         try:
             actions = self.reconciler.plan(self._frame(now, slug))
+        except RuntimeInvariantViolation as invariant:
+            # A violated runtime invariant is about the process, not this
+            # market. It stays terminal.
+            return await self._handle_strategy_plan_failure(invariant), 0.0
         except Exception as exc:
-            return await self._handle_strategy_plan_failure(exc), 0.0
+            # Planning raised on this market's own state. Ending the session
+            # would take seven healthy markets down with it and stop all
+            # accrual; retiring keeps them quoting while this one is worked out
+            # and never quoted again. Retirement is bounded -- ten rounds per
+            # market, and a full slate of retirements still stops the session,
+            # so a systemic planning fault is not silently absorbed.
+            await self._report_runtime_error(f"strategy_plan:{slug}", exc)
+            stop = await self._retire_market(
+                slug, f"plan_failed_{type(exc).__name__}")
+            return stop, 0.0
         if actions and actions[0].kind == ActionKind.CRITICAL:
             reason = actions[0].reason
             if reason == "hard_exit_sent_but_inventory_remains":
@@ -1690,8 +1707,23 @@ class CommissioningRunner:
                 critical=not routine,
             )
 
-    async def _quarantine_working_orders(self) -> None:
-        """Cancel known quotes and prove their terminal state before resume."""
+    async def _quarantine_working_orders(
+        self, slug: str | None = None,
+    ) -> None:
+        """Cancel known quotes and prove their terminal state before resume.
+
+        ``slug`` limits the quarantine to one market. A per-market fault --
+        this market's execution state is unknown, this market's action failed
+        -- says nothing about the other seven, whose quotes are resting
+        legitimately and earning. Cancelling them destroys the accrual that
+        reward pays for and buys no safety. Observed 2026-08-15T01:42Z: one
+        market reporting `execution_state_unknown` cancelled every other
+        market's quote within seconds of placement, on repeat.
+
+        The global form (``slug=None``) is still correct for faults that really
+        are account-wide: a stream reconnect, and rotation, which is about to
+        rebind every market anyway.
+        """
 
         # Name the caller. This is one of only two paths that cancel an order,
         # the planner never asked for a cancel in the live logs, and the live
@@ -1714,22 +1746,22 @@ class CommissioningRunner:
         # primary. Resuming with one market's order still working would let it
         # fill unobserved while the others rebind.
         # Nothing bound and nothing in the ledger means nothing to retire.
-        slugs = self._shutdown_slugs()
-        for slug in slugs:
-            if self.ledger.market_has_unresolved_intent(slug):
+        slugs = (slug,) if slug is not None else self._shutdown_slugs()
+        for market in slugs:
+            if self.ledger.market_has_unresolved_intent(market):
                 raise AdapterError(
-                    f"runtime recovery has unresolved order intents in {slug}")
-            if self.ledger.working_orders(slug):
-                await self.kill_switch.initiate(slug, now=self._now())
+                    f"runtime recovery has unresolved order intents in {market}")
+            if self.ledger.working_orders(market):
+                await self.kill_switch.initiate(market, now=self._now())
         await self._rest_reconcile(self._now())
         self._assert_runtime_scope()
-        for slug in slugs:
-            if self.ledger.market_has_unresolved_intent(slug):
+        for market in slugs:
+            if self.ledger.market_has_unresolved_intent(market):
                 raise AdapterError(
-                    f"runtime recovery cancel is not yet reconciled in {slug}")
-            if self.ledger.working_orders(slug):
+                    f"runtime recovery cancel is not yet reconciled in {market}")
+            if self.ledger.working_orders(market):
                 raise AdapterError(
-                    f"runtime recovery order is still working in {slug}")
+                    f"runtime recovery order is still working in {market}")
 
     def _rotation_blockers(self) -> tuple[str, ...]:
         """Require whole-account flat, owned, resolved state before rebinding."""
@@ -2069,7 +2101,7 @@ class CommissioningRunner:
                     # stale: the reconciler returns this critical before it can
                     # plan anything, so no quote is placed on stale data.
                     return
-            await self._quarantine_working_orders()
+            await self._quarantine_working_orders(slug)
         except RuntimeInvariantViolation:
             raise
         except Exception as exc:
@@ -2179,8 +2211,11 @@ class CommissioningRunner:
                 critical=True,
             )
         # One full slate of retirements is not eight unlucky books, it is a
-        # systemic fault. Stop rather than churn every slot.
-        if len(self._retired_ever) > self.config.max_markets:
+        # systemic fault. Stop rather than churn every slot. Markets bound by
+        # recovery share the retired set (they must never quote) but were not
+        # retired for a fault, so they do not count toward the systemic bound.
+        faulted = self._retired_ever - self._recovery_slugs
+        if len(faulted) > self.config.max_markets:
             return "critical:market_retirement_limit_exceeded"
         return None
 
@@ -2262,7 +2297,7 @@ class CommissioningRunner:
         if "unresolved order intent" in str(exc):
             return None
         try:
-            await self._quarantine_working_orders()
+            await self._quarantine_working_orders(slug)
         except RuntimeInvariantViolation as invariant:
             await self._report_runtime_error(
                 "action_driver_terminal", invariant)

@@ -1622,6 +1622,11 @@ class CommissioningRunner:
                 # quoting have nothing to protect here -- applying them would
                 # only raise `no longer pregame` on every refresh for the whole
                 # time we are exiting, once a second, for hours.
+                # Exit-only markets load with the gates relaxed: those gates
+                # exist to stop us OPENING risk, and a market we are trying to
+                # leave has already opened it. Without this an exit-only market
+                # whose game has started raises `no longer pregame` on every
+                # refresh and never gets a fresh book to price against.
                 await self._refresh_contracts(
                     now, slug, for_exit=self._is_barred_from_quoting(slug))
                 self._runtime_error_counts.pop(
@@ -2296,7 +2301,12 @@ class CommissioningRunner:
         re-entering it is how a bad market gets traded twice.
         """
 
-        return slug in self._retired_ever
+        if slug in self._retired_ever:
+            return True
+        # Serviced but not selected: we hold risk here and are working the
+        # exit, but selection did not choose it, so it must not build MORE.
+        # Without this the managed set would quietly widen what we quote.
+        return slug not in set(self.active_slugs)
 
     async def _retire_market(
         self, slug: str, reason: str, *, reset_exit_budget: bool = True,
@@ -2492,6 +2502,29 @@ class CommissioningRunner:
             await self._report_runtime_error(
                 f"action_driver_recovery:{slug}", recovery_exc)
         return None
+
+    def managed_slugs(self) -> tuple[str, ...]:
+        """Every market to SERVICE, which is not the same as what to quote.
+
+        `active_slugs` answers "what did selection choose"; this answers "what
+        still holds risk". They were conflated, so a position lost its manager
+        the moment selection moved on: the passive reducer, the inventory
+        timer and the pre-kickoff flatten all iterate the serviced set, so a
+        dropped market was never visited again and never got an exit order.
+        Rotation even cancelled the exit that was already resting, leaving the
+        worst pairing -- position kept, exit gone.
+
+        Observed 2026-08-15: `aec-wta-kamrak-marsak-2026-08-14` held 5
+        contracts from the previous day, through many restarts, with no exit
+        order and no attempt to place one. Nothing was refusing it; nothing was
+        looking at it.
+
+        A market here that selection did not choose is exit-only: barred from
+        quoting by `_is_barred_from_quoting`, while the reconciler still plans
+        its exit every pass.
+        """
+
+        return self._shutdown_slugs()
 
     def _shutdown_slugs(self) -> tuple[str, ...]:
         """Every market that could still hold risk, not just the active set.
@@ -2898,7 +2931,10 @@ class CommissioningRunner:
                 # last among periodic REST work so account latency cannot age a
                 # book before the decisions below.
                 try:
-                    for slug in self.active_slugs:
+                    # Serviced, not merely selected. A market holding risk must
+                    # keep being visited even after selection moves on, or its
+                    # exit is never planned.
+                    for slug in self.managed_slugs():
                         await self._service_market_state(slug, self._now())
                 except RuntimeInvariantViolation as invariant:
                     stop_reason = await self._handle_strategy_plan_failure(

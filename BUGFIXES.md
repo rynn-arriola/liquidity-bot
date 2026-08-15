@@ -31,6 +31,32 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### A position lost its manager when selection moved on
+
+**Symptom:** two open positions with **no exit orders and no attempt to place
+any** — `aec-wta-kamrak-marsak` held 5 contracts from the *previous day*,
+through many restarts. Nothing refused them; nothing looked at them.
+
+**Mechanism:** `active_slugs` answered two different questions — *what to
+quote* and *what to manage* — and selection decided it. The passive reducer,
+the inventory timer and the pre-kickoff flatten all iterate the serviced set,
+so a market dropped by rotation was never visited again. Rotation also
+cancelled the exit already resting, leaving the worst pairing: position kept,
+exit gone.
+
+**Fix:** service the *managed* set — selected ∪ anything holding a position,
+working order or unresolved intent (which `_shutdown_slugs` already computed
+for shutdown, just never used at runtime). A managed-but-unselected market is
+exit-only: barred from quoting, refreshed with `for_exit=True` so a started
+game still yields a book to price against.
+
+**Why today's other fixes missed it:** all of them assumed the bot was still
+watching the market. This position never reached the decision loop at all.
+
+**Coverage gap, stated plainly:** `managed_slugs()` and the quoting bar are
+both mutation-covered, but the line that iterates it in the run loop is not —
+no test drives that loop. Reverting it to `active_slugs` still passes.
+
 ### Adding a field to Execution broke the fill back-fill
 
 **Symptom:** `LedgerConflict: event id was reused with different content`, the

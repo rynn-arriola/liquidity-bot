@@ -3075,6 +3075,40 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             runner.ledger.query("SELECT * FROM execution_fills"), [])
 
+    async def test_a_position_outside_the_selected_set_is_still_serviced(self):
+        """A position must not lose its manager when selection moves on.
+
+        active_slugs answered two different questions -- what to quote and what
+        to manage -- so a market dropped by rotation was never visited again.
+        The passive reducer, the inventory timer and the pre-kickoff flatten
+        all iterate the serviced set, so none of them ran, and no exit order
+        was ever placed. Rotation also cancelled the exit already resting,
+        leaving position kept and exit gone.
+
+        Observed 2026-08-15: aec-wta-kamrak-marsak held 5 contracts from the
+        PREVIOUS DAY, through many restarts, with no exit and no attempt at
+        one. Nothing refused it; nothing looked at it.
+        """
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        await runner.preflight()
+        runner._bind_markets(["market-one"])
+
+        # A position in a market selection did NOT choose.
+        client.portfolio.rows = {"market-two": {
+            "netPosition": "5", "netPositionDecimal": "5.0000",
+            "updateTime": NOW.isoformat()}}
+        await runner._rest_reconcile(runner._now())
+
+        self.assertNotIn("market-two", runner.active_slugs)
+        self.assertIn("market-two", runner.managed_slugs())
+        # Serviced, but never quotable -- we are leaving, not building.
+        self.assertTrue(runner._is_barred_from_quoting("market-two"))
+        self.assertFalse(runner._is_barred_from_quoting("market-one"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_shutdown_parks_a_position_on_its_resting_exit(self):
         """A redeploy must not liquidate a position at the market.
 

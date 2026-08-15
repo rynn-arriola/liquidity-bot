@@ -22,8 +22,9 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ## Current status — 2026-08-15
 
-**Bot: stopped**, flat at the venue, on `c0be148`. `max_markets` is now **16**
-across two private connections (§7). Six production bugs fixed today, all
+**`max_markets` is 16** across two private connections -- set by the REST
+governor, not the subscription cap (§7, finding 8). Thirty was tried live and
+produced zero placements. Six production bugs fixed today, all
 mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
 
 **Critical facts established 2026-08-15:**
@@ -75,7 +76,23 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    a longer quiet-refresh interval -- never a higher request rate, since
    maker-lab was rate-limited and settled at 0.3 req/s.
 
-8. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+8. **The REST governor caps market width at ~16, not the socket cap.**
+   Measured live 2026-08-15T13:48Z at `max_markets = 30`: **29 markets bound,
+   58 `book_stale` events, and ZERO placements.** Not one market could quote.
+
+       N markets / 4 req/s must stay under max_book_age_seconds (5.0)
+       30 / 4 = 7.5s cycle  ->  every book stale before its turn
+       N < 20; 16 leaves a second of margin
+
+   Subscriptions were never the limit -- 30 markets across four connections is
+   subscribable and the sockets came up fine. Width past this point is not
+   merely wasted, it is **negative**: extra markets starve the ones that would
+   otherwise have quoted. Raising `rest_requests_per_second` is not the lever
+   (maker-lab was rate-limited and settled at 0.3; we are at 4). Going wider
+   needs a longer quiet-refresh interval or a higher staleness bound first,
+   measured deliberately.
+
+9. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

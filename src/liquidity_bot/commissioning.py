@@ -81,26 +81,30 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    # Four private connections: 8 + 8 + 8 + 6. The subscription cap is per
-    # connection (1 orders + N positions + 1 balance <= 10) and connections are
-    # independent -- both measured 2026-08-14. Reward pools are per market, so
-    # more markets reaches more pools; more size only buys a larger share of
-    # the same one. maker-lab ran 30 at size 5 and that is the account that
-    # earned $70.92.
+    # Two private connections at eight markets each.
     #
-    # Worst-case exposure is bounded well inside the portfolio budget: both
-    # sides of one market risk quote_size x p + quote_size x (1 - p) = $5, so
-    # 30 markets is $150 against the $340 cap.
+    # The socket cap is not what sets this. Subscriptions allow far more --
+    # 1 orders + N positions + 1 balance <= 10 per connection, and connections
+    # are independent (measured 2026-08-14), so 30 markets across four sockets
+    # is subscribable. **The REST governor is the real ceiling.** Measured
+    # 2026-08-15T13:48Z at 30 markets: 29 bound, 58 book_stale events, and
+    # ZERO placements -- the bot could not quote a single market.
     #
-    # The binding constraint at this width is the REST governor, not the
-    # sockets. The quiet-book refresh only fires when the WebSocket has been
-    # silent for 3s, so active markets cost nothing; but if every market went
-    # quiet at once, 30 of them want ~10 req/s against a 4 req/s governor. That
-    # degrades safely -- books age, book_stale fires, those markets stop
-    # quoting -- and the lever if it bites is a longer quiet-refresh interval,
-    # NOT a higher request rate. maker-lab was rate-limited and settled at 0.3
-    # req/s; we are already at 4.
-    max_markets: int = 30
+    #     N markets / 4 req/s must stay under max_book_age_seconds (5.0)
+    #     N < 20, and 16 leaves a second of margin
+    #
+    # Every book was stale before its turn came round, so no market could ever
+    # act on fresh data. Width past this point is not merely wasted, it is
+    # negative: it starves the markets that would otherwise quote.
+    #
+    # Raising rest_requests_per_second is NOT the lever. maker-lab was
+    # rate-limited and settled at 0.3 req/s; we are already at 4. Widening past
+    # 16 needs a longer quiet-refresh interval or a higher staleness bound
+    # first, and both are freshness trade-offs to measure deliberately.
+    #
+    # Worst-case exposure: both sides of one market risk quote_size x p +
+    # quote_size x (1 - p) = $5, so 16 markets is $80 against the $340 cap.
+    max_markets: int = 16
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -213,10 +217,10 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 5 or self.max_markets != 30:
+        if self.quote_size != 5 or self.max_markets != 16:
             problems.append(
                 "commissioning is hard-locked to five contracts per quote "
-                "across at most thirty markets")
+                "across at most sixteen markets")
         if (self.max_market_exposure_usd != 45
                 or self.max_portfolio_exposure_usd != 340):
             problems.append(

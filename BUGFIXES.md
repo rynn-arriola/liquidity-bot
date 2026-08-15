@@ -31,6 +31,24 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### Thirty markets starved every market of fresh books — `a5b20e9`..`HEAD`
+
+**Symptom:** 29 markets bound, 58 `book_stale` events, **zero placements**.
+The bot could not quote a single market.
+
+**Mechanism:** the socket cap was lifted to 30 across four connections, but the
+REST governor is the real ceiling. 30 markets at 4 req/s is a 7.5s refresh
+cycle against a 5s staleness bound, so every book was stale before its turn.
+Width past ~16 is negative, not merely wasted: the extra markets starve the
+ones that would otherwise quote.
+
+**Fix:** `max_markets = 16`. Raising the request rate is not the lever --
+maker-lab was rate-limited and settled at 0.3 req/s against our 4.
+
+**Caught in production, minutes after deploy.** The end-to-end review verified
+subscriptions, sharding and exposure, and confirmed the rate could not be
+exceeded — but never checked whether the rate could *service* 30 markets.
+
 ### Stuck-cancel grace measured lateness, not the cancel — `c2602df`
 
 **Symptom:** `hard_exit_blocked_cancel_unconfirmed` firing on a ~60s cycle,

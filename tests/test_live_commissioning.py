@@ -573,7 +573,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # Ten private subscriptions is the measured per-connection ceiling,
         # and eight markets is exactly what fits alongside orders and balance.
-        # Thirty is four connections; more slugs on offer must not widen it.
+        # Sixteen is two connections; more slugs on offer must not widen it.
         self.assertEqual(len(runner.active_slugs), runner.config.max_markets)
         await runner.private_stream.close()
         await runner.market_stream.close()

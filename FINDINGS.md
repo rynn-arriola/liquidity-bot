@@ -180,7 +180,27 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    well. We reject it because the parser demands both sides before returning
    anything -- a requirement that belongs to *quoting*, not to exiting.
 
-11. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+11. **The fill price frame is NOT yet derivable from portfolio.activities.**
+   Attempted 2026-08-15 across every trade on the account. Two obstacles:
+
+   - every leg returned carries `aggressor: true`, and `makerExecutions` is
+     empty on all of them. So the feed shows the COUNTERPARTY's order, not
+     ours, whenever we were the maker -- which is most fills.
+   - the submitted price and the execution price differ by a uniform **0.10**,
+     positive for `BUY_SHORT` and negative for `BUY_LONG`
+     (0.30->0.42, 0.57->0.65, 0.28->0.38 / 0.52->0.42, 0.59->0.49,
+     0.58->0.50). Too consistent to be price improvement, and unexplained.
+
+   Until our own maker legs can be read, any conversion rule would be inferred
+   from someone else's order. Two attempts at reasoning this out have already
+   been wrong. **Do not write arithmetic on top of it** -- realized_pnl feeds
+   the $40 stop.
+
+   What is now available that was not: fills record `outcome` (commit
+   4bfadde), so once our own legs are obtainable the rule can be derived
+   rather than guessed.
+
+12. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

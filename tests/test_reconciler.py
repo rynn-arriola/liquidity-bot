@@ -353,15 +353,20 @@ class ReconcilerTests(unittest.TestCase):
 
         self.assertEqual(actions, [])
 
-    def test_resting_quotes_pull_after_spread_tightens_below_hysteresis(self):
-        snapshot = book(bid=.49, offer=.504)
+    def test_resting_quotes_pull_after_spread_stays_below_hysteresis(self):
+        """A sustained tight book still pulls the resting quotes."""
         orders = (
             WorkingOrder("bid-one", "bid", .49, Decimal("2")),
             WorkingOrder("offer-one", "offer", .504, Decimal("2")),
         )
+        reconciler = DesiredStateReconciler(policy())
+        reconciler.plan(frame(snapshot=book(bid=.49, offer=.504),
+                              orders=orders))
 
-        actions = DesiredStateReconciler(policy()).plan(
-            frame(snapshot=snapshot, orders=orders))
+        later = T0 + timedelta(seconds=60)
+        actions = reconciler.plan(frame(
+            now=later, snapshot=book(later, bid=.49, offer=.504),
+            orders=orders))
 
         self.assertEqual(
             {action.order_id for action in actions},
@@ -369,6 +374,26 @@ class ReconcilerTests(unittest.TestCase):
         )
         self.assertTrue(all(action.kind == ActionKind.CANCEL
                             for action in actions))
+
+    def test_a_transient_spread_dip_does_not_pull_a_resting_quote(self):
+        """Touch noise must not cancel accrued resting time.
+
+        Measured 2026-08-15: 69 of 153 cancels in an hour were resting quotes
+        pulled on a one-pass spread dip and re-placed at the same price about
+        ten seconds later. Reward pays for resting, so each of those was pure
+        loss.
+        """
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .504, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=book(bid=.49, offer=.504), orders=orders))
+
+        self.assertEqual(
+            [action for action in actions
+             if action.kind == ActionKind.CANCEL], [])
 
     def test_tight_spread_never_blocks_inventory_reducer(self):
         tight = book(T0 + timedelta(seconds=1), bid=.49, offer=.50)

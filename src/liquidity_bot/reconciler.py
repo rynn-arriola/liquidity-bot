@@ -64,6 +64,14 @@ class ReconcilerPolicy:
     hard_exit_confirmation_timeout_seconds: float = 10.0
     minimum_entry_spread: float = 0.02
     spread_hysteresis: float = 0.005
+    # How long a *resting* side must stay below the resting threshold before
+    # it is pulled. The touch is noisy at one-tick spreads: measured
+    # 2026-08-15, 69 of 153 cancels in an hour were resting quotes pulled on a
+    # spread dip and re-placed at the same price ~10s later. Each of those
+    # threw away accrued resting time, which is the only thing reward pays
+    # for. A book that is genuinely too tight stays tight and still clears
+    # this dwell.
+    spread_pull_dwell_seconds: float = 45.0
     force_exit_before_start_seconds: float = 300.0
 
     def __post_init__(self) -> None:
@@ -120,6 +128,8 @@ class MarketFrame:
 @dataclass
 class DesiredStateReconciler:
     policy: ReconcilerPolicy
+    _spread_pull_since: dict[tuple[str, str], datetime] = field(
+        default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
     _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
@@ -353,10 +363,22 @@ class DesiredStateReconciler:
         spread = frame.book.best_offer.price - frame.book.best_bid.price
         resting_sides = {order.side for order in frame.working_orders}
         for side in tuple(desired_sides):
+            resting = side in resting_sides
             threshold = self.policy.minimum_entry_spread
-            if side in resting_sides:
+            if resting:
                 threshold -= self.policy.spread_hysteresis
-            if spread + 1e-9 < threshold:
+            if spread + 1e-9 >= threshold:
+                self._spread_pull_since.pop((slug, side), None)
+                continue
+            if not resting:
+                # No risk is on the book yet. Refuse to open it immediately.
+                desired_sides.remove(side)
+                continue
+            # Resting. Pull only once the book has been this tight for a
+            # while; a one-pass dip is touch noise, not a regime change.
+            since = self._spread_pull_since.setdefault((slug, side), frame.now)
+            held = (frame.now - since).total_seconds()
+            if held >= self.policy.spread_pull_dwell_seconds:
                 desired_sides.remove(side)
 
         quote_size = self.policy.quote_size

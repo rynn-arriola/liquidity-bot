@@ -646,6 +646,18 @@ class CommissioningRunner:
                 exchange_id, observed_at=now)
         orders = await self.account.fetch_open_orders(observed_at=now)
         positions = await self.account.fetch_positions(observed_at=now)
+        # Fills, from the one source that survives a restart. Without this the
+        # $40 stop reads one-sided round trips: measured 2026-08-15, a $1.55
+        # loss was recorded as a $3.26 gain because only the opening fill was
+        # ever written. Failing this must not fail the whole reconcile -- the
+        # order and position snapshots above are what gate new risk.
+        try:
+            for execution in await self.account.fetch_executions(
+                    observed_at=now):
+                self.ledger.apply_execution(execution, received_at=now)
+            self._runtime_error_counts.pop("execution_backfill", None)
+        except Exception as exc:
+            await self._report_runtime_error("execution_backfill", exc)
         stamp = now.isoformat()
         self.ledger.apply_order_snapshot(
             f"commissioning-rest-orders:{stamp}", orders,

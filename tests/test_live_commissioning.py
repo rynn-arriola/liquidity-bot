@@ -119,9 +119,14 @@ class FakeOrders:
 class FakePortfolio:
     def __init__(self):
         self.rows = {}
+        self.trades = []
 
     async def positions(self, params):
         return {"positions": self.rows, "eof": True}
+
+    async def activities(self, params):
+        return {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": t}
+                               for t in self.trades], "eof": True}
 
 
 class FakeAccount:
@@ -2658,6 +2663,54 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._whole_account_safe_to_stop = lambda: False
         runner.config = replace(runner.config, max_shutdown_seconds=30)
         return runner, client, slug
+
+    async def test_a_fill_only_the_venue_saw_still_reaches_the_stop(self):
+        """A closing fill lost by the WebSocket must not hide a loss.
+
+        Measured 2026-08-15: three closing fills were never written, because a
+        shutdown IOC returns before its match completes and the fill then
+        arrives on a socket shutdown is closing. realized_pnl read a $1.55 loss
+        as a $3.26 gain, and the $40 stop cannot fire on what it cannot see.
+        """
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        def execution(exec_id, side, intent, px, qty):
+            return {
+                "id": exec_id, "tradeId": exec_id, "aggressor": True,
+                "type": "EXECUTION_TYPE_FILL",
+                "lastPx": {"value": px, "currency": "USD"},
+                "lastShares": qty,
+                "commissionNotionalCollected": {
+                    "value": "0.0000", "currency": "USD"},
+                "transactTime": NOW.isoformat(),
+                "order": {
+                    "id": f"order-{exec_id}", "marketSlug": slug,
+                    "side": side, "intent": intent,
+                    "price": {"value": px, "currency": "USD"},
+                    "quantity": qty, "cumQuantity": qty,
+                    "state": "ORDER_STATE_FILLED",
+                    "createTime": NOW.isoformat(),
+                },
+            }
+
+        # Sold 5 at 0.65, bought back at 0.96. Only the venue ever saw either.
+        client.portfolio.trades = [
+            {"id": "t1", "aggressorExecution": execution(
+                "e1", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT", "0.65", "5")},
+            {"id": "t2", "aggressorExecution": execution(
+                "e2", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG", "0.96", "5")},
+        ]
+
+        await runner._rest_reconcile(runner._now())
+
+        self.assertAlmostEqual(
+            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
+        # Replaying is idempotent -- dedupe is on execution_id.
+        await runner._rest_reconcile(runner._now())
+        self.assertAlmostEqual(
+            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
 
     async def test_shutdown_parks_a_position_on_its_resting_exit(self):
         """A redeploy must not liquidate a position at the market.

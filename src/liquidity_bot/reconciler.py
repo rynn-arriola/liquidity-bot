@@ -164,9 +164,14 @@ def entry_quote_price(
     gap_ticks = math.ceil(minimum_gap / step_size - 1e-9)
     mid = (book.best_bid.price + book.best_offer.price) / 2.0
     bid_ticks = math.ceil((mid - gap_ticks * step_size / 2.0) / step_size - 1e-9)
-    if side == "bid":
-        return bid_ticks * step_size
-    return (bid_ticks + gap_ticks) * step_size
+    ticks = bid_ticks if side == "bid" else bid_ticks + gap_ticks
+    # Round the grid multiplication. `41 * 0.01` is 0.41000000000000003 in
+    # binary floating point, and build_order_payload validates alignment in
+    # Decimal, so that price is rejected outright -- which retired the market
+    # for the whole session. Nine of the ninety-nine cent prices land this way
+    # (35, 41, 47, 57, 69, 70, 82, 83, 94), so roughly one backed-off quote in
+    # eleven was burning a market slot. Observed live 2026-08-15T07:01Z.
+    return round(ticks * step_size, 10)
 
 
 @dataclass

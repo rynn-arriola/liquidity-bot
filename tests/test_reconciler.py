@@ -381,6 +381,27 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(
             [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
 
+    def test_every_backed_off_price_lands_on_the_tick_grid(self):
+        """A price off the grid is rejected and retires the market.
+
+        `41 * 0.01` is 0.41000000000000003 in binary floating point, and
+        build_order_payload validates alignment in Decimal. Nine of the
+        ninety-nine cent prices land this way, so roughly one backed-off quote
+        in eleven burned a market slot for the whole session. Observed live
+        2026-08-15T07:01Z on merval-soprus.
+        """
+        reconciler = DesiredStateReconciler(policy())
+        for cents in range(2, 99):
+            touch = round(cents / 100.0, 10)
+            snapshot = book(bid=touch, offer=touch)
+            for side in ("bid", "offer"):
+                price = reconciler._entry_price(snapshot, side, 0.01)
+                if price is None:
+                    continue
+                self.assertEqual(
+                    Decimal(str(price)) % Decimal("0.01"), Decimal("0"),
+                    f"{side} price {price!r} off the tick grid at {cents}c")
+
     def test_a_tight_book_is_priced_back_to_two_cents_not_refused(self):
         """50/50 is quoted 49/49, not skipped.
 

@@ -2830,6 +2830,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
 
+        # Claim both orders as ours, the way an acknowledged intent does.
+        for oid, price in (("e1", "0.65"), ("e2", "0.96")):
+            runner.ledger.prepare_intent(
+                f"intent-{oid}", "PLACE", slug, f"client-{oid}",
+                {"marketSlug": slug, "price": {"value": price},
+                 "quantity": 5}, created_at=NOW)
+            runner.ledger.transition_intent(
+                f"intent-{oid}", "SUBMITTING", updated_at=NOW)
+            runner.ledger.transition_intent(
+                f"intent-{oid}", "ACKNOWLEDGED", updated_at=NOW,
+                exchange_order_id=f"order-{oid}")
+            client.orders.rows[f"order-{oid}"] = {
+                "id": f"order-{oid}", "marketSlug": slug,
+                "side": "ORDER_SIDE_BUY",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": price, "currency": "USD"},
+                "quantity": "5", "cumQuantity": "5",
+                "state": "ORDER_STATE_FILLED",
+                "createTime": NOW.isoformat(),
+            }
+
         # Sold 5 at 0.65, bought back at 0.96. Only the venue ever saw either.
         client.portfolio.trades = [
             {"id": "t1", "aggressorExecution": execution(
@@ -2846,6 +2867,47 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._rest_reconcile(runner._now())
         self.assertAlmostEqual(
             float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
+
+    async def test_the_counterpartys_side_of_a_trade_is_not_recorded(self):
+        """A trade has two sides and the venue reports both. One is ours.
+
+        normalize_execution succeeds on any well-formed execution regardless of
+        who owns it, so every trade was being recorded twice -- once as our
+        fill and once as the counterparty's. Observed 2026-08-15 on
+        aec-valorant-ff-ep: SELL 5 @ 0.39 and BUY 5 @ 0.39 at the same instant
+        against a real position of +5. Offsetting phantom fills make realised
+        P&L read flat on a market that is holding risk, which is the number the
+        $40 stop trusts.
+        """
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.portfolio.trades = [{
+            "id": "t1",
+            # Neither leg is claimed by any intent of ours.
+            "aggressorExecution": {
+                "id": "theirs", "tradeId": "theirs",
+                "type": "EXECUTION_TYPE_FILL",
+                "lastPx": {"value": "0.39", "currency": "USD"},
+                "lastShares": "5",
+                "commissionNotionalCollected": {
+                    "value": "0.0000", "currency": "USD"},
+                "transactTime": NOW.isoformat(),
+                "order": {
+                    "id": "their-order", "marketSlug": slug,
+                    "side": "ORDER_SIDE_BUY",
+                    "intent": "ORDER_INTENT_BUY_LONG",
+                    "price": {"value": "0.39", "currency": "USD"},
+                    "quantity": "5", "cumQuantity": "5",
+                    "state": "ORDER_STATE_FILLED",
+                    "createTime": NOW.isoformat()},
+            },
+        }]
+
+        await runner._rest_reconcile(runner._now())
+
+        self.assertEqual(
+            runner.ledger.query("SELECT * FROM execution_fills"), [])
 
     async def test_shutdown_parks_a_position_on_its_resting_exit(self):
         """A redeploy must not liquidate a position at the market.

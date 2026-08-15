@@ -31,6 +31,26 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### The fill back-fill recorded the counterparty's side too
+
+**Symptom:** `aec-valorant-ff-ep` held a real position of +5 while its fills
+read `SELL 5 @ 0.39` and `BUY 5 @ 0.39` at the same instant. Same shape on
+`cherom-rezrom`. Offsetting phantom fills make realised P&L read flat on a
+market that is holding risk.
+
+**Mechanism:** `portfolio.activities` reports both legs of every trade --
+`aggressorExecution` and `makerExecutions` -- and only one is ours.
+`normalize_execution` succeeds on any well-formed execution regardless of
+ownership, so a comment assuming foreign legs would fail to parse was simply
+wrong, and every trade was recorded twice.
+
+**Fix:** skip legs whose resolved client id carries the project's existing
+`venue:` unowned marker, the same one the kill switch refuses to cancel.
+
+**Self-inflicted, same day**, introduced by the fill back-fill hours earlier.
+It corrupts the number the $40 stop trusts, which is the thing that fix existed
+to protect.
+
 ### One unusable book killed the whole market feed
 
 **Symptom:** 30 markets bound, every book stale, zero placements. Standalone

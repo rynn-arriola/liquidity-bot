@@ -100,9 +100,24 @@ class AsyncAccountSnapshotGateway:
                             leg, observed_at=observed_at,
                             resolve_client_id=self.resolve_client_id)
                     except AdapterError:
-                        # A leg belonging to the counterparty carries no order
-                        # we can identify. Skipping it is correct; failing the
-                        # whole sweep over it would lose our own fills too.
+                        # Malformed rather than foreign. Failing the whole
+                        # sweep over one leg would lose our own fills too.
+                        continue
+                    # A trade has two sides and the venue reports both. Only
+                    # ONE of them is ours. normalize_execution does not care
+                    # who owns an execution -- it succeeds on any well-formed
+                    # one -- so without this every trade was recorded twice,
+                    # once as our fill and once as the counterparty's.
+                    # Observed 2026-08-15 on aec-valorant-ff-ep: SELL 5 @ 0.39
+                    # and BUY 5 @ 0.39 at the same instant, against a real
+                    # position of +5. Offsetting phantom fills make realised
+                    # P&L read flat on a market that is holding risk, which is
+                    # the number the $40 stop trusts.
+                    #
+                    # `venue:` is this project's existing marker for an order
+                    # we cannot claim; the kill switch already refuses to
+                    # cancel anything carrying it.
+                    if str(execution.client_order_id).startswith("venue:"):
                         continue
                     rows[execution.execution_id] = execution
             cursor = str(response.get("nextCursor") or "").strip() or None

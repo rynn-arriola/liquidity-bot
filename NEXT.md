@@ -1,5 +1,78 @@
 # Next session — outstanding fixes
 
+## TOP PRIORITY (2026-08-16): the $40 stop is computing from one-sided fills
+
+**Measured 2026-08-15 06:53Z.** `realized_by_market()` returns:
+
+```
+tkamak-tsokos   +3.26     <-- the trade actually LOST $1.55
+karfriwilvin    -2.93     <-- opening buy, no close recorded, market is flat
+derand-savvol   -2.43     <-- same
+realized_pnl() = -2.70    <-- noise, not P&L
+```
+
+`tkamak-tsokos` is off by **$4.81, in the direction that hides losses**: the
+opening sell of 5 @ 0.65 was recorded as $3.25 of proceeds and the buy-back at
+0.96 was never recorded at all, so a loss reads as a profit.
+
+Every trade in that table is one-sided. Two causes, fix together:
+
+1. **Closing fills from IOC exits never reach `execution_fills`.** The 06:22Z
+   shutdown flatten executed at the venue (confirmed in
+   `portfolio.activities`) and left no fill row.
+2. **Recorded fills sit in two price frames.** `SELL_*` intents are read by the
+   venue at `1 - price`, so even a complete pair can compute wrong.
+
+**Why it is first:** this is the only automated protection on live capital, and
+it is currently unreliable in *both* directions -- a fake profit masks a real
+loss and never fires; a fake loss halts trading for nothing.
+
+## 2. hard_exit_blocked_cancel_unconfirmed loop
+
+Fired 10 times over 10 minutes on `tkamak-tsokos` and never once got a clean
+book, which is why that position was still open when a deploy landed. The hard
+exit must clear resting orders before it can cross, but the soft reducer
+re-places every pass, so the cancel confirmation keeps losing the race.
+`cancel_confirm_grace_seconds` is 5.0.
+
+## 3. Capital deployment: max_markets 8 -> 30
+
+~$40 of $385 works at a time (5 x 8 markets x 2 sides). The 8 is a WebSocket
+subscription limit (10 per connection: 1 orders + 8 positions + 1 balance), not
+a risk decision. Connections are independent and each carries its own quota
+(measured, FINDINGS 7), so 30 markets is 4 connections. maker-lab ran 30.
+Biggest earning lever left.
+
+## 4. Discord alert severity
+
+Normal recovery paths still fire `critical=True`, so real alerts get buried.
+Keep critical for: loss stops, ownership violations, retirement, abandonment,
+unexplained runner failures.
+
+## 5. Residual target_not_met churn
+
+Small now -- a handful of cancels an hour, down from ~7/minute.
+
+## 6. API rate
+
+4 req/s against maker-lab's 0.3. ~2,500 placements without a ban, but untested.
+
+---
+
+## Fixed 2026-08-15 (all mutation-checked, deployed)
+
+- recovery could not load a market whose game had started (`for_exit`)
+- one market's fault cancelled all eight markets' quotes (scoped quarantine)
+- plan/action exceptions retired one market instead of ending the session
+- a one-pass spread dip cancelled resting quotes (superseded by the 2c rule)
+- a tight book is priced to exactly 2c instead of being refused
+  (`entry_quote_price`) -- 50/50 and 49/50 both quote 49/49; a book already
+  wider than 2c is quoted at the touch, untouched
+- a one-pass reward-eligibility flip cancelled every quote (90s dwell), and
+  that path now records a blocker instead of writing nothing
+- shutdown parks a position on its opposite-side exit instead of liquidating
+  it at any price (`fdd20cd`)
+
 Written 2026-08-14 at the end of a long session. Ordered by what actually
 blocks earning. Every claim here is measured; see `FINDINGS.md` for the data.
 

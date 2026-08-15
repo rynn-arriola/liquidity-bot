@@ -2599,8 +2599,18 @@ class CommissioningRunner:
                                 await self.kill_switch.initiate(
                                     market_slug, now=now)
                                 continue
-                            parked.append(market_slug)
-                            continue
+                            # Parking only means anything if the exit is
+                            # actually there. With nothing resting the position
+                            # is not parked, it is stranded -- shutdown reports
+                            # non-flat, the supervisor refuses to restart, and
+                            # the position sits with no way out. Observed
+                            # 2026-08-15 on aec-valorant-ff-ep: +5 held, no
+                            # order, bot down. Fall through to the flatten
+                            # below instead, which is the pre-existing path for
+                            # exactly this state.
+                            if working:
+                                parked.append(market_slug)
+                                continue
                     if working and not unresolved:
                         await self.kill_switch.initiate(market_slug, now=now)
                         continue

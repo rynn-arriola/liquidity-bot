@@ -2949,6 +2949,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             runner._only_parked_positions_remain([slug, "market-two"]))
 
+    async def test_a_position_with_no_resting_exit_is_not_treated_as_parked(self):
+        """Parking means the exit is there. With none, it is stranded.
+
+        Observed 2026-08-15 on aec-valorant-ff-ep: +5 held with no order,
+        shutdown reported it parked, exited non-flat, and the supervisor
+        refused to restart -- leaving the position with no way out and the bot
+        down. Fall through to the flatten instead.
+        """
+        runner, client, _slug = await self._parking_runner("ORDER_SIDE_BUY")
+        # Same position, but nothing resting on it.
+        client.orders.rows.clear()
+        await runner._rest_reconcile(runner._now())
+
+        await runner._shutdown("operator_sigterm")
+
+        # It attempted an exit rather than walking away calling it parked.
+        self.assertTrue(client.orders.create_calls)
+        self.assertEqual(
+            client.orders.create_calls[0]["tif"],
+            "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL")
+
     async def test_shutdown_still_pulls_an_order_that_could_add(self):
         """Parking protects the exit, never a quote that grows the position."""
         # Short, so a SELL would add to it. That must not be left resting.

@@ -200,7 +200,30 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    4bfadde), so once our own legs are obtainable the rule can be derived
    rather than guessed.
 
-12. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+12. **The session loss stop reads settled cash, not a total rebuilt from
+   fills.** Cash moves only when a trade actually executes, so there is no
+   price frame to decode, no fill that can be missed, and nothing that can
+   disagree with itself. Every P&L defect found on 2026-08-15 came from
+   rebuilding a number the venue already knows: counterparty legs recorded as
+   ours, closing fills lost on a restart, prices quoted against the opposite
+   outcome.
+
+       session realised = (cash now - cash at session start) + position x basis
+
+   Open inventory has already spent cash, so it is added back at its own
+   basis, and it falls back to the fill ledger whenever cash or a basis is
+   unavailable -- a stop that raises is worse than one computed the old way.
+
+   **Settled cash, not marked equity.** The earlier decision to reject marked
+   equity (320 contracts move $38 on a twelve-cent mark) does not apply: cash
+   does not move on paper price changes. The two were conflated in the test
+   that covered this, which set `currentBalance` while reasoning about paper
+   movement.
+
+   Per market stays fills-based -- cash is account-wide -- and being wrong
+   there costs one market rather than the account.
+
+13. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

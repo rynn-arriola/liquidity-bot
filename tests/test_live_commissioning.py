@@ -7,6 +7,7 @@ from argparse import Namespace
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -1590,6 +1591,43 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_holding_a_position_is_not_a_loss(self):
+        """Buying spends cash but is not a loss -- the value is in inventory.
+
+        Cash alone would read the entry cost as a loss the moment we fill, so
+        open inventory is added back at its own basis.
+        """
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        start = client.account.current_balance
+        await runner._refresh_balance(NOW)
+
+        # Bought 5 at 0.40: $2 of cash became $2 of inventory.
+        client.account.current_balance = start - Decimal("2")
+        client.portfolio.rows = {runner.config.market_slug: {
+            "netPosition": "5", "netPositionDecimal": "5.0000",
+            "updateTime": NOW.isoformat()}}
+        await runner._rest_reconcile(runner._now())
+        runner.ledger.inventory_basis = lambda slug: SimpleNamespace(
+            average_entry_price=Decimal("0.40"), opened_at=NOW)
+        await runner._refresh_balance(NOW)
+
+        self.assertEqual(runner._session_realized(), Decimal("0"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_the_session_stop_falls_back_when_cash_is_unavailable(self):
+        """A stop that raises is worse than one computed the old way."""
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        runner._cash_baseline = None
+        runner._realized_baseline = Decimal("0")
+        runner.ledger.realized_pnl = lambda slug=None: Decimal("-7")
+
+        self.assertEqual(runner._session_realized(), Decimal("-7"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_losses_from_earlier_sessions_do_not_spend_this_budget(self):
         """The stop is a guardrail for today, not a lifetime tally.
 
@@ -1635,20 +1673,24 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         start = Decimal("100")
 
-        # A marked-equity drop is NOT the session stop any more. Open inventory
-        # marks against us constantly -- 320 contracts move $38 on twelve cents
-        # -- and stopping on paper movement would end sessions that never lost
-        # a trade. Marked equity still backs the emergency ceiling below.
-        client.account.current_balance = start - runner.config.max_session_loss_usd
+        # Paper movement is NOT the session stop. Open inventory marks against
+        # us constantly -- 320 contracts move $38 on twelve cents -- and
+        # stopping on that would end sessions that never lost a trade. Paper
+        # movement is assetNotional; cash is untouched by it.
+        await runner._refresh_balance(NOW)
+        client.account.asset_notional = -runner.config.max_session_loss_usd
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
-        # Realised trading loss at the stop ends the session.
-        client.account.current_balance = start
-        runner.ledger.realized_pnl = lambda slug=None: -runner.config.max_session_loss_usd
-        runner.ledger.realized_by_market = lambda: {}
+        # A drop in settled CASH is a realised loss, and does stop. Cash moves
+        # only when a trade executes, which is why the session stop reads it
+        # rather than a total rebuilt from fills.
+        client.account.asset_notional = Decimal("0")
+        client.account.current_balance = (
+            start - runner.config.max_session_loss_usd)
         await runner._refresh_balance(NOW)
         self.assertTrue(runner._stop_reason(NOW).startswith("risk_stop:"))
+        client.account.current_balance = start
 
         # The ceiling is the one thing that still reads marked equity, because
         # its job is to catch what the ledger cannot explain.

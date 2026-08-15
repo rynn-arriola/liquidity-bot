@@ -237,6 +237,18 @@ class CommissioningRunner:
         # test losses on startup and halted in 73 seconds.
         self._realized_baseline: Decimal = Decimal("0")
         self._baseline_day: date | None = None
+        # Settled cash at session start. The session stop measures the change
+        # in this rather than a total rebuilt from fills: cash moves only when
+        # a trade actually executes, so there is no price frame to decode and
+        # no fill that can be missed. Every P&L defect found 2026-08-15 --
+        # counterparty legs recorded as ours, closing fills lost on a restart,
+        # prices quoted against the opposite outcome -- came from rebuilding a
+        # number the venue already knows.
+        #
+        # Settled cash, NOT marked equity. The reason marked equity was
+        # rejected (320 contracts move $38 on a twelve-cent mark) does not
+        # apply -- cash does not move on paper price changes.
+        self._cash_baseline: Decimal | None = None
         self._realized_baseline_by_market: dict[str, Decimal] = {}
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
@@ -1326,11 +1338,42 @@ class CommissioningRunner:
         # primary market, which was wrong twice over: marked equity is not
         # realised, and one market is not all of them.
         self._roll_realized_baseline()
-        self.risk_guard.observe_realized(
-            self.ledger.realized_pnl() - self._realized_baseline)
+        self.risk_guard.observe_realized(self._session_realized())
         self.risk_guard.observe_market_realized({
             slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
             for slug, value in self.ledger.realized_by_market().items()})
+
+    def _session_realized(self) -> Decimal:
+        """Session P&L from settled cash, falling back to the fill ledger.
+
+            realised = (cash now - cash at session start) + position x basis
+
+        Open inventory has already spent cash, so it is added back at its own
+        basis -- the same shape realized_pnl uses, but with cash taken from the
+        venue instead of a total rebuilt from fills.
+
+        Falls back to the ledger whenever cash or a basis is unavailable. A
+        stop that raises is worse than one computed the old way.
+        """
+
+        ledger_value = self.ledger.realized_pnl() - self._realized_baseline
+        if self.balance is None or self._cash_baseline is None:
+            return ledger_value
+        try:
+            realised = self.balance.current_balance - self._cash_baseline
+            for slug in self._shutdown_slugs() or self.active_slugs:
+                position = self.ledger.position(slug)
+                if not position:
+                    continue
+                basis = self.ledger.inventory_basis(slug)
+                if basis is None:
+                    # Cannot value what we hold, so cash alone would read the
+                    # entry cost as a loss. Use the old path.
+                    return ledger_value
+                realised += position * basis.average_entry_price
+            return realised
+        except Exception:
+            return ledger_value
 
     def _roll_realized_baseline(self) -> None:
         """Re-baseline at session start and again at each UTC midnight.
@@ -1347,6 +1390,8 @@ class CommissioningRunner:
         self._realized_baseline = self.ledger.realized_pnl()
         self._realized_baseline_by_market = dict(
             self.ledger.realized_by_market())
+        self._cash_baseline = (
+            self.balance.current_balance if self.balance is not None else None)
 
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:

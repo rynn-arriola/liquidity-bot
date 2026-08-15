@@ -31,6 +31,24 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### Adding a field to Execution broke the fill back-fill
+
+**Symptom:** `LedgerConflict: event id was reused with different content`, the
+reconcile sweep aborted, the runner exited non-flat and the supervisor refused
+to restart. Bot down with a position open.
+
+**Mechanism:** `_accept_event` dedupes by hashing the whole payload. Adding
+`outcome` to `Execution` changed that hash, so replaying an already-recorded
+fill read as a conflicting rewrite. The back-fill replays every sweep by
+design, so this fired on the first reconcile after the schema change.
+
+**Fix:** a replayed execution is skipped, not fatal. The execution id is the
+identity — if we hold it, we hold it.
+
+**Self-inflicted, hours after the field was added**, and the first test written
+for it passed against the broken code: it counted fills without proving the
+sweep continued past the conflict.
+
 ### realized_pnl booked a purchase as a sale, turning a loss into a gain
 
 **Symptom:** `realized_pnl` reported **+$1.34** on `aec-valorant-ff-ep`, a

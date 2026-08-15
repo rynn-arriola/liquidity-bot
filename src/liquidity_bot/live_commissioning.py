@@ -35,7 +35,7 @@ from .commissioning import (
 )
 from .discord_summary import LiquiditySummary, build_liquidity_summary
 from .errors import AdapterError, RuntimeInvariantViolation
-from .execution_ledger import ExecutionLedger
+from .execution_ledger import ExecutionLedger, LedgerConflict
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
     AsyncTradingGateway,
@@ -676,7 +676,17 @@ class CommissioningRunner:
         try:
             for execution in await self.account.fetch_executions(
                     observed_at=now):
-                self.ledger.apply_execution(execution, received_at=now)
+                try:
+                    self.ledger.apply_execution(execution, received_at=now)
+                except LedgerConflict:
+                    # Already recorded. The dedupe hashes the whole payload, so
+                    # adding a field to Execution -- `outcome` did exactly this
+                    # -- makes a replay of an existing fill look like a
+                    # conflicting rewrite. It is not: the execution id is the
+                    # identity and we already hold it. Aborting the sweep here
+                    # left the position unprovable and the runner exited
+                    # non-flat, refusing to restart. Observed 2026-08-15T21:24Z.
+                    continue
             self._runtime_error_counts.pop("execution_backfill", None)
         except Exception as exc:
             await self._report_runtime_error("execution_backfill", exc)

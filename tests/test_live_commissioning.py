@@ -2951,6 +2951,44 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             float(runner.ledger.realized_pnl(slug)), -3.05, places=2)
 
+    async def test_replaying_a_fill_after_a_schema_change_is_not_a_conflict(self):
+        """Adding a field to Execution must not break the back-fill.
+
+        _accept_event dedupes by hashing the whole payload, so adding `outcome`
+        made a replay of an already-recorded fill look like a conflicting
+        rewrite. That aborted the reconcile sweep, left the position
+        unprovable, and the runner exited non-flat and refused to restart.
+        Observed 2026-08-15T21:24Z. The execution id is the identity -- if we
+        hold it, we hold it.
+        """
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        recorded = Execution(
+            execution_id="dupe", market_slug=slug, side="ORDER_SIDE_BUY",
+            price=Decimal("0.40"), qty=Decimal("5"), fee=Decimal("0"),
+            event_at=NOW, intent="ORDER_INTENT_BUY_LONG")
+        runner.ledger.apply_execution(recorded, received_at=NOW)
+
+        # The same execution carrying a field it did not have before, followed
+        # by a genuinely new one. The new one proves the sweep CONTINUED --
+        # aborting on the conflict is what left the position unprovable.
+        fresh = replace(recorded, execution_id="fresh", price=Decimal("0.41"))
+
+        async def replay(*, observed_at):
+            return (replace(recorded, outcome="Some Outcome"), fresh)
+
+        runner.account.fetch_executions = replay
+
+        await runner._rest_reconcile(runner._now())
+
+        recorded_ids = {
+            row["execution_id"] for row in
+            runner.ledger.query("SELECT execution_id FROM execution_fills")}
+        self.assertEqual(recorded_ids, {"dupe", "fresh"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_the_counterpartys_side_of_a_trade_is_not_recorded(self):
         """A trade has two sides and the venue reports both. One is ours.
 

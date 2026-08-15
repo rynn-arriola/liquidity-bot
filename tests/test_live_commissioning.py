@@ -2539,6 +2539,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_does_not_submit_a_fourth_ioc(self):
         runner, client, notifier = self.build_runner(clock=TickingClock())
         await runner.preflight()
+        # Shutdown only crosses out inside the kickoff window now;
+        # outside it a position is parked on its resting exit.
+        self._force_kickoff_window(runner)
         slug = runner.config.market_slug
         self._hold_one_contract(client, slug)
         # Every shutdown IOC expires unfilled, so the position never clears and
@@ -2568,6 +2571,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._recovery_delay("action_driver"), 30)
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    def _force_kickoff_window(self, runner):
+        """Put the bound market inside the pre-kickoff flatten window."""
+        runner.market = replace(
+            runner.market, game_start=NOW + timedelta(seconds=60))
 
     def _hold_one_contract(self, client, slug):
         client.portfolio.rows = {slug: {
@@ -2625,9 +2633,90 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         client.orders.create = create_then_fill
 
+    async def _parking_runner(self, exit_side, extra_orders=()):
+        """A runner holding a short of 5 with orders resting, far from kickoff."""
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.portfolio.rows = {slug: {
+            "netPosition": "-5",
+            "netPositionDecimal": "-5.0000",
+            "updateTime": NOW.isoformat(),
+        }}
+        rows = [("resting-exit", exit_side)] + list(extra_orders)
+        for order_id, side in rows:
+            client.orders.rows[order_id] = {
+                "id": order_id, "marketSlug": slug, "side": side,
+                "intent": ("ORDER_INTENT_BUY_LONG" if side == "ORDER_SIDE_BUY"
+                           else "ORDER_INTENT_BUY_SHORT"),
+                "price": {"value": "0.65", "currency": "USD"},
+                "quantity": "5", "cumQuantity": "0",
+                "state": "ORDER_STATE_NEW", "createTime": NOW.isoformat(),
+            }
+        # The flat shortcuts would return before the per-market branch runs.
+        runner._venue_proves_flat = lambda: False
+        runner._whole_account_safe_to_stop = lambda: False
+        runner.config = replace(runner.config, max_shutdown_seconds=30)
+        return runner, client, slug
+
+    async def test_shutdown_parks_a_position_on_its_resting_exit(self):
+        """A redeploy must not liquidate a position at the market.
+
+        Measured 2026-08-15: short 5 at 0.65 with a break-even reducer resting.
+        Shutdown cancelled every order, then crossed out at 0.96 because that
+        path has no price cap anywhere -- -$1.55 on a position that cost
+        nothing to hold, with kickoff hours away and the next process ready to
+        pick the exit straight back up.
+        """
+        # Short, so the exit is a BUY. Nothing resting can add to the position.
+        runner, client, _slug = await self._parking_runner("ORDER_SIDE_BUY")
+
+        await runner._shutdown("operator_sigterm")
+
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertTrue(runner._shutdown_proved_flat)
+
+    async def test_parking_one_market_does_not_excuse_another(self):
+        """Only the market holding the position is left alone.
+
+        Every other market must still be flat, orderless and resolved before
+        shutdown will report itself done. A second market still holding risk
+        keeps the shutdown loop working rather than walking away from it.
+        """
+        runner, client, slug = await self._parking_runner("ORDER_SIDE_BUY")
+        runner._bind_markets([slug, "market-two"])
+        client.portfolio.rows["market-two"] = {
+            "netPosition": "-5",
+            "netPositionDecimal": "-5.0000",
+            "updateTime": NOW.isoformat(),
+        }
+        await runner._rest_reconcile(runner._now())
+
+        self.assertNotEqual(runner.ledger.position("market-two"), 0)
+        self.assertFalse(runner._only_parked_positions_remain([slug]))
+        # And the parked one alone is still a safe place to stop.
+        self.assertTrue(
+            runner._only_parked_positions_remain([slug, "market-two"]))
+
+    async def test_shutdown_still_pulls_an_order_that_could_add(self):
+        """Parking protects the exit, never a quote that grows the position."""
+        # Short, so a SELL would add to it. That must not be left resting.
+        runner, client, _slug = await self._parking_runner(
+            "ORDER_SIDE_BUY", extra_orders=[("builder", "ORDER_SIDE_SELL")])
+
+        await runner._shutdown("operator_sigterm")
+
+        # Not parked: an add-side order means this market is not in a safe
+        # state to walk away from, so shutdown must not report itself done.
+        self.assertFalse(runner._shutdown_proved_flat)
+
     async def test_shutdown_flattens_on_its_own_budget_after_runtime_ceiling(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()
+        # Shutdown only crosses out inside the kickoff window now;
+        # outside it a position is parked on its resting exit.
+        self._force_kickoff_window(runner)
         slug = runner.config.market_slug
         # The quoting loop already spent its ceiling before going terminal.
         runner.reconciler._hard_exit_attempts[slug] = (
@@ -2651,6 +2740,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, client, _ = self.build_runner(
             clock=TickingClock(), notifier=notifier)
         await runner.preflight()
+        # Shutdown only crosses out inside the kickoff window now;
+        # outside it a position is parked on its resting exit.
+        self._force_kickoff_window(runner)
         slug = runner.config.market_slug
         self._hold_one_contract(client, slug)
         runner.config = replace(
@@ -2703,6 +2795,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, client, _ = self.build_runner(
             clock=TickingClock(), notifier=notifier)
         await runner.preflight()
+        # Shutdown only crosses out inside the kickoff window now;
+        # outside it a position is parked on its resting exit.
+        self._force_kickoff_window(runner)
         slug = runner.config.market_slug
         self._hold_one_contract(client, slug)
         runner.config = replace(

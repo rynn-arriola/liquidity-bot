@@ -2373,6 +2373,28 @@ class CommissioningRunner:
             "SELECT 1 FROM execution_positions "
             "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1"))
 
+    def _only_parked_positions_remain(self, parked: list[str]) -> bool:
+        """True when every market still holding risk is parked on its exit.
+
+        Parked means: a nonzero position, no unresolved intent, and nothing
+        working that could add to it. That is a safe state to stop in -- the
+        exit keeps resting at the venue and the next process binds the market
+        exit-only through recovery. Any market outside that set still needs
+        shutdown's attention, so this refuses.
+        """
+
+        parked_set = set(parked)
+        for slug in self._shutdown_slugs():
+            if slug in parked_set:
+                continue
+            if self.ledger.position(slug) != 0:
+                return False
+            if self.ledger.working_orders(slug):
+                return False
+            if self.ledger.market_has_unresolved_intent(slug):
+                return False
+        return bool(parked_set)
+
     def _venue_proves_flat(self) -> bool:
         """True when the last venue snapshot showed no orders and no position.
 
@@ -2450,11 +2472,51 @@ class CommissioningRunner:
                 # the primary. A slug the session has already dropped can still
                 # own an order or a position, and leaving it behind is exactly
                 # how inventory reaches settlement.
+                parked: list[str] = []
                 for market_slug in self._shutdown_slugs():
                     position = self.ledger.position(market_slug)
                     working = self.ledger.working_orders(market_slug)
                     unresolved = self.ledger.market_has_unresolved_intent(
                         market_slug)
+                    if position != 0 and not unresolved:
+                        # A position keeps its exit working. Shutdown used to
+                        # cancel every order and then cross out at whatever the
+                        # book showed, with no price cap anywhere on that path
+                        # -- so a redeploy liquidated at the market. Measured
+                        # 2026-08-15: short 5 at 0.65 with a break-even reducer
+                        # resting, cancelled and crossed at 0.96 on a deploy
+                        # restart, -$1.55 on a position that was costing
+                        # nothing to hold.
+                        #
+                        # Leaving the exit resting is strictly better: it may
+                        # fill at basis while we are down, and the next process
+                        # binds the market exit-only through recovery. Orders
+                        # that could ADD to the position are still pulled --
+                        # nothing may grow a position nobody is watching.
+                        # Kickoff is the one deadline parking may not outlive.
+                        # A held position that reaches settlement is unbounded
+                        # up to the full contract value, which is how maker-lab
+                        # lost $443.88 over four days. Inside the flatten
+                        # window we still cross out at whatever it costs.
+                        state = self.state_for(market_slug)
+                        start = (
+                            state.market.game_start
+                            if state.market is not None else None)
+                        near_kickoff = (
+                            start is None
+                            or (start - now).total_seconds()
+                            <= self.config.force_exit_before_start_seconds)
+                        if not near_kickoff:
+                            reducing = (
+                                "ORDER_SIDE_SELL" if position > 0
+                                else "ORDER_SIDE_BUY")
+                            if any(str(order["side"]) != reducing
+                                   for order in working):
+                                await self.kill_switch.initiate(
+                                    market_slug, now=now)
+                                continue
+                            parked.append(market_slug)
+                            continue
                     if working and not unresolved:
                         await self.kill_switch.initiate(market_slug, now=now)
                         continue
@@ -2515,6 +2577,19 @@ class CommissioningRunner:
                     await self._send_summary(now)
                     await self.notifier.send_async(
                         f"✅ Liquidity Bot LIVE stopped flat after {reason}.")
+                    return
+                if parked and self._only_parked_positions_remain(parked):
+                    # Not flat, but deliberately so. Spinning to the 900s
+                    # deadline here would make every deploy a fifteen-minute
+                    # stop and end it on a critical alert.
+                    await self._refresh_balance(now)
+                    self._accrue_score(now)
+                    await self._send_summary(now)
+                    await self.notifier.send_async(
+                        f"✅ Liquidity Bot LIVE stopped after {reason} with "
+                        f"{len(parked)} position(s) left resting on their exit: "
+                        f"{', '.join(sorted(parked))}. No order can add to them "
+                        "and the next process resumes their exit.")
                     return
                 shutdown_failures = 0
             except Exception as exc:

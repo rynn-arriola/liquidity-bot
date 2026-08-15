@@ -38,10 +38,21 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    closes were lost this way. Fixed by replaying `portfolio.activities` during
    `_rest_reconcile`; `apply_execution` dedupes on `execution_id`.
 
-2. **Fills are NOT stored in two price frames.** This was suspected and is
-   false. `normalize_execution` reads the venue's `lastPx`, so kundmy-tsokos
-   computes to -0.60 in the ledger against -0.61 from the venue legs. Recorded
-   so it is not re-investigated.
+2. **Fills ARE stored in an ambiguous price frame.** An earlier version of
+   this finding claimed the opposite and was wrong; it is replaced rather than
+   edited, because it was used as grounds not to investigate.
+
+   The venue prices an execution against a specific outcome
+   (`marketMetadata.outcome`), and `normalize_execution` stores `lastPx`
+   without recording which outcome it was quoted on. The frame is then
+   unrecoverable. Measured on `aec-valorant-ff-ep`: both legs priced against
+   *Enterprise Esports* at 0.39 and 0.67, where 0.67 means 0.33 in Fire Flux
+   terms. The ledger computed **+$1.34** on a trade that actually lost about
+   **$0.30**.
+
+   This matters because `realized_pnl` is what the $40 stop reads, and the
+   error runs in the direction that hides losses. See task 24; the exact rule
+   is NOT established and two theories have already been wrong.
 
 3. **The shutdown flatten had no price cap.** It asked only whether
    `cross_exit` was complete, never what it cost, then fired an IOC at

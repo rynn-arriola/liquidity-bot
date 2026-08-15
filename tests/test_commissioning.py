@@ -109,10 +109,11 @@ class CommissioningTests(unittest.TestCase):
         )
 
         self.assertIsNone(config.assert_authorized(now=now))
-        # Eight is the measured private-WebSocket ceiling: 10 subscriptions per
-        # connection, of which one is account-wide orders and one is balance,
-        # leaving eight per-market position subscriptions.
-        self.assertEqual(config.max_markets, 8)
+        # Eight per connection is the measured ceiling: 10 subscriptions, of
+        # which one is account-wide orders and one is balance, leaving eight
+        # per-market position subscriptions. Connections are independent, so
+        # sixteen is two of them.
+        self.assertEqual(config.max_markets, 16)
         # Size per quote is unchanged. Breadth expands, exposure per market
         # does not.
         self.assertEqual(config.quote_size, Decimal("5"))
@@ -123,8 +124,8 @@ class CommissioningTests(unittest.TestCase):
 
     def test_more_markets_than_the_subscription_ceiling_is_refused(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-        with self.assertRaisesRegex(CommissioningRefused, "eight markets"):
-            self.authorized(max_markets=9).assert_authorized(now=now)
+        with self.assertRaisesRegex(CommissioningRefused, "sixteen markets"):
+            self.authorized(max_markets=17).assert_authorized(now=now)
 
     def test_auto_selection_constants_and_reserved_slug_are_locked(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)

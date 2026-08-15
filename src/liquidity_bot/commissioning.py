@@ -81,7 +81,13 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    max_markets: int = 8
+    # Two private connections at eight markets each. The subscription cap is
+    # per connection (1 orders + N positions + 1 balance <= 10), and
+    # connections are independent -- measured 2026-08-14. Reward pools are per
+    # market, so more markets reaches more pools; more size only buys a larger
+    # share of the same one. Staged at 16 rather than 30: every recovery path
+    # is now exercised on two sockets before it is trusted on four.
+    max_markets: int = 16
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -194,10 +200,10 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 5 or self.max_markets != 8:
+        if self.quote_size != 5 or self.max_markets != 16:
             problems.append(
                 "commissioning is hard-locked to five contracts per quote "
-                "across at most eight markets")
+                "across at most sixteen markets")
         if (self.max_market_exposure_usd != 45
                 or self.max_portfolio_exposure_usd != 340):
             problems.append(

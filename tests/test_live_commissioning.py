@@ -564,15 +564,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.market_stream.close()
 
     async def test_startup_never_binds_more_than_the_authorized_maximum(self):
-        slugs = tuple(f"market-{i}" for i in range(12))
+        slugs = tuple(f"market-{i}" for i in range(24))
         selector = FakeRewardSelector(multi_selection(*slugs))
         runner, _, _ = self.build_runner(
             auto=True, reward_selector=selector, clock=TickingClock())
 
         await runner.preflight()
 
-        # Ten private subscriptions is the measured connection ceiling, and
-        # eight markets is exactly what fits alongside orders and balance.
+        # Ten private subscriptions is the measured per-connection ceiling,
+        # and eight markets is exactly what fits alongside orders and balance.
+        # Sixteen is two connections; more slugs on offer must not widen it.
         self.assertEqual(len(runner.active_slugs), runner.config.max_markets)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -749,7 +750,6 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         selector = FakeRewardSelector(fake_selection("market-one"))
         runner, _, _ = self.build_runner(
             auto=True, reward_selector=selector)
-        runner.config = replace(runner.config, max_markets=8)
         await runner.preflight()
         runner._bind_markets(("market-one", "market-two"))
         runner._expected_net_by_side = {}

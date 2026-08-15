@@ -22,6 +22,11 @@ from .private_stream import PrivateEvent, decode_private_message
 # rejected with "max subscriptions per connection reached". The rejection
 # arrives asynchronously on the socket, not from the subscribe call.
 MAX_PRIVATE_SUBSCRIPTIONS = 10
+# 1 orders + N positions + 1 balance <= 10. Positions must be scoped one market
+# per subscription, so this is forced, and it is measured rather than assumed:
+# adding subscriptions one at a time, the eleventh returns `max subscriptions
+# per connection reached`.
+MARKETS_PER_PRIVATE_CONNECTION = 8
 
 
 class MarketReadOnlyStream:
@@ -287,3 +292,105 @@ class ShadowMarketStream:
         finally:
             self._started = False
             self._slugs.clear()
+
+
+class PrivateStreamPool:
+    """One private feed spread across several connections.
+
+    The subscription cap is per connection, not per account -- measured
+    2026-08-14: `ws.private()` returns a fresh socket per call, and two sockets
+    each held ten subscriptions simultaneously with zero errors. So more than
+    eight markets is reachable by opening more sockets, which is the only lever
+    that raises deployed capital: reward pools are per market, so more markets
+    reaches more pools, while more size only buys a larger share of the same
+    one.
+
+    Presents exactly the single-connection interface -- start, next_event,
+    close -- so nothing downstream knows there is a pool.
+
+    **Any socket's failure surfaces as this pool's failure.** That is
+    deliberate. The runner's recovery then rebuilds every connection and
+    re-subscribes every market. Tearing down healthy sockets to repair one is
+    wasteful, but the alternative is worse: one socket dying quietly while its
+    markets keep showing resting orders and stop reporting their own fills.
+    Losing the feed loudly is the safe direction.
+    """
+
+    def __init__(self, client: Any, *, factory: Any = None,
+                 markets_per_connection: int = MARKETS_PER_PRIVATE_CONNECTION):
+        if markets_per_connection <= 0:
+            raise ValueError("markets_per_connection must be positive")
+        self._client = client
+        self._factory = factory or PrivateReadOnlyStream
+        self._markets_per_connection = markets_per_connection
+        self._streams: list[Any] = []
+        self._readers: list[asyncio.Task[None]] = []
+        self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
+        self._started = False
+
+    @property
+    def connection_count(self) -> int:
+        return len(self._streams)
+
+    async def _pump(self, stream: Any) -> None:
+        """Forward one connection's events onto the shared queue."""
+        while True:
+            try:
+                self._queue.put_nowait(await stream.next_event())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._queue.put_nowait(exc)
+                return
+
+    async def start(self, slugs: Iterable[str] | None = None) -> None:
+        if self._started:
+            raise RuntimeError("private stream is already started")
+        clean = None
+        if slugs is not None:
+            clean = list(dict.fromkeys(str(slug).strip() for slug in slugs
+                                       if str(slug).strip()))
+            if not clean:
+                raise ValueError("an explicit market filter cannot be empty")
+        shards: list[list[str] | None]
+        if clean is None:
+            shards = [None]
+        else:
+            size = self._markets_per_connection
+            shards = [clean[index:index + size]
+                      for index in range(0, len(clean), size)]
+        try:
+            for shard in shards:
+                stream = self._factory(self._client)
+                self._streams.append(stream)
+                await stream.start(shard)
+        except Exception:
+            await self.close()
+            raise
+        for stream in self._streams:
+            self._readers.append(asyncio.create_task(self._pump(stream)))
+        self._started = True
+
+    async def next_event(self, *, timeout: float | None = None) -> PrivateEvent:
+        item = (await self._queue.get() if timeout is None
+                else await asyncio.wait_for(self._queue.get(), timeout))
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        for reader in self._readers:
+            reader.cancel()
+        for reader in self._readers:
+            try:
+                await reader
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._readers.clear()
+        for stream in self._streams:
+            try:
+                await stream.close()
+            except Exception:
+                pass
+        self._streams.clear()
+        self._started = False

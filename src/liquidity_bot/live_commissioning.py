@@ -81,7 +81,7 @@ from .risk import OpportunityEconomics
 from .runtime_safety import SessionRiskGuard, SingleInstanceLease
 from .runtime_secrets import load_runtime_secrets
 from .shadow_math import cross_exit
-from .streams import MarketReadOnlyStream, PrivateReadOnlyStream
+from .streams import MarketReadOnlyStream, PrivateStreamPool
 from .venue_state import PrivateLedgerProjector
 
 
@@ -162,7 +162,7 @@ class CommissioningRunner:
         clock: Clock | None = None,
         sleep: Callable[[float], Any] = asyncio.sleep,
         market_stream_factory: Callable[[Any], Any] = MarketReadOnlyStream,
-        private_stream_factory: Callable[[Any], Any] = PrivateReadOnlyStream,
+        private_stream_factory: Callable[[Any], Any] = PrivateStreamPool,
         reward_selector: RewardMarketSelector | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
     ):

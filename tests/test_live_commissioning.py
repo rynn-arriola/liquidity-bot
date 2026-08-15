@@ -54,14 +54,16 @@ class ImmediateLimiter:
 class FakeMarkets:
     def __init__(self):
         self.book_calls = 0
+        self.started: set[str] = set()
 
     async def retrieve_by_slug(self, slug):
+        start = (NOW - timedelta(hours=2)) if slug in self.started else GAME_START
         return {"market": {
             "slug": slug,
             "active": True,
             "closed": False,
             "status": "MARKET_STATE_OPEN",
-            "gameStartTime": GAME_START.isoformat(),
+            "gameStartTime": start.isoformat(),
             "orderPriceMinTickSize": {"value": "0.01", "currency": "USD"},
             "minimumTradeQty": "1",
             "sportsMarketType": "moneyline",
@@ -850,6 +852,55 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_recovery_loads_a_market_whose_game_already_started(self):
+        """A leftover order does not stop being ours because the game began.
+
+        Recovery used to load its market through the same gates that stop us
+        *opening* risk, so `no longer pregame` made startup fail and retry
+        forever -- with contracts still held. Observed 2026-08-15T01:2xZ.
+        """
+        selector = FakeRewardSelector(fake_selection("market-two"))
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        client.markets.started.add("market-one")
+        payload = {
+            "marketSlug": "market-one",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "type": "ORDER_TYPE_LIMIT",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 5,
+            "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+            "participateDontInitiate": True,
+            "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC",
+            "synchronousExecution": False,
+        }
+        runner.ledger.prepare_intent(
+            "stranded", "PLACE", "market-one", "stranded-client",
+            payload, created_at=NOW)
+        runner.ledger.transition_intent("stranded", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "stranded", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="stranded-order")
+        client.orders.rows["stranded-order"] = {
+            "id": "stranded-order",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+
+        result = await runner.run()
+
+        self.assertNotEqual(result.stop_reason, "startup_unavailable")
+        self.assertEqual(runner.market_slug, "market-one")
+        # Loaded to be exited, never to be quoted.
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertEqual(client.orders.create_calls, [])
 
     async def test_auto_restart_recovers_ledger_market_before_new_selection(self):
         selector = FakeRewardSelector(fake_selection("market-two"))

@@ -520,13 +520,26 @@ class CommissioningRunner:
                 float(self.config.market_selection_refresh_seconds))
 
     async def _refresh_contracts(
-        self, now: datetime, slug: str | None = None,
+        self, now: datetime, slug: str | None = None, *,
+        for_exit: bool = False,
     ) -> None:
+        """Load metadata and incentive for one market.
+
+        ``for_exit`` relaxes the gates that exist to stop us *opening* risk.
+        A market we hold a position in may have started, lost its incentive
+        programme or left the pregame window, and none of that changes the need
+        to get out of it -- it makes the need urgent. Observed
+        2026-08-15T01:2xZ: recovery bound a market holding 5 contracts whose
+        game had begun, this raised `no longer pregame`, and startup retried
+        for over two hours while the position sat there unmanaged.
+        """
         state = self.state_for(slug or self.market_slug)
         slug = state.slug
         state.market = await self.gateway.fetch_market(slug)
         incentives = await self.gateway.fetch_incentives([slug])
         state.incentive = incentives.get(slug)
+        if for_exit:
+            return
         if state.incentive is None:
             raise CommissioningUnavailable(
                 f"{slug} has no liquidityProgram incentive")
@@ -776,20 +789,32 @@ class CommissioningRunner:
             recovery_slugs = self._identified_recovery_markets()
             if recovery_slugs:
                 self._bind_markets(recovery_slugs)
+                # Recovery exists to get out, never to quote. Marking these
+                # retired up front lets the pregame and incentive gates be
+                # skipped when loading them (see _refresh_contracts for_exit)
+                # with no risk of building on a market that has started: a
+                # retired market is barred from quoting for the whole session,
+                # while the reconciler keeps planning its exit.
+                for slug in recovery_slugs:
+                    self._retired_ever.add(slug)
             else:
                 await self._select_reward_market(now)
                 now = self._now()
         # The primary must prove out; the rest are best effort. Requiring all
         # eight would let one unlucky market block startup entirely, and
         # startup failure is the most expensive kind -- nothing quotes at all.
-        await self._refresh_contracts(now)
+        recovering = set(self._retired_ever) & set(self.active_slugs)
+        primary = self.active_slugs[0] if self.active_slugs else None
+        await self._refresh_contracts(
+            now, for_exit=primary is not None and primary in recovering)
         await self._refresh_book(now)
         extras = self.active_slugs[1:]
         if extras:
             healthy = [self.market_slug]
             for slug in extras:
                 try:
-                    await self._refresh_contracts(now, slug)
+                    await self._refresh_contracts(
+                        now, slug, for_exit=slug in recovering)
                     await self._refresh_book(now, slug)
                     healthy.append(slug)
                 except Exception as exc:
@@ -1449,7 +1474,12 @@ class CommissioningRunner:
         state = self.state_for(slug)
         if state.next_contract_refresh is None or now >= state.next_contract_refresh:
             try:
-                await self._refresh_contracts(now, slug)
+                # A barred market never quotes, so the gates that guard
+                # quoting have nothing to protect here -- applying them would
+                # only raise `no longer pregame` on every refresh for the whole
+                # time we are exiting, once a second, for hours.
+                await self._refresh_contracts(
+                    now, slug, for_exit=self._is_barred_from_quoting(slug))
                 self._runtime_error_counts.pop(
                     f"market_incentive_refresh:{slug}", None)
             except Exception as exc:

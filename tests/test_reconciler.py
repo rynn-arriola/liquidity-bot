@@ -333,6 +333,54 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].order_id, "bid-two")
 
+    def test_a_one_pass_eligibility_flip_does_not_cancel_a_resting_quote(self):
+        """The score and projection calls can disagree for a single pass.
+
+        Measured 2026-08-15: an incentive refresh flipped every market at once,
+        seven markets cancelled inside 1.5 seconds and re-placed nine seconds
+        later, several at the identical price. Reward pays for resting time, so
+        each of those was pure loss.
+        """
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .51, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            snapshot=book(bid=.49, offer=.51), orders=orders,
+            eligible=frozenset()))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.CANCEL], [])
+
+    def test_a_sustained_ineligible_side_is_still_pulled(self):
+        """A side that is genuinely dead still clears the dwell."""
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .51, Decimal("2")),
+        )
+        reconciler = DesiredStateReconciler(policy())
+        reconciler.plan(frame(
+            snapshot=book(bid=.49, offer=.51), orders=orders,
+            eligible=frozenset()))
+
+        later = T0 + timedelta(seconds=120)
+        actions = reconciler.plan(frame(
+            now=later, snapshot=book(later, bid=.49, offer=.51),
+            orders=orders, eligible=frozenset()))
+
+        self.assertEqual(
+            {a.order_id for a in actions if a.kind == ActionKind.CANCEL},
+            {"bid-one", "offer-one"})
+
+    def test_an_ineligible_side_with_nothing_resting_is_never_quoted(self):
+        """The dwell protects accrued resting time, not new risk."""
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(eligible=frozenset()))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
+
     def test_a_tight_book_is_priced_back_to_two_cents_not_refused(self):
         """50/50 is quoted 49/49, not skipped.
 

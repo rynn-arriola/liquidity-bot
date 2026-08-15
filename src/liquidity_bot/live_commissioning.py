@@ -1012,6 +1012,15 @@ class CommissioningRunner:
                 order_already_resting=already_resting)
             if result.eligible:
                 eligible.add(side)
+            else:
+                # Record why. This drop is what removes the side from
+                # reward_eligible, and it used to write nothing at all -- so a
+                # burst of cancels across every market logged `blockers={}`
+                # with both nets present and could not be attributed for two
+                # days. A later projection failure overwrites this with its own
+                # more specific reason; nothing here changes behaviour.
+                state.economic_blocker_by_side[side] = (
+                    result.reason or "score_ineligible")
             projection = project_order_reward(
                 side=side,
                 price=price,

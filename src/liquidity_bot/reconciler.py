@@ -66,6 +66,14 @@ class ReconcilerPolicy:
     # offer. See entry_quote_price -- a tighter book is priced back to exactly
     # this, not refused.
     minimum_entry_spread: float = 0.02
+    # How long a *resting* side must stay reward-ineligible before it is
+    # pulled. evaluate_order_score and project_order_reward are separate calls
+    # that can disagree for a single pass, and the score call is depth-based,
+    # so an incentive refresh flipped every market at once: measured
+    # 2026-08-15, seven markets cancelled inside 1.5s and re-placed nine
+    # seconds later, several at the identical price. A side that is genuinely
+    # dead stays ineligible and still clears this dwell.
+    reward_eligibility_dwell_seconds: float = 90.0
     force_exit_before_start_seconds: float = 300.0
 
     def __post_init__(self) -> None:
@@ -159,6 +167,8 @@ def entry_quote_price(
 @dataclass
 class DesiredStateReconciler:
     policy: ReconcilerPolicy
+    _ineligible_since: dict[tuple[str, str], datetime] = field(
+        default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
     _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
@@ -385,7 +395,19 @@ class DesiredStateReconciler:
         desired_sides = ({"bid", "offer"} if market_open else set())
         if not frame.market.is_supported_moneyline:
             desired_sides.clear()
-        desired_sides &= set(frame.reward_eligible)
+        resting_sides = {order.side for order in frame.working_orders}
+        for side in tuple(desired_sides):
+            if side in frame.reward_eligible:
+                self._ineligible_since.pop((slug, side), None)
+                continue
+            if side not in resting_sides:
+                # Nothing resting yet, so there is no accrual to protect.
+                desired_sides.discard(side)
+                continue
+            since = self._ineligible_since.setdefault((slug, side), frame.now)
+            if (frame.now - since).total_seconds() >= (
+                    self.policy.reward_eligibility_dwell_seconds):
+                desired_sides.discard(side)
         desired_sides = {
             side for side in desired_sides
             if math.isfinite(frame.expected_net_by_side.get(side, 0.0))

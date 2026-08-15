@@ -1600,7 +1600,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.orders_sent_to_polymarket, 0)
         self.assertEqual(client.orders.create_calls, [])
         self.assertEqual(len(client.orders.cancel_calls), 1)
-        self.assertTrue(any(critical for _, critical in notifier.messages))
+        # Announced, but not as a critical. Finding leftover state on restart
+        # is the healthy recovery path, not a fault -- it fired on roughly
+        # fifteen restarts on 2026-08-14, and an alert that cries wolf on a
+        # normal state trains the operator to ignore the ones that matter.
+        self.assertTrue(any(
+            "recovering flat" in message for message, _ in notifier.messages))
+        self.assertFalse(any(critical for _, critical in notifier.messages))
 
     async def test_unowned_exchange_order_refuses_and_never_mutates(self):
         runner, client, _ = self.build_runner()
@@ -2663,6 +2669,28 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._whole_account_safe_to_stop = lambda: False
         runner.config = replace(runner.config, max_shutdown_seconds=30)
         return runner, client, slug
+
+    async def test_a_book_that_never_parses_retires_its_market(self):
+        """An unquotable market must not hold a slot forever.
+
+        `book is not two-sided` was the most common error in the log at 2,121
+        occurrences across 21 of 77 markets, two of them retried about 1,100
+        times each at three-second intervals. The market can never quote, so
+        the retries buy nothing and spend REST budget.
+        """
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        async def unparseable(*_args, **_kwargs):
+            raise AdapterError("book is not two-sided")
+
+        runner._refresh_quiet_book_if_due = unparseable
+
+        for _ in range(MAX_RECOVERY_ATTEMPTS + 1):
+            await runner._service_market_state(slug, runner._now())
+
+        self.assertTrue(runner._is_barred_from_quoting(slug))
 
     async def test_a_fill_only_the_venue_saw_still_reaches_the_stop(self):
         """A closing fill lost by the WebSocket must not hide a loss.

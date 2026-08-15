@@ -1539,6 +1539,21 @@ class CommissioningRunner:
             await self._report_runtime_error(
                 f"quiet_book_rest_refresh:{slug}", exc)
             state.next_book_refresh = self._now() + timedelta(seconds=3)
+            # A book that will not parse is not a book we can ever quote, and
+            # retrying it every three seconds holds a market slot while burning
+            # REST budget. `book is not two-sided` was the most common error in
+            # the log at 2,121 occurrences across 21 of 77 markets, with two
+            # markets retried about 1,100 times each. Retire it on the same
+            # bound the strategy-state recoveries use.
+            if (self._runtime_error_counts.get(
+                    f"quiet_book_rest_refresh:{slug}", 0)
+                    >= MAX_RECOVERY_ATTEMPTS):
+                stop = await self._retire_market(
+                    slug, f"unrecoverable_book_{type(exc).__name__}",
+                    reset_exit_budget=False)
+                if stop:
+                    raise RuntimeInvariantViolation(
+                        "market_retirement_limit_exceeded", stop)
         # Check before evaluating: a retired market that reached flat should
         # stop being treated as retired in the same pass that would otherwise
         # keep blocking its slot.
@@ -2640,10 +2655,14 @@ class CommissioningRunner:
             preflight_complete = True
             if startup_mode == "RECOVERY_ONLY":
                 self.request_stop("startup_recovery_only")
+                # Not critical. This is the healthy recovery path, and it
+                # fires on every restart that finds leftover state -- roughly
+                # fifteen times on 2026-08-14 alone. An alert that cries wolf
+                # on a normal state trains the operator to ignore Discord,
+                # which is where the real stops and ownership violations go.
                 await self.notifier.send_async(
                     "Liquidity Bot found identified one-market state from a "
-                    "prior process. New risk remains disabled; recovering flat.",
-                    critical=True)
+                    "prior process. New risk remains disabled; recovering flat.")
             now = self._now()
             try:
                 self._evaluate_rewards(now)

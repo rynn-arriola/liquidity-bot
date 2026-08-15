@@ -81,30 +81,27 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    # Two private connections at eight markets each.
+    # Twenty markets across three private connections (8 + 8 + 4).
     #
-    # The socket cap is not what sets this. Subscriptions allow far more --
-    # 1 orders + N positions + 1 balance <= 10 per connection, and connections
-    # are independent (measured 2026-08-14), so 30 markets across four sockets
-    # is subscribable. **The REST governor is the real ceiling.** Measured
-    # 2026-08-15T13:48Z at 30 markets: 29 bound, 58 book_stale events, and
-    # ZERO placements -- the bot could not quote a single market.
+    # Not set by the socket cap. Measured 2026-08-15 after the market feed was
+    # made survivable (one unusable book used to kill it), three runs at each
+    # width, 25s each:
     #
-    #     N markets / 4 req/s must stay under max_book_age_seconds (5.0)
-    #     N < 20, and 16 leaves a second of margin
+    #     16 -> 16/16 slugs,  82-91 msgs, 0 dropped
+    #     20 -> 20/20 slugs, 153-165 msgs, 0 dropped
+    #     24 -> 22/24 slugs, 184-202 msgs, 0 dropped
+    #     29 -> 27/29 slugs, 202-226 msgs, 0 dropped
     #
-    # Every book was stale before its turn came round, so no market could ever
-    # act on fresh data. Width past this point is not merely wasted, it is
-    # negative: it starves the markets that would otherwise quote.
+    # The socket sustains 29. **The real ceiling is what REST can carry alone
+    # when the socket drops**, because that is when a held position still has
+    # to be exitable: N markets refresh in N/4 seconds against a 5s staleness
+    # bound, so 20 sits exactly at the limit and 24+ does not fit. Above 20 a
+    # feed drop leaves every book stale, the exit unpriceable, and inventory
+    # riding toward settlement -- how maker-lab lost $443.88.
     #
-    # Raising rest_requests_per_second is NOT the lever. maker-lab was
-    # rate-limited and settled at 0.3 req/s; we are already at 4. Widening past
-    # 16 needs a longer quiet-refresh interval or a higher staleness bound
-    # first, and both are freshness trade-offs to measure deliberately.
-    #
-    # Worst-case exposure: both sides of one market risk quote_size x p +
-    # quote_size x (1 - p) = $5, so 16 markets is $80 against the $340 cap.
-    max_markets: int = 16
+    # Worst case exposure: both sides of a market risk quote_size x p +
+    # quote_size x (1 - p) = $5, so 20 markets is $100 against the $340 cap.
+    max_markets: int = 20
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -217,10 +214,10 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 5 or self.max_markets != 16:
+        if self.quote_size != 5 or self.max_markets != 20:
             problems.append(
                 "commissioning is hard-locked to five contracts per quote "
-                "across at most sixteen markets")
+                "across at most twenty markets")
         if (self.max_market_exposure_usd != 45
                 or self.max_portfolio_exposure_usd != 340):
             problems.append(

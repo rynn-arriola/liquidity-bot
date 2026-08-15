@@ -123,6 +123,30 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    Fixed by skipping unusable books instead of raising them (streams.py).
    Scope violations and structural decode failures stay fatal.
 
+   **Re-measured after the fix, three runs per width, 25s each:**
+
+       width 16 -> 16/16 slugs,  82- 91 msgs, 0 dropped
+       width 20 -> 20/20 slugs, 153-165 msgs, 0 dropped
+       width 24 -> 22/24 slugs, 184-202 msgs, 0 dropped
+       width 29 -> 27/29 slugs, 202-226 msgs, 0 dropped
+
+   Twelve trials, **zero deaths**. The socket sustains 29. The two slugs
+   missing at 24 and 29 are the same two in every run -- `zhuole-hohser` and
+   `horana-shevik` simply do not publish. Message volume rises with width, as
+   a healthy feed should.
+
+10. **Market width is set by what REST can carry ALONE, not by the socket.**
+   The socket sustains 29 (finding 9). The binding question is what happens
+   when it drops, because a held position must still be exitable: REST
+   refreshes N markets in N/4 seconds against a 5s staleness bound, so 20 sits
+   exactly at the limit and 24+ does not fit. Above 20 a feed drop leaves every
+   book stale, the exit unpriceable, and inventory riding toward settlement --
+   which is how maker-lab lost $443.88.
+
+   **max_markets = 20.** Worst-case exposure $100 against the $340 cap, so the
+   risk budget is not binding. This supersedes finding 8, which reasoned from
+   REST arithmetic alone before the feed fault was known.
+
 10. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count

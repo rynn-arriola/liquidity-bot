@@ -112,11 +112,11 @@ class CommissioningTests(unittest.TestCase):
         # Eight per connection is the measured ceiling: 10 subscriptions, of
         # which one is account-wide orders and one is balance, leaving eight
         # per-market position subscriptions. Connections are independent, so
-        # sixteen is two of them -- and sixteen rather than thirty because
-        # the REST governor, not the socket cap, is the real ceiling: 30
-        # markets at 4 req/s is a 7.5s refresh cycle against a 5s staleness
-        # bound, measured live as zero placements.
-        self.assertEqual(config.max_markets, 16)
+        # Twenty, and the socket cap is not what sets it: the feed sustains
+        # 29. The ceiling is what REST can carry ALONE if the socket drops,
+        # because a held position must stay exitable -- N/4 seconds against a
+        # 5s staleness bound puts 20 at the limit.
+        self.assertEqual(config.max_markets, 20)
         # Size per quote is unchanged. Breadth expands, exposure per market
         # does not.
         self.assertEqual(config.quote_size, Decimal("5"))
@@ -127,8 +127,8 @@ class CommissioningTests(unittest.TestCase):
 
     def test_more_markets_than_the_subscription_ceiling_is_refused(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-        with self.assertRaisesRegex(CommissioningRefused, "sixteen markets"):
-            self.authorized(max_markets=17).assert_authorized(now=now)
+        with self.assertRaisesRegex(CommissioningRefused, "twenty markets"):
+            self.authorized(max_markets=21).assert_authorized(now=now)
 
     def test_auto_selection_constants_and_reserved_slug_are_locked(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)

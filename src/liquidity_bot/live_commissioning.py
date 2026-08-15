@@ -2282,8 +2282,15 @@ class CommissioningRunner:
         """Retry ambiguous remote outcomes; terminate local invariant failures."""
 
         await self._report_runtime_error(f"action_driver:{slug}", exc)
-        if not isinstance(exc, (AdapterError, OrderOutcomeUncertain)):
+        if isinstance(exc, RuntimeInvariantViolation):
+            # About the process, not this market. Terminal.
             return self._terminal_exception_reason("action_driver", exc)
+        if not isinstance(exc, (AdapterError, OrderOutcomeUncertain)):
+            # Some other exception driving this market's action. Retire the
+            # market and keep the rest quoting rather than ending the session
+            # over one market's mutation. Bounded like every retirement.
+            return await self._retire_market(
+                slug, f"action_failed_{type(exc).__name__}")
         # Losing a race against our own placement is not a failure worth
         # tearing the book down for. The order we just sent is not yet visible
         # as working, so the next pass tries to place again, place() refuses

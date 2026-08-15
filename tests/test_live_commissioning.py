@@ -853,6 +853,33 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_action_failure_retires_one_market_not_the_session(self):
+        """An unexpected action exception must not stop the other seven."""
+        runner, client, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one", "market-two"])
+
+        stop = await runner._handle_action_failure(
+            ValueError("driver blew up on this market"), "market-one")
+
+        self.assertIsNone(stop)
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertFalse(runner._is_barred_from_quoting("market-two"))
+
+    async def test_invariant_violation_in_an_action_still_stops_the_session(self):
+        """A violated invariant is about the process. It stays terminal."""
+        runner, _client, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one"])
+
+        stop = await runner._handle_action_failure(
+            RuntimeInvariantViolation("scope_violation", "scope"), "market-one")
+
+        self.assertIsNotNone(stop)
+        self.assertIn("scope_violation", stop)
+
     async def test_plan_failure_retires_one_market_not_the_session(self):
         """One market's planning exception must not stop the other seven."""
         runner, client, _ = self.build_runner(

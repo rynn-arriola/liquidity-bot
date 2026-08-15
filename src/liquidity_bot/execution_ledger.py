@@ -91,7 +91,9 @@ CREATE TABLE IF NOT EXISTS execution_positions (
     received_at TEXT NOT NULL,
     source TEXT NOT NULL,
     authoritative_through TEXT
-);
+,
+    cost TEXT,
+    first_seen_at TEXT);
 CREATE TABLE IF NOT EXISTS execution_position_reconciliations (
     id INTEGER PRIMARY KEY,
     snapshot_id TEXT NOT NULL,
@@ -222,12 +224,22 @@ class PositionState:
     market_slug: str
     net_qty: Decimal
     event_at: datetime
+    # What the venue says this position cost. Our own fills are the primary
+    # source of basis, but a fill that never arrives leaves the basis
+    # unknowable -- and no basis means no exit can be priced, which deadlocks:
+    # _inventory_plan returns inventory_basis_or_clock_unknown, the market is
+    # retired, and a retired market's exit still needs a basis. Observed
+    # 2026-08-15 on demciva-hryole and ff-ep. The venue already knows the cost,
+    # so stop rebuilding it -- the same move that fixed the loss stop.
+    cost: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug:
             raise ValueError("position market is required")
         _decimal(self.net_qty, "net_qty")
         _time(self.event_at, "event_at")
+        if self.cost is not None:
+            _decimal(self.cost, "cost")
 
 
 @dataclass(frozen=True)
@@ -257,6 +269,8 @@ class ExecutionLedger:
     ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
         ("execution_orders", "reject_reason", "TEXT"),
         ("execution_fills", "outcome", "TEXT"),
+        ("execution_positions", "cost", "TEXT"),
+        ("execution_positions", "first_seen_at", "TEXT"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -552,8 +566,37 @@ class ExecutionLedger:
             return None
         if (net != authoritative or average is None or opened_at is None
                 or opened_at.tzinfo is None or opened_at.utcoffset() is None):
-            return None
+            # Fills cannot explain the position -- most often because the fill
+            # that opened it never arrived. Fall back to what the VENUE says it
+            # cost. Without this there is no basis, so no exit can be priced,
+            # and _inventory_plan returns inventory_basis_or_clock_unknown --
+            # which retires the market, whose exit then still needs a basis.
+            # That deadlock stranded demciva-hryole and ff-ep on 2026-08-15.
+            #
+            # The clock uses first_seen_at, not a fill time we do not have.
+            # It can only make the deadline LATER, never skip it, which is the
+            # safe direction.
+            return self._venue_basis(market_slug, authoritative)
         return InventoryBasis(authoritative, average, opened_at)
+
+    def _venue_basis(
+        self, market_slug: str, authoritative: Decimal,
+    ) -> InventoryBasis | None:
+        row = self.connection.execute(
+            "SELECT cost,first_seen_at FROM execution_positions "
+            "WHERE market_slug=?", (market_slug,)).fetchone()
+        if row is None or row["cost"] is None or row["first_seen_at"] is None:
+            return None
+        try:
+            cost = _decimal(str(row["cost"]), "position cost")
+            seen = datetime.fromisoformat(str(row["first_seen_at"]))
+        except Exception:
+            return None
+        if not cost or seen.tzinfo is None or seen.utcoffset() is None:
+            return None
+        # Cost is what the position cost in total; basis is per contract.
+        return InventoryBasis(
+            authoritative, abs(cost) / abs(authoritative), seen)
 
     def _accept_event(
         self, source: str, event_id: str, received_at: str,
@@ -862,6 +905,8 @@ class ExecutionLedger:
                                       received, payload):
                 return False
             venue = {row.market_slug: _decimal(row.net_qty, "net_qty") for row in rows}
+            # The venue's own cost per market, used only as a basis fallback.
+            costs = {row.market_slug: getattr(row, "cost", None) for row in rows}
             if complete_account:
                 for item in self.connection.execute(
                         "SELECT market_slug FROM execution_positions").fetchall():
@@ -883,15 +928,26 @@ class ExecutionLedger:
                          _number(venue_qty, "venue_qty"),
                          _number(venue_qty - prior_qty, "difference"),
                          snapshot_at, received))
+                cost = costs.get(slug)
                 self.connection.execute(
                     "INSERT INTO execution_positions(market_slug,net_qty,event_at,"
-                    "received_at,source,authoritative_through) VALUES (?,?,?,?,?,?) "
+                    "received_at,source,authoritative_through,cost,first_seen_at) "
+                    "VALUES (?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(market_slug) "
                     "DO UPDATE SET net_qty=excluded.net_qty,event_at=excluded.event_at,"
                     "received_at=excluded.received_at,source=excluded.source,"
-                    "authoritative_through=excluded.authoritative_through",
+                    "authoritative_through=excluded.authoritative_through,"
+                    "cost=COALESCE(excluded.cost,cost),"
+                    # first_seen_at is when this position became nonzero and is
+                    # NOT refreshed while it stays open -- it is the clock the
+                    # exit deadline runs on when no fill time is available.
+                    # Cleared once flat so the next position starts its own.
+                    "first_seen_at=CASE WHEN CAST(excluded.net_qty AS REAL)=0 "
+                    "THEN NULL ELSE COALESCE(first_seen_at,excluded.first_seen_at) END",
                     (slug, _number(venue_qty, "venue_qty"), snapshot_at,
-                     received, "position_snapshot", snapshot_at))
+                     received, "position_snapshot", snapshot_at,
+                     None if cost is None else _number(cost, "cost"),
+                     None if venue_qty == 0 else received))
             self._finish_event("position_snapshot", snapshot_id, True)
         return True
 

@@ -31,6 +31,28 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### A position with no recorded fill could never be exited
+
+**Symptom:** `demciva-hryole` short 5, `basis NONE`, no exit order and no
+attempt at one. Its last logged activity was the two entry quotes. Same shape
+on `ff-ep` earlier in the day.
+
+**Mechanism:** `inventory_basis` rebuilds basis from fills only. When the fill
+that opened a position never arrives, basis is `None` — and `_inventory_plan`
+returns `inventory_basis_or_clock_unknown`, a *retiring* critical. The market
+is retired, and a retired market's exit **still needs a basis**. Deadlock, and
+the position rides to settlement.
+
+**Fix:** fall back to the venue's own `cost` on the position snapshot —
+`basis = cost / |netPosition|`. The clock uses `first_seen_at`, held from when
+the position became nonzero and cleared when it goes flat; with no fill time
+available that can only make the deadline *later*, never skip it.
+
+**The pattern, for the third time today:** stop rebuilding what the venue
+already knows. The same move fixed the loss stop (settled cash instead of
+reconstructed fills). Quantity still comes from `netPositionDecimal` — cost is
+used for basis only, never to infer size.
+
 ### A position lost its manager when selection moved on
 
 **Symptom:** two open positions with **no exit orders and no attempt to place

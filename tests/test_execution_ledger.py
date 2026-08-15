@@ -495,3 +495,64 @@ class PairSettlementTests(unittest.TestCase):
         # so nothing is realised. Buying and holding is not a loss.
         self.assertAlmostEqual(
             float(led.realized_pnl("market-one")), 0.0, places=2)
+
+
+class VenueBasisFallbackTests(unittest.TestCase):
+    """A position whose opening fill never arrived must still be exitable."""
+
+    def ledger(self):
+        root = Path(tempfile.mkdtemp(prefix="venuebasis-"))
+        led = ExecutionLedger(root / "l.db")
+        self.addCleanup(led.close)
+        return led
+
+    def snapshot(self, led, qty, cost, at):
+        led.apply_position_snapshot(
+            f"snap-{at.isoformat()}",
+            [PositionState(market_slug="market-one", net_qty=Decimal(qty),
+                           event_at=at, cost=Decimal(cost))],
+            as_of=at, observed_at=at, complete_account=True)
+
+    def test_basis_falls_back_to_the_venue_cost(self):
+        """No fill, no basis, no exit -- and no exit means settlement.
+
+        _inventory_plan returns inventory_basis_or_clock_unknown without a
+        basis, which retires the market, whose exit then still needs a basis.
+        That deadlock stranded demciva-hryole and ff-ep on 2026-08-15. The
+        venue already knows what the position cost.
+        """
+        led = self.ledger()
+        at = datetime(2026, 8, 15, 22, tzinfo=UTC)
+
+        self.snapshot(led, "5", "2.98", at)     # no fills at all
+
+        basis = led.inventory_basis("market-one")
+        self.assertIsNotNone(basis, "a costed position must be exitable")
+        self.assertEqual(basis.net_qty, Decimal("5"))
+        self.assertAlmostEqual(float(basis.average_entry_price), 0.596, places=3)
+
+    def test_the_clock_starts_when_the_position_was_first_seen(self):
+        """No fill time exists, so the deadline runs from first observation.
+
+        That can only make the deadline LATER, never skip it.
+        """
+        led = self.ledger()
+        first = datetime(2026, 8, 15, 22, tzinfo=UTC)
+        later = datetime(2026, 8, 15, 22, 30, tzinfo=UTC)
+
+        self.snapshot(led, "5", "2.98", first)
+        self.snapshot(led, "5", "2.98", later)   # still open, clock must hold
+
+        self.assertEqual(led.inventory_basis("market-one").opened_at, first)
+
+    def test_going_flat_clears_the_clock_for_the_next_position(self):
+        led = self.ledger()
+        first = datetime(2026, 8, 15, 22, tzinfo=UTC)
+        flat = datetime(2026, 8, 15, 22, 10, tzinfo=UTC)
+        again = datetime(2026, 8, 15, 22, 20, tzinfo=UTC)
+
+        self.snapshot(led, "5", "2.98", first)
+        self.snapshot(led, "0", "0", flat)
+        self.snapshot(led, "5", "2.50", again)
+
+        self.assertEqual(led.inventory_basis("market-one").opened_at, again)

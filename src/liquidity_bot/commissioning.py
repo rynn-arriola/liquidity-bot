@@ -81,13 +81,26 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    # Two private connections at eight markets each. The subscription cap is
-    # per connection (1 orders + N positions + 1 balance <= 10), and
-    # connections are independent -- measured 2026-08-14. Reward pools are per
-    # market, so more markets reaches more pools; more size only buys a larger
-    # share of the same one. Staged at 16 rather than 30: every recovery path
-    # is now exercised on two sockets before it is trusted on four.
-    max_markets: int = 16
+    # Four private connections: 8 + 8 + 8 + 6. The subscription cap is per
+    # connection (1 orders + N positions + 1 balance <= 10) and connections are
+    # independent -- both measured 2026-08-14. Reward pools are per market, so
+    # more markets reaches more pools; more size only buys a larger share of
+    # the same one. maker-lab ran 30 at size 5 and that is the account that
+    # earned $70.92.
+    #
+    # Worst-case exposure is bounded well inside the portfolio budget: both
+    # sides of one market risk quote_size x p + quote_size x (1 - p) = $5, so
+    # 30 markets is $150 against the $340 cap.
+    #
+    # The binding constraint at this width is the REST governor, not the
+    # sockets. The quiet-book refresh only fires when the WebSocket has been
+    # silent for 3s, so active markets cost nothing; but if every market went
+    # quiet at once, 30 of them want ~10 req/s against a 4 req/s governor. That
+    # degrades safely -- books age, book_stale fires, those markets stop
+    # quoting -- and the lever if it bites is a longer quiet-refresh interval,
+    # NOT a higher request rate. maker-lab was rate-limited and settled at 0.3
+    # req/s; we are already at 4.
+    max_markets: int = 30
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -200,10 +213,10 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 5 or self.max_markets != 16:
+        if self.quote_size != 5 or self.max_markets != 30:
             problems.append(
                 "commissioning is hard-locked to five contracts per quote "
-                "across at most sixteen markets")
+                "across at most thirty markets")
         if (self.max_market_exposure_usd != 45
                 or self.max_portfolio_exposure_usd != 340):
             problems.append(

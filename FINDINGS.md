@@ -65,7 +65,17 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    operator reads between the two outcomes' bids. This is why the quoting rule
    is stated as "two cents in the middle".
 
-7. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+7. **The REST rate cannot be exceeded by adding markets.** Every call awaits a
+   single shared `AsyncIntervalLimiter` (`adapters.py:334`) that sleeps until
+   the minimum interval elapses, so more markets queue rather than raise the
+   rate. `from_rate` also refuses anything above the documented 20/s retail
+   ceiling. What scales with market count is *freshness*, not rate: 30 quiet
+   markets at 4 req/s is a 7.5s cycle against a 5s staleness bound, so quiet
+   markets age out and stop quoting. That is safe, and the lever if it bites is
+   a longer quiet-refresh interval -- never a higher request rate, since
+   maker-lab was rate-limited and settled at 0.3 req/s.
+
+8. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

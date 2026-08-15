@@ -92,7 +92,31 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    needs a longer quiet-refresh interval or a higher staleness bound first,
    measured deliberately.
 
-9. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+9. **The market-data WebSocket stops delivering somewhere between 16 and 29
+   slugs on one subscription.** Measured 2026-08-15 with a standalone script,
+   40 seconds per trial, one `subscribe_market_data` call carrying all slugs:
+
+       subscribed  8  ->  books from  8 slugs, 249 messages
+       subscribed 16  ->  books from 16 slugs, 256 messages
+       subscribed 29  ->  books from 20 slugs,  20 messages
+
+   At 29 the stream effectively dies: ~1 message per slug and then silence,
+   against ~16 per slug at the smaller widths, and nine slugs never deliver at
+   all. **This, not the REST governor, is why 30 markets produced zero
+   placements.** Books never arrive over the socket, every market goes quiet,
+   REST becomes the only path, and everything reports `book_stale`. The
+   earlier `30 / 4 req/s = 7.5s` arithmetic described the overwhelmed fallback,
+   not the cause -- it is superseded, and finding 8 above should be read with
+   that correction.
+
+   Also observed in the same run: `book is not two-sided` surfaced as a
+   *stream error* out of `next_book`, killing the whole stream rather than
+   skipping one market. One malformed book can stop book delivery for every
+   market on that socket.
+
+   16 is measured-good. The boundary between 17 and 28 is unmeasured.
+
+10. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

@@ -438,3 +438,60 @@ class RejectReasonTests(unittest.TestCase):
         columns = {row["name"] for row in
                    led.connection.execute("PRAGMA table_info(execution_orders)")}
         self.assertIn("reject_reason", columns)
+
+
+class PairSettlementTests(unittest.TestCase):
+    """BUY_SHORT is a purchase, and a matched pair settles at one dollar."""
+
+    def ledger(self):
+        root = Path(tempfile.mkdtemp(prefix="pairs-"))
+        led = ExecutionLedger(root / "l.db")
+        self.addCleanup(led.close)
+        return led
+
+    def fill(self, led, eid, side, intent, price, qty, fee="0"):
+        led.apply_execution(Execution(
+            execution_id=eid, market_slug="market-one", side=side,
+            price=Decimal(price), qty=Decimal(qty), fee=Decimal(fee),
+            event_at=datetime(2026, 8, 15, tzinfo=UTC), intent=intent),
+            received_at=datetime(2026, 8, 15, tzinfo=UTC))
+
+    def test_a_round_trip_realises_the_pair_settlement(self):
+        """The trade that exposed this: bought 0.39, "sold" 0.67, LOST money.
+
+        BUY_SHORT at 0.67 buys the opposite outcome for 0.67; it does not sell
+        at 0.67. Paying 0.39 + 0.67 = 1.06 for a pair worth 1.00 is a six-cent
+        loss per contract. Reading the venue's ORDER_SIDE_SELL label as cash IN
+        reported +$1.34 on aec-valorant-ff-ep, which actually lost about $0.30.
+        """
+        led = self.ledger()
+        self.fill(led, "e1", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.39", "5")
+        self.fill(led, "e2", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.67", "5")
+
+        # 5 x 0.39 + 5 x 0.67 = 5.30 paid; 5 pairs settle at 5.00.
+        self.assertAlmostEqual(
+            float(led.realized_pnl("market-one")), -0.30, places=2)
+
+    def test_a_profitable_pair_costs_less_than_a_dollar(self):
+        led = self.ledger()
+        self.fill(led, "e1", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.45", "5")
+        self.fill(led, "e2", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.50", "5")
+
+        # 0.95 per pair for something worth 1.00.
+        self.assertAlmostEqual(
+            float(led.realized_pnl("market-one")), 0.25, places=2)
+
+    def test_an_unmatched_leg_realises_nothing(self):
+        """One side alone is open inventory, not a completed round trip."""
+        led = self.ledger()
+        self.fill(led, "e1", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.39", "5")
+
+        # Cash is out, but the position carries that value at its own basis,
+        # so nothing is realised. Buying and holding is not a loss.
+        self.assertAlmostEqual(
+            float(led.realized_pnl("market-one")), 0.0, places=2)

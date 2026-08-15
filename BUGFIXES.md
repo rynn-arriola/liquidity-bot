@@ -31,6 +31,32 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### realized_pnl booked a purchase as a sale, turning a loss into a gain
+
+**Symptom:** `realized_pnl` reported **+$1.34** on `aec-valorant-ff-ep`, a
+trade that lost about **$0.30**. The venue app showed 1.94 paid in and 1.72
+back.
+
+**Mechanism:** both intents we send are BUY intents with the price unchanged
+(`live_orders._intent`, validated by maker-lab over 201 fills). So `BUY_SHORT`
+at 0.67 *buys the opposite outcome* for 0.67 — it does not sell at 0.67. The
+venue labels it `ORDER_SIDE_SELL` because of which outcome is taken, and
+`realized_pnl` read that label as the direction of our cash.
+
+    BUY_LONG   5 x 0.39 = paid 1.95
+    BUY_SHORT  5 x 0.67 = paid 3.35
+    five pairs settle at        5.00
+    realised                   -0.30
+
+**Fix:** the sign comes from the intent, not the side label; both intents are
+cash out, and each matched pair credits one dollar. Prices were never wrong —
+every maker fill equals our own order price.
+
+**Three wrong diagnoses first**, all recorded: fills stored in two frames
+(false), the frame not derivable from `portfolio.activities` (true but beside
+the point), and a uniform 0.10 offset (an artifact of reading the
+counterparty's order). The sign, not the price, was the whole bug.
+
 ### A one-sided book stranded a position until it settled
 
 **Symptom:** `chevic-scovla` — 254 log mentions, exactly **one** order action

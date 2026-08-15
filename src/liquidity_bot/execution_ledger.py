@@ -927,14 +927,43 @@ class ExecutionLedger:
             params.append(_time(since, "since").isoformat())
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         cash = Decimal("0")
+        long_qty = Decimal("0")
+        short_qty = Decimal("0")
         for row in self.query(
-                "SELECT side,price,qty,fee FROM execution_fills" + where,
+                "SELECT side,price,qty,fee,intent FROM execution_fills" + where,
                 tuple(params)):
             qty = _decimal(row["qty"], "fill qty")
             price = _decimal(str(row["price"]), "fill price")
             fee = _decimal(str(row["fee"] or 0), "fill fee")
-            signed = qty if "SELL" in str(row["side"]).upper() else -qty
-            cash += signed * price - fee
+            intent = str(row["intent"] or "").upper()
+            if intent.endswith("BUY_SHORT"):
+                # A PURCHASE, despite the venue labelling it ORDER_SIDE_SELL.
+                # That label says which OUTCOME is taken, not which way our
+                # cash moves -- both intents we send are BUY intents with the
+                # price unchanged (live_orders._intent, validated by maker-lab
+                # over 201 fills). Taking the sign from the label booked cash
+                # IN on a purchase and turned a $0.30 loss into a $1.34 gain
+                # on aec-valorant-ff-ep.
+                #
+                # Buying the opposite outcome nets the position out, and the
+                # pair settles at exactly 1.00 -- credited below.
+                cash -= qty * price + fee
+                short_qty += qty
+            elif intent.endswith("BUY_LONG"):
+                cash -= qty * price + fee
+                long_qty += qty
+            else:
+                # Legacy SELL_LONG / SELL_SHORT fills, and any fill recorded
+                # before intent was captured. Those used the other mapping,
+                # where the venue read the price in the opposite frame, so the
+                # side label is the only signal available.
+                signed = qty if "SELL" in str(row["side"]).upper() else -qty
+                cash += signed * price - fee
+        # Each MATCHED pair of outcomes settles at exactly one dollar, so a
+        # completed round trip realises that dollar against what both legs
+        # cost. An unmatched leg is still open inventory and is valued at its
+        # own basis below instead.
+        cash += min(long_qty, short_qty)
         slugs = ([market_slug] if market_slug is not None
                  else [str(r["market_slug"]) for r in self.query(
                      "SELECT DISTINCT market_slug FROM execution_fills")])

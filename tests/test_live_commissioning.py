@@ -2939,12 +2939,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._rest_reconcile(runner._now())
 
+        # Both intents are PURCHASES: 5 x 0.65 + 5 x 0.96 = 8.05 paid for five
+        # pairs that settle at 5.00, so -3.05. The old expectation of -1.55
+        # came from reading BUY_SHORT as a sale, which is the defect -- the
+        # venue's ORDER_SIDE_SELL label says which outcome is taken, not which
+        # way our cash moves.
         self.assertAlmostEqual(
-            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
+            float(runner.ledger.realized_pnl(slug)), -3.05, places=2)
         # Replaying is idempotent -- dedupe is on execution_id.
         await runner._rest_reconcile(runner._now())
         self.assertAlmostEqual(
-            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
+            float(runner.ledger.realized_pnl(slug)), -3.05, places=2)
 
     async def test_the_counterpartys_side_of_a_trade_is_not_recorded(self):
         """A trade has two sides and the venue reports both. One is ours.

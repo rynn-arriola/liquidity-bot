@@ -31,6 +31,28 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### One unusable book killed the whole market feed
+
+**Symptom:** 30 markets bound, every book stale, zero placements. Standalone
+measurement: 28 slugs delivered 20 messages then silence, preceded by
+`book is not two-sided`; 8/16/20/24 delivered 250-490 messages.
+
+**Mechanism:** `_on_market_data` queued a parse failure as an exception,
+`next_book` raised it, and the runner treated that as the socket failing. One
+market's malformed book ended delivery for every market on that socket. About
+one market in four publishes a one-sided book.
+
+**Not a width cap.** A second run of 29 slugs was healthy at 415 messages while
+16 delivered 152. Width only changes the odds of hitting a bad book.
+
+**Fix:** skip and count unusable books. That market simply has no fresh data,
+ages out, and `book_stale` already refuses to quote on stale data. Scope
+violations and structural decode failures stay fatal.
+
+**Two wrong diagnoses before this one**, both recorded rather than deleted: the
+REST governor arithmetic (a symptom -- the overwhelmed fallback), and a
+supposed subscription cap (disproved by the second run).
+
 ### Thirty markets starved every market of fresh books — `a5b20e9`..`HEAD`
 
 **Symptom:** 29 markets bound, 58 `book_stale` events, **zero placements**.

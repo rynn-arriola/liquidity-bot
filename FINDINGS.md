@@ -114,7 +114,14 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    skipping one market. One malformed book can stop book delivery for every
    market on that socket.
 
-   16 is measured-good. The boundary between 17 and 28 is unmeasured.
+   **A second run did not reproduce it**: 29 slugs then delivered 27 markets
+   in 415 messages and stayed healthy, while 16 delivered only 152. So width
+   is not the variable at all -- the feed dies when a malformed book happens
+   to arrive, and more markets only raises the odds. One run is noise; measure
+   three times before believing a width.
+
+   Fixed by skipping unusable books instead of raising them (streams.py).
+   Scope violations and structural decode failures stay fatal.
 
 10. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a

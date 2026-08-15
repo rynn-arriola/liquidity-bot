@@ -100,7 +100,8 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(client.market_socket.calls[1][2], ["market-one"])
         self.assertEqual(client.market_socket.calls[-1], ("close",))
 
-    def test_market_stream_rejects_unsubscribed_or_malformed_books(self):
+    def test_market_stream_rejects_a_book_outside_its_subscription(self):
+        """A scope violation is our bug, not the venue's, so it stays fatal."""
         async def scenario(payload):
             client = FakeClient()
             stream = MarketReadOnlyStream(client)
@@ -113,8 +114,35 @@ class StreamTests(unittest.TestCase):
 
         with self.assertRaises(AdapterError):
             self.run_async(scenario(fixture("book.json")))
-        with self.assertRaises(AdapterError):
-            self.run_async(scenario({"marketData": {}}))
+
+    def test_one_unusable_book_does_not_kill_the_feed(self):
+        """Measured 2026-08-15: this killed book delivery for every market.
+
+        A parse failure was queued and raised out of next_book, which the
+        runner treats as the socket failing. Subscribing 28 slugs delivered 20
+        messages and then silence after one `book is not two-sided` arrived,
+        while a later run of 29 stayed healthy at 415 -- so it was never a
+        width cap, just whether a bad book happened to arrive. About one market
+        in four publishes one.
+        """
+        async def scenario():
+            client = FakeClient()
+            stream = MarketReadOnlyStream(client)
+            await stream.start(["market-one"])
+            # An unusable book, then a good one for a subscribed market.
+            client.market_socket.emit("market_data", {"marketData": {}})
+            client.market_socket.emit("market_data", fixture("book.json"))
+            try:
+                book = await stream.next_book(timeout=0.1)
+            finally:
+                await stream.close()
+            return book, stream
+
+        book, stream = self.run_async(scenario())
+        # The good book still arrives; the bad one is counted, not raised.
+        self.assertEqual(book.slug, "market-one")
+        self.assertEqual(stream._dropped_books, 1)
+        self.assertIn("slug", str(stream._last_drop))
 
     def test_private_stream_subscribes_to_all_read_only_state(self):
         async def scenario():

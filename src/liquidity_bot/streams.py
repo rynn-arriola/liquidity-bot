@@ -37,6 +37,10 @@ class MarketReadOnlyStream:
         self._queue: asyncio.Queue[BookSnapshot | Exception] = asyncio.Queue()
         self._slugs: set[str] = set()
         self._started = False
+        # Books the venue sent that no consumer can use. Counted, never
+        # raised, so a rising number is visible without stopping the feed.
+        self._dropped_books = 0
+        self._last_drop: str | None = None
         self._socket.on("market_data", self._on_market_data)
         self._socket.on("error", self._on_error)
         self._socket.on("close", self._on_close)
@@ -44,14 +48,32 @@ class MarketReadOnlyStream:
     def _on_market_data(self, message: Any) -> None:
         try:
             book = parse_book_response(message)
-            if book.slug not in self._slugs:
-                raise AdapterError(
-                    f"received market data for unsubscribed slug {book.slug}")
-            self._queue.put_nowait(book)
+        except AdapterError as exc:
+            # ONE market's unusable book must not end the feed for all of
+            # them. Queuing this raised it out of next_book, which the runner
+            # treats as the socket failing. Measured 2026-08-15: subscribing 28
+            # slugs delivered 20 messages and then silence after a `book is not
+            # two-sided` arrived early, while a later run of 29 slugs delivered
+            # 415 messages and stayed healthy. It was never a width cap -- it
+            # is whether a malformed book happens to arrive, and about one
+            # market in four publishes one.
+            #
+            # Skipping is safe: that market simply has no fresh book, its data
+            # ages, and book_stale already refuses to quote on stale data.
+            self._dropped_books += 1
+            self._last_drop = str(exc)
+            return
         except Exception as exc:
+            # Not a book we failed to parse -- something structural. Loud.
             self._queue.put_nowait(
-                exc if isinstance(exc, AdapterError)
-                else AdapterError(f"market stream decode failed: {exc}"))
+                AdapterError(f"market stream decode failed: {exc}"))
+            return
+        if book.slug not in self._slugs:
+            # A scope violation is our bug, not the venue's. Stays fatal.
+            self._queue.put_nowait(AdapterError(
+                f"received market data for unsubscribed slug {book.slug}"))
+            return
+        self._queue.put_nowait(book)
 
     def _on_error(self, error: Any) -> None:
         self._queue.put_nowait(AdapterError(f"market WebSocket error: {error}"))

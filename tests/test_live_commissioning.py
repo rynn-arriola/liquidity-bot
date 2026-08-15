@@ -1348,8 +1348,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         places = [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY]
         self.assertTrue(places)
         prices = {a.side: a.price for a in places}
-        # 0.49/0.50 is 1c. Shed half a cent each way, rounded outward to tick.
-        self.assertAlmostEqual(prices["bid"], .48, places=6)
+        # 0.49/0.50 is 1c. The 2c window lands on the grid keeping the bid at
+        # the touch, so the offer alone gives up the odd tick.
+        self.assertAlmostEqual(prices["bid"], .49, places=6)
         self.assertAlmostEqual(prices["offer"], .51, places=6)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -1366,8 +1367,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         runner.book = BookSnapshot(
             "market-one",
-            (BookLevel(.49, 100000), BookLevel(.48, 1)),
-            (BookLevel(.50, 100000), BookLevel(.51, 1)),
+            (BookLevel(.49, 100000), BookLevel(.48, 100000)),
+            (BookLevel(.50, 100000), BookLevel(.51, 100000)),
             "MARKET_STATE_OPEN",
             NOW,
         )
@@ -1376,12 +1377,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._evaluate_rewards(NOW)
         actions = runner.reconciler.plan(runner._frame(NOW))
 
+        # The bid keeps the touch and stays eligible; the offer is the side
+        # that moves, and one tick past a cutoff fed entirely by touch depth
+        # earns nothing -- so it is blocked rather than quoted for free risk.
         self.assertEqual(
-            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
+            runner._economic_blocker_by_side.get("offer"),
+            "outside_reward_cutoff")
         self.assertEqual(
-            set(runner._economic_blocker_by_side.values()),
-            {"outside_reward_cutoff"},
-        )
+            {a.side for a in actions if a.kind == ActionKind.PLACE_POST_ONLY},
+            {"bid"})
         await runner.private_stream.close()
         await runner.market_stream.close()
 

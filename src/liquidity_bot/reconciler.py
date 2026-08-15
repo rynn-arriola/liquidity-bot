@@ -137,10 +137,12 @@ def entry_quote_price(
 
     Join the touch whenever the book already leaves that much -- a 7c book
     quoted at 50 and 43 stays at 50 and 43, with no stepping inside. When the
-    book is tighter, back off symmetrically until the gap is two cents: a
-    50/50 book is quoted 49/49, one tick behind each best bid rather than
-    refused outright. Returns None when the two sides overlap, which is stale
-    or bad data rather than a tradeable book.
+    book is tighter, the two-cent window is placed as a unit, as close to the
+    book's mid as the tick grid allows: a 50/50 book and a 49/50 book are both
+    quoted 49/49. The gap lands on exactly two cents rather than overshooting,
+    so when an odd cent has to go somewhere the bid keeps the touch and the
+    offer gives up the tick. Returns None when the two sides overlap, which is
+    stale or bad data rather than a tradeable book.
 
     Both the runner's economics and the planner's placement call this, so the
     reward projection is computed for the price we will actually rest at.
@@ -153,15 +155,18 @@ def entry_quote_price(
     spread = book.best_offer.price - book.best_bid.price
     if spread < -1e-9:
         return None
-    shortfall = minimum_gap - spread
-    if shortfall <= 1e-9:
+    if spread + 1e-9 >= minimum_gap:
         return book.best_bid.price if side == "bid" else book.best_offer.price
-    back_off = shortfall / 2.0
+    # Place the whole window at once so the gap comes out *exactly* at the
+    # minimum. Backing each side off half the shortfall and rounding outward
+    # gave 3c on an odd-cent book -- a 49/50 book became 48/49 when 49/49 is
+    # available, giving up a tick on both sides for nothing.
+    gap_ticks = math.ceil(minimum_gap / step_size - 1e-9)
+    mid = (book.best_bid.price + book.best_offer.price) / 2.0
+    bid_ticks = math.ceil((mid - gap_ticks * step_size / 2.0) / step_size - 1e-9)
     if side == "bid":
-        return math.floor(
-            (book.best_bid.price - back_off) / step_size + 1e-9) * step_size
-    return math.ceil(
-        (book.best_offer.price + back_off) / step_size - 1e-9) * step_size
+        return bid_ticks * step_size
+    return (bid_ticks + gap_ticks) * step_size
 
 
 @dataclass

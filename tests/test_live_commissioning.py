@@ -1890,6 +1890,63 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_recovery_spans_every_market_that_holds_state(self):
+        """Observed 2026-08-14T23:03Z: down until an operator noticed.
+
+        Leftover state in more than one market raised CommissioningRefused,
+        which exits 2 and is never restarted. Written when the runner held one
+        market at a time; with eight quoting, state in several markets after a
+        hard stop is the expected case.
+        """
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_markets=8)
+        for index, slug in enumerate(("market-one", "market-two")):
+            runner.ledger.apply_order_event(
+                "ws", f"left-behind-{index}",
+                OrderState(
+                    client_order_id=f"liquidity-left-{index}",
+                    exchange_order_id=f"exchange-left-{index}",
+                    market_slug=slug,
+                    side="ORDER_SIDE_BUY",
+                    price=Decimal("0.49"),
+                    original_qty=Decimal("5"),
+                    filled_qty=Decimal("0"),
+                    status="OPEN",
+                    event_at=runner._now()),
+                received_at=runner._now())
+
+        found = runner._identified_recovery_markets()
+
+        self.assertEqual(found, ("market-one", "market-two"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_recovery_still_refuses_more_markets_than_authorized(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        for index in range(runner.config.max_markets + 1):
+            runner.ledger.apply_order_event(
+                "ws", f"too-many-{index}",
+                OrderState(
+                    client_order_id=f"liquidity-many-{index}",
+                    exchange_order_id=f"exchange-many-{index}",
+                    market_slug=f"market-{index}",
+                    side="ORDER_SIDE_BUY",
+                    price=Decimal("0.49"),
+                    original_qty=Decimal("5"),
+                    filled_qty=Decimal("0"),
+                    status="OPEN",
+                    event_at=runner._now()),
+                received_at=runner._now())
+
+        # State this session could not have created is not ours to retire.
+        with self.assertRaisesRegex(CommissioningRefused, "above the authorized"):
+            runner._identified_recovery_markets()
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_restart_recovers_risk_left_on_a_non_primary_market(self):
         runner, _, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()

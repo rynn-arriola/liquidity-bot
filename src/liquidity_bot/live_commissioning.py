@@ -415,8 +415,8 @@ class CommissioningRunner:
             raise RuntimeError("runner clock must be timezone-aware")
         return value
 
-    def _identified_recovery_market(self) -> str | None:
-        """Return the sole ledger market that may still require retirement."""
+    def _identified_recovery_markets(self) -> tuple[str, ...]:
+        """Return every ledger market that may still require retirement."""
 
         slugs = {
             str(row["market_slug"])
@@ -433,10 +433,21 @@ class CommissioningRunner:
                 "WHERE CAST(net_qty AS REAL)!=0")
         )
         slugs.discard("")
-        if len(slugs) > 1:
+        # Recover the whole authorized set, not a single market. This raised
+        # when leftover state spanned more than one market, and
+        # CommissioningRefused exits 2, which the supervisor never restarts --
+        # so the bot stayed down. Written when the runner held one market at a
+        # time; with eight quoting, state in several markets after any hard
+        # stop is the expected case rather than an anomaly. Observed
+        # 2026-08-14T23:03Z, down until an operator noticed.
+        #
+        # More markets than the authorization is still refused: that is state
+        # this session could not have created, so it is not ours to retire.
+        if len(slugs) > self.config.max_markets:
             raise CommissioningRefused(
-                "automatic recovery found state in more than one market")
-        return next(iter(slugs), None)
+                f"automatic recovery found state in {len(slugs)} markets, "
+                f"above the authorized {self.config.max_markets}")
+        return tuple(sorted(slugs))
 
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
@@ -762,9 +773,9 @@ class CommissioningRunner:
         self.config.assert_authorized(now=now)
         self.cutoff_at = None
         if self.config.auto_select_reward_markets:
-            recovery_slug = self._identified_recovery_market()
-            if recovery_slug is not None:
-                self._bind_markets((recovery_slug,))
+            recovery_slugs = self._identified_recovery_markets()
+            if recovery_slugs:
+                self._bind_markets(recovery_slugs)
             else:
                 await self._select_reward_market(now)
                 now = self._now()

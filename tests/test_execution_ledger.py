@@ -363,3 +363,78 @@ class ExecutionLedgerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RejectReasonTests(unittest.TestCase):
+    """The venue's rejection reason must reach the ledger and survive."""
+
+    def ledger(self):
+        import tempfile
+        from pathlib import Path
+        root = Path(tempfile.mkdtemp(prefix="reject-"))
+        led = ExecutionLedger(root / "l.db")
+        self.addCleanup(led.close)
+        return led
+
+    def order(self, status, reason=None):
+        return OrderState(
+            client_order_id="c1", exchange_order_id="x1",
+            market_slug="market-one", side="ORDER_SIDE_BUY",
+            price=Decimal("0.50"), original_qty=Decimal("5"),
+            filled_qty=Decimal("0"), status=status,
+            event_at=datetime(2026, 8, 15, tzinfo=timezone.utc),
+            reject_reason=reason)
+
+    def test_a_rejection_reason_is_recorded(self):
+        led = self.ledger()
+        led.apply_order_event(
+            "src", "e1", self.order("REJECTED", "ORD_REJECT_REASON_POST_ONLY"),
+            received_at=datetime(2026, 8, 15, tzinfo=timezone.utc))
+
+        row = led.query("SELECT reject_reason FROM execution_orders")[0]
+        self.assertEqual(row["reject_reason"], "ORD_REJECT_REASON_POST_ONLY")
+
+    def test_a_later_snapshot_does_not_erase_the_reason(self):
+        """Snapshots of the same rejected order carry no reason.
+
+        Overwriting with NULL would erase the only explanation we ever get.
+        """
+        led = self.ledger()
+        moment = datetime(2026, 8, 15, tzinfo=timezone.utc)
+        led.apply_order_event(
+            "src", "e1", self.order("REJECTED", "ORD_REJECT_REASON_POST_ONLY"),
+            received_at=moment)
+        led.apply_order_event(
+            "src", "e2", self.order("REJECTED", None), received_at=moment)
+
+        row = led.query("SELECT reject_reason FROM execution_orders")[0]
+        self.assertEqual(row["reject_reason"], "ORD_REJECT_REASON_POST_ONLY")
+
+    def test_an_existing_database_gains_the_column(self):
+        """CREATE TABLE IF NOT EXISTS never adds a column to a live ledger.
+
+        This ledger is never rebuilt -- it is what proves what we own at the
+        venue -- so a new column has to arrive by migration.
+        """
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        root = Path(tempfile.mkdtemp(prefix="reject-old-"))
+        path = root / "old.db"
+        legacy = sqlite3.connect(path)
+        legacy.execute(
+            "CREATE TABLE execution_orders (client_order_id TEXT PRIMARY KEY,"
+            "exchange_order_id TEXT UNIQUE, market_slug TEXT NOT NULL,"
+            "side TEXT, price TEXT, original_qty TEXT,"
+            "filled_qty TEXT NOT NULL, status TEXT NOT NULL,"
+            "event_at TEXT NOT NULL, received_at TEXT NOT NULL,"
+            "unknown_reason TEXT)")
+        legacy.commit()
+        legacy.close()
+
+        led = ExecutionLedger(path)
+        self.addCleanup(led.close)
+
+        columns = {row["name"] for row in
+                   led.connection.execute("PRAGMA table_info(execution_orders)")}
+        self.assertIn("reject_reason", columns)

@@ -121,6 +121,12 @@ def normalize_order(
             filled_qty=cumulative,
             status=state_map[state],
             event_at=event_at,
+            # Only meaningful on a rejection, and the venue supplies it there.
+            # 203 rejections were unattributable because this was dropped.
+            reject_reason=(
+                str(_wire(raw, "orderRejectReason", "order_reject_reason")
+                    or "").strip() or None
+                if state_map[state] == "REJECTED" else None),
         )
     except ValueError as exc:
         raise AdapterError(f"order is invalid: {exc}") from exc

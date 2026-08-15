@@ -53,6 +53,23 @@ def raw_execution(**changes):
 
 
 class NormalizationTests(unittest.TestCase):
+    def test_a_rejected_order_keeps_the_venue_reason(self):
+        """203 rejections were unattributable because this was dropped.
+
+        A rejected order never rests, and reward pays only for resting time, so
+        telling an ordinary post-only collision from a real defect matters.
+        """
+        item = normalize_order(raw_order(
+            state="ORDER_STATE_REJECTED",
+            orderRejectReason="ORD_REJECT_REASON_POST_ONLY"), observed_at=NOW)
+
+        self.assertEqual(item.status, "REJECTED")
+        self.assertEqual(item.reject_reason, "ORD_REJECT_REASON_POST_ONLY")
+
+    def test_a_healthy_order_carries_no_rejection_reason(self):
+        self.assertIsNone(normalize_order(
+            raw_order(), observed_at=NOW).reject_reason)
+
     def test_order_amounts_and_cumulative_quantity_stay_decimal(self):
         item = normalize_order(raw_order(), observed_at=NOW)
         self.assertEqual(item.client_order_id, "venue:order-one")

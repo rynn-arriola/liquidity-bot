@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS execution_orders (
     status TEXT NOT NULL,
     event_at TEXT NOT NULL,
     received_at TEXT NOT NULL,
-    unknown_reason TEXT
+    unknown_reason TEXT,
+    reject_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_execution_orders_market_status
     ON execution_orders(market_slug, status);
@@ -153,6 +154,11 @@ class OrderState:
     status: str
     event_at: datetime
     exchange_order_id: str | None = None
+    # Why the venue refused it. 203 rejections were unattributable because this
+    # was thrown away: a rejected order never rests, and reward pays only for
+    # resting time, so telling an ordinary post-only collision from a real
+    # defect matters.
+    reject_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.client_order_id or not self.market_slug:
@@ -233,7 +239,27 @@ class ExecutionLedger:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.executescript(SCHEMA)
+        self._add_missing_columns()
         self.connection.commit()
+
+    # Additive-only migrations. `CREATE TABLE IF NOT EXISTS` silently leaves an
+    # existing table alone, so a new column never reaches a database that has
+    # already been created -- and this ledger is never rebuilt, because it is
+    # what proves what we own at the venue.
+    ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("execution_orders", "reject_reason", "TEXT"),
+    )
+
+    def _add_missing_columns(self) -> None:
+        for table, column, kind in self.ADDED_COLUMNS:
+            existing = {
+                str(row["name"]) for row in
+                self.connection.execute(f"PRAGMA table_info({table})")}
+            if not existing:
+                continue
+            if column not in existing:
+                self.connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     def close(self) -> None:
         self.connection.close()
@@ -607,15 +633,21 @@ class ExecutionLedger:
         self.connection.execute(
             "INSERT INTO execution_orders(client_order_id,exchange_order_id,"
             "market_slug,side,price,original_qty,filled_qty,status,event_at,"
-            "received_at,unknown_reason) VALUES (?,?,?,?,?,?,?,?,?,?,NULL) "
+            "received_at,unknown_reason,reject_reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,NULL,?) "
             "ON CONFLICT(client_order_id) DO UPDATE SET "
             "exchange_order_id=COALESCE(excluded.exchange_order_id,exchange_order_id),"
             "price=excluded.price,filled_qty=excluded.filled_qty,status=excluded.status,"
             "event_at=excluded.event_at,received_at=excluded.received_at,"
-            "unknown_reason=NULL",
+            "unknown_reason=NULL,"
+            # Keep a reason once seen. A later snapshot of the same rejected
+            # order carries no reason, and overwriting with NULL would erase
+            # the only explanation we ever get.
+            "reject_reason=COALESCE(excluded.reject_reason,reject_reason)",
             (order.client_order_id, order.exchange_order_id, order.market_slug,
              side, price, _number(original, "original_qty"),
-             _number(filled, "filled_qty"), status, event_at, received))
+             _number(filled, "filled_qty"), status, event_at, received,
+             order.reject_reason))
         if order.exchange_order_id:
             # A create is proven once any exchange state for its returned ID
             # arrives. Cancel/modify are proven only by a terminal state; an

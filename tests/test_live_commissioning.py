@@ -2864,6 +2864,40 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.config = replace(runner.config, max_shutdown_seconds=30)
         return runner, client, slug
 
+    async def test_a_repeated_book_fault_does_not_escalate_to_abandonment(self):
+        """The round counter bounds exit attempts, not book-parse failures.
+
+        The book-refresh error counter never resets, so every later failure
+        re-entered _retire_market and bumped the round -- 1, 2, 4, 8, then
+        abandonment -- for a market already retired and quoting nothing.
+        Measured 2026-08-15: 50 markets retired and 30 abandoned in a single
+        session, past the max_markets limit that stops the session outright.
+        """
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        for _ in range(12):
+            await runner._retire_market(slug, "unrecoverable_book_stale")
+
+        self.assertEqual(runner._retired[slug].rounds, 1)
+        self.assertNotIn("abandoned", str(runner._retired[slug].reason))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_repeated_exit_failures_do_still_escalate(self):
+        """Exit retirements must keep counting -- that bound is the point."""
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        for _ in range(3):
+            await runner._retire_market(slug, "hard_exit_retry_window_exceeded")
+
+        self.assertEqual(runner._retired[slug].rounds, 3)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unquotable_market_is_not_released_just_for_being_flat(self):
         """Being flat does not fix a book that will not parse.
 

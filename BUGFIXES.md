@@ -31,6 +31,24 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### Already-retired markets escalated themselves to abandonment
+
+**Symptom:** the same market retiring over and over — round 1, 2, 4, 8 — then
+abandoned. **50 markets retired and 30 abandoned in one session**, well past
+the `max_markets` limit that stops the session outright.
+
+**Mechanism:** bounding unparseable-book retries calls `_retire_market` once
+the book-refresh error counter passes `MAX_RECOVERY_ATTEMPTS`. That counter
+never resets, so every later failure re-entered and bumped the round — for a
+market already retired and quoting nothing. The round counter exists to bound
+**exit attempts**, not book-parse failures.
+
+**Fix:** retiring a market that is already retired for the same *permanent*
+fault is a no-op. Exit retirements still escalate, because that bound is the
+whole point of them.
+
+**Self-inflicted, same day** — introduced by the fix that bounded book retries.
+
 ### A position with no recorded fill could never be exited
 
 **Symptom:** `demciva-hryole` short 5, `basis NONE`, no exit order and no

@@ -2346,6 +2346,18 @@ class CommissioningRunner:
         now = self._now()
         retry_at = now + timedelta(seconds=RETIRED_EXIT_RETRY_SECONDS)
         existing = self._retired.get(slug)
+        # Already retired for the same permanent fault? Nothing to escalate.
+        # The round counter bounds EXIT ATTEMPTS, not how many times a book
+        # failed to parse. The book-refresh error counter never resets, so
+        # every later failure re-entered here and incremented the round --
+        # 1, 2, 4, 8, then abandonment -- for a market that was already retired
+        # and quoting nothing. Measured 2026-08-15: 50 markets retired and 30
+        # abandoned in one session, past the max_markets limit that stops the
+        # session outright.
+        if (existing is not None
+                and existing.reason == reason
+                and str(reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES)):
+            return None
         if existing is None:
             self._retired[slug] = RetiredMarket(
                 slug=slug, reason=reason, retired_at=now,

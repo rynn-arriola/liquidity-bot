@@ -179,6 +179,7 @@ class DesiredStateReconciler:
     policy: ReconcilerPolicy
     _ineligible_since: dict[tuple[str, str], datetime] = field(
         default_factory=dict)
+    _hard_exit_cancel_at: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
     _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
@@ -292,21 +293,25 @@ class DesiredStateReconciler:
 
         if inventory_age >= deadline or pre_kickoff_due:
             if frame.working_orders:
-                # Measure lateness against whichever deadline fired, so a
-                # kickoff-driven exit cannot sit forever waiting on a cancel.
-                overdue = inventory_age - deadline
-                if seconds_to_event is not None:
-                    overdue = max(
-                        overdue,
-                        self.policy.force_exit_before_start_seconds
-                        - seconds_to_event)
-                if overdue > self.policy.cancel_confirm_grace_seconds:
+                # The grace measures how long OUR CANCEL has been outstanding,
+                # not how long we are past the deadline. Measuring from the
+                # deadline made this permanently critical: `overdue` only
+                # grows, so once it passed the grace every pass returned the
+                # critical *instead of* issuing the cancel, and a cancel that
+                # is never re-sent can never confirm. Observed 2026-08-15 on
+                # tkamak-tsokos -- ten retirement rounds over ten minutes, the
+                # position still open when a deploy landed, and a break-even
+                # exit turned into -$1.55.
+                issued_at = self._hard_exit_cancel_at.setdefault(slug, frame.now)
+                if ((frame.now - issued_at).total_seconds()
+                        > self.policy.cancel_confirm_grace_seconds):
                     return self._critical(
                         frame, "hard_exit_blocked_cancel_unconfirmed")
                 return [PlanAction(
                     ActionKind.CANCEL, slug, "hard_timeout_cancel_confirm_first",
                     side=order.side, order_id=order.order_id)
                     for order in frame.working_orders]
+            self._hard_exit_cancel_at.pop(slug, None)
             attempts = self._hard_exit_attempts.get(slug, 0)
             started_at = self._hard_exit_started_at.get(slug)
             if attempts >= self.policy.max_hard_exit_attempts:

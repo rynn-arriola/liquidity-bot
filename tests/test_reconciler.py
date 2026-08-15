@@ -241,12 +241,38 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual([item.kind for item in second], [ActionKind.PLACE_IOC])
         self.assertEqual(second[0].price, .49)
 
-    def test_cancel_stuck_past_grace_has_explicit_critical_failure(self):
+    def test_the_hard_exit_cancels_before_it_declares_a_stuck_cancel(self):
+        """The grace measures our cancel, not how late the deadline is.
+
+        Measuring from the deadline made this permanently critical: `overdue`
+        only grows, so past the grace every pass returned the critical instead
+        of issuing the cancel, and a cancel that is never re-sent can never
+        confirm. Observed 2026-08-15 on tkamak-tsokos: ten retirement rounds
+        over ten minutes, position still open when a deploy landed.
+        """
         reconciler = DesiredStateReconciler(policy())
         active = WorkingOrder("exit", "offer", .51, Decimal("2"))
+
         actions = reconciler.plan(frame(
             now=T0 + timedelta(seconds=21), position="2", orders=(active,),
             opened=T0, entry=.49))
+
+        self.assertEqual([item.kind for item in actions], [ActionKind.CANCEL])
+        self.assertEqual(
+            actions[0].reason, "hard_timeout_cancel_confirm_first")
+
+    def test_cancel_stuck_past_grace_has_explicit_critical_failure(self):
+        """Once OUR cancel has been outstanding past the grace, escalate."""
+        reconciler = DesiredStateReconciler(policy())
+        active = WorkingOrder("exit", "offer", .51, Decimal("2"))
+        reconciler.plan(frame(
+            now=T0 + timedelta(seconds=21), position="2", orders=(active,),
+            opened=T0, entry=.49))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=30), position="2", orders=(active,),
+            opened=T0, entry=.49))
+
         self.assertEqual([item.kind for item in actions], [ActionKind.CRITICAL])
         self.assertEqual(
             actions[0].reason, "hard_exit_blocked_cancel_unconfirmed")

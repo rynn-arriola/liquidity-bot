@@ -31,6 +31,30 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### A one-sided book stranded a position until it settled
+
+**Symptom:** `chevic-scovla` — 254 log mentions, exactly **one** order action
+(the entry). After the fill the bot never placed another order on that market.
+The position reached settlement. Same shape on `ff-ep`.
+
+**Mechanism:** `parse_book_response` raised when either side was empty. The
+book then never refreshed, went stale, and the reconciler returned `book_stale`
+as a critical *before* planning — and the passive reducer, the bounded hard
+exit AND the pre-kickoff flatten all live inside `_inventory_plan`, so all
+three were lost together. Not a late flatten: no flatten. About one market in
+four publishes a one-sided book.
+
+**Fix:** parse a book with one side; gate on sides at the point of use.
+Quoting needs both touches (the 2c rule is defined between them). A passive
+exit needs the side it joins. The deadline exit crosses into the *other* side —
+which is precisely the side a one-sided book still carries, so a position is
+plannable even when no passive quote can be priced.
+
+**A wrong turn worth recording:** the first attempt guarded on the reducing
+side at the top of `_inventory_plan`, which blocked the hard exit too — the
+opposite of the intent. Selling a long *joins* the offer side; it is *crossing*
+that needs the bid side.
+
 ### The reducing quote had a cost-basis floor the invariants forbid
 
 **Symptom:** losing positions never exited passively. They sat unfilled until

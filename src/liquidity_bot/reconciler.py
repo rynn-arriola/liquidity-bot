@@ -259,7 +259,15 @@ class DesiredStateReconciler:
             return self._critical(frame, "book_stale")
         if frame.position == 0:
             self._clear_hard_exit(slug)
+            # Quoting needs BOTH touches -- the two-cent rule is defined
+            # between them -- so a one-sided book simply has nothing to quote.
+            # Nothing is wrong, there is just no work.
+            if not frame.book.is_two_sided:
+                return []
             return self._flat_plan(frame)
+        # Holding. Exiting a long needs only the bid side to sell into, a short
+        # only the offer side, so a one-sided book is usually still enough.
+        # Requiring both here is what stranded positions until they settled.
         return self._inventory_plan(frame)
 
     def _inventory_plan(self, frame: MarketFrame) -> list[PlanAction]:
@@ -393,6 +401,18 @@ class DesiredStateReconciler:
         # the maker rebate instead of paying a taker fee, and early instead of
         # at a binary. The hard timeout remains the only path that pays for an
         # emergency flatten.
+        # A passive reducer JOINS the reducing side, so it needs that side to
+        # exist. With it empty there is no touch to rest at -- but the hard
+        # exit above has already had its turn, and it crosses into the OTHER
+        # side, which is exactly the side a one-sided book still carries. That
+        # is the asymmetry that matters: the deadline exit keeps working even
+        # when the passive one cannot be priced, so the position is no longer
+        # stranded until settlement.
+        if not frame.book.has_side(reducing):
+            return [PlanAction(
+                ActionKind.CANCEL, slug, "cancel_building_after_fill",
+                side=order.side, order_id=order.order_id)
+                for order in frame.working_orders if order.side == building]
         passive_price = self._touch(frame.book, reducing)
         active_touch = passive_price
         reducing_orders = [order for order in frame.working_orders

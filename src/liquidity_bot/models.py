@@ -67,6 +67,24 @@ class BookSnapshot:
     state: str | None = None
     transact_time: datetime | None = None
 
+    def has_side(self, side: str) -> bool:
+        """Whether this book can price that side at all.
+
+        A one-sided book is common -- about one market in four -- and is
+        perfectly usable for the side it does carry. Quoting needs both;
+        exiting needs only the side being sold into.
+        """
+
+        if side == "bid":
+            return bool(self.bids)
+        if side == "offer":
+            return bool(self.offers)
+        raise ValueError("side must be 'bid' or 'offer'")
+
+    @property
+    def is_two_sided(self) -> bool:
+        return bool(self.bids) and bool(self.offers)
+
     @property
     def best_bid(self) -> BookLevel:
         return max(self.bids, key=lambda level: level.price)

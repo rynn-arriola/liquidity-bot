@@ -210,6 +210,60 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual((actions[0].kind, actions[0].order_id),
                          (ActionKind.CANCEL, "bid-one"))
 
+    def test_a_long_rests_its_exit_on_an_offers_only_book(self):
+        """A passive sell JOINS the offer side, so that is the side it needs.
+
+        The book going one-sided used to strand a position until settlement:
+        parse_book_response demanded both sides, so the book never refreshed,
+        went stale, and the reconciler returned book_stale before planning --
+        losing the passive reducer, the hard exit and the pre-kickoff flatten
+        together. Measured 2026-08-15 on chevic-scovla: 254 log lines, exactly
+        one order action, position rode to settlement.
+        """
+        offers_only = BookSnapshot(
+            "market-one", (), (BookLevel(.60, 100), BookLevel(.61, 100)),
+            "MARKET_STATE_OPEN", T0 + timedelta(seconds=1))
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="2", opened=T0,
+            entry=.50, snapshot=offers_only))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side, "offer")
+        self.assertEqual(actions[0].price, .60)
+
+    def test_a_long_still_crosses_out_at_the_deadline_on_a_bids_only_book(self):
+        """The case that caused settlement, and the reason this matters.
+
+        With no offer side there is no touch to rest at, so no passive quote is
+        possible -- but the deadline exit crosses INTO the bids, which is
+        exactly the side a bids-only book still carries. Previously the whole
+        market was unplannable and the position simply rode to settlement.
+        """
+        bids_only = BookSnapshot(
+            "market-one",
+            (BookLevel(.45, 500), BookLevel(.44, 500)), (),
+            "MARKET_STATE_OPEN", T0 + timedelta(seconds=20))
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=20), position="2", opened=T0,
+            entry=.50, snapshot=bids_only))
+
+        self.assertTrue(actions, "a held position must still be plannable")
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "hard_inventory_timeout")
+
+    def test_a_one_sided_book_is_never_quoted(self):
+        """Quoting needs both touches -- the 2c rule is defined between them."""
+        bids_only = BookSnapshot(
+            "market-one", (BookLevel(.60, 100),), (),
+            "MARKET_STATE_OPEN", T0 + timedelta(seconds=1))
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), snapshot=bids_only))
+
+        self.assertEqual(actions, [])
+
     def test_a_losing_long_exit_rests_at_the_touch_not_at_entry(self):
         """Invariant 5: no cost-basis floor. The code used to contradict it.
 

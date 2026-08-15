@@ -9,6 +9,7 @@ from liquidity_bot.adapters import (
     AdapterError,
     AsyncIntervalLimiter,
     AsyncReadOnlyGateway,
+    parse_book_response,
     parse_trade_response,
 )
 from liquidity_bot.private_stream import PrivateEventKind, decode_private_message
@@ -398,3 +399,48 @@ class PrivateMessageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneSidedBookTests(unittest.TestCase):
+    """A one-sided book must parse. Requiring both sides stranded positions."""
+
+    def payload(self, *, bids, offers):
+        return {"marketData": {
+            "marketSlug": "market-one",
+            "state": "MARKET_STATE_OPEN",
+            "transactTime": "2026-08-15T12:00:00Z",
+            "bids": bids,
+            "offers": offers,
+        }}
+
+    def level(self, price, size):
+        return {"px": {"value": str(price), "currency": "USD"},
+                "qty": str(size)}
+
+    def test_a_bids_only_book_parses(self):
+        """About one market in four publishes one.
+
+        Requiring both sides meant the book never refreshed, went stale, and
+        the reconciler returned book_stale before planning -- losing the
+        passive reducer, the hard exit and the pre-kickoff flatten together.
+        Measured 2026-08-15 on chevic-scovla: the position rode to settlement.
+        """
+        book = parse_book_response(
+            self.payload(bids=[self.level(0.45, 100)], offers=[]))
+
+        self.assertTrue(book.has_side("bid"))
+        self.assertFalse(book.has_side("offer"))
+        self.assertFalse(book.is_two_sided)
+        self.assertEqual(book.best_bid.price, 0.45)
+
+    def test_an_offers_only_book_parses(self):
+        book = parse_book_response(
+            self.payload(bids=[], offers=[self.level(0.55, 100)]))
+
+        self.assertTrue(book.has_side("offer"))
+        self.assertFalse(book.has_side("bid"))
+        self.assertEqual(book.best_offer.price, 0.55)
+
+    def test_a_book_empty_on_both_sides_is_still_refused(self):
+        with self.assertRaises(AdapterError):
+            parse_book_response(self.payload(bids=[], offers=[]))

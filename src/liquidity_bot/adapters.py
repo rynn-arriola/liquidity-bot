@@ -197,8 +197,20 @@ def parse_book_response(response: Any, *, expected_slug: str | None = None) -> B
                  for index, row in enumerate(data["bids"]))
     offers = tuple(_book_level(row, side="offers", index=index)
                    for index, row in enumerate(data["offers"]))
-    if not bids or not offers:
-        raise AdapterError("book is not two-sided")
+    # One side is enough to return a book. Requiring both is a QUOTING rule --
+    # you need two touches to keep two cents in the middle -- and it was
+    # gating everything, including exits. A position in a market whose book
+    # went one-sided could never be exited at all: the parse failed, the book
+    # went stale, the reconciler returned book_stale before planning, and the
+    # passive reducer, the hard exit AND the pre-kickoff flatten all live
+    # behind that gate. Measured 2026-08-15 on chevic-scovla -- 254 log lines,
+    # one order action, position rode to settlement. About one market in four
+    # publishes a one-sided book.
+    #
+    # Selling a long only needs the bid side; buying back a short only needs
+    # the offer side. Callers that need both check `has_side` themselves.
+    if not bids and not offers:
+        raise AdapterError("book is empty on both sides")
     return BookSnapshot(
         slug=actual_slug,
         bids=bids,

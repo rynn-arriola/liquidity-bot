@@ -43,7 +43,7 @@ class AsyncAccountSnapshotGateway:
             for row in response["orders"])
 
     async def fetch_executions(
-        self, *, observed_at: datetime,
+        self, *, observed_at: datetime, max_pages: int = 2,
     ) -> tuple[Execution, ...]:
         """Every fill the venue has recorded for this account.
 
@@ -62,7 +62,12 @@ class AsyncAccountSnapshotGateway:
 
         rows: dict[str, Execution] = {}
         cursor: str | None = None
-        for _ in range(self.gateway.max_pages):
+        # Deliberately shallow. This runs on every reconcile and shares the one
+        # 4 req/s governor with book refreshes and order placement, so walking
+        # the whole history would spend the budget quotes need -- and there is
+        # no point: anything older is already recorded, and apply_execution
+        # dedupes. Two pages is recent activity with headroom for a burst.
+        for _ in range(max(1, min(max_pages, self.gateway.max_pages))):
             params: dict[str, Any] = {"limit": 100}
             if cursor:
                 params["cursor"] = cursor

@@ -53,6 +53,26 @@ def raw_execution(**changes):
 
 
 class NormalizationTests(unittest.TestCase):
+    def test_a_fill_records_which_outcome_it_was_priced_against(self):
+        """A price without its outcome cannot be interpreted.
+
+        The venue prices an execution on ONE outcome, and 0.67 on one side is
+        0.33 on the other. Dropping the outcome made realized_pnl compute
+        +$1.34 on a trade that lost $0.30 (aec-valorant-ff-ep, 2026-08-15) --
+        and realized_pnl is the number the $40 stop reads.
+        """
+        raw = raw_execution()
+        raw["order"]["marketMetadata"] = {
+            "slug": "market-one", "outcome": "Enterprise Esports"}
+
+        item = normalize_execution(raw, observed_at=NOW)
+
+        self.assertEqual(item.outcome, "Enterprise Esports")
+
+    def test_a_fill_without_market_metadata_records_no_outcome(self):
+        self.assertIsNone(
+            normalize_execution(raw_execution(), observed_at=NOW).outcome)
+
     def test_a_rejected_order_keeps_the_venue_reason(self):
         """203 rejections were unattributable because this was dropped.
 

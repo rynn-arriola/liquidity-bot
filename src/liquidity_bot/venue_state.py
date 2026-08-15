@@ -155,6 +155,12 @@ def normalize_execution(
             market_slug=_slug(order),
             side=str(order.get("side") or ""),
             intent=str(order.get("intent") or ""),
+            # The outcome this price was quoted against. Without it the price
+            # cannot be interpreted: 0.67 on one outcome is 0.33 on the other.
+            outcome=(
+                str((order.get("marketMetadata") or {}).get("outcome") or "")
+                .strip() or None
+                if isinstance(order.get("marketMetadata"), Mapping) else None),
             price=_decimal(
                 _wire(raw, "lastPx", "last_px"), "execution.lastPx"),
             qty=_decimal(

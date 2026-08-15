@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS execution_fills (
     intent TEXT NOT NULL,
     event_at TEXT NOT NULL,
     received_at TEXT NOT NULL
-);
+,
+    outcome TEXT);
 CREATE TABLE IF NOT EXISTS execution_positions (
     market_slug TEXT PRIMARY KEY,
     net_qty TEXT NOT NULL,
@@ -188,6 +189,13 @@ class Execution:
     exchange_order_id: str | None = None
     liquidity: str | None = None
     intent: str | None = None
+    # WHICH outcome this price was quoted against. The venue prices an
+    # execution on one specific outcome, and 0.67 on one side is 0.33 on the
+    # other -- so a price without its outcome cannot be interpreted. Dropping
+    # it made realized_pnl compute +$1.34 on a trade that lost $0.30
+    # (aec-valorant-ff-ep, 2026-08-15), and realized_pnl is what the $40 stop
+    # reads. Recorded now so the frame is recoverable; see task 24.
+    outcome: str | None = None
 
     def __post_init__(self) -> None:
         if not self.execution_id or not self.market_slug:
@@ -248,6 +256,7 @@ class ExecutionLedger:
     # what proves what we own at the venue.
     ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
         ("execution_orders", "reject_reason", "TEXT"),
+        ("execution_fills", "outcome", "TEXT"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -740,12 +749,14 @@ class ExecutionLedger:
             self.connection.execute(
                 "INSERT INTO execution_fills(execution_id,client_order_id,"
                 "exchange_order_id,market_slug,side,price,qty,fee,liquidity,"
-                "intent,event_at,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "intent,event_at,received_at,outcome) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (execution.execution_id, execution.client_order_id,
                  execution.exchange_order_id, execution.market_slug,
                  execution.side.upper(), _number(execution.price, "price"),
                  _number(qty, "qty"), _number(execution.fee, "fee"),
-                 execution.liquidity, execution.intent, event_at, received))
+                 execution.liquidity, execution.intent, event_at, received,
+                 execution.outcome))
             position = self.connection.execute(
                 "SELECT net_qty,event_at,source,authoritative_through "
                 "FROM execution_positions WHERE market_slug=?",

@@ -158,7 +158,29 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    risk budget is not binding. This supersedes finding 8, which reasoned from
    REST arithmetic alone before the feed fault was known.
 
-10. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+10. **A position in a market whose book stops parsing can NEVER be exited.**
+   It rides to settlement with certainty. Measured 2026-08-15 on
+   `aec-setkamemd-chevic-scovla`: 254 log mentions, of which exactly **one**
+   is an order action -- the entry quote at 15:51. After the fill at 18:52 the
+   bot never placed another order on that market. The other 253 lines are
+   `book is not two-sided` / `book_stale`.
+
+   The chain: `parse_book_response` requires BOTH sides populated, so a
+   one-sided book fails; the book then never refreshes and goes stale; the
+   reconciler returns `book_stale` as a critical *before* planning anything;
+   and `_inventory_plan` never runs. The passive reducer, the hard exit AND
+   the pre-kickoff flatten all live inside that path, so all three are lost at
+   once.
+
+   **This is not a late flatten, it is no flatten.** About one market in four
+   publishes a one-sided book (finding 5), so this is common, not exotic.
+
+   The asymmetry that makes it fixable: exiting a long only needs the **bid**
+   side to sell into. A one-sided book with bids prices that exit perfectly
+   well. We reject it because the parser demands both sides before returning
+   anything -- a requirement that belongs to *quoting*, not to exiting.
+
+11. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
    incentive period). More markets reaches more pools; more size only buys a
    larger share of the same one. This is the argument for raising market count
    rather than quote size, and it matches maker-lab's 30 markets at size 5.

@@ -17,6 +17,7 @@ from liquidity_bot.commissioning import (
     CommissioningRefused,
     CommissioningUnavailable,
 )
+from liquidity_bot.discord_summary import GRAY, RED
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
@@ -235,8 +236,20 @@ class FakeNotifier:
             self.delivery_succeeds,
             "sent" if self.delivery_succeeds else "delivery_failed")
 
-    async def send_payload_async(self, payload, *, critical=False):
+    async def send_payload_async(self, payload, *, critical=False,
+                                 channel=None):
         self.payloads.append((payload, critical))
+        self.channels.append(channel)
+        # Flatten the embed into `messages` too, so assertions about what was
+        # announced do not have to care whether it went as text or as an embed.
+        embeds = payload.get("embeds") if isinstance(payload, dict) else None
+        if embeds:
+            embed = embeds[0]
+            flat = " ".join(str(part) for part in (
+                embed.get("title", ""), embed.get("description", ""),
+                " ".join(f"{f.get('name')} {f.get('value')}"
+                         for f in embed.get("fields", []))))
+            self.messages.append((flat, critical))
         return NotificationResult(
             self.delivery_succeeds,
             "sent" if self.delivery_succeeds else "delivery_failed")
@@ -1537,6 +1550,38 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.private_stream.closed)
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
+
+    async def test_an_alert_shows_its_severity_without_reading_the_text(self):
+        """Recovering and fatal used to look identical -- both plain text.
+
+        Colour and title now carry the severity so it is readable at a glance,
+        and the footer says which host and build produced it.
+        """
+        runner, _client, notifier = self.build_runner()
+        await runner.preflight()
+        before = len(notifier.payloads)
+
+        for attempt in range(1, 5):          # past the routine announce floor
+            await runner._report_runtime_error(
+                "strategy_state:market-one", AdapterError("book_stale"),
+                attempt)
+        await runner._report_runtime_error(
+            "strategy_state_terminal",
+            RuntimeInvariantViolation("scope", "scope violated"), 1)
+
+        sent = [payload for payload, _c in notifier.payloads[before:]]
+        embeds = [p["embeds"][0] for p in sent if "embeds" in p]
+        self.assertTrue(embeds, "alerts must be embeds, not plain text")
+        colours = {embed["color"] for embed in embeds}
+        # Two severities, two colours -- the whole point.
+        self.assertIn(RED, colours)
+        self.assertIn(GRAY, colours)
+        recovering = [e for e in embeds if e["color"] == GRAY][0]
+        self.assertIn("Recovering", recovering["title"])
+        self.assertIn("market-one", str(recovering["fields"]))
+        self.assertTrue(recovering["footer"]["text"].startswith("liquidity-bot"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_operational_noise_goes_to_the_errors_webhook(self):
         """The summary channel is for reporting, not for retries.

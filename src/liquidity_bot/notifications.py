@@ -102,6 +102,7 @@ class DiscordNotifier:
 
     async def send_payload_async(
         self, payload: Mapping[str, Any], *, critical: bool = False,
+        channel: str | None = None,
     ) -> NotificationResult:
         return await asyncio.to_thread(
-            self.send_payload, payload, critical=critical)
+            self.send_payload, payload, critical=critical, channel=channel)

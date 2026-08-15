@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -11,7 +11,11 @@ from typing import Any
 GREEN = 0x2ECC71
 RED = 0xE74C3C
 ORANGE = 0xE67E22
+# Deliberately distinct at a glance. The complaint this answers is not that
+# alerts were missing, it is that a recovering retry and a fatal condition
+# looked identical -- both plain text, both opening "Liquidity Bot".
 GRAY = 0x95A5A6
+NOTE_SEPARATOR = chr(10) + chr(10) + "_"
 
 
 def _money(value: Decimal | str | int | float) -> Decimal:
@@ -196,4 +200,50 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         "footer": {"text": (
             "Pending/unattributable rewards excluded • exact private state required")},
         "timestamp": now.isoformat(),
+    }]}
+
+
+def build_runtime_alert(
+    *,
+    component: str,
+    error: str,
+    attempt: int,
+    critical: bool,
+    market: str | None = None,
+    host: str | None = None,
+    commit: str | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """One error embed, styled so severity is readable without parsing text.
+
+    Colour and title carry the severity; the body carries the detail. A
+    recovering retry is grey and says so, a fatal condition is red and says
+    what it wants from the operator. Previously both went as plain text
+    beginning "Liquidity Bot", which is why they were indistinguishable.
+    """
+
+    moment = now or datetime.now(timezone.utc)
+    if critical:
+        colour, title, note = (
+            RED, "🛑 Needs attention",
+            "New risk is disabled until this clears.")
+    else:
+        colour, title, note = (
+            GRAY, "🔁 Recovering on its own", "No action needed. Retrying.")
+    fields = [
+        {"name": "Component", "value": f"`{component}`"[:1024], "inline": True},
+        {"name": "Attempt", "value": str(attempt), "inline": True},
+    ]
+    if market:
+        fields.append({"name": "Market", "value": f"`{market}`"[:1024],
+                       "inline": False})
+    footer = " · ".join(part for part in (
+        "liquidity-bot", host, commit) if part)
+    return {"embeds": [{
+        "title": title[:256],
+        "description": (error + NOTE_SEPARATOR + note + "_")[:4000],
+        "color": colour,
+        "fields": fields[:25],
+        "footer": {"text": footer[:2048]},
+        "timestamp": moment.isoformat(),
     }]}

@@ -16,6 +16,7 @@ import asyncio
 import json
 import signal
 import time
+import socket
 import traceback
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -33,7 +34,8 @@ from .commissioning import (
     CommissioningRefused,
     CommissioningUnavailable,
 )
-from .discord_summary import LiquiditySummary, build_liquidity_summary
+from .discord_summary import (
+    LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import AdapterError, RuntimeInvariantViolation
 from .execution_ledger import ExecutionLedger, LedgerConflict
 from .fill_hazard import MondayFillHazardModel
@@ -249,6 +251,15 @@ class CommissioningRunner:
         # rejected (320 contracts move $38 on a twelve-cent mark) does not
         # apply -- cash does not move on paper price changes.
         self._cash_baseline: Decimal | None = None
+        # Footer identity, so an alert says which box and which build produced
+        # it without the operator having to ask.
+        self._host_name = socket.gethostname()
+        try:
+            self._deployed_commit = (
+                Path("DEPLOYED_COMMIT").read_text(
+                    encoding="utf-8").splitlines()[0].strip() or None)
+        except Exception:
+            self._deployed_commit = None
         self._realized_baseline_by_market: dict[str, Decimal] = {}
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
@@ -1842,13 +1853,16 @@ class CommissioningRunner:
         else:
             should_alert = attempt <= 2 or (attempt & (attempt - 1)) == 0
         if should_alert:
-            await self.notifier.send_async(
-                ("🔁 " if routine else "⚠️ ")
-                + f"Liquidity Bot {'recovering' if routine else 'runtime failure'}: "
-                f"{component} attempt {attempt}, {type(exc).__name__}: "
-                f"{detail[:300]}."
-                + ("" if routine else
-                   " New risk is disabled until reconnect and reconciliation pass."),
+            slug = component.split(":", 1)[1] if ":" in component else None
+            await self.notifier.send_payload_async(
+                build_runtime_alert(
+                    component=component.split(":", 1)[0],
+                    error=f"{type(exc).__name__}: {detail[:300]}",
+                    attempt=attempt,
+                    critical=not routine,
+                    market=slug,
+                    host=self._host_name,
+                    commit=self._deployed_commit),
                 critical=not routine,
                 # Operational, not a report. The summary webhook is for
                 # reporting; recoveries and failures go to the errors webhook

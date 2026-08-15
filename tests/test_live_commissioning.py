@@ -1529,6 +1529,32 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
 
+    async def test_the_startup_banner_reports_the_real_config(self):
+        """The operator's first sight of a run must not be wrong.
+
+        It announced "one market, one contract per quote, $5 soft stop, $15
+        hard stop" long after every one of those had changed. Nothing tied the
+        message to the numbers, so it rotted silently -- this test is the tie.
+        """
+        runner, _client, notifier = self.build_runner()
+        await runner.preflight()
+
+        banner = next(
+            message for message, _critical in notifier.messages
+            if "commissioning started" in message)
+
+        self.assertIn(f"{runner.config.max_markets} markets", banner)
+        self.assertIn(f"{runner.config.quote_size} contracts", banner)
+        self.assertIn(f"${runner.config.max_session_loss_usd} session", banner)
+        self.assertIn(f"${runner.config.hard_stop_loss_usd} hard", banner)
+        # The gate has been advisory since 2026-08-14; saying "enforced" was
+        # one of the four wrong facts.
+        self.assertIn(
+            "enforced" if runner.config.enforce_reward_cost_gate
+            else "advisory", banner)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_losses_from_earlier_sessions_do_not_spend_this_budget(self):
         """The stop is a guardrail for today, not a lifetime tally.
 

@@ -897,10 +897,20 @@ class CommissioningRunner:
                 f"{self._market_selection.books_evaluated} books; "
                 f"{self._market_selection.unsupported_programs} programs used "
                 "an unsupported or undocumented lifecycle and remained read-only.")
+        # Built from config, never from literals. This announced "one market,
+        # one contract per quote, $5 soft stop, $15 hard stop" long after every
+        # one of those had changed -- four wrong facts as the operator's first
+        # sight of each run. Nothing tied the message to the numbers, which is
+        # the actual defect; the test does that now.
+        gate = ("enforced" if self.config.enforce_reward_cost_gate
+                else "advisory")
         delivery = await self.notifier.send_async(
-            "🟠 Liquidity Bot LIVE commissioning started: one market, "
-            "one contract per quote, reward-versus-exit economics enforced, "
-            "one taker exit ends the market, $5 soft stop, $15 hard stop, "
+            f"🟠 Liquidity Bot LIVE commissioning started: up to "
+            f"{self.config.max_markets} markets, {self.config.quote_size} "
+            f"contracts per quote, reward-versus-exit economics {gate}, "
+            f"${self.config.max_session_loss_usd} session stop, "
+            f"${self.config.max_market_loss_usd} per-market stop, "
+            f"${self.config.hard_stop_loss_usd} hard stop, "
             "operator-controlled stop; pregame and loss gates remain active."
             + selection_note)
         if not getattr(delivery, "sent", False):

@@ -13,6 +13,9 @@ Ground rules that came out of these:
   tests here passed against the unfixed code.
 - **A gate that lives in two places is one where changing a single side does
   nothing.** Cost a deploy cycle to learn, twice.
+- **Anything critical goes straight into `FINDINGS.md`**, when it is measured
+  rather than at the end of the session. Re-derived facts cost hours and often
+  come back wrong.
 
 ---
 

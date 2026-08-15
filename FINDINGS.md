@@ -4,9 +4,69 @@ Empirically established facts, with the measurement that produced each one.
 Nothing here is a plan or an intention. If a number appears without a source,
 it does not belong in this file.
 
-Companion to `docs/SAFETY_INVARIANTS.md` (rules the code must obey) and
+Companion to `docs/SAFETY_INVARIANTS.md` (rules the code must obey),
+`BUGFIXES.md` (bugs that reached production: symptom, mechanism, fix) and
 `docs/SCALE_REVIEW.md` (what is and is not proven). This file is the evidence
 those two rest on.
+
+**Standing rule: anything critical we establish goes in here immediately.**
+Not at the end of the session, not "if it comes up again" -- when it is
+measured. A fact that has to be re-derived costs hours and usually comes back
+wrong the second time; the exit-anchor question and the per-market reward
+breakdown were each researched twice before this rule existed. If it changes a
+decision, or it took real work to learn, it belongs here with its measurement.
+
+---
+
+## Current status — 2026-08-15
+
+**Bot: stopped**, flat at the venue, on `c0be148`. `max_markets` is now **16**
+across two private connections (§7). Six production bugs fixed today, all
+mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
+
+**Critical facts established 2026-08-15:**
+
+1. **The $40 stop was reading one-sided round trips.** `realized_pnl` returned
+   **+3.26** for a trade that lost **$1.55**. The formula is right; the closing
+   fill was simply never recorded. Only two paths wrote fills -- the
+   order-create response (inline executions only) and the private WebSocket --
+   and a shutdown IOC satisfies neither, because it returns before its match
+   completes and the fill then lands on a socket shutdown is closing. Three
+   closes were lost this way. Fixed by replaying `portfolio.activities` during
+   `_rest_reconcile`; `apply_execution` dedupes on `execution_id`.
+
+2. **Fills are NOT stored in two price frames.** This was suspected and is
+   false. `normalize_execution` reads the venue's `lastPx`, so kundmy-tsokos
+   computes to -0.60 in the ledger against -0.61 from the venue legs. Recorded
+   so it is not re-investigated.
+
+3. **The shutdown flatten had no price cap.** It asked only whether
+   `cross_exit` was complete, never what it cost, then fired an IOC at
+   `worst_price`. The runtime hard exit refuses above `max_exit_loss`;
+   shutdown had no equivalent, so every redeploy was an uncapped liquidation of
+   any open position. Observed: a break-even short crossed out at 0.96 against
+   a 0.65 entry.
+
+4. **Tick prices must be rounded off the grid multiplication.** `41 * 0.01` is
+   `0.41000000000000003`, and `build_order_payload` validates in `Decimal`.
+   Nine of the ninety-nine cent prices land this way: **35, 41, 47, 57, 69, 70,
+   82, 83, 94**. An unaligned price is rejected outright and retires the
+   market.
+
+5. **`book is not two-sided` is the most common error the bot produces** --
+   2,121 occurrences across 21 of 77 markets ever bound, two of them retried
+   about 1,100 times each at three-second intervals. Such a market can never
+   quote, so the retries are pure cost.
+
+6. **The venue publishes bids only.** The offer on one outcome is one minus the
+   best bid on the other, so `best_offer - best_bid` is exactly the gap an
+   operator reads between the two outcomes' bids. This is why the quoting rule
+   is stated as "two cents in the middle".
+
+7. **Reward pools are per market** (`reward_pool=20000.0` on a single market's
+   incentive period). More markets reaches more pools; more size only buys a
+   larger share of the same one. This is the argument for raising market count
+   rather than quote size, and it matches maker-lab's 30 markets at size 5.
 
 ---
 

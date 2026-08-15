@@ -73,7 +73,7 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             self.authorized().minimum_entry_spread, Decimal("0.02"))
         self.assertEqual(
-            self.authorized().spread_hysteresis, Decimal("0.005"))
+            self.authorized().minimum_entry_spread, Decimal("0.02"))
 
     def test_missing_arm_or_non_manual_mode_is_refused(self):
         overnight = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -96,7 +96,7 @@ class CommissioningTests(unittest.TestCase):
         with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
             self.authorized(max_inventory_age_seconds=30).assert_authorized(
                 now=overnight)
-        with self.assertRaisesRegex(CommissioningRefused, "entry spread"):
+        with self.assertRaisesRegex(CommissioningRefused, "two cents"):
             self.authorized(
                 minimum_entry_spread=Decimal("0.01")).assert_authorized(
                     now=overnight)

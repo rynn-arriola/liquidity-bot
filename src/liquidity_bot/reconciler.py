@@ -62,16 +62,10 @@ class ReconcilerPolicy:
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: float = 30.0
     hard_exit_confirmation_timeout_seconds: float = 10.0
+    # The gap kept in the middle: at least this much between our bid and our
+    # offer. See entry_quote_price -- a tighter book is priced back to exactly
+    # this, not refused.
     minimum_entry_spread: float = 0.02
-    spread_hysteresis: float = 0.005
-    # How long a *resting* side must stay below the resting threshold before
-    # it is pulled. The touch is noisy at one-tick spreads: measured
-    # 2026-08-15, 69 of 153 cancels in an hour were resting quotes pulled on a
-    # spread dip and re-placed at the same price ~10s later. Each of those
-    # threw away accrued resting time, which is the only thing reward pays
-    # for. A book that is genuinely too tight stays tight and still clears
-    # this dwell.
-    spread_pull_dwell_seconds: float = 45.0
     force_exit_before_start_seconds: float = 300.0
 
     def __post_init__(self) -> None:
@@ -93,8 +87,6 @@ class ReconcilerPolicy:
             raise ValueError("hard-exit time limits must be positive")
         if not 0 < self.minimum_entry_spread < 1:
             raise ValueError("minimum entry spread must be in (0, 1)")
-        if (self.spread_hysteresis < 0
-                or self.spread_hysteresis >= self.minimum_entry_spread):
             raise ValueError(
                 "spread hysteresis must be nonnegative and below entry spread")
         if self.force_exit_before_start_seconds <= 0:
@@ -125,11 +117,48 @@ class MarketFrame:
             raise ValueError("position must be finite")
 
 
+def entry_quote_price(
+    book: BookSnapshot, side: str, minimum_gap: float, tick: float | None,
+) -> float | None:
+    """Where a *building* quote rests. Exits never use this.
+
+    The venue publishes bids only; the offer on one outcome is one minus the
+    best bid on the other. So `best_offer - best_bid` is exactly the gap an
+    operator reads between the two outcomes' best bids, and the rule is stated
+    in those terms: keep at least two cents in the middle.
+
+    Join the touch whenever the book already leaves that much -- a 7c book
+    quoted at 50 and 43 stays at 50 and 43, with no stepping inside. When the
+    book is tighter, back off symmetrically until the gap is two cents: a
+    50/50 book is quoted 49/49, one tick behind each best bid rather than
+    refused outright. Returns None when the two sides overlap, which is stale
+    or bad data rather than a tradeable book.
+
+    Both the runner's economics and the planner's placement call this, so the
+    reward projection is computed for the price we will actually rest at.
+    Those two used to disagree -- the economics scored the touch while a tight
+    book was refused outright -- and a gate that lives in two places is one
+    where changing a single side does nothing.
+    """
+
+    step_size = tick if tick and tick > 0 else 0.01
+    spread = book.best_offer.price - book.best_bid.price
+    if spread < -1e-9:
+        return None
+    shortfall = minimum_gap - spread
+    if shortfall <= 1e-9:
+        return book.best_bid.price if side == "bid" else book.best_offer.price
+    back_off = shortfall / 2.0
+    if side == "bid":
+        return math.floor(
+            (book.best_bid.price - back_off) / step_size + 1e-9) * step_size
+    return math.ceil(
+        (book.best_offer.price + back_off) / step_size - 1e-9) * step_size
+
+
 @dataclass
 class DesiredStateReconciler:
     policy: ReconcilerPolicy
-    _spread_pull_since: dict[tuple[str, str], datetime] = field(
-        default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
     _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
@@ -141,6 +170,12 @@ class DesiredStateReconciler:
     @staticmethod
     def _touch(book: BookSnapshot, side: str) -> float:
         return book.best_bid.price if side == "bid" else book.best_offer.price
+
+    def _entry_price(
+        self, book: BookSnapshot, side: str, tick: float | None,
+    ) -> float | None:
+        return entry_quote_price(
+            book, side, self.policy.minimum_entry_spread, tick)
 
     @staticmethod
     def _matches(order: WorkingOrder, *, price: float, qty: Decimal) -> bool:
@@ -356,29 +391,18 @@ class DesiredStateReconciler:
             if math.isfinite(frame.expected_net_by_side.get(side, 0.0))
             and frame.expected_net_by_side.get(side, 0.0) > 0}
 
-        # New building quotes require the measured 2-cent regime. Resting
-        # quotes are retained down to 1.5 cents to prevent touch-noise churn,
-        # then pulled if the book tightens further. Inventory reduction is
-        # handled exclusively by _inventory_plan and is never spread-gated.
-        spread = frame.book.best_offer.price - frame.book.best_bid.price
-        resting_sides = {order.side for order in frame.working_orders}
-        for side in tuple(desired_sides):
-            resting = side in resting_sides
-            threshold = self.policy.minimum_entry_spread
-            if resting:
-                threshold -= self.policy.spread_hysteresis
-            if spread + 1e-9 >= threshold:
-                self._spread_pull_since.pop((slug, side), None)
-                continue
-            if not resting:
-                # No risk is on the book yet. Refuse to open it immediately.
-                desired_sides.remove(side)
-                continue
-            # Resting. Pull only once the book has been this tight for a
-            # while; a one-pass dip is touch noise, not a regime change.
-            since = self._spread_pull_since.setdefault((slug, side), frame.now)
-            held = (frame.now - since).total_seconds()
-            if held >= self.policy.spread_pull_dwell_seconds:
+        # A tight book is priced, not refused: _entry_price backs the quote off
+        # until two cents sit in the middle. Only an overlapping book -- the
+        # two outcomes' best bids summing past one -- drops the side, because
+        # that is stale or bad data rather than a tradeable market. Inventory
+        # reduction is handled exclusively by _inventory_plan and is never
+        # spread-gated.
+        tick = frame.market.tick_size
+        entry_prices = {
+            side: self._entry_price(frame.book, side, tick)
+            for side in tuple(desired_sides)}
+        for side, price in entry_prices.items():
+            if price is None:
                 desired_sides.remove(side)
 
         quote_size = self.policy.quote_size
@@ -399,7 +423,7 @@ class DesiredStateReconciler:
         for side in tuple(desired_sides):
             result = cross_exit(
                 frame.book, entry_side=side,
-                entry_price=self._touch(frame.book, side),
+                entry_price=entry_prices[side],
                 qty=float(quote_size),
                 depth_haircut=self.policy.exit_depth_haircut,
                 taker_theta=self.policy.taker_theta,
@@ -410,7 +434,7 @@ class DesiredStateReconciler:
         actions: list[PlanAction] = []
         kept_sides: set[str] = set()
         for order in frame.working_orders:
-            desired_price = self._touch(frame.book, order.side)
+            desired_price = entry_prices.get(order.side)
             # Three very different faults used to share one reason string, so
             # the live place/cancel churn of 2026-08-14 could not be attributed
             # from the logs: a side going uneconomic, the touch moving away,
@@ -435,5 +459,5 @@ class DesiredStateReconciler:
         existing = kept_sides
         return [PlanAction(
             ActionKind.PLACE_POST_ONLY, slug, "reward_positive_candidate",
-            side=side, price=self._touch(frame.book, side), qty=quote_size)
+            side=side, price=entry_prices[side], qty=quote_size)
             for side in sorted(desired_sides - existing)]

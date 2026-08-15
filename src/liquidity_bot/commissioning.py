@@ -168,7 +168,6 @@ class CommissioningConfig:
     # ~25s per scan against a 900s interval.
     max_selection_book_candidates: int = 100
     minimum_entry_spread: Decimal = Decimal("0.02")
-    spread_hysteresis: Decimal = Decimal("0.005")
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -252,15 +251,12 @@ class CommissioningConfig:
         if self.force_exit_before_start_seconds >= self.max_inventory_age_seconds:
             problems.append(
                 "the pre-kickoff flatten must fire before the inventory clock")
-        if (self.minimum_entry_spread != Decimal("0.02")
-                or self.spread_hysteresis != Decimal("0.005")):
+        if self.minimum_entry_spread != Decimal("0.02"):
             problems.append(
-                "commissioning entry spread must remain 2 cents with "
-                "0.5-cent resting-order hysteresis")
-        if (self.minimum_entry_spread <= 0
-                or self.spread_hysteresis < 0
-                or self.spread_hysteresis >= self.minimum_entry_spread):
-            problems.append("commissioning spread thresholds are invalid")
+                "commissioning must keep two cents in the middle between the "
+                "two outcomes' quotes")
+        if self.minimum_entry_spread <= 0:
+            problems.append("commissioning spread threshold is invalid")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

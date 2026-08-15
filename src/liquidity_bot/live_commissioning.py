@@ -67,6 +67,7 @@ from .reconciler import (
     PlanAction,
     ReconcilerPolicy,
     WorkingOrder,
+    entry_quote_price,
 )
 from .rewards import (
     AmbiguousIncentiveError,
@@ -246,7 +247,6 @@ class CommissioningRunner:
             hard_exit_confirmation_timeout_seconds=(
                 config.hard_exit_confirmation_timeout_seconds),
             minimum_entry_spread=float(config.minimum_entry_spread),
-            spread_hysteresis=float(config.spread_hysteresis),
             force_exit_before_start_seconds=float(
                 config.force_exit_before_start_seconds),
         ))
@@ -992,8 +992,18 @@ class CommissioningRunner:
             side: self._furthest_resting_price(working_orders, side)
             for side in ("bid", "offer")}
         spread = state.book.best_offer.price - state.book.best_bid.price
-        for side, price in (("bid", state.book.best_bid.price),
-                            ("offer", state.book.best_offer.price)):
+        for side in ("bid", "offer"):
+            # Score the price we will actually rest at. A tight book is priced
+            # back to the two-cent gap rather than refused, so pricing the raw
+            # touch here would project a score for an order the planner is
+            # never going to place.
+            price = entry_quote_price(
+                state.book, side,
+                float(self.config.minimum_entry_spread),
+                state.market.tick_size)
+            if price is None:
+                state.economic_blocker_by_side[side] = "book_sides_overlap"
+                continue
             already_resting = side in working_sides
             result = evaluate_order_score(
                 side=side, price=price, size=float(self.config.quote_size),
@@ -1037,15 +1047,6 @@ class CommissioningRunner:
             )
             state.fill_probability_by_side[side] = fill_hazard.probability
             state.fill_risk_driver_by_side[side] = fill_hazard.driver
-            spread_threshold = float(self.config.minimum_entry_spread)
-            if already_resting:
-                spread_threshold -= float(self.config.spread_hysteresis)
-            if spread + 1e-9 < spread_threshold:
-                state.economic_blocker_by_side[side] = (
-                    "spread_below_resting_minimum"
-                    if already_resting
-                    else "spread_below_entry_minimum")
-                continue
             if not projection.eligible:
                 state.economic_blocker_by_side[side] = projection.reason
                 continue

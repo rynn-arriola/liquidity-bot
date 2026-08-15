@@ -333,67 +333,59 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].order_id, "bid-two")
 
-    def test_tight_spread_blocks_new_building_quotes(self):
-        tight = book(bid=.49, offer=.50)
+    def test_a_tight_book_is_priced_back_to_two_cents_not_refused(self):
+        """50/50 is quoted 49/49, not skipped.
 
+        The venue publishes bids only, so `best_offer - best_bid` is the gap an
+        operator reads between the two outcomes' best bids. Both outcomes bid
+        at 50 leaves nothing in the middle; backing each side off one tick
+        leaves the two cents the rule asks for, and still earns.
+        """
         actions = DesiredStateReconciler(policy()).plan(
-            frame(snapshot=tight))
+            frame(snapshot=book(bid=.50, offer=.50)))
 
-        self.assertEqual(actions, [])
+        prices = {action.side: action.price for action in actions}
+        self.assertTrue(all(action.kind == ActionKind.PLACE_POST_ONLY
+                            for action in actions))
+        self.assertAlmostEqual(prices["bid"], .49, places=6)
+        self.assertAlmostEqual(prices["offer"], .51, places=6)
 
-    def test_resting_quotes_survive_inside_hysteresis_band(self):
-        snapshot = book(bid=.49, offer=.507)
-        orders = (
-            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
-            WorkingOrder("offer-one", "offer", .507, Decimal("2")),
-        )
-
+    def test_a_book_already_wider_than_two_cents_is_quoted_at_the_touch(self):
+        """A 7c book stays where it is -- no stepping inside the touch."""
         actions = DesiredStateReconciler(policy()).plan(
-            frame(snapshot=snapshot, orders=orders))
+            frame(snapshot=book(bid=.50, offer=.57)))
 
-        self.assertEqual(actions, [])
+        prices = {action.side: action.price for action in actions}
+        self.assertAlmostEqual(prices["bid"], .50, places=6)
+        self.assertAlmostEqual(prices["offer"], .57, places=6)
 
-    def test_resting_quotes_pull_after_spread_stays_below_hysteresis(self):
-        """A sustained tight book still pulls the resting quotes."""
-        orders = (
-            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
-            WorkingOrder("offer-one", "offer", .504, Decimal("2")),
-        )
-        reconciler = DesiredStateReconciler(policy())
-        reconciler.plan(frame(snapshot=book(bid=.49, offer=.504),
-                              orders=orders))
-
-        later = T0 + timedelta(seconds=60)
-        actions = reconciler.plan(frame(
-            now=later, snapshot=book(later, bid=.49, offer=.504),
-            orders=orders))
+    def test_an_overlapping_book_is_not_quoted(self):
+        """Best bids summing past one is stale data, not a tradeable book."""
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=book(bid=.60, offer=.40)))
 
         self.assertEqual(
-            {action.order_id for action in actions},
-            {"bid-one", "offer-one"},
-        )
-        self.assertTrue(all(action.kind == ActionKind.CANCEL
-                            for action in actions))
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
 
-    def test_a_transient_spread_dip_does_not_pull_a_resting_quote(self):
-        """Touch noise must not cancel accrued resting time.
+    def test_a_dip_to_a_tight_book_reprices_to_the_same_place_it_rests(self):
+        """The back-off lands exactly where the touch sits at two cents.
 
-        Measured 2026-08-15: 69 of 153 cancels in an hour were resting quotes
-        pulled on a one-pass spread dip and re-placed at the same price about
-        ten seconds later. Reward pays for resting, so each of those was pure
-        loss.
+        So a book oscillating between a 2c touch and a 0c touch asks for the
+        same quote either way, and a resting order is left alone rather than
+        cancelled and re-placed. Reward pays for resting time.
         """
         orders = (
             WorkingOrder("bid-one", "bid", .49, Decimal("2")),
-            WorkingOrder("offer-one", "offer", .504, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .51, Decimal("2")),
         )
 
-        actions = DesiredStateReconciler(policy()).plan(
-            frame(snapshot=book(bid=.49, offer=.504), orders=orders))
+        at_touch = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=book(bid=.49, offer=.51), orders=orders))
+        dipped = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=book(bid=.50, offer=.50), orders=orders))
 
-        self.assertEqual(
-            [action for action in actions
-             if action.kind == ActionKind.CANCEL], [])
+        self.assertEqual(at_touch, [])
+        self.assertEqual(dipped, [])
 
     def test_tight_spread_never_blocks_inventory_reducer(self):
         tight = book(T0 + timedelta(seconds=1), bid=.49, offer=.50)

@@ -1324,13 +1324,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_tight_book_is_economically_blocked_before_new_order(self):
-        runner, client, _ = self.build_runner()
+    async def test_a_tight_book_is_priced_back_rather_than_blocked(self):
+        """1c in the middle is quoted at 2c, and scored at that same price."""
+        runner, _client, _ = self.build_runner()
         await runner.preflight()
+        # Depth sits at the backed-off level, so the reward cutoff still
+        # reaches it -- see the companion test for the case where it does not.
         runner.book = BookSnapshot(
             "market-one",
-            (BookLevel(.49, 100), BookLevel(.48, 100)),
-            (BookLevel(.50, 100), BookLevel(.51, 100)),
+            (BookLevel(.49, 1), BookLevel(.48, 100)),
+            (BookLevel(.50, 1), BookLevel(.51, 100)),
             "MARKET_STATE_OPEN",
             NOW,
         )
@@ -1339,11 +1342,70 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._evaluate_rewards(NOW)
         actions = runner.reconciler.plan(runner._frame(NOW))
 
-        self.assertEqual(actions, [])
-        self.assertEqual(runner._expected_net_by_side, {})
+        self.assertNotIn(
+            "spread_below_entry_minimum",
+            set(runner._economic_blocker_by_side.values()))
+        places = [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY]
+        self.assertTrue(places)
+        prices = {a.side: a.price for a in places}
+        # 0.49/0.50 is 1c. Shed half a cent each way, rounded outward to tick.
+        self.assertAlmostEqual(prices["bid"], .48, places=6)
+        self.assertAlmostEqual(prices["offer"], .51, places=6)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_backing_off_outside_the_reward_band_blocks_the_side(self):
+        """Pricing back to 2c must not buy fill risk for zero reward.
+
+        The reward cutoff is depth-based: it walks levels until the programme's
+        target size is met. If all of that depth sits at the touch, an order
+        one tick behind earns nothing, and quoting it would be pure downside.
+        The reward gate catches this on its own -- this test pins that it does.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        runner.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 100000), BookLevel(.48, 1)),
+            (BookLevel(.50, 100000), BookLevel(.51, 1)),
+            "MARKET_STATE_OPEN",
+            NOW,
+        )
+        runner.book_observed_at = NOW
+
+        runner._evaluate_rewards(NOW)
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
         self.assertEqual(
             set(runner._economic_blocker_by_side.values()),
-            {"spread_below_entry_minimum"},
+            {"outside_reward_cutoff"},
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_overlapping_book_is_blocked_before_new_order(self):
+        """Best bids summing past one is stale data, not a tradeable book."""
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.60, 100), BookLevel(.59, 100)),
+            (BookLevel(.40, 100), BookLevel(.41, 100)),
+            "MARKET_STATE_OPEN",
+            NOW,
+        )
+        runner.book_observed_at = NOW
+
+        runner._evaluate_rewards(NOW)
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
+        self.assertEqual(
+            set(runner._economic_blocker_by_side.values()),
+            {"book_sides_overlap"},
         )
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()

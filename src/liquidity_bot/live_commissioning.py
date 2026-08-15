@@ -2313,10 +2313,26 @@ class CommissioningRunner:
             return "critical:market_retirement_limit_exceeded"
         return None
 
-    def _release_retired_if_flat(self, slug: str) -> None:
-        """Free a retired market's slot once the venue proves it flat."""
+    # Retirement reasons that being flat does not resolve. A market retired
+    # because its book will not parse is still unquotable once flat, so
+    # releasing it just lets the same fault retire it again. Observed
+    # 2026-08-15 on chevic-scovla: retired, released=flat, retired again, every
+    # ~45 seconds.
+    PERMANENT_RETIREMENT_PREFIXES = ("unrecoverable_book", "plan_failed",
+                                     "action_failed")
 
-        if slug not in self._retired:
+    def _release_retired_if_flat(self, slug: str) -> None:
+        """Free a retired market's slot once the venue proves it flat.
+
+        Only for retirements that being flat actually resolves -- the exit
+        ones. A market whose book cannot be parsed is no more quotable flat
+        than it was holding risk.
+        """
+
+        retired = self._retired.get(slug)
+        if retired is None:
+            return
+        if str(retired.reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES):
             return
         if self.ledger.position(slug) != 0:
             return

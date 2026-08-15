@@ -31,6 +31,43 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### The reducing quote had a cost-basis floor the invariants forbid
+
+**Symptom:** losing positions never exited passively. They sat unfilled until
+they crossed the spread or reached settlement.
+
+**Mechanism:** the passive reducer priced at `max(touch, entry)` for a long.
+Invariant 5 has always said **no cost-basis floor** -- the code contradicted
+its own documented rule. A floor can only fill when the market returns to
+entry, so it exits winners and strands losers.
+
+**Evidence:** maker-lab ran a floor over 101 exits -- passive 60 winners to 1
+loser, settlement 2 winners to 14, which they documented as *"79% losers BY
+CONSTRUCTION"*. At scale, 234 settled positions cost $443.88 where crossing at
+T-15 would have cost $64.18: a **$379.70 swing, 78% of positions better off**.
+
+**Fix:** rest at the touch. A loser can then leave passively, earning the maker
+rebate instead of paying a taker fee.
+
+**The tests locked in the defect** -- named `never_quotes_below_entry`, for the
+behaviour rather than the rule.
+
+### Retired markets looped through release and back
+
+**Symptom:** `retired` / `released=flat` / `retired` every ~45s on
+chevic-scovla.
+
+**Mechanism:** `_release_retired_if_flat` frees any retired market once flat.
+But a market retired because its book will not parse is no more quotable flat
+than it was holding risk, so the same fault retired it again immediately.
+
+**Fix:** only release retirements that being flat resolves -- the exit ones.
+Book, plan and action failures stay retired.
+
+**A test asserted the wrong field first:** `_is_barred_from_quoting` reads
+`_retired_ever`, which is never cleared, so it passed against the broken code.
+Assert on `_retired`.
+
 ### The fill back-fill recorded the counterparty's side too
 
 **Symptom:** `aec-valorant-ff-ep` held a real position of +5 while its fills

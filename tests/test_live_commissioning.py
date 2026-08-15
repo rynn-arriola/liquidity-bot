@@ -2777,6 +2777,42 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.config = replace(runner.config, max_shutdown_seconds=30)
         return runner, client, slug
 
+    async def test_an_unquotable_market_is_not_released_just_for_being_flat(self):
+        """Being flat does not fix a book that will not parse.
+
+        Observed 2026-08-15 on chevic-scovla: retired, released=flat, retired
+        again, every ~45 seconds. Releasing hands the slot back to the same
+        fault, which immediately retires it.
+        """
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        await runner._retire_market(slug, "unrecoverable_book_stale")
+        self.assertIn(slug, runner._retired)
+
+        # Flat, no orders, no intents -- the release conditions are all met.
+        runner._release_retired_if_flat(slug)
+
+        # Still retired. _is_barred_from_quoting reads _retired_ever, which is
+        # never cleared, so asserting on it would pass either way.
+        self.assertIn(slug, runner._retired)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_exit_retirement_is_still_released_when_flat(self):
+        """The release exists for retirements that being flat does resolve."""
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        await runner._retire_market(slug, "hard_exit_retry_window_exceeded")
+        runner._release_retired_if_flat(slug)
+
+        self.assertNotIn(slug, runner._retired)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_book_that_never_parses_retires_its_market(self):
         """An unquotable market must not hold a slot forever.
 

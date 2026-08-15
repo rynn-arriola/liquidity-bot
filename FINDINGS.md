@@ -180,7 +180,34 @@ mutation-checked; see `BUGFIXES.md` for symptom and mechanism on each.
    well. We reject it because the parser demands both sides before returning
    anything -- a requirement that belongs to *quoting*, not to exiting.
 
-11. **The fill price frame is NOT yet derivable from portfolio.activities.**
+11. **Fills are recorded in OUR frame, and match our own orders exactly.**
+   Measured 2026-08-15 across all 54 fills, joining each fill to the order that
+   produced it: **every MAKER fill has fill price == our order price**, without
+   exception. A maker fills at its own limit, so this is the strongest
+   available check. The only mismatches are TAKER fills, where a better price
+   than the limit is exactly what should happen.
+
+   **So there is no frame inversion in the fills table**, and the earlier
+   entry claiming otherwise (superseded below) was wrong.
+
+   The discrepancy is one level up: what our order PRICE MEANS for a
+   `BUY_SHORT`. That is the known intent inversion recorded in
+   `live_orders.py` -- a short quote submitted at 0.36 rests on the venue at
+   0.64. Our ledger is internally consistent; whether our submitted price
+   equals the economic price for both intents is the open question.
+
+   For `aec-valorant-ff-ep` the ledger says bought 0.39, sold 0.67 (+$1.34);
+   the venue app showed 1.94 in and 1.72 out. 5 x 0.39 = 1.95 matches the buy.
+   5 x 0.67 = 3.35 does not match the sell, while 5 x (1 - 0.67) = 1.65
+   roughly does. So the BUY_LONG leg reads true and the BUY_SHORT leg does
+   not.
+
+   **The decisive test is now cheap**: the session stop reads settled cash
+   (finding 12), so comparing cash delta against the ledger's computed P&L on
+   any round trip settles which leg is wrong, with no inference.
+
+12. **SUPERSEDED -- the fill price frame is not derivable from
+   portfolio.activities.**
    Attempted 2026-08-15 across every trade on the account. Two obstacles:
 
    - every leg returned carries `aggressor: true`, and `makerExecutions` is

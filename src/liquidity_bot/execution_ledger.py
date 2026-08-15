@@ -884,7 +884,8 @@ class ExecutionLedger:
             self._finish_event("position_snapshot", snapshot_id, True)
         return True
 
-    def realized_pnl(self, market_slug: str | None = None) -> Decimal:
+    def realized_pnl(self, market_slug: str | None = None, *,
+                     since: datetime | None = None) -> Decimal:
         """Realised trading P&L: closed round trips only, net of fees.
 
         Open inventory is excluded by valuing it at its own average entry, so
@@ -900,12 +901,24 @@ class ExecutionLedger:
         the signed position.
         """
 
-        where = "" if market_slug is None else " WHERE market_slug=?"
-        params = () if market_slug is None else (market_slug,)
+        # `since` bounds the window. Without it this is lifetime P&L, and the
+        # loss stop is a *session* limit -- every past loss would count against
+        # today's budget forever, so once the ledger had ever lost $40 the bot
+        # could never start again. Observed 2026-08-15: the stop fired on
+        # startup from several days of accumulated test losses.
+        clauses: list[str] = []
+        params: list[Any] = []
+        if market_slug is not None:
+            clauses.append("market_slug=?")
+            params.append(market_slug)
+        if since is not None:
+            clauses.append("event_at>=?")
+            params.append(_time(since, "since").isoformat())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         cash = Decimal("0")
         for row in self.query(
                 "SELECT side,price,qty,fee FROM execution_fills" + where,
-                params):
+                tuple(params)):
             qty = _decimal(row["qty"], "fill qty")
             price = _decimal(str(row["price"]), "fill price")
             fee = _decimal(str(row["fee"] or 0), "fill fee")
@@ -914,6 +927,10 @@ class ExecutionLedger:
         slugs = ([market_slug] if market_slug is not None
                  else [str(r["market_slug"]) for r in self.query(
                      "SELECT DISTINCT market_slug FROM execution_fills")])
+        # Open inventory is added back at basis so an unrealised mark never
+        # reaches the stop. That is window-independent: a position held from
+        # before `since` is still open now, and excluding it would report its
+        # entry cost as a loss.
         for slug in slugs:
             position = self.position(slug)
             if not position:
@@ -924,11 +941,14 @@ class ExecutionLedger:
             cash += position * basis.average_entry_price
         return cash
 
-    def realized_by_market(self) -> dict[str, Decimal]:
+    def realized_by_market(
+        self, *, since: datetime | None = None,
+    ) -> dict[str, Decimal]:
         """Realised P&L per market, for the per-market loss stop."""
 
         return {
-            str(row["market_slug"]): self.realized_pnl(str(row["market_slug"]))
+            str(row["market_slug"]): self.realized_pnl(
+                str(row["market_slug"]), since=since)
             for row in self.query(
                 "SELECT DISTINCT market_slug FROM execution_fills")
         }

@@ -9,7 +9,45 @@ crashes. Quote size 5, 8 markets, $40 realised stop, reward-cost gate OFF
 
 ---
 
-## 1. Quote churn — cancels within seconds of placing
+## 1. Quote churn — RESOLVED 2026-08-15
+
+**The cancels were never planned actions.** They came from
+`_quarantine_working_orders`, which does not log as an `[action]` — which is
+why the cancel tally read zero while quotes visibly vanished. It cancelled
+*every bound market*, driven by any single market reporting
+`execution_state_unknown`.
+
+Quarantine now takes a slug. Global remains for genuinely account-wide faults
+(stream reconnect, rotation).
+
+Measured before: PLACE 2597 / CANCEL 2596, ~1.5s apart, nothing rested.
+Measured after (01:44–01:50Z, 8 markets): PLACE 29 / CANCEL 7, twelve orders
+resting concurrently, median age 181s. Two of the seven cancels were the
+`target_not_met` sign-flip below; five were legitimate repositioning.
+
+**Residual, much smaller**: `desired_sides` still drops a side on a bare
+`expected_net <= 0` sign flip. Hysteresis mirroring `spread_hysteresis` would
+remove the last ~7% of churn. Not urgent now that quotes rest for minutes.
+
+## 1b. One market's error no longer stops the session
+
+Three paths took all eight markets down for one market's fault, all fixed
+2026-08-15 and mutation-checked:
+
+- recovery bound a market whose game had started → `no longer pregame` →
+  `startup_unavailable` retry loop for 2h20m with a position held.
+  `_refresh_contracts(for_exit=True)` skips gates that exist to stop us
+  *opening* risk; recovery markets are marked retired so they exit, never quote.
+- a planning exception on one market → whole-session terminal → now retires it.
+- an unexpected action exception on one market → whole-session terminal → now
+  retires it.
+
+`RuntimeInvariantViolation` stays terminal everywhere: it is about the process,
+not a market. Retirement stays bounded — ten rounds per market, and a full
+slate of retirements still stops the session, so a systemic fault is not
+silently absorbed.
+
+## 1c. Old quote churn detail (kept for reference)
 
 **Symptom**: `[action] ... kind=CANCEL reason=side_no_longer_desired` two to
 three seconds after `PLACE_POST_ONLY`, repeatedly, same market and price.

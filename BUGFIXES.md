@@ -5,6 +5,16 @@ bug fixed once should never have to be diagnosed twice — so each entry records
 the **symptom you would see**, the **mechanism**, and the **fix**, not just a
 commit subject.
 
+**Standing rule: every bug that reaches production gets an entry here, when it
+is fixed.** Symptom, mechanism, fix -- and the cost if it cost anything. Not a
+commit subject: the commit says what changed, this says what to look for and
+what it turned out to be. Include the false alarms too, so nobody re-chases a
+theory that was already disproved.
+
+Its companion rule lives in `FINDINGS.md`: anything critical we establish goes
+in there when it is measured. Between them, nothing has to be diagnosed or
+derived twice.
+
 Ground rules that came out of these:
 
 - **Verify against real data before asserting.** Several entries below were

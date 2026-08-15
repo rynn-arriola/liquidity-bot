@@ -10,6 +10,8 @@ Companion to `docs/SAFETY_INVARIANTS.md` (rules the code must obey),
 those two rest on.
 
 **Standing rule: anything critical we establish goes in here immediately.**
+Its companion is in `BUGFIXES.md`: every bug that reaches production gets an
+entry there when it is fixed, with symptom, mechanism and fix.
 Not at the end of the session, not "if it comes up again" -- when it is
 measured. A fact that has to be re-derived costs hours and usually comes back
 wrong the second time; the exit-anchor question and the per-market reward

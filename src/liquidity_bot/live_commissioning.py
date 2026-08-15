@@ -18,7 +18,7 @@ import signal
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -228,6 +228,16 @@ class CommissioningRunner:
         self._market_selection_observed_at: datetime | None = None
         self.balance: AccountBalance | None = None
         self.started_at: datetime | None = None
+        # Realised P&L already on the ledger when this session began. The loss
+        # stop measures the change since then, never the lifetime total: it is
+        # a guardrail against blowing the account *today*, not an accounting
+        # record. Unbounded, once the ledger had ever lost $40 the bot could
+        # never start again -- observed 2026-08-15, when the fill back-fill let
+        # the stop see real closed round trips and it totalled several days of
+        # test losses on startup and halted in 73 seconds.
+        self._realized_baseline: Decimal = Decimal("0")
+        self._baseline_day: date | None = None
+        self._realized_baseline_by_market: dict[str, Decimal] = {}
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
@@ -1305,8 +1315,27 @@ class CommissioningRunner:
         # used to attribute the whole account's marked-equity change to the
         # primary market, which was wrong twice over: marked equity is not
         # realised, and one market is not all of them.
-        self.risk_guard.observe_realized(self.ledger.realized_pnl())
-        self.risk_guard.observe_market_realized(
+        self._roll_realized_baseline()
+        self.risk_guard.observe_realized(
+            self.ledger.realized_pnl() - self._realized_baseline)
+        self.risk_guard.observe_market_realized({
+            slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
+            for slug, value in self.ledger.realized_by_market().items()})
+
+    def _roll_realized_baseline(self) -> None:
+        """Re-baseline at session start and again at each UTC midnight.
+
+        Per session so a restart does not inherit an earlier run's losses, and
+        per day so a process that runs for days gets a fresh budget rather than
+        spending one day's allowance on its first afternoon.
+        """
+
+        today = self._now().date()
+        if self._baseline_day == today:
+            return
+        self._baseline_day = today
+        self._realized_baseline = self.ledger.realized_pnl()
+        self._realized_baseline_by_market = dict(
             self.ledger.realized_by_market())
 
     def _stop_reason(self, now: datetime) -> str | None:

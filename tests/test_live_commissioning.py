@@ -1529,6 +1529,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.closed)
         self.assertGreaterEqual(len(notifier.messages), 3)
 
+    async def test_losses_from_earlier_sessions_do_not_spend_this_budget(self):
+        """The stop is a guardrail for today, not a lifetime tally.
+
+        Measured 2026-08-15: once the fill back-fill let the stop see real
+        closed round trips, it totalled several days of test losses and the
+        runner halted 73 seconds after every start. A stop that can never be
+        satisfied is not a safety measure, it is an outage.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        # Far past the $40 session limit, all of it from before this session.
+        runner.ledger.realized_pnl = (
+            lambda slug=None: Decimal("-500")
+            if slug is None else Decimal("-500"))
+        runner.ledger.realized_by_market = lambda: {"market-one": Decimal("-500")}
+        runner._baseline_day = None
+
+        runner._roll_realized_baseline()
+        runner.risk_guard.observe_realized(
+            runner.ledger.realized_pnl() - runner._realized_baseline)
+
+        self.assertIsNone(runner._stop_reason(NOW))
+
+    async def test_a_loss_taken_this_session_still_stops(self):
+        """Re-baselining must not blind the stop to real losses."""
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.realized_pnl = lambda slug=None: Decimal("0")
+        runner.ledger.realized_by_market = lambda: {}
+        runner._baseline_day = None
+        runner._roll_realized_baseline()
+
+        # Now lose the whole session budget, after the baseline was taken.
+        loss = -runner.config.max_session_loss_usd
+        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.risk_guard.observe_realized(
+            runner.ledger.realized_pnl() - runner._realized_baseline)
+
+        self.assertIn("loss limit", str(runner._stop_reason(NOW)))
+
     async def test_single_stop_fires_at_forty_then_the_ceiling(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()

@@ -174,6 +174,76 @@ def entry_quote_price(
     return round(ticks * step_size, 10)
 
 
+def exit_quote_price(
+    book: BookSnapshot, reducing_side: str, tick: float | None,
+    entry_price: float | None = None,
+) -> float:
+    """Where a *reducing* quote rests. Entries never use this.
+
+    Steps one tick inside the touch instead of joining it, because the exit is
+    priced for the probability of leaving, not for the last cent. Joining puts
+    us behind everyone already resting there; one tick inside makes us the
+    touch and puts us first in the queue.
+
+    **Only while the step still does not lose money.** Stepping inside is a
+    concession, and on a position already under water it concedes in the wrong
+    direction -- a long whose touch is 0.41 would sell at 0.40 and deepen the
+    loss by a tick to leave sooner. So the step is taken only when the improved
+    price is still at or above entry (at or below, for a short); otherwise the
+    exit joins the touch exactly as before.
+
+    That keeps this strictly an improvement. It is emphatically NOT a
+    cost-basis floor: a losing exit still rests AT the touch and still follows
+    it down, which is invariant 5 and is deliberate -- a floor only fills when
+    the market returns to entry, so it exits winners and strands losers into
+    settlement. This changes where a *winner* rests, and nothing else.
+
+    The tick is cheap and the alternative is not. Measured 2026-08-16 over the
+    whole ledger: exits that ended in a taker cross were **-$30.22 across 28
+    markets**, about 76% of all real recorded losses, and the losers cluster at
+    911s and 966s of hold time -- right on the 900s inventory clock. Individual
+    crosses cost 8c, 13c, 31c per contract. One tick on five contracts is
+    $0.05, so this has to fail ten to thirty times to cost what a single
+    avoided cross saves.
+
+    It does not cost reward either. Score is `discountFactor ^ ticks * size`,
+    penalising distance from the touch -- and stepping inside makes us the
+    touch, at zero ticks, rather than resting behind a queue at the same price.
+
+    Never prices through the opposite touch: a post-only order that would match
+    is rejected outright, so when there is no room the exit simply joins the
+    touch as before. A one-sided book has no opposite touch to respect, and
+    joins for the same reason.
+    """
+
+    step = tick if tick and tick > 0 else 0.01
+    if reducing_side == "offer":
+        touch = book.best_offer.price
+        if not book.has_side("bid"):
+            return touch
+        # Step in tick space, never by subtracting floats. `41 * 0.01` is
+        # 0.41000000000000003 in binary floating point and the payload
+        # validates alignment in Decimal, so an unrounded price is rejected
+        # and retires the market for the session -- see `entry_quote_price`.
+        improved = round((round(touch / step) - 1) * step, 10)
+        if entry_price is not None and improved < entry_price - 1e-9:
+            return touch
+        if improved - book.best_bid.price > 1e-9:
+            return improved
+        return touch
+    if reducing_side == "bid":
+        touch = book.best_bid.price
+        if not book.has_side("offer"):
+            return touch
+        improved = round((round(touch / step) + 1) * step, 10)
+        if entry_price is not None and improved > entry_price + 1e-9:
+            return touch
+        if book.best_offer.price - improved > 1e-9:
+            return improved
+        return touch
+    raise ValueError("reducing_side must be 'bid' or 'offer'")
+
+
 @dataclass
 class DesiredStateReconciler:
     policy: ReconcilerPolicy
@@ -413,8 +483,8 @@ class DesiredStateReconciler:
                 ActionKind.CANCEL, slug, "cancel_building_after_fill",
                 side=order.side, order_id=order.order_id)
                 for order in frame.working_orders if order.side == building]
-        passive_price = self._touch(frame.book, reducing)
-        active_touch = passive_price
+        passive_price = exit_quote_price(
+            frame.book, reducing, frame.market.tick_size, frame.entry_price)
         reducing_orders = [order for order in frame.working_orders
                            if order.side == reducing]
         matching = [order for order in reducing_orders

@@ -1428,3 +1428,59 @@ whole ledger. Manually *cancelling* or *closing* stays invisible to the
 ownership test. Manually *placing* would not -- that trips
 `ownership_is_known()` and is a terminal safety event that stops every market
 at once, by design.
+
+## Crossed exits are where the money goes, and the 900s clock pulls the trigger
+
+Measured 2026-08-16 across the whole ledger, splitting every market by how its
+exit filled.
+
+```
+exit was TAKER (crossed):   28 markets   net  -30.22
+exit was MAKER only:        11 markets   net   -9.67
+NO exit fill recorded:      12 markets   net  -22.41
+                                        TOTAL  -62.30
+```
+
+**Taker exits are ~76% of real recorded losses.** Entries are almost entirely
+MAKER; the damage is on the way out. Individual crosses:
+
+```
+bought 0.92 -> crossed out 0.79   (-13c/contract)
+sold   0.65 -> bought back 0.96   (-31c/contract)
+sold   0.36 -> bought back 0.46   (-10c/contract)
+```
+
+Hold time from entry to last exit, for markets that lost more than $1, clusters
+exactly where you would expect if a timer were forcing the exit:
+
+```
+911s   -4.20   kundmy-tsokos
+966s   -3.60   bornac-servas
+```
+
+`max_inventory_age_seconds` is **900**. Those are not positions that failed to
+find a passive exit for their own reasons -- they are positions the clock
+crossed out.
+
+**The guard that should have stopped the expensive ones cannot fire.**
+`_inventory_plan` refuses a cross costing more than `max_exit_loss` while
+outside the kickoff window, and the comment is explicit that "before the
+kickoff deadline a too-expensive exit can wait for a better book". But
+`max_exit_loss` is wired to `max_market_loss_usd` = **$40**, the session stop.
+Five contracts can lose at most about $5, so `pnl < -40` is unreachable and
+every timeout crosses at whatever price the market has moved to.
+
+**That number is doing two unrelated jobs.** `reconciler.py` uses it at the
+exit (the cross cap) AND in `_flat_plan` (the entry gate: do not open a side
+whose stressed close would cost more than this). Retuning it for the exit would
+tighten entry by ~50x. It has to be split, exactly as the loss stops and the
+exposure budgets were split for the same reason -- "stop after losing $40" and
+"never pay more than $40 to leave one position" are different statements.
+
+The `-22.41` with no exit fill recorded is not trading loss; it is the
+one-sided-record defect (manual closes, IOC exits that never reach
+`execution_fills`).
+
+**Fixed so far:** exits now rest one tick inside the touch while still at or
+above entry, to raise passive fill probability and reach the clock less often.
+The `max_exit_loss` split is identified but NOT yet done.

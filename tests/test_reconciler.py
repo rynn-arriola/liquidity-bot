@@ -199,9 +199,12 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual([action.kind for action in actions], [ActionKind.CRITICAL])
 
     def test_first_fill_cancels_building_side_and_keeps_correct_reducer(self):
+        # The reducer rests one tick INSIDE the 0.51 touch, at 0.50, because
+        # 0.50 still clears the 0.49 entry. Resting at 0.51 is no longer the
+        # correct price and would be re-priced -- which is a different test.
         orders = (
             WorkingOrder("bid-one", "bid", .49, Decimal("2")),
-            WorkingOrder("offer-one", "offer", .51, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .50, Decimal("2")),
         )
         actions = DesiredStateReconciler(policy()).plan(frame(
             now=T0 + timedelta(seconds=1), position="2", orders=orders,
@@ -560,10 +563,86 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(actions[0].side, "offer")
 
+    def test_a_profitable_exit_steps_one_tick_inside_the_touch(self):
+        """Priority is leaving, not the last cent.
+
+        Joining the touch queues us behind everyone already there. One tick
+        inside makes us the touch. Measured 2026-08-16: exits that ended in a
+        taker cross were -$30.22 across 28 markets, ~76% of real losses, and
+        the losers sit at 911s/966s hold time -- right on the 900s clock. One
+        tick on five contracts is $0.05.
+        """
+
+        wide = book(T0, bid=.44, offer=.50)
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="5", orders=(),
+            opened=T0, entry=.44, snapshot=wide))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side, "offer")
+        self.assertEqual(actions[0].price, .49)
+
+    def test_a_losing_exit_does_not_step_inside_and_deepen_the_loss(self):
+        """The step is a concession, and a loser concedes the wrong way.
+
+        Stepping inside a 0.41 touch on a 0.44 long sells at 0.40 -- a tick
+        worse -- to leave sooner. It still rests AT the touch and still follows
+        it down: this is not a cost-basis floor, which invariant 5 forbids.
+        """
+
+        under_water = book(T0, bid=.39, offer=.41)
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="5", orders=(),
+            opened=T0, entry=.44, snapshot=under_water))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].price, .41, "must join the touch, not 0.40")
+
+    def test_the_exit_step_never_prices_through_the_opposite_touch(self):
+        """A post-only order that would match is rejected outright."""
+
+        one_tick = book(T0, bid=.49, offer=.50)
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="5", orders=(),
+            opened=T0, entry=.40, snapshot=one_tick))
+
+        # 0.49 would sit on the bid, so it joins the 0.50 touch instead.
+        self.assertEqual(actions[0].price, .50)
+
+    def test_a_short_exit_steps_inside_upward(self):
+        """Mirror image: a short reduces on the bid and steps UP toward it."""
+
+        wide = book(T0, bid=.44, offer=.50)
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), position="-5", orders=(),
+            opened=T0, entry=.50, snapshot=wide))
+
+        self.assertEqual(actions[0].side, "bid")
+        self.assertEqual(actions[0].price, .45)
+
+    def test_the_exit_price_lands_on_the_tick_grid(self):
+        """`41 * 0.01` is 0.41000000000000003 and the payload validates
+        alignment in Decimal, so an unrounded price is rejected outright and
+        retires the market for the session."""
+
+        from decimal import Decimal as D
+        for bid, offer, entry in ((.40, .42, .35), (.46, .48, .40),
+                                  (.56, .58, .50), (.68, .70, .60),
+                                  (.81, .83, .75), (.93, .95, .85)):
+            actions = DesiredStateReconciler(policy()).plan(frame(
+                now=T0 + timedelta(seconds=1), position="5", orders=(),
+                opened=T0, entry=entry, snapshot=book(T0, bid=bid, offer=offer)))
+            price = actions[0].price
+            self.assertEqual(
+                D(str(price)) % D("0.01"), D("0"),
+                f"{price!r} is off the tick grid for book {bid}/{offer}")
+
     def test_duplicate_reducing_order_is_canceled_to_prevent_overclose(self):
+        # Both at the desired price, so only the duplicate is what gets pulled.
         orders = (
-            WorkingOrder("exit-one", "offer", .51, Decimal("2")),
-            WorkingOrder("exit-two", "offer", .51, Decimal("2")),
+            WorkingOrder("exit-one", "offer", .50, Decimal("2")),
+            WorkingOrder("exit-two", "offer", .50, Decimal("2")),
         )
         actions = DesiredStateReconciler(policy()).plan(frame(
             now=T0 + timedelta(seconds=1), position="2", orders=orders,

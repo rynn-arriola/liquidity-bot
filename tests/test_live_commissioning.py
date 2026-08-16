@@ -23,6 +23,7 @@ from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderStat
 from liquidity_bot.live_commissioning import (
     MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
+    RETIREMENT_COOLDOWN_SECONDS,
     CommissioningResult,
     CommissioningRunner,
     _run,
@@ -2242,6 +2243,48 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             stop = await runner._retire_market(slug, "unrecoverable_book_stale")
 
         self.assertIsNone(stop)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_retirement_stops_barring_the_market_after_its_cooldown(self):
+        """A permanent ban starves a fixed slate; only a cooldown does not."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        await runner._retire_market("market-one", "unrecoverable_book_stale")
+        now = runner._now()
+        self.assertIn("market-one", runner._barred_slugs(now))
+
+        # The exit machinery lets go once it proves flat; the cooldown is what
+        # still bars reselection after that.
+        runner._retired.pop("market-one", None)
+        self.assertIn("market-one", runner._barred_slugs(now))
+
+        # `book_stale` describes the book at a moment, not forever. Measured
+        # 2026-08-16: twenty markets barred inside the first forty minutes and
+        # the quoting slate fell 19 -> 6 with candidates still available.
+        later = now + timedelta(seconds=RETIREMENT_COOLDOWN_SECONDS + 1)
+        self.assertNotIn("market-one", runner._barred_slugs(later))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_book_fault_is_not_released_the_moment_it_is_flat(self):
+        """Flatness does not make an unparseable book parseable."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        await runner._retire_market("market-one", "unrecoverable_book_stale")
+        # Releasing on flat alone re-retired the same market about every 45
+        # seconds (chevic-scovla, 2026-08-15). Time resolves these, not flatness.
+        runner._release_retired_if_flat("market-one")
+        self.assertIn("market-one", runner._retired)
+
+        runner._retired_until["market-one"] = (
+            runner._now() - timedelta(seconds=1))
+        runner._release_retired_if_flat("market-one")
+        self.assertNotIn("market-one", runner._retired)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

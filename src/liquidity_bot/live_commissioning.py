@@ -128,6 +128,22 @@ MAX_RETIREMENT_ROUNDS = 10
 # over 7h09m, about 4.4/hour) never comes close.
 RETIREMENT_BURST_WINDOW_SECONDS = 900
 
+# How long a retirement bars a market from being quoted or reselected.
+#
+# This was the rest of the session, and with only max_markets slots that is a
+# slow starvation. Measured 2026-08-16: twenty markets were barred inside the
+# first forty minutes and the quoting slate fell 19 -> 11 -> 8 -> 7 -> 6 while
+# the venue still had candidates. Thirty of the retirements were
+# `unrecoverable_book_stale`, which describes the book AT THAT MOMENT -- a book
+# too quiet to refresh at 00:30 is routinely fine at 03:00, and banning it for
+# seven hours spends a slot to avoid a condition that has already passed.
+#
+# Thirty minutes is chosen from both directions: long enough to break the
+# retire/release/retire churn that made the ban permanent in the first place
+# (observed at ~45 seconds on chevic-scovla, 2026-08-15), and short enough that
+# a market returns while its game is still ahead of it.
+RETIREMENT_COOLDOWN_SECONDS = 1800
+
 RETIRING_STRATEGY_CRITICALS = frozenset({
     "hard_exit_attempt_limit_exceeded",
     "hard_exit_retry_window_exceeded",
@@ -227,9 +243,11 @@ class CommissioningRunner:
         # Markets this session has stopped quoting but must still flatten.
         # They stay in the active set so their exit keeps being worked.
         self._retired: dict[str, RetiredMarket] = {}
-        # Retired slugs are never re-entered, even after they prove flat: an
-        # exit that failed once is evidence about that book, not bad luck.
+        # Every slug this session has retired, for reporting only. Barring is
+        # driven by `_retired_until` so it expires; see the constant.
         self._retired_ever: set[str] = set()
+        # slug -> the moment its retirement stops barring it.
+        self._retired_until: dict[str, datetime] = {}
         # Bound by recovery to be exited, not retired for a fault. Held in
         # `_retired_ever` too, so they never quote and are never reselected.
         self._recovery_slugs: set[str] = set()
@@ -532,7 +550,7 @@ class CommissioningRunner:
                 # untouched for the first quarter hour of every run.
                 chosen = tuple(
                     item.market.slug for item in selection.top_viable(
-                        self.config.max_markets, exclude=self._retired_ever))
+                        self.config.max_markets, exclude=self._barred_slugs()))
                 self._bind_markets(
                     chosen or (selection.selected.market.slug,))
                 self._runtime_error_counts.pop("startup_market_wait", None)
@@ -2074,7 +2092,7 @@ class CommissioningRunner:
         chosen = tuple(
             item.market.slug
             for item in selection.top_viable(
-                self.config.max_markets, exclude=self._retired_ever))
+                self.config.max_markets, exclude=self._barred_slugs()))
         previous = tuple(self.active_slugs)
         if chosen == previous:
             for slug in previous:
@@ -2304,16 +2322,25 @@ class CommissioningRunner:
 
         return slug in self._retired
 
-    def _is_barred_from_quoting(self, slug: str) -> bool:
-        """True once a market has been retired, and for the rest of the session.
+    def _barred_slugs(self, now: datetime | None = None) -> set[str]:
+        """Slugs that must not be quoted or reselected right now.
 
-        Deliberately outlives ``_retired``. Releasing a retired market when it
-        reaches flat frees it from the exit machinery, but it must not become
-        quotable again: the exit failure is evidence about that book, and
-        re-entering it is how a bad market gets traded twice.
+        Outlives ``_retired`` but no longer outlives the session. A market is
+        barred while its exit is still being worked, while its cooldown runs,
+        and permanently if it was bound by recovery -- those were loaded to be
+        exited, and their games have already started.
         """
 
-        if slug in self._retired_ever:
+        moment = now or self._now()
+        return (set(self._retired)
+                | set(self._recovery_slugs)
+                | {slug for slug, until in self._retired_until.items()
+                   if until > moment})
+
+    def _is_barred_from_quoting(self, slug: str) -> bool:
+        """True while a retirement is still in force for this market."""
+
+        if slug in self._barred_slugs():
             return True
         # Serviced but not selected: we hold risk here and are working the
         # exit, but selection did not choose it, so it must not build MORE.
@@ -2379,6 +2406,10 @@ class CommissioningRunner:
             existing.reason = reason
             existing.next_retry_at = retry_at
         self._retired_ever.add(slug)
+        # Re-retiring pushes the cooldown out from now, so a market that keeps
+        # failing keeps being barred; one that recovers comes back.
+        self._retired_until[slug] = now + timedelta(
+            seconds=RETIREMENT_COOLDOWN_SECONDS)
         rounds = self._retired[slug].rounds
         position = self.ledger.position(slug)
         print(
@@ -2455,15 +2486,18 @@ class CommissioningRunner:
     def _release_retired_if_flat(self, slug: str) -> None:
         """Free a retired market's slot once the venue proves it flat.
 
-        Only for retirements that being flat actually resolves -- the exit
-        ones. A market whose book cannot be parsed is no more quotable flat
-        than it was holding risk.
+        Book faults still hold the market until their cooldown expires. Being
+        flat does not make an unparseable book parseable, so releasing on flat
+        alone just let the same fault retire it again about every 45 seconds
+        (chevic-scovla, 2026-08-15). Time is what resolves them, not flatness --
+        so they wait out the cooldown here instead of being barred forever.
         """
 
         retired = self._retired.get(slug)
         if retired is None:
             return
-        if str(retired.reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES):
+        if (str(retired.reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES)
+                and self._retired_until.get(slug, self._now()) > self._now()):
             return
         if self.ledger.position(slug) != 0:
             return

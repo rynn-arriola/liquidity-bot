@@ -440,3 +440,34 @@ last guard against churning every slot is never weakened by a gap.
 
 **Coverage:** two tests, each mutation-verified. Restoring the cumulative count
 fails both; dropping only the kickoff exclusion fails only the kickoff test.
+
+### A permanent ban list starved a fixed slate — `PENDING`
+
+**Symptom:** distinct markets quoting per hour fell 19 → 11 → 8 → 7 → 6 across
+2026-08-16 while the venue still had candidates and selection never once
+reported a shortfall.
+
+**Mechanism:** `_retired_ever` barred a market from quoting *and* from
+reselection for the rest of the session, and it is never cleared. Twenty
+markets were barred inside the first forty minutes. With `max_markets` fixed at
+20, a permanent ban list is a slow starvation: every retirement is a slot
+spent, and slots are never returned.
+
+Thirty of the retirements were `unrecoverable_book_stale`, which is 12
+*consecutive* failed refreshes — the counter does reset on a good pass
+(`live_commissioning.py:1587`), so those books really were persistently quiet.
+But that describes the book **at that moment**. A book too quiet to refresh at
+00:30 is routinely fine at 03:00, and banning it until 07:00 spends a slot to
+avoid a condition that has already passed.
+
+**Fix:** `RETIREMENT_COOLDOWN_SECONDS` (1800) replaces the permanent ban.
+`_barred_slugs()` bars a market while its exit is still being worked, while its
+cooldown runs, and permanently only for recovery-bound markets. Re-retiring
+pushes the cooldown out from now, so a market that keeps failing keeps being
+barred while one that recovers comes back. Book faults still refuse to release
+on flatness alone — time resolves those, not flatness — which keeps the ~45s
+retire/release churn closed.
+
+**Coverage:** two tests, both mutation-verified. Restoring the permanent ban
+fails the cooldown test; dropping the churn guard fails the release test *and*
+the pre-existing `test_an_unquotable_market_is_not_released_just_for_being_flat`.

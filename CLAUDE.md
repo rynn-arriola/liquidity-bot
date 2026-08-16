@@ -62,6 +62,12 @@ Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `scripts/resting_fraction.py` measures what share of time each side actually
 holds a live order — the quantity that maps to reward.
 
+`scripts/backup_ledger.py` runs nightly from cron at 04:17 UTC and keeps 30
+dated snapshots in `backups/daily/`. It uses SQLite's online backup API, so it
+is safe against the live writer — never `cp` a WAL database. **Those snapshots
+are on the same droplet, so they do not survive losing it.** Pull them off
+periodically; that is still a manual step.
+
 ## Things that will mislead you
 
 - **`book_stale` event counts mean nothing.** They measure how often the bot

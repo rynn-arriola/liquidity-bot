@@ -28,6 +28,21 @@ def _money(value: Decimal | str | int | float) -> Decimal:
     return result
 
 
+def _bytes(value: int) -> str:
+    """Human-readable size.
+
+    The ledger is never rebuilt -- it is the audit trail -- so it only ever
+    grows, and nothing else on the droplet warns before the disk fills.
+    """
+
+    size = float(max(0, value))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:,.0f}{unit}" if unit == "B" else f"{size:,.1f}{unit}"
+        size /= 1024
+    return f"{size:,.1f}TB"
+
+
 def _age(value: float | None) -> str:
     if value is None:
         return "UNKNOWN"
@@ -63,6 +78,10 @@ class LiquiditySummary:
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
     private_stream_age_seconds: float | None = None
+    # Ledger file plus its WAL sidecar. WAL is not a rounding error here: it
+    # can carry a large uncommitted tail, and reporting the .db alone would
+    # understate the disk actually in use.
+    ledger_bytes: int = 0
     integrity_problems: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -81,7 +100,8 @@ class LiquiditySummary:
                 ("open_positions", self.open_positions),
                 ("working_orders", self.working_orders),
                 ("unresolved_intents", self.unresolved_intents),
-                ("unknown_orders", self.unknown_orders)):
+                ("unknown_orders", self.unknown_orders),
+                ("ledger_bytes", self.ledger_bytes)):
             if value < 0:
                 raise ValueError(f"{name} cannot be negative")
         if not 0 <= self.exit_completion_rate <= 1:
@@ -183,6 +203,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
                 f"REST rate        {summary.rest_requests_per_second:>8.2f}/s\n"
                 f"Market stream    {_age(summary.market_stream_age_seconds):>10}\n"
                 f"Private stream   {_age(summary.private_stream_age_seconds):>10}\n"
+                f"Ledger on disk   {_bytes(summary.ledger_bytes):>10}\n"
                 "```"),
             "inline": False,
         },

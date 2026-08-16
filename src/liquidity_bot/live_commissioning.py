@@ -1524,6 +1524,30 @@ class CommissioningRunner:
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
 
+    def _ledger_bytes_on_disk(self) -> int:
+        """Ledger file plus its WAL sidecar, in bytes.
+
+        The ledger is the audit trail and is never rebuilt, so it only grows --
+        47,784 events and 22MB inside three days, on a droplet where nothing
+        else warns before the disk fills. Reporting the `.db` alone would
+        understate it: WAL mode keeps an uncommitted tail in `-wal` that can be
+        a large fraction of the total.
+
+        Never raises. A summary that cannot be sent because a stat failed is a
+        worse outcome than a size it could not read.
+        """
+
+        total = 0
+        path = getattr(self.ledger, "path", None)
+        if path is None:
+            return 0
+        for candidate in (path, Path(f"{path}-wal")):
+            try:
+                total += Path(candidate).stat().st_size
+            except OSError:
+                continue
+        return total
+
     def _log_shutdown(self, market_slug: str, decision: str, **fields: Any) -> None:
         """Log one shutdown decision, the way `[action]` logs a live one.
 
@@ -1833,6 +1857,7 @@ class CommissioningRunner:
             rest_requests_per_second=float(self.config.rest_requests_per_second),
             market_stream_age_seconds=market_age,
             private_stream_age_seconds=private_age,
+            ledger_bytes=self._ledger_bytes_on_disk(),
             integrity_problems=problems,
         ))
         # Expose actual create count only in the description, never imply that

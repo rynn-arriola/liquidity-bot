@@ -2384,6 +2384,29 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_ledger_size_counts_the_wal_sidecar_and_never_raises(self):
+        """WAL is not a rounding error: the .db alone understates the disk."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        path = Path(runner.ledger.path)
+
+        # The ledger runs in WAL mode, so a sidecar already exists -- write a
+        # known size over it rather than assuming it starts empty.
+        Path(f"{path}-wal").write_bytes(b"x" * 4096)
+        self.assertEqual(
+            runner._ledger_bytes_on_disk(), path.stat().st_size + 4096)
+        # And the sidecar is genuinely counted, not merely tolerated.
+        self.assertGreater(
+            runner._ledger_bytes_on_disk(), path.stat().st_size)
+
+        # A summary that cannot be sent because a stat failed is worse than a
+        # size it could not read.
+        runner.ledger.path = Path("no", "such", "ledger.db")
+        self.assertEqual(runner._ledger_bytes_on_disk(), 0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_shutdown_decisions_are_logged_in_a_parseable_line(self):
         """Format is load-bearing: these lines are read back to diagnose."""
 

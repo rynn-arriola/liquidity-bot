@@ -114,6 +114,26 @@ class DiscordTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notifier.send("x", channel="somewhere")
 
+    def test_summary_reports_ledger_size_so_a_full_disk_is_visible(self):
+        """The ledger is never rebuilt, so nothing else warns before it fills."""
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            ledger_bytes=22_396_928 + 4_194_304)
+        health = [field for field in build_liquidity_summary(summary)["embeds"][0]
+                  ["fields"] if "alive" in field["name"]][0]["value"]
+
+        # Rendered in units a human can act on, not raw bytes.
+        self.assertIn("Ledger on disk", health)
+        self.assertIn("25.4MB", health)
+
+        # Negative size is a bug in the caller, not something to render.
+        with self.assertRaises(ValueError):
+            LiquiditySummary(
+                mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+                observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
+
     def test_liquidity_summary_excludes_pending_reward_and_leads_with_risk(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="DO_NOT_START_TRIAL",

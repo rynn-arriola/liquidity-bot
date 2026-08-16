@@ -1543,72 +1543,53 @@ it doubles that side's exposure for the overlap and needs its own risk check.
 that actually maps to reward. 8/20 is an instantaneous count and understates
 coverage if the dark windows are staggered across markets.
 
-## 20 markets does not fit in a 4 req/s REST budget
+## Re-deriving the REST-contention theory a second time (it is still wrong)
 
-Measured 2026-08-16T21:47-22:00Z. This is the constraint underneath the
-re-price latency recorded above, and underneath an 8-of-20 resting count.
+2026-08-16T22:00Z. Recording the mistake, because the theory is attractive
+enough that it has now been derived twice from first principles and the
+arithmetic looks compelling both times.
 
-**Sustained, not startup.** `book_stale` ran 18-31 per minute for thirteen
-straight minutes:
+The pitch: `_refresh_quiet_book_if_due` re-reads a book over REST at 3s, the
+reconciler refuses one older than 5s, `rest_requests_per_second` is hard-capped
+at 4, so 20 markets want `20/3 = 6.7 req/s` against 4 and must starve.
 
-```
-T21:49 25   T21:53 30   T21:57 31
-T21:50 22   T21:54 20   T21:58 18
-T21:51 24   T21:55 24   T21:59 21
-T21:52 23   T21:56 25   T22:00 19
-```
+**It is wrong, and the section "`book_stale` is self-perpetuating, and REST
+contention is not the cause" above already disproves it with data.** Staleness
+per market RISES as markets drop -- 21/market at 19 markets, 49/market at 8 --
+which is the opposite of contention.
 
-An earlier reading of these as "the normal startup state, once per market
-before its first book" was wrong -- that shape is a single burst, not a
-thirteen-minute plateau.
+What made me believe it the second time was **using the event count as the
+metric**, which the section "The `book_stale` replan works, and the event COUNT
+is the wrong metric" also already warns against. Counting `book_stale` lines
+measures how often we LOOK, not how often we are broken.
 
-**Spread across every market, not a subset.** Per-market counts ran 10 to 27
-across all 19-20 bound markets. A malformed-book cause would concentrate: the
-market stream drops books that fail to parse, and `streams.py` records that
-about one market in four publishes one. A roughly uniform spread points at a
-shared resource instead.
-
-**The stream is not at fault.** Zero WebSocket errors, zero
-`received market data for unsubscribed slug`, zero `quiet_book_rest_refresh`
-failures. The only other errors in the window were 12 transient
-`execution_state_unknown` and 8 `CommissioningUnavailable` for markets leaving
-pregame, both normal.
-
-**The arithmetic.** `rest_requests_per_second` is 4 and
-`assert_authorized` refuses anything higher. `_refresh_quiet_book_if_due`
-re-reads a market's book over REST once it is 3s old, and the reconciler
-refuses to plan on a book older than 5s.
+The correct metric, on the same window that produced the false alarm:
 
 ```
-20 markets / 3s  =  6.7 req/s wanted
-                    4.0 req/s available   (shared with contract refreshes,
-                                           whole-account reconciles, and
-                                           every order mutation)
+422  attempt=1
+  5  attempt=2
+  7  attempt=3
+  0  markets retired
 ```
 
-Even if book refresh were the ONLY consumer, 20 markets at 4 req/s is one
-refresh per market per 5.0s -- exactly the stale limit. Markets therefore sit
-on the boundary permanently, which is precisely the observed signature: mild,
-constant, evenly spread staleness rather than a few broken markets.
+Nearly every event is one failure that recovers on the replan. Nothing
+escalates, nothing costs a slot. A sustained 25/min of `attempt=1` is a healthy
+bot visiting quiet books, not a starved one.
 
-These were next-day pregame tennis books, which are quiet, so the WebSocket
-delivers little and REST is effectively the only source of a fresh book.
+**Two rules that would have prevented this, both already written down:**
+grep FINDINGS before deriving a resource-contention theory, and never reason
+about `book_stale` from event counts.
 
-**`max_markets = 20` was sized against capital, not against this.** Its comment
-reasons entirely about exposure -- "20 markets is $100 against the $340 cap".
-Nothing sized it against the REST budget needed to keep 20 books inside a 5s
-freshness window. Keeping N markets fresh needs about `N/3 <= 4`, so N <= 12
-with nothing left over, and realistically 8-10 once reconciles and mutations
-take their share.
+**`max_markets = 20` is not unexamined.** Its code comment reasons about
+exposure, which is what made it look capital-only, but the REST budget for 20
+markets is worked through in the section beginning "REST budget on the shared
+4 req/s governor" -- 0.033 req/s per market with an active WebSocket book, and
+0.333 req/s only when a book goes quiet and falls back. The 6.7 req/s figure
+assumes every market falls back at once, which is the overwhelmed-fallback case
+that section explicitly distinguishes.
 
-**Proven vs inferred.** Proven: the staleness rate, its spread, the absence of
-stream faults, the configured budget, and the refresh/stale thresholds.
-Inferred: that the limiter is actually saturated -- there is no request counter,
-so this is arithmetic plus a signature that fits, not a direct measurement.
-**The decisive test is to cut `max_markets` and watch `book_stale` fall.**
-
-**A diagnostic that exists but is invisible.** `MarketReadOnlyStream._dropped_books`
-and `_last_drop` are incremented and never read by anything -- the comment says
-"a rising number is visible without stopping the feed", but nothing surfaces
-them. That is why the malformed-book alternative had to be excluded by
-distribution rather than measured directly. Worth putting in the summary.
+**Still open and genuinely unexplained:** the measured 70s median gap between a
+`resting_price_left_the_touch` cancel and its replacement (see the section
+above). That measurement stands -- it is timestamps, not inference -- but its
+cause is NOT REST contention and is not yet established. Do not attach it to
+this theory.

@@ -1137,6 +1137,23 @@ class CommissioningRunner:
             return
         if period is None or period.period == "live" or state.market.tick_size is None:
             return
+        if not state.book.is_two_sided:
+            # `best_bid`/`best_offer` are `max`/`min` over a list, so an empty
+            # side raises ValueError rather than returning None -- and this ran
+            # outside any book guard. A single one-sided book took the whole
+            # runner down with `runner_failure:ValueError` after two hours of
+            # healthy quoting, and the supervisor then refused to restart
+            # because shutdown could not prove flat. Observed 2026-08-16T19:01Z.
+            #
+            # Quoting needs BOTH touches -- the two-cent rule is defined
+            # between them -- so there is genuinely nothing to evaluate here.
+            # `Reconciler.plan` already returns no actions for exactly this
+            # case; this is the same rule, applied one layer earlier. Exits are
+            # unaffected: they are planned by the reconciler, which needs only
+            # the side being sold into and no economics at all.
+            state.economic_blocker_by_side = {
+                "bid": "book_one_sided", "offer": "book_one_sided"}
+            return
         eligible: set[str] = set()
         working_orders = self._working_orders(state.slug)
         working_sides = {order.side for order in working_orders}

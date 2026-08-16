@@ -1419,6 +1419,39 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_one_sided_book_does_not_take_the_runner_down(self):
+        """It did, on 2026-08-16T19:01Z, after two hours of healthy quoting.
+
+        `_evaluate_rewards` computed `best_offer.price - best_bid.price` with no
+        book guard, and those are `min`/`max` over a list -- an empty side
+        raises ValueError rather than returning None. That surfaced as
+        `runner_failure:ValueError`, and the supervisor then refused to restart
+        because shutdown could not prove flat. `Reconciler.plan` already
+        declines to quote a one-sided book; this is the same rule one layer up.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        # Every bid pulled at once. Nothing else about the market changes.
+        state.book = replace(state.book, bids=())
+
+        # Precondition: this is exactly the shape that raised.
+        self.assertFalse(state.book.is_two_sided)
+        with self.assertRaises(ValueError):
+            _ = state.book.best_bid
+
+        # Must not raise.
+        runner._evaluate_rewards(runner._now(), slug)
+
+        self.assertEqual(
+            state.economic_blocker_by_side,
+            {"bid": "book_one_sided", "offer": "book_one_sided"})
+        self.assertEqual(state.reward_eligible, set())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_one_markets_absent_order_does_not_blank_another(self):
         """The reason quotes died two seconds after being placed.
 

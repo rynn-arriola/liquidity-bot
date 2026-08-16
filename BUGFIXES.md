@@ -29,6 +29,83 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-16 (second incident)
+
+### A book with no bids killed the runner, and the supervisor would not restart it
+
+Observed live 2026-08-16T19:01:34Z on `a02bbfe`, after two hours of healthy
+quoting. Unrelated to the stall below — a pre-existing hole that a one-sided
+book finally reached.
+
+**Symptom:** the process is **gone**, not stuck. `status_commissioning.sh`
+shows supervisor and runner both stopped, and `supervisor.log` ends with:
+
+```
+[supervisor] process exited without proving flat; not restarting
+```
+
+**Mechanism:**
+
+```
+File "live_commissioning.py", line 1146, in _evaluate_rewards
+    spread = state.book.best_offer.price - state.book.best_bid.price
+File "models.py", line 90, in best_bid
+    return max(self.bids, key=lambda level: level.price)
+ValueError: max() iterable argument is empty
+```
+
+`best_bid`/`best_offer` are `max`/`min` over a list, so an empty side **raises**
+rather than returning `None`, and `_evaluate_rewards` computed the spread with
+no book guard at all. One book with every bid pulled took the whole runner down
+as `runner_failure:ValueError`.
+
+`Reconciler.plan` has always declined to quote a one-sided book — "quoting needs
+BOTH touches, the two-cent rule is defined between them". That rule simply never
+reached the reward-evaluation path, which runs earlier.
+
+**Why the bot then stayed down.** Shutdown parked a live position rather than
+crossing at a loss (kickoff was 43 minutes out), so it exited non-flat, and the
+supervisor deliberately refuses to restart from unproven state. Correct
+behaviour — but it converts a one-line crash into an outage lasting until an
+operator notices.
+
+**Cost:** ~79 minutes down. No capital lost: the venue was flat when checked
+directly (0 open orders, 0 positions) — the parked position's resting sell
+resolved on its own while nothing was running.
+
+**A caution about the ledger, recorded because it produced a wrong call
+during this very incident.** `data/commissioning.db` stops updating the moment
+the runner dies. Reading it after a crash shows the position and working order
+*as of the crash*, which is easily mistaken for current exposure — it was, here,
+and prompted an unnecessary restart recommendation. **After a crash, query the
+venue, not the ledger.** Read-only, no runner required:
+
+```python
+from liquidity_bot.probe import client_from_environment
+from liquidity_bot.adapters import AsyncReadOnlyGateway
+from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway
+# fetch_open_orders / fetch_positions
+```
+
+**Fix:** `_evaluate_rewards` returns early on `not state.book.is_two_sided`,
+setting `book_one_sided` on both sides so the market shows up in
+`_idle_market_reasons` instead of vanishing. Exits are unaffected — the
+reconciler plans those, needs only the side being sold into, and uses no
+economics.
+
+Regression test: `test_a_one_sided_book_does_not_take_the_runner_down`.
+Mutation-checked — disabling the guard reproduces
+`ValueError: max() iterable argument is empty` exactly.
+
+**Not fixed, and worth a decision:** any uncaught exception anywhere in
+`_service_market_state` still ends the session, and if a position is parked at
+that moment the bot stays down until a human intervenes. A per-market guard
+that retires the offending market instead of killing the runner would have made
+this a non-event. See the "up but quoting nothing" alarm in FINDINGS — same
+theme: the failures that cost the most are the ones nothing announces.
+
+---
+
 ## 2026-08-16
 
 ### One order we lost sight of wedged every stream bind and stopped all quoting

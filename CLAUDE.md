@@ -28,6 +28,13 @@ real account.** Every change can lose it.
    per-machine and do not sync, which is why everything durable lives in these
    files instead.
 
+   **Pushing is not deploying.** Three separate steps, and only the first is
+   git: `commit + push` so the other machine sees it; `scp` to the droplet so
+   it actually runs (runner code only); write `DEPLOYED_COMMIT` so anyone can
+   tell what is running. Pushed-but-not-deployed is not running.
+   Deployed-but-not-pushed is invisible to the other machine and will be
+   clobbered by the next deploy from it. Both fail silently.
+
 ## What is authoritative for what
 
 Git is the source of truth for **code and decisions**, and nothing else. Four

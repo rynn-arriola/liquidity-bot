@@ -1380,3 +1380,51 @@ times and failed identically each time. A retry that keeps failing is evidence
 the fault is *below* the thing retrying -- not evidence that retry is the fix.
 Shipping the recovery alone would have converted a silent hang into a loud
 infinite loop and looked like progress. See BUGFIXES 2026-08-16.
+
+## A manual close leaves a one-sided P&L record that eats the loss stops
+
+Measured 2026-08-16 on `aec-setkawoua-melolh-kololh-2026-08-16` (Melnyk Olha),
+after the operator recalled closing that position by hand during the previous
+session.
+
+What the ledger holds for that market:
+
+```
+fills:      1  BUY 5 @ 0.28, MAKER, 14:20:16Z   <- the entry
+            (no sell fill, ever)
+orders:    35 CANCELED, 1 FILLED, 1 REJECTED
+position:  net_qty 0, cost 1.39
+realized:  -1.39
+```
+
+The bot bought 5 at 0.28 and then walked a sell ladder down -- 0.43, 0.30,
+0.29, 0.28, 0.27, 0.26, 0.25, 0.24, 0.21, 0.20, 0.19, 0.18 (rejected) -- and
+**not one of those sells ever filled**. The position is nevertheless flat. It
+was closed by hand at the venue.
+
+**The exit is invisible to the ledger.** `fetch_executions` back-fills from
+`portfolio.activities`, and the manual close carried no bot client-order-id to
+attribute it to. So the entry is recorded, the exit is not, and the market
+reads **-1.39 realized against a position that is actually closed**.
+
+**Why that is not cosmetic:** `realized_by_market()` and `realized_pnl()` are
+what drive the $2 per-market stop, the $5 session stop and the $15 hard stop.
+A phantom -1.39 consumes 70% of that market's stop and 28% of the session stop
+before a single real loss occurs. Loss stops are the only automated protection
+on live capital, and this makes them fire early on money that was never lost.
+
+This is a **second, independent cause** of the one-sided-fill defect already
+recorded as NEXT.md's top priority. That one is about IOC exits never reaching
+`execution_fills`; this one needs no bug at all -- a human closing a position in
+the UI produces it by construction, and always will.
+
+**Operational rule until the ledger can attribute unowned executions:** closing
+a bot position by hand is not free. It is safe for the *account* -- the bot
+re-reads positions from REST and stays flat -- but it silently debits the loss
+stops. Prefer stopping the bot, or expect the stops to trip early and know why.
+
+Worth noting what did NOT happen: no `venue:` order was ever recorded, in the
+whole ledger. Manually *cancelling* or *closing* stays invisible to the
+ownership test. Manually *placing* would not -- that trips
+`ownership_is_known()` and is a terminal safety event that stops every market
+at once, by design.

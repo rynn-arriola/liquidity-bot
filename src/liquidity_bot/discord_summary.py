@@ -58,6 +58,10 @@ class LiquiditySummary:
     observed_at: datetime
     session_started_at: datetime
     active_markets: int = 0
+    # Managed is not earning. Reward is paid for RESTING, so the count that
+    # maps to income is how many of the managed markets actually hold an
+    # order. Measured 2026-08-16: 20 managed against 9 resting.
+    resting_markets: int = 0
     reward_eligible_sides: int = 0
     score_seconds: float = 0.0
     entry_fills: int = 0
@@ -94,6 +98,7 @@ class LiquiditySummary:
                 raise ValueError(f"{name} must be timezone-aware")
         for name, value in (
                 ("active_markets", self.active_markets),
+                ("resting_markets", self.resting_markets),
                 ("reward_eligible_sides", self.reward_eligible_sides),
                 ("entry_fills", self.entry_fills),
                 ("exit_samples", self.exit_samples),
@@ -164,6 +169,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             "value": (
                 "```text\n"
                 f"Markets active   {summary.active_markets:>10}\n"
+                f"Markets resting  "
+                f"{f'{summary.resting_markets}/{summary.active_markets}':>10}\n"
                 f"Eligible sides   {summary.reward_eligible_sides:>10}\n"
                 f"Score-seconds    {summary.score_seconds:>10,.2f}\n"
                 f"PAID attributed  {float(paid):>10,.2f}\n"

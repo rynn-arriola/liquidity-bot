@@ -114,6 +114,21 @@ class DiscordTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notifier.send("x", channel="somewhere")
 
+    def test_summary_separates_markets_managed_from_markets_earning(self):
+        """Managed is not earning: reward is paid for resting, not selecting."""
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            active_markets=20, resting_markets=9)
+        rewards = [field for field in build_liquidity_summary(summary)["embeds"][0]
+                   ["fields"] if "reward" in field["name"].lower()][0]["value"]
+
+        self.assertIn("Markets active", rewards)
+        # Shown as a ratio, because 9 alone does not say what it is 9 of.
+        # Measured 2026-08-16: 20 managed against 9 actually holding an order.
+        self.assertIn("9/20", rewards)
+
     def test_summary_reports_ledger_size_so_a_full_disk_is_visible(self):
         """The ledger is never rebuilt, so nothing else warns before it fills."""
 

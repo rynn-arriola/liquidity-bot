@@ -526,3 +526,23 @@ unconditionally, independent of alert throttling.
 **Coverage:** the line format is tested (it is parsed back when diagnosing).
 The call sites themselves are straight-line logging and are **not** covered;
 they get their first real exercise on the next live shutdown.
+
+### A reporting metric nearly stopped shutdown proving flat — `PENDING`
+
+**Symptom:** caught in tests, not production. Adding a `resting_markets` count
+to the summary broke `test_shutdown_parks_a_position_on_its_resting_exit`.
+
+**Mechanism:** the count was built from `_working_orders()`, which raises
+`RuntimeInvariantViolation` for a working order with no owned place intent.
+The summary is also sent from inside the shutdown loop, whose `except` treats
+any exception as a failure to prove flat — so a *reporting* metric could keep
+a genuinely flat process from stopping, and a stop that will not complete is
+what previously forced `kill -9` and left the state that produced recovery
+runs on every restart.
+
+**Fix:** read `ledger.working_orders(slug)` directly. The count needs only
+whether rows exist, not the intent-to-side mapping that carries the invariant.
+
+**The rule this is the second instance of:** anything that exists only to be
+*reported* must not be able to raise. `_ledger_bytes_on_disk` was written that
+way deliberately and this was not.

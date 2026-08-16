@@ -1841,6 +1841,20 @@ class CommissioningRunner:
             observed_at=now,
             session_started_at=self.started_at or now,
             active_markets=len(self.active_slugs),
+            # Counted from resting orders, never from `[action]` log activity:
+            # a market that placed its quotes and is resting quietly logs no
+            # actions at all, so an activity-based count falls exactly when
+            # things are going well. Measured 2026-08-16 -- it read 17 while
+            # only 9 markets actually held an order.
+            #
+            # Reads the ledger directly rather than `_working_orders`, which
+            # raises RuntimeInvariantViolation on an order with no owned place
+            # intent. The summary is also sent from the shutdown loop, where
+            # that exception is caught as a failure to prove flat -- so a
+            # reporting metric would have kept a flat process from stopping.
+            resting_markets=sum(
+                1 for slug in self.active_slugs
+                if self.ledger.working_orders(slug)),
             reward_eligible_sides=sum(
                 len(self.state_for(slug).reward_eligible)
                 for slug in self.active_slugs),

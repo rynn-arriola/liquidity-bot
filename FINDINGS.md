@@ -1542,3 +1542,73 @@ it doubles that side's exposure for the overlap and needs its own risk check.
 **Unmeasured:** the resting FRACTION over a long window, which is the number
 that actually maps to reward. 8/20 is an instantaneous count and understates
 coverage if the dark windows are staggered across markets.
+
+## 20 markets does not fit in a 4 req/s REST budget
+
+Measured 2026-08-16T21:47-22:00Z. This is the constraint underneath the
+re-price latency recorded above, and underneath an 8-of-20 resting count.
+
+**Sustained, not startup.** `book_stale` ran 18-31 per minute for thirteen
+straight minutes:
+
+```
+T21:49 25   T21:53 30   T21:57 31
+T21:50 22   T21:54 20   T21:58 18
+T21:51 24   T21:55 24   T21:59 21
+T21:52 23   T21:56 25   T22:00 19
+```
+
+An earlier reading of these as "the normal startup state, once per market
+before its first book" was wrong -- that shape is a single burst, not a
+thirteen-minute plateau.
+
+**Spread across every market, not a subset.** Per-market counts ran 10 to 27
+across all 19-20 bound markets. A malformed-book cause would concentrate: the
+market stream drops books that fail to parse, and `streams.py` records that
+about one market in four publishes one. A roughly uniform spread points at a
+shared resource instead.
+
+**The stream is not at fault.** Zero WebSocket errors, zero
+`received market data for unsubscribed slug`, zero `quiet_book_rest_refresh`
+failures. The only other errors in the window were 12 transient
+`execution_state_unknown` and 8 `CommissioningUnavailable` for markets leaving
+pregame, both normal.
+
+**The arithmetic.** `rest_requests_per_second` is 4 and
+`assert_authorized` refuses anything higher. `_refresh_quiet_book_if_due`
+re-reads a market's book over REST once it is 3s old, and the reconciler
+refuses to plan on a book older than 5s.
+
+```
+20 markets / 3s  =  6.7 req/s wanted
+                    4.0 req/s available   (shared with contract refreshes,
+                                           whole-account reconciles, and
+                                           every order mutation)
+```
+
+Even if book refresh were the ONLY consumer, 20 markets at 4 req/s is one
+refresh per market per 5.0s -- exactly the stale limit. Markets therefore sit
+on the boundary permanently, which is precisely the observed signature: mild,
+constant, evenly spread staleness rather than a few broken markets.
+
+These were next-day pregame tennis books, which are quiet, so the WebSocket
+delivers little and REST is effectively the only source of a fresh book.
+
+**`max_markets = 20` was sized against capital, not against this.** Its comment
+reasons entirely about exposure -- "20 markets is $100 against the $340 cap".
+Nothing sized it against the REST budget needed to keep 20 books inside a 5s
+freshness window. Keeping N markets fresh needs about `N/3 <= 4`, so N <= 12
+with nothing left over, and realistically 8-10 once reconciles and mutations
+take their share.
+
+**Proven vs inferred.** Proven: the staleness rate, its spread, the absence of
+stream faults, the configured budget, and the refresh/stale thresholds.
+Inferred: that the limiter is actually saturated -- there is no request counter,
+so this is arithmetic plus a signature that fits, not a direct measurement.
+**The decisive test is to cut `max_markets` and watch `book_stale` fall.**
+
+**A diagnostic that exists but is invisible.** `MarketReadOnlyStream._dropped_books`
+and `_last_drop` are incremented and never read by anything -- the comment says
+"a rising number is visible without stopping the feed", but nothing surfaces
+them. That is why the malformed-book alternative had to be excluded by
+distribution rather than measured directly. Worth putting in the summary.

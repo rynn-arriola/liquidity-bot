@@ -235,6 +235,14 @@ class CommissioningRunner:
         self.kill_switch = MarketKillSwitch(self.executor, ledger)
         self.projector = PrivateLedgerProjector(ledger)
         self.gate = PrivateStateGate(max_silence_seconds=30)
+        # Set when `_open_streams_for_active_market` fails and leaves both
+        # stream attributes pointing at objects it has already closed. The run
+        # loop drives `_recover_bound_streams` until it clears. Without it the
+        # runner stays up holding closed streams with `gate.connected` false,
+        # every market reports `execution_state_unknown` forever, and nothing
+        # ever retries -- observed live 2026-08-16, 24 minutes of silent
+        # downtime before an operator noticed. See BUGFIXES 2026-08-16.
+        self._streams_need_rebind = False
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -2124,7 +2132,16 @@ class CommissioningRunner:
             self.gate.on_disconnect()
             await private.close()
             await market.close()
+            # Both attributes now point at closed streams, and the gate reads
+            # disconnected. Neither `_recover_private_stream` nor
+            # `_recover_market_stream` will fire on their own: those trigger
+            # when a `next_*` task RAISES, and reading a stream we closed
+            # deliberately never produced that exception -- the 2026-08-16
+            # session logged no `component=private_stream` line at all while
+            # stuck. The run loop must be told explicitly.
+            self._streams_need_rebind = True
             raise
+        self._streams_need_rebind = False
 
     def _reset_selected_market_observations(self, now: datetime) -> None:
         self._accrue_score(now)
@@ -2497,6 +2514,62 @@ class CommissioningRunner:
             except RuntimeInvariantViolation as invariant:
                 await self._report_runtime_error(
                     "market_stream_terminal", invariant)
+                return f"critical:{invariant.code}"
+            except Exception as recovery_exc:
+                exc = recovery_exc
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self.sleep(min(2 ** min(attempt - 1, 5), 30))
+
+    async def _recover_bound_streams(self, initial: Exception) -> str | None:
+        """Rebind both streams after a failed bind left them closed.
+
+        `_recover_private_stream` and `_recover_market_stream` each repair one
+        side and assume the other is healthy. A failed
+        `_open_streams_for_active_market` closes BOTH, so neither is usable and
+        the whole bind has to be redone -- which is exactly what that method
+        does, so this retries it rather than reimplementing the sequence.
+
+        Quarantines first, like both sibling recoveries. A top-up deliberately
+        leaves resting orders alone, so cancelling here gives up the reward
+        they were still accruing -- but the private stream is down, which means
+        a fill can land unseen, and quoting blind is the one thing the gate
+        exists to prevent. Reward lost on a rare bind failure is cheaper than
+        an unobserved position.
+        """
+
+        exc = initial
+        attempt = 0
+        await self.notifier.send_async(
+            "⚠️ Liquidity Bot lost both streams while rebinding the active "
+            "set. Quoting is stopped and no market can report state until "
+            "they are back. Retrying.")
+        while True:
+            attempt += 1
+            await self._report_runtime_error("bound_streams", exc, attempt)
+            try:
+                try:
+                    await self._refresh_balance(self._now())
+                except Exception as balance_exc:
+                    print(
+                        "[runtime-recovery] balance refresh failed: "
+                        f"{type(balance_exc).__name__}: {balance_exc}",
+                        flush=True,
+                    )
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self._quarantine_working_orders()
+                await self._open_streams_for_active_market()
+                await self.notifier.send_async(
+                    "✅ Liquidity Bot rebound both streams; REST and fresh "
+                    "private state passed. Quoting may resume.")
+                self._runtime_error_counts.pop("bound_streams", None)
+                return None
+            except RuntimeInvariantViolation as invariant:
+                await self._report_runtime_error(
+                    "bound_streams_terminal", invariant)
                 return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 exc = recovery_exc
@@ -3266,6 +3339,26 @@ class CommissioningRunner:
                 stop_reason = self._stop_reason(now) or ""
                 if stop_reason:
                     break
+                if self._streams_need_rebind:
+                    # Both `next_*` tasks are reading streams that are already
+                    # closed, so waiting on them below can only ever time out.
+                    # Drop them before rebinding: the recovery replaces both
+                    # stream objects, and a task holding the old one would
+                    # otherwise be recreated against a stream nobody owns.
+                    stream_tasks = (market_task, private_task)
+                    for task in stream_tasks:
+                        task.cancel()
+                    await asyncio.gather(*stream_tasks, return_exceptions=True)
+                    stop_reason = await self._recover_bound_streams(
+                        RuntimeError("stream bind left both streams closed")
+                    ) or ""
+                    if stop_reason:
+                        break
+                    market_task = asyncio.create_task(
+                        self.market_stream.next_book())
+                    private_task = asyncio.create_task(
+                        self.private_stream.next_event())
+                    continue
                 done, _ = await asyncio.wait(
                     {market_task, private_task}, timeout=.5,
                     return_when=asyncio.FIRST_COMPLETED)

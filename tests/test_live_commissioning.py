@@ -3794,6 +3794,97 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def _one_dead_slot(self, runner):
+        """Bind one pregame market and one that is past kickoff and flat."""
+
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        runner.state_for(held).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=2))
+        runner.state_for(dead).market = SimpleNamespace(
+            game_start=runner._now() - timedelta(minutes=45))
+        # Preconditions: exactly one slot is reclaimable, and no position is
+        # near its deadline -- so only the bind can decide the outcome.
+        self.assertFalse(runner._expired_and_flat(held, runner._now()))
+        self.assertTrue(runner._expired_and_flat(dead, runner._now()))
+        self.assertFalse(
+            runner._position_near_its_flatten_deadline(runner._now()))
+        return held, dead
+
+    async def test_a_failed_bind_marks_the_streams_for_rebind(self):
+        """The 2026-08-16 hang: a failed top-up bind left the runner alive
+        holding two closed streams and a disconnected gate, and nothing ever
+        retried. Every market reported `execution_state_unknown` for 24
+        minutes. The flag is what lets the run loop notice."""
+
+        runner = await self.armed(replacements=("market-three",))
+        await self._one_dead_slot(runner)
+
+        async def timed_out():
+            raise TimeoutError()
+
+        runner._wait_for_initial_private_state = timed_out
+        # Precondition: nothing is asking for a rebind before the failure.
+        self.assertFalse(runner._streams_need_rebind)
+
+        with self.assertRaises(TimeoutError):
+            await runner._top_up_active_markets(runner._now())
+
+        # The gate is down, which is correct and is why no market can quote.
+        self.assertFalse(runner.gate.connected)
+        # ...and this is the part that was missing: a standing request to
+        # rebind, so the loop does not sit in the quarantine loop forever.
+        self.assertTrue(runner._streams_need_rebind)
+
+    async def test_a_successful_bind_clears_the_rebind_request(self):
+        """Otherwise the loop would rebind on every single pass."""
+
+        runner = await self.armed(replacements=("market-three",))
+        runner._streams_need_rebind = True
+
+        await runner._open_streams_for_active_market()
+
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertTrue(runner.gate.connected)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_recovery_rebinds_both_streams_and_resumes(self):
+        """`_recover_bound_streams` must fix BOTH sides. The two existing
+        recoveries each repair one and assume the other is healthy, which is
+        exactly the assumption a failed bind breaks."""
+
+        runner = await self.armed(replacements=("market-three",))
+        await self._one_dead_slot(runner)
+
+        failures = []
+
+        async def timed_out():
+            failures.append(1)
+            raise TimeoutError()
+
+        original = runner._wait_for_initial_private_state
+        runner._wait_for_initial_private_state = timed_out
+        with self.assertRaises(TimeoutError):
+            await runner._top_up_active_markets(runner._now())
+        self.assertTrue(runner._streams_need_rebind)
+
+        # The venue comes back.
+        runner._wait_for_initial_private_state = original
+        stop = await runner._recover_bound_streams(RuntimeError("bind failed"))
+
+        self.assertIsNone(stop)
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertTrue(runner.gate.connected)
+        # Fresh objects, not the closed ones it was holding.
+        self.assertTrue(runner.private_stream.started)
+        self.assertFalse(runner.private_stream.closed)
+        self.assertTrue(runner.market_stream.started)
+        self.assertFalse(runner.market_stream.closed)
+        self.assertEqual(len(failures), 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_top_up_defers_while_inventory_nears_its_flatten_deadline(self):
         """A scan is deferrable; a missed pre-kickoff flatten is not."""
 

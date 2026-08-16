@@ -29,6 +29,107 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-16
+
+### A failed top-up leaves the gate disconnected forever and the bot never quotes again
+
+Observed live 2026-08-16 15:37Z on `efbd332`. Fixed same day.
+
+**Symptom:** the process stays up and healthy-looking — supervisor and runner
+both alive, REST still working, account flat — but it places **nothing**, for
+hours. `scripts/status_commissioning.sh` shows a runner pid and the log is an
+endless two-line loop, one pair every ~7s, across *every* active market:
+
+```
+[runtime-recovery] component=strategy_state:<slug> attempt=N error=AdapterError: execution_state_unknown
+[quarantine] called_by=_recover_strategy_state:2554
+```
+
+The tell that separates it from the §6g churn: **`book_stale` stops appearing
+entirely** at the moment it starts. `Reconciler.plan()` tests `state_known`
+*before* book age, so once the gate is dead the book check is never reached.
+On this run: 997 `book_stale` between 15:07 and 15:36, then zero, and 144
+`execution_state_unknown` from 15:38 onward with no `[action]` line after
+15:36:31.
+
+**Mechanism:** `_top_up_active_markets` ends with
+`await self._open_streams_for_active_market()`. That method reassigns
+`self.private_stream`/`self.market_stream` to the new objects, calls
+`gate.on_connect()`, and then may raise from `_wait_for_initial_private_state`
+(15s timeout). Its `except` runs `gate.on_disconnect()`, closes both streams,
+and re-raises. The caller catches it as a plain runtime error:
+
+```python
+except Exception as exc:
+    await self._report_runtime_error("market_top_up", exc)
+    next_selection = self._now() + timedelta(seconds=60)
+```
+
+— logs it, backs off, and **continues the run loop**. The runner is now left
+holding closed stream objects with `gate.connected = False`, and nothing ever
+sets it back. `gate.ready()` is account-wide on `connected`, so *every* market
+reports `execution_state_unknown` forever.
+
+`_recover_private_stream` is the path that would fix this, and it does call
+`gate.on_connect()` — but it only fires when the private stream task *raises*
+in the run loop. Reading the already-closed stream never produced that
+exception: there is not one `component=private_stream` line in the whole
+session's log. The supervisor cannot help either, because the process never
+exits.
+
+Confirmed at 15:37:42Z: `component=market_top_up attempt=1 error=TimeoutError:`
+(bare, no message — the asyncio timeout), 21s after the `[top-up]` line at
+15:37:21Z, which is `_rest_reconcile` plus the 15s private-state wait.
+
+**Ruled out** — do not re-chase these:
+
+- *Unresolved intents (§6g again).* All 12,052 rows in `execution_intents` are
+  `RECONCILED`.
+- *Unowned `venue:` orders*, the one genuinely account-wide test left in
+  `risk_state_known()`. Zero rows in any working state.
+- *A stuck `UNKNOWN_ABSENT` order.* There is exactly one
+  (`BXFF5TKQGDK5`, `aec-itfwo-annlaz-frapar-2026-08-16`, absent since
+  15:33:50Z), but that test is scoped by `market_slug` and that market was
+  released by the same top-up. It cannot explain the other 19.
+- *A dead stream reader.* `fd=15` held a 39,772-byte `Recv-Q` backlog on first
+  look, which looks exactly like a stalled consumer — it drained to 0 within
+  three seconds. Those sockets are the REST client, still working.
+
+**Cost:** no capital lost — the account was flat with zero open orders
+throughout, and every order from the 15:07 cohort had already been cancelled by
+15:36. The cost is pure downtime: reward accrues only for resting, and the bot
+rested nothing for the entire window.
+
+**Fix:** a failed bind now leaves a standing request to rebind, and the run
+loop honours it.
+
+- `_open_streams_for_active_market` sets `self._streams_need_rebind = True` on
+  its failure path and clears it on success. The rotation path composes
+  correctly for free: when its first bind fails and the *restore* bind then
+  succeeds, the flag ends up cleared, which is right — the streams really are
+  healthy again.
+- The run loop checks the flag at the top of each pass, before `asyncio.wait`.
+  Waiting on closed streams can only time out, so it cancels both `next_*`
+  tasks, recovers, and recreates them against the new stream objects.
+- `_recover_bound_streams` is the new recovery. The two existing ones each
+  repair a single side and assume the other is healthy — precisely the
+  assumption a failed bind breaks — so this one retries the whole bind, with
+  the same backoff, quarantine-first and stop-reason checks as its siblings.
+  It also sends a Discord alert on entry, so the next occurrence is not silent.
+
+Note the deliberate cost: it quarantines before rebinding, so a failed top-up
+now cancels resting orders that the top-up path was specifically designed to
+leave alone. That is the right trade — with the private stream down a fill can
+land unseen, and quoting blind is what the gate exists to prevent.
+
+Regression tests in `TopUpSafetyTests`:
+`test_a_failed_bind_marks_the_streams_for_rebind`,
+`test_a_successful_bind_clears_the_rebind_request`,
+`test_recovery_rebinds_both_streams_and_resumes`. Mutation-checked — flipping
+the flag to `False` on the failure path fails two of the three.
+
+---
+
 ## 2026-08-15
 
 ### Market selection ranked on a field that ties everywhere

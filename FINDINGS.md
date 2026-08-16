@@ -1192,3 +1192,43 @@ Corollary, and the reason a window alone is not sufficient: sports markets kick
 off in **synchronized slates**, so a whole slate of markets can retire within
 minutes of each other with nothing wrong. Any burst detector must exclude
 markets whose `game_start` has passed, or the morning slate reads as a cascade.
+
+## `book_stale` is self-perpetuating, and REST contention is not the cause
+
+Measured 2026-08-16 across a 7h09m session, 7,535 `book_stale` events.
+
+The obvious theory was REST starvation: the refresh trigger is 3s
+(`live_commissioning.py:1506`), the stale threshold is 5s
+(`reconciler.py:258`), and 20 markets needing a refresh every 3s is 6.67 req/s
+against a hard 4 req/s cap. **That theory is wrong.** Tested against the data:
+
+```
+hour | markets quoting | book_stale | per market
+ 00  |      19         |    411     |    21
+ 02  |       8         |    395     |    49
+ 04  |       6         |    251     |    41
+ 05  |       6         |    290     |    48
+```
+
+Staleness is flat regardless of load, and per-market staleness *rises* as
+markets drop. Contention would show the opposite. The market stream was also
+healthy the whole session -- all 10 `component=market_stream` errors in the log
+are from 2026-08-14 -- and zero books were dropped.
+
+**The actual mechanism is the recovery path feeding itself.** `plan()` returns
+`book_stale` BEFORE anything else, then `_handle_strategy_critical` refreshes
+the book and returns, and the caller applies `_recovery_delay` -- exponential
+backoff to a 30s cap. So the refresh is immediately followed by a wait longer
+than the 5s freshness budget it just satisfied. Measured interval between
+consecutive `book_stale` events on one market: **34-75s, clustered at 45-60s.**
+Every visit fails, refreshes, backs off, and expires the refresh before the
+next visit. The refresh is always wasted work.
+
+This burns exactly the quiet markets -- which are the ones with the least
+competition for reward share, since reward is paid for RESTING and not for
+trading. The 5-second budget assumes a continuously-updating book; an illiquid
+market legitimately has nothing to send, and being quiet is not being wrong.
+
+**Not yet fixed.** Candidate fixes: re-plan immediately after a successful
+refresh instead of returning; or exempt `book_stale` from exponential backoff,
+since it is not an escalating fault.

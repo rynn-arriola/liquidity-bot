@@ -19,11 +19,17 @@ These are implementation requirements, not suggestions.
 10. Unknown order, fill, position, book, or incentive state fails closed for new risk.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
-13. Commissioning is pregame only, uses one exclusively held API key with
-    maker-lab stopped, and is hard-locked to one contract per quote across at
-    most eight concurrently bound markets. Eight is the measured private
-    WebSocket ceiling (invariant 57), not a preference. Raising either limit is
-    a separate authorization.
+13. Commissioning is pregame only and uses one exclusively held API key with
+    maker-lab stopped. Size and breadth are **5 contracts per quote across at
+    most 20 concurrently bound markets** (corrected 2026-08-16; this read one
+    contract and eight markets). Both are enforced by `CommissioningConfig`,
+    which refuses to arm if they are changed, so raising either remains a
+    deliberate authorization rather than a config edit.
+
+    The old "eight is the measured WebSocket ceiling" reasoning is retained in
+    invariant 57 but was **disproved** -- 29 subscriptions were later sustained
+    (FINDINGS section 9). Eight was a real measurement of one connection's
+    cap, not of the account's.
 14. `cancel-all` and account-wide close operations are forbidden on a shared account.
 15. A realized-P&L breaker does not replace open-exposure and worst-case-loss limits.
 16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its per-market loss and slippage budgets.
@@ -48,10 +54,14 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. Losses are stopped at a single $30 threshold. The $35 hard stop exists only
-    because the emergency ceiling must sit above the normal stop, and is
-    measured on marked account equity (`currentBalance` plus `assetNotional`).
-    Buying power is never treated as P&L or marked equity.
+25. Losses are stopped at a single **$40** threshold -- `max_market_loss_usd`
+    and `max_session_loss_usd` both sit there so exactly one can fire. The
+    **$45** hard stop exists only because the emergency ceiling must sit above
+    the normal stop, and is measured on marked account equity
+    (`currentBalance` plus `assetNotional`). Buying power is never treated as
+    P&L or marked equity. (Corrected 2026-08-16: this read $30/$35, which had
+    not been true for some time. Verified against `CommissioningConfig`, which
+    validates both at startup and refuses to arm if changed.)
 26. A restart may mutate only persisted, identified orders/positions in one
     ledger-selected recovery market, and then only to recover flat. Unowned or cross-market
     state refuses without mutation.
@@ -182,8 +192,15 @@ These are implementation requirements, not suggestions.
     disabled its forced exit on the same holding-is-cheaper evidence and the
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
-57. Commissioning quotes at most eight markets at once and one contract per
-    quote. Eight is measured, not chosen: the private WebSocket accepts 10
+57. **Superseded 2026-08-16 — kept because it was used as grounds not to
+    investigate.** The live limits are 20 markets and 5 contracts per quote
+    (invariant 13). The per-connection reasoning below is still correct; what
+    was wrong is treating one connection's cap as the account's. Connections
+    are independent and each carries its own quota, and 29 subscriptions were
+    later sustained (FINDINGS section 9).
+
+    ~~Commissioning quotes at most eight markets at once and one contract per
+    quote.~~ Eight is measured, not chosen: the private WebSocket accepts 10
     subscriptions per connection, and positions must be scoped one market per
     subscription because `positionSubscription` omits `marketSlug`. Orders ride
     a single subscription carrying every bound slug, because order events

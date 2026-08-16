@@ -32,9 +32,27 @@ The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a non-scalable commissioning process. It joins the active sports
 catalog to reward programs and binds a single executor to one selected market at
-a time. It remains hard-locked to exactly one contract per quote, a 30-second inventory
-age, a $2 market stop, a $5 session stop, a $15 emergency hard stop, and an
-operator-controlled graceful stop. Live entry is nevertheless fail-closed: a
+a time. The operative limits, **as configured and running** (verified against
+`CommissioningConfig` and the live command line 2026-08-16 — the runner takes no
+config overrides, so the dataclass defaults are what execute):
+
+| limit | value |
+|---|---|
+| quote size | 5 contracts |
+| concurrently bound markets | 20 |
+| market loss stop | $40 |
+| session loss stop | $40 |
+| emergency hard stop | $45 marked equity |
+| inventory age before a forced exit | 900s |
+| pre-kickoff flatten deadline | 300s |
+| early-exit cross cap | $4 |
+| REST budget | 4 requests/second |
+
+Plus an operator-controlled graceful stop. **These numbers have moved several
+times and older prose elsewhere in this repo still quotes superseded ones** —
+one contract, eight markets, a 30-second inventory age, and $2/$5/$15 or
+$30/$35 stops are all stale. `commissioning.py` is the only authority; it
+validates these values at startup and refuses to arm if they are changed. Live entry is nevertheless fail-closed: a
 venue-eligible side must also pass a book-competition reward projection, a 50%
 reward haircut, and a 2x probability-weighted stressed-exit-cost margin. The
 $1 venue payout floor is aggregate reporting policy and never a per-market

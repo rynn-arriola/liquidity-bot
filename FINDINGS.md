@@ -1593,3 +1593,63 @@ that section explicitly distinguishes.
 above). That measurement stands -- it is timestamps, not inference -- but its
 cause is NOT REST contention and is not yet established. Do not attach it to
 this theory.
+
+## The docs disagreed with the running config on four safety numbers
+
+Audited 2026-08-16 from a second machine reading only the markdown, then
+resolved against `CommissioningConfig` and the live command line.
+
+**The runner takes no config overrides.** Its command line is
+`--auto-select-rewards --database --lock-file --arm-live
+--accept-one-contract-risk --exclusive-api-key --maker-lab-stopped` -- not one
+of which sets a limit. So the dataclass defaults in `commissioning.py` ARE what
+executes, and it is the only authority.
+
+```
+quote_size                       5
+max_markets                      20
+max_market_loss_usd              40
+max_session_loss_usd             40
+hard_stop_loss_usd               45
+max_inventory_age_seconds        900
+force_exit_before_start_seconds  300
+max_early_exit_loss_usd          4
+rest_requests_per_second         4
+```
+
+What the prose said instead:
+
+| | claimed | live |
+|---|---|---|
+| loss stops | $2/$5/$15 (README, COMMISSIONING, PHASE5, SCALE_REVIEW); $30/$35 (invariant 25) | **40/40/45** |
+| quote size | 1 contract (README, invariants 13/57) | **5** |
+| max_markets | 8 (README, invariants 13/57, NEXT item 5) | **20** |
+| inventory age | 30s (README, SCALE_REVIEW, COMMISSIONING) | **900s** |
+
+Even the shorthand used throughout FINDINGS, NEXT and BUGFIXES -- "the $40
+stop" -- is incomplete: the emergency ceiling is $45, not $40.
+
+**Why this matters more than a typo.** Three of the four are risk limits. A
+reader reasoning from "a $2 market stop" and "one contract" concludes the
+downside is bounded at pocket change, when the live configuration risks 5
+contracts across 20 markets against a $40 stop. Every one of those documents
+reads as authoritative and none carried a date.
+
+**The trap that produced it:** the numbers moved (1 -> 5 contracts, 8 -> 30 ->
+16 -> 20 markets, 30s -> 900s, and the stops repeatedly), and each move updated
+the code plus the file being worked in, never the rest. Nothing cross-checked
+prose against config.
+
+`README.md` and invariants 13, 25 and 57 are corrected. Invariant 57 keeps its
+superseded text struck through rather than deleted, per the WATCHLIST rule --
+"eight is measured, not chosen" was used as grounds not to investigate raising
+it, and deleting the claim would hide why the ceiling stood for so long.
+
+**Not yet corrected**, all still carrying stale numbers: `COMMISSIONING.md`,
+`PHASE5_ACCEPTANCE.md`, `SCALE_REVIEW.md`, and NEXT item 5. Also open: FINDINGS
+has **duplicate section numbers** -- two each of 10, 12 and 13 -- while other
+documents cite findings by number and WATCHLIST graduates entries "to FINDINGS
+with the number that decided it". Those citations are ambiguous.
+
+**Rule going forward:** a safety number in prose is a copy, not a source. Cite
+`commissioning.py` or quote the value with the date it was verified.

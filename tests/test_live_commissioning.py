@@ -3699,3 +3699,54 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarketTopUpTests(unittest.IsolatedAsyncioTestCase):
+    """Reclaim slots held by kicked-off markets without disturbing the rest."""
+
+    build_runner = LiveCommissioningTests.build_runner
+
+    async def test_a_kicked_off_flat_market_is_releasable(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.market = SimpleNamespace(
+            game_start=runner._now() - timedelta(minutes=45))
+
+        # Exactly the 2026-08-16 state: four markets 45 minutes past kickoff,
+        # still serviced every ~70s, never quotable again.
+        self.assertTrue(runner._expired_and_flat(slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_kicked_off_market_holding_a_position_is_never_released(self):
+        """Releasing it would strand the position with nothing working its exit."""
+
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.market = SimpleNamespace(
+            game_start=runner._now() - timedelta(minutes=45))
+        runner.ledger.apply_position_event(
+            "ws", "held-past-kickoff",
+            PositionState(slug, Decimal("5"), runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._expired_and_flat(slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_market_before_kickoff_is_never_released(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.state_for(slug).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=2))
+
+        self.assertFalse(runner._expired_and_flat(slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()

@@ -2157,6 +2157,85 @@ class CommissioningRunner:
                 return False
         return True
 
+    def _expired_and_flat(self, slug: str, now: datetime) -> bool:
+        """True when a market can never quote again and holds nothing.
+
+        A market whose game has started is finished: the selector drops it from
+        the opportunity set, so it can never be quoted again, but the runner
+        kept servicing it -- one book refresh every ~70 seconds, forever.
+
+        Flatness is required, and it is the whole reason this is separate from
+        the rotation blockers. A started market still HOLDING inventory must
+        stay in the active set, because that is the exit path; releasing it
+        would strand the position with nothing working its exit.
+        """
+
+        if not self._retired_past_kickoff(slug, now):
+            return False
+        return (self.ledger.position(slug) == 0
+                and not self.ledger.working_orders(slug)
+                and not any(str(row["market_slug"]) == slug
+                            for row in self.ledger.unresolved_intents()))
+
+    async def _top_up_active_markets(self, now: datetime) -> bool:
+        """Replace kicked-off markets without disturbing the ones still resting.
+
+        Full rotation requires a whole-account flat state (`_rotation_blockers`,
+        `_discovery_is_free`) because it quarantines every resting order and
+        rebinds from scratch. With twenty markets something is almost always
+        resting, so that condition is essentially never met: measured
+        2026-08-16, rotation ran exactly twice, both at startup, and the active
+        set stayed frozen while markets kicked off one by one. Coverage decayed
+        19 -> 11 -> 8 -> 7 -> 6 across the previous session for this reason as
+        much as for the retirement ban.
+
+        This path is deliberately narrower. It releases ONLY markets that are
+        past kickoff and flat, keeps every other market and its resting orders
+        exactly where they are, and never quarantines. Streams are restarted
+        because they cannot subscribe incrementally, but a stream restart does
+        not touch resting orders -- those live on the venue and keep earning
+        through it. That is the whole difference from full rotation, which
+        cancels them.
+        """
+
+        if not self.config.auto_select_reward_markets:
+            return False
+        if self.reward_selector is None:
+            return False
+        expired = [slug for slug in self.active_slugs
+                   if self._expired_and_flat(slug, now)]
+        if not expired:
+            return False
+        keep = tuple(slug for slug in self.active_slugs if slug not in expired)
+        scan_started = time.monotonic()
+        try:
+            selection = await self.reward_selector.select(now=self._now())
+        finally:
+            self._selection_scan_seconds_last = time.monotonic() - scan_started
+        self._market_selection = selection
+        self._market_selection_observed_at = self._now()
+        free = self.config.max_markets - len(keep)
+        exclude = self._barred_slugs() | set(keep) | set(expired)
+        replacements = tuple(
+            item.market.slug
+            for item in selection.top_viable(self.config.max_markets,
+                                             exclude=exclude))[:free]
+        print(
+            f"[top-up] at={self._now().isoformat()} "
+            f"released={len(expired)} kept={len(keep)} "
+            f"added={len(replacements)} free_slots={free} "
+            f"released_slugs={','.join(sorted(expired))}",
+            flush=True,
+        )
+        if not replacements:
+            # Still worth releasing: a dead market costs a REST refresh every
+            # service cycle and reports `book_stale` every time.
+            self._bind_markets(keep)
+        else:
+            self._bind_markets(keep + replacements)
+        await self._open_streams_for_active_market()
+        return True
+
     async def _rotate_reward_market(self, now: datetime) -> bool:
         transition_started = time.monotonic()
         try:
@@ -3212,6 +3291,37 @@ class CommissioningRunner:
                 stop_reason = self._stop_reason(now) or ""
                 if stop_reason:
                     break
+                # A full rotation needs a whole-account flat state, which with
+                # twenty markets almost never happens -- measured 2026-08-16,
+                # it ran twice, both at startup, while markets kicked off and
+                # were never replaced. When it cannot run, still reclaim the
+                # slots held by markets that have kicked off and are flat.
+                # That path keeps every resting order where it is.
+                if (self.config.auto_select_reward_markets
+                        and now >= next_selection
+                        and not self._safe_to_scan()
+                        and any(self._expired_and_flat(slug, now)
+                                for slug in self.active_slugs)):
+                    stream_tasks = (market_task, private_task)
+                    for task in stream_tasks:
+                        task.cancel()
+                    await asyncio.gather(
+                        *stream_tasks, return_exceptions=True)
+                    try:
+                        await self._top_up_active_markets(now)
+                        next_selection = self._now() + timedelta(
+                            seconds=self.config.market_selection_refresh_seconds)
+                    except Exception as exc:
+                        await self._report_runtime_error(
+                            "market_top_up", exc)
+                    market_task = asyncio.create_task(
+                        self.market_stream.next_book())
+                    private_task = asyncio.create_task(
+                        self.private_stream.next_event())
+                    now = self._now()
+                    next_book_refresh = now + timedelta(seconds=3)
+                    next_contract_refresh = now + timedelta(minutes=1)
+                    continue
                 if (self.config.auto_select_reward_markets
                         and now >= next_selection
                         and self._safe_to_scan()):

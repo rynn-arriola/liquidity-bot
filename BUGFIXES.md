@@ -576,3 +576,47 @@ WATCHLIST.
 **Coverage:** three tests, mutation-verified. Restoring the `now < game_start`
 gate fails both the "opens nothing inside the window" and "withdraws at the
 deadline" cases.
+
+### The active set froze at startup and decayed all day — `PENDING`
+
+**Symptom:** measured 2026-08-16 14:45 UTC. Of 19 markets serviced in a
+20-minute window only 7 took any action, 4 got placements, and 5 held a resting
+order — while **26 viable candidates sat unselected**. Four of the idle markets
+had kicked off **45 minutes earlier** and were still being serviced, one book
+refresh each per ~70 seconds, forever.
+
+**Mechanism:** rotation is gated on `_rotation_blockers()` and
+`_discovery_is_free()`, both of which require a **whole-account** flat state —
+no working orders anywhere. Full rotation quarantines every resting order and
+rebinds from scratch, so that gate is correct *for that operation*. But with
+twenty markets something is almost always resting, so the gate is essentially
+never satisfied. **Rotation ran exactly twice this session, both at startup**
+(two distinct `scan_seconds` values across 13 summaries, then nothing). The set
+was frozen from boot while its markets kicked off one at a time.
+
+This is a second, independent cause of the 19 → 11 → 8 → 7 → 6 decay measured
+the previous session, which was attributed solely to the retirement ban list.
+The ban was real, but even with it fixed the set cannot refresh. It also
+explains much of the post-fix `book_stale` volume (~2,190/hour): a live game's
+book does not update in the pregame feed, so every service cycle on a dead
+market reports stale.
+
+Note what the earlier fixes did and did not do. The cooldown stopped kicked-off
+markets being *fatal*, and `_retired_past_kickoff` stopped them counting as a
+*fault*. Neither makes the **slot get reused**.
+
+**Fix:** `_top_up_active_markets`, a narrower path than rotation. It releases
+only markets that are past kickoff **and** flat, keeps every other market and
+its resting orders untouched, and never quarantines. Streams restart because
+they cannot subscribe incrementally, but a stream restart does not cancel
+resting orders — those live on the venue and keep earning through it. That is
+the whole difference from full rotation. It runs when the periodic selection is
+due and full rotation is blocked.
+
+**The safety property:** a started market still HOLDING inventory is never
+released, because that is its exit path and releasing it would strand the
+position with nothing working the exit.
+
+**Coverage:** three tests, both guards mutation-verified. Removing the flatness
+check fails the held-position case; removing the kickoff check fails the
+pre-kickoff case.

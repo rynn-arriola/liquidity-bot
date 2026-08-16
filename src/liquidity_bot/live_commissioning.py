@@ -248,8 +248,9 @@ class CommissioningRunner:
         self._retired_ever: set[str] = set()
         # slug -> the moment its retirement stops barring it.
         self._retired_until: dict[str, datetime] = {}
-        # Bound by recovery to be exited, not retired for a fault. Held in
-        # `_retired_ever` too, so they never quote and are never reselected.
+        # Bound by recovery to be exited, not retired for a fault. Barred for
+        # the whole session by `_barred_slugs`, never on a cooldown: their
+        # games have already started, so they can never become quotable again.
         self._recovery_slugs: set[str] = set()
         self._active_market_slugs: tuple[str, ...] = (
             () if config.auto_select_reward_markets
@@ -880,8 +881,9 @@ class CommissioningRunner:
                 # Recovery exists to get out, never to quote. Marking these
                 # retired up front lets the pregame and incentive gates be
                 # skipped when loading them (see _refresh_contracts for_exit)
-                # with no risk of building on a market that has started: a
-                # retired market is barred from quoting for the whole session,
+                # with no risk of building on a market that has started:
+                # `_recovery_slugs` is barred from quoting for the whole
+                # session -- the one bar that did NOT become a cooldown --
                 # while the reconciler keeps planning its exit.
                 for slug in recovery_slugs:
                     self._retired_ever.add(slug)
@@ -892,7 +894,11 @@ class CommissioningRunner:
         # The primary must prove out; the rest are best effort. Requiring all
         # eight would let one unlucky market block startup entirely, and
         # startup failure is the most expensive kind -- nothing quotes at all.
-        recovering = set(self._retired_ever) & set(self.active_slugs)
+        # `_recovery_slugs`, not `_retired_ever`. They are equal here -- at
+        # startup nothing else has retired yet -- but `_retired_ever` is a
+        # reporting set that now outlives the bar it used to imply, and a
+        # control decision must not read from it.
+        recovering = set(self._recovery_slugs) & set(self.active_slugs)
         primary = self.active_slugs[0] if self.active_slugs else None
         await self._refresh_contracts(
             now, for_exit=primary is not None and primary in recovering)
@@ -2578,8 +2584,12 @@ class CommissioningRunner:
         retired = self._retired.get(slug)
         if retired is None:
             return
+        # One clock read. Calling `_now()` on both sides compares two different
+        # instants, so the comparison depended on how far the clock advanced
+        # between them rather than on the cooldown.
+        moment = self._now()
         if (str(retired.reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES)
-                and self._retired_until.get(slug, self._now()) > self._now()):
+                and self._retired_until.get(slug, moment) > moment):
             return
         if self.ledger.position(slug) != 0:
             return

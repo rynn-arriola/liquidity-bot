@@ -97,12 +97,31 @@ Regression test: `test_a_one_sided_book_does_not_take_the_runner_down`.
 Mutation-checked — disabling the guard reproduces
 `ValueError: max() iterable argument is empty` exactly.
 
-**Not fixed, and worth a decision:** any uncaught exception anywhere in
-`_service_market_state` still ends the session, and if a position is parked at
-that moment the bot stays down until a human intervenes. A per-market guard
-that retires the offending market instead of killing the runner would have made
-this a non-event. See the "up but quoting nothing" alarm in FINDINGS — same
-theme: the failures that cost the most are the ones nothing announces.
+**Second fix, same day: the blast radius.** The one-sided book was the trigger;
+the reason it cost 79 minutes is that *any* exception in servicing ended the
+session. `_plan_and_apply` already retires a market whose `reconciler.plan`
+raises, precisely so one market cannot stop the others — but that guard sat
+only around the `plan` call, and everything servicing does *around* it was
+unprotected. `_evaluate_rewards` is one of those, which is how a book with no
+bids reached the top of the run loop.
+
+The servicing loop now lives in `_service_bound_markets`, which gives every
+market the treatment planning already had: report, retire, keep going.
+Retirement stays bounded — ten rounds per market, and a full slate of
+retirements still stops the session — so a local defect is absorbed while a
+systemic one still surfaces. `RuntimeInvariantViolation` is deliberately NOT
+absorbed: an ownership violation or a loss stop is about the process, not the
+market, and remains terminal.
+
+Tests: `test_a_servicing_failure_retires_one_market_not_the_session` and
+`test_a_runtime_invariant_still_stops_the_session` — the second exists so the
+guard can never be widened into swallowing a safety event. Mutation-checked:
+narrowing the `except` reproduces the original crash.
+
+**Still not fixed:** nothing alarms when the process is up and resting nothing.
+Both of today's outages were invisible until someone looked. Same theme as the
+"up but quoting nothing" alarm in FINDINGS — the failures that cost the most
+are the ones nothing announces.
 
 ---
 

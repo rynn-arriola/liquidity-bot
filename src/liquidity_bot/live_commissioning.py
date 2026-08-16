@@ -1828,6 +1828,43 @@ class CommissioningRunner:
             return None, self._recovery_delay(f"action_driver:{slug}")
         return None, 0.0
 
+    async def _service_bound_markets(self) -> str:
+        """Visit every bound market, surviving any one of them failing.
+
+        Serviced, not merely selected: a market holding risk must keep being
+        visited after selection moves on, or its exit is never planned.
+
+        Returns a stop reason, or "" to keep running. A market that raises is
+        reported and retired rather than allowed to end the session -- the same
+        treatment `_plan_and_apply` already gives a planning failure. That
+        guard sat only around `reconciler.plan`, so anything raising in the
+        servicing steps AROUND it escaped. `_evaluate_rewards` did exactly that
+        on 2026-08-16T19:01Z with a book whose bids had all been pulled: the
+        runner died, shutdown parked a live position rather than cross at a
+        loss, and being unable to prove flat the supervisor refused to restart.
+        79 minutes down, and nineteen healthy markets taken along with the one
+        that broke.
+
+        Absorbing a local defect is not the same as hiding a systemic one.
+        Retirement is bounded at ten rounds per market, and a full slate of
+        retirements still stops the session, so a fault in every market still
+        surfaces as one.
+        """
+
+        for slug in self.managed_slugs():
+            try:
+                await self._service_market_state(slug, self._now())
+            except RuntimeInvariantViolation as invariant:
+                # About the process, not this market. Stays terminal.
+                return await self._handle_strategy_plan_failure(invariant)
+            except Exception as exc:
+                await self._report_runtime_error(f"market_service:{slug}", exc)
+                stop = await self._retire_market(
+                    slug, f"service_failed_{type(exc).__name__}")
+                if stop:
+                    return stop
+        return ""
+
     async def _service_market_state(self, slug: str, now: datetime) -> None:
         """Bring one market's contracts, book and economics up to date.
 
@@ -3490,15 +3527,8 @@ class CommissioningRunner:
                 # Service every bound market on its own cadence. Keep this
                 # last among periodic REST work so account latency cannot age a
                 # book before the decisions below.
-                try:
-                    # Serviced, not merely selected. A market holding risk must
-                    # keep being visited even after selection moves on, or its
-                    # exit is never planned.
-                    for slug in self.managed_slugs():
-                        await self._service_market_state(slug, self._now())
-                except RuntimeInvariantViolation as invariant:
-                    stop_reason = await self._handle_strategy_plan_failure(
-                        invariant)
+                stop_reason = await self._service_bound_markets()
+                if stop_reason:
                     break
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""

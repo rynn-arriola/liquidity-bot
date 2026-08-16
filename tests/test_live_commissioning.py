@@ -938,6 +938,63 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._is_barred_from_quoting("market-one"))
         self.assertFalse(runner._is_barred_from_quoting("market-two"))
 
+    async def test_a_servicing_failure_retires_one_market_not_the_session(self):
+        """The 2026-08-16T19:01Z crash, as a test.
+
+        The guard sat only around `reconciler.plan`. `_evaluate_rewards` runs
+        in the servicing steps AROUND that call, so when it raised on a book
+        with every bid pulled the exception escaped and ended the session --
+        taking nineteen healthy markets with it, parking a live position, and
+        leaving the supervisor unable to restart because flat could not be
+        proven. 79 minutes down for a fault in one market.
+        """
+
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one", "market-two"])
+        serviced = []
+        original = runner._service_market_state
+
+        async def explode(slug, now):
+            serviced.append(slug)
+            if slug == "market-one":
+                raise ValueError("max() iterable argument is empty")
+            return await original(slug, now)
+
+        runner._service_market_state = explode
+
+        stop = await runner._service_bound_markets()
+
+        self.assertEqual(stop, "", "one market must not stop the session")
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertFalse(runner._is_barred_from_quoting("market-two"))
+        # The healthy market was still visited, not skipped by the failure.
+        self.assertIn("market-two", serviced)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_runtime_invariant_still_stops_the_session(self):
+        """Absorbing a local defect must not absorb a safety violation."""
+
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")), clock=TickingClock())
+        runner._bind_markets(["market-one", "market-two"])
+
+        async def violate(slug, now):
+            raise RuntimeInvariantViolation(
+                "unowned_working_order", "someone else is on our key")
+
+        runner._service_market_state = violate
+
+        stop = await runner._service_bound_markets()
+
+        self.assertTrue(stop, "an invariant violation must remain terminal")
+        self.assertIn("unowned_working_order", stop)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_quarantine_scoped_to_one_market_spares_the_others(self):
         """One market's fault must not cancel seven healthy quotes.
 

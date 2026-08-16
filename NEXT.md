@@ -15,19 +15,88 @@ realized_pnl() = -2.70    <-- noise, not P&L
 opening sell of 5 @ 0.65 was recorded as $3.25 of proceeds and the buy-back at
 0.96 was never recorded at all, so a loss reads as a profit.
 
-Every trade in that table is one-sided. Two causes, fix together:
+Every trade in that table is one-sided. Causes, fix together:
 
 1. **Closing fills from IOC exits never reach `execution_fills`.** The 06:22Z
    shutdown flatten executed at the venue (confirmed in
    `portfolio.activities`) and left no fill row.
 2. **Recorded fills sit in two price frames.** `SELL_*` intents are read by the
    venue at `1 - price`, so even a complete pair can compute wrong.
+3. **There is no settlements table at all** (added 2026-08-16). The ledger has
+   intents, events, orders, fills, positions, position_reconciliations and
+   reward_earnings -- nowhere to record a payout. maker-lab had
+   `settlements(pnl)`. Every position that resolves is therefore booked as a
+   total loss of its entry cost regardless of outcome.
+4. **A manual close produces this by construction** (added 2026-08-16). It
+   carries no bot client-order-id, so `fetch_executions` cannot attribute it.
+   Confirmed on `melolh-kololh`: bot bought 5 @ 0.28, operator closed by hand,
+   ledger reads -1.39 on a position that is flat.
 
-**Why it is first:** this is the only automated protection on live capital, and
-it is currently unreliable in *both* directions -- a fake profit masks a real
-loss and never fires; a fake loss halts trading for nothing.
+**Measured 2026-08-16.** 12 markets have exactly one fill, position flat, and
+realized loss equal to the entry cost -- **-$22.41 unverifiable**, inside a
+reported total of +$5.33.
 
-## 2. hard_exit_blocked_cancel_unconfirmed loop
+**Why it is first:** two reasons, and the second is newer. It is the only
+automated protection on live capital, unreliable in *both* directions -- a fake
+profit masks a real loss and never fires; a fake loss halts trading for nothing.
+And **it makes every other measurement unweighable**: a contract bought at 0.60
+that settles at $1 is +$2.00 while the books say -$3.07, so nothing downstream
+-- resting fraction, exit policy, selection -- can be judged against P&L until
+this is fixed.
+
+## 2. Sides that never quote at all (2026-08-16)
+
+Measured over a 25.6 min live window with `scripts/resting_fraction.py`: only
+**27 of a possible 40 sides** (20 markets x 2) ever placed an order. The other
+13 sat on `target_not_met` -- the venue pays only once a side reaches
+`targetSize`, so the bot correctly declines to quote below it.
+
+That is bigger than anything in the order path. Fixing the re-price latency
+(item 3) recovers about a third of the time on 27 sides; getting more sides past
+the reward gate addresses 13 sides that currently earn nothing at all.
+
+**This is a SELECTION change, not an execution one.** Rank candidates by whether
+their sides actually clear `targetSize` now, rather than discovering it after
+binding a slot. Related to item 7 below (`target_not_met` churn), which is the
+same gate seen from the resting side.
+
+**First step:** confirm the 13 is stable over hours rather than a property of
+one late-evening slate. `scripts/resting_fraction.py` reports it.
+
+## 3. Re-price latency: a cancel and its replacement are two visits (2026-08-16)
+
+Measured live, two independent numbers that agree:
+
+```
+per-market visit interval:  median 35.2s  (582 samples, 22 markets)
+cancel -> replace gap:      median 69.4s  (6 samples)
+2 x 35.2 = 70.4  ~=  69.4
+```
+
+`apply_one` executes at most one mutation per pass, so a
+`resting_price_left_the_touch` cancel lands on one visit and its replacement on
+the next. A side re-pricing six times in 25 min rested **66.9%** against 88.9%
+for a side that never re-priced -- roughly a third of its earning time.
+
+The one-mutation limit is deliberate and its reason is sound: several mutations
+through a 4 req/s governor take real time, and a book that ages meanwhile must
+report `book_stale` rather than quote on stale data.
+
+Candidates, least invasive first:
+
+- **Revisit a market right after it mutates** instead of making it wait a full
+  sweep. Weakens no gate; only reorders the queue.
+- **Issue a re-price as one visit.** Both halves already come from the same
+  fresh frame, and waiting 35s for the second half is *worse* for price
+  accuracy. Risk is the placement landing before the cancel confirms, briefly
+  doubling that side's exposure -- needs a confirm-then-place step.
+- **Shorten the visit interval.** ~1.6s of sweep per market at 22 markets. What
+  dominates that 1.6s is **unmeasured** -- measure before changing.
+
+**Do not start this before item 1.** Its payoff is measured in reward, and
+reward cannot be weighed against a P&L that is currently wrong by -$22.41.
+
+## 4. hard_exit_blocked_cancel_unconfirmed loop
 
 Fired 10 times over 10 minutes on `tkamak-tsokos` and never once got a clean
 book, which is why that position was still open when a deploy landed. The hard
@@ -35,7 +104,7 @@ exit must clear resting orders before it can cross, but the soft reducer
 re-places every pass, so the cancel confirmation keeps losing the race.
 `cancel_confirm_grace_seconds` is 5.0.
 
-## 3. Capital deployment: max_markets 8 -> 30
+## 5. Capital deployment: max_markets 8 -> 30
 
 ~$40 of $385 works at a time (5 x 8 markets x 2 sides). The 8 is a WebSocket
 subscription limit (10 per connection: 1 orders + 8 positions + 1 balance), not
@@ -43,17 +112,17 @@ a risk decision. Connections are independent and each carries its own quota
 (measured, FINDINGS 7), so 30 markets is 4 connections. maker-lab ran 30.
 Biggest earning lever left.
 
-## 4. Discord alert severity
+## 6. Discord alert severity
 
 Normal recovery paths still fire `critical=True`, so real alerts get buried.
 Keep critical for: loss stops, ownership violations, retirement, abandonment,
 unexplained runner failures.
 
-## 5. Residual target_not_met churn
+## 7. Residual target_not_met churn
 
 Small now -- a handful of cancels an hour, down from ~7/minute.
 
-## 6. API rate
+## 8. API rate
 
 4 req/s against maker-lab's 0.3. ~2,500 placements without a ban, but untested.
 

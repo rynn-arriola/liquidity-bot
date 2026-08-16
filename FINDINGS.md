@@ -1268,3 +1268,40 @@ waiting past 900s, and weak evidence says it costs.** Keep the current policy.
 Caveat on the passive row, repeating section 2: which exits resolve passively
 is partly construction, not policy. Do not read +0.038 vs -0.074 as the gain
 from a policy change -- read it as why resting time is worth protecting.
+
+## Reward is concentrated in the hours before kickoff
+
+Measured 2026-08-16 across 48 live candidate markets, using the selector's own
+projection (`projected_reward` summed over eligible sides).
+
+```
+mins to start     n    median reward    share paying > 0
+15-30            11       0.000313            100%
+30-60             5       0.000327            100%
+60-120           10       0.000204             90%
+120+             21       0.000022             67%
+```
+
+The 15–30 minute bucket pays roughly **14x** the median of the 120+ bucket, and
+a third of markets beyond two hours pay nothing at all. (A 0–15 bucket existed
+with a much higher value but n=1, so it is not read here.)
+
+**This settles the entry-gate question against widening.** Stopping quotes at
+T-15 or T-30 would surrender the best-paying window to avoid fills that cost
+about a cent per contract. The T-300s gate is the right size: it removes only
+fills that were guaranteed to be force-crossed (BUGFIXES, entry/exit
+incoherence) and gives up almost no reward.
+
+**Caveat, and it matters.** This is *projected* reward at a single snapshot,
+not realized earnings, and **every market passes through every bucket** as its
+game approaches — today's 120+ market becomes a 30-minute market later. So the
+claim is NOT "distant markets are worse to hold". It is "reward is available in
+the hours before kickoff and largely absent before that", most plausibly
+because distant markets have thin or absent books to score against.
+
+**What it implies for effort.** Near kickoff is simultaneously the best-paying
+and the most adversely-selected window, so the answer is to keep resting there
+and manage fills, not to avoid the window. Combined with the scale of the two
+sides — reward ~$25/day against trading ~-$1.2/day, so losses are about 5% of
+reward — effort spent increasing RESTING TIME is worth more than effort spent
+improving fill quality.

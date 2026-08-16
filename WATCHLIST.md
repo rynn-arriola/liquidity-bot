@@ -151,12 +151,18 @@ minutes exceeds the expected loss on the fills it attracts.
 **Measure:** bucket fills by minutes-to-kickoff at fill time, and compare
 realized P&L per contract against reward accrued while resting in that bucket.
 
-**Change if:** a bucket shows reward earned below expected loss. Then raise the
-entry gate to that boundary.
+**Evidence so far points AGAINST widening** (FINDINGS, 2026-08-16): the 15-30
+minute bucket pays ~14x the median of the 120+ bucket, and a third of markets
+beyond two hours pay nothing. Cutting at T-15 or T-30 would surrender the
+best-paying window to avoid fills costing about a cent per contract.
 
-**Do not change if:** losses are spread evenly across time-to-kickoff. That
-would mean fill timing is not the driver and the answer is in selection or
-exit instead.
+**Change only if:** a time bucket shows reward earned BELOW expected loss on
+realized fills -- not on projections. That has not been shown, and the current
+ratio (reward ~$25/day against trading ~-$1.2/day) makes it unlikely.
+
+**Do not change if:** losses are spread evenly across time-to-kickoff, or if
+reward in the near buckets continues to dominate. Then fill timing is not the
+driver and the lever is selection or exit instead.
 
 ## 6. Which markets and sides precede the losing fills?
 

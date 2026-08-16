@@ -546,3 +546,33 @@ whether rows exist, not the intent-to-side mapping that carries the invariant.
 **The rule this is the second instance of:** anything that exists only to be
 *reported* must not be able to raise. `_ledger_bytes_on_disk` was written that
 way deliberately and this was not.
+
+### Entry opened positions the exit was already flattening — `PENDING`
+
+**Symptom:** measured 2026-08-16, 8 of the 9 markets resting quotes started
+within fifteen minutes, and one was **3.6 minutes** from kickoff — already
+inside the 300-second pre-kickoff flatten window.
+
+**Mechanism:** the quoting gate in `_flat_plan` was `now < game_start`, so the
+bot opened quotes in the same window `_inventory_plan` has already committed to
+flattening *at any price* — no loss cap, no depth haircut. A fill there is
+force-crossed almost immediately, so the position was taken on purpose and
+closed at a taker price on purpose. FINDINGS measured pre-kickoff crossings as
+the worst exit group at **-0.075/contract median**, against -0.059 for the
+inventory clock.
+
+**Fix:** gate entry on `seconds_to_event > force_exit_before_start_seconds`
+rather than on kickoff. Emptying `desired_sides` also cancels anything already
+resting, so the bot withdraws at the deadline instead of waiting to be filled
+into it. `_flat_plan` only runs when flat, so held positions and their reducing
+quotes are untouched.
+
+**Still open:** whether to widen the gate further (T-15, T-30) is NOT decided.
+Reward is paid for resting, so quoting a market that never fills is free money;
+the risk is only on fills, and near kickoff is when fill probability and adverse
+selection are both highest. That needs fills bucketed by time-to-kickoff — see
+WATCHLIST.
+
+**Coverage:** three tests, mutation-verified. Restoring the `now < game_start`
+gate fails both the "opens nothing inside the window" and "withdraws at the
+deadline" cases.

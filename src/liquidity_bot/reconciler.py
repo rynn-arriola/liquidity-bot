@@ -436,9 +436,27 @@ class DesiredStateReconciler:
 
     def _flat_plan(self, frame: MarketFrame) -> list[PlanAction]:
         slug = frame.market.slug
+        # Not merely "before kickoff" -- before the flatten deadline.
+        #
+        # Entry used to gate on `now < game_start`, so the bot opened quotes
+        # inside the same window `_inventory_plan` has already committed to
+        # flattening at any price, with no loss cap and no depth haircut. A
+        # fill there is force-crossed almost immediately, which makes it a
+        # position taken on purpose and closed at a taker price on purpose.
+        # Measured 2026-08-16: pre-kickoff crossings were the worst exit group
+        # at -0.075/contract median (FINDINGS), and 8 of 9 markets resting at
+        # the time started within fifteen minutes, one of them within 3.6.
+        #
+        # Emptying `desired_sides` also cancels anything already resting, so
+        # the bot withdraws at the deadline rather than waiting to be filled
+        # into it. Held positions are unaffected: this path only runs flat.
+        seconds_to_event = (
+            (frame.market.game_start - frame.now).total_seconds()
+            if frame.market.game_start is not None else None)
         market_open = (frame.market.active and not frame.market.closed
-                       and frame.market.game_start is not None
-                       and frame.now < frame.market.game_start)
+                       and seconds_to_event is not None
+                       and seconds_to_event
+                       > self.policy.force_exit_before_start_seconds)
         desired_sides = ({"bid", "offer"} if market_open else set())
         if not frame.market.is_supported_moneyline:
             desired_sides.clear()

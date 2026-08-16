@@ -574,3 +574,39 @@ class ReconcilerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreKickoffEntryTests(unittest.TestCase):
+    """Entry must not open what the exit is already committed to flattening."""
+
+    KICKOFF = T0 + timedelta(hours=5)
+
+    def plan_at(self, seconds_to_event, orders=()):
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300))
+        moment = self.KICKOFF - timedelta(seconds=seconds_to_event)
+        return reconciler.plan(frame(
+            now=moment, position="0", orders=orders,
+            snapshot=book(moment)))
+
+    def test_flat_market_still_quotes_outside_the_flatten_window(self):
+        actions = self.plan_at(600)
+        self.assertEqual({action.side for action in actions}, {"bid", "offer"})
+        self.assertTrue(all(action.kind == ActionKind.PLACE_POST_ONLY
+                            for action in actions))
+
+    def test_flat_market_opens_nothing_inside_the_flatten_window(self):
+        # Entry gated on `now < game_start`, so the bot opened positions inside
+        # the window `_inventory_plan` flattens at any price -- no loss cap, no
+        # depth haircut. Measured 2026-08-16: pre-kickoff crossings were the
+        # worst exit group at -0.075/contract, and a market 3.6 minutes from
+        # kickoff was resting quotes at the time.
+        self.assertEqual(self.plan_at(200), [])
+
+    def test_resting_quotes_are_withdrawn_at_the_flatten_deadline(self):
+        # Withdraw rather than wait to be filled into the window.
+        resting = (WorkingOrder("order-bid", "bid", .49, Decimal("2")),)
+        actions = self.plan_at(200, orders=resting)
+        self.assertEqual([action.kind for action in actions],
+                         [ActionKind.CANCEL])
+        self.assertEqual(actions[0].order_id, "order-bid")

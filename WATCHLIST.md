@@ -130,7 +130,35 @@ losses grow to a similar order as reward accrual. Neither is true today.
 
 ---
 
-## 5. Which markets and sides precede the losing fills?
+## 5. Should we stop quoting well BEFORE the flatten deadline?
+
+**Decide when:** enough fills to bucket by time-to-kickoff.
+
+Entry now stops at `force_exit_before_start_seconds` (300s), because quoting
+inside the window the exit already flattens is incoherent (BUGFIXES). Whether
+to stop *earlier* -- T-15min, T-30min -- is a real question and is NOT decided.
+
+**Baseline (2026-08-16):** 8 of 9 markets resting quotes started within fifteen
+minutes; the slate is dominated by near-kickoff markets. Pre-kickoff crossings
+measured -0.075/contract against -0.059 for the inventory clock.
+
+**The tension:** reward is paid for RESTING, so quoting a market that never
+fills is free money and a wider gate throws it away. The risk is only on fills
+-- and near kickoff is exactly when fill probability and adverse selection are
+both highest. So the question is whether the reward earned in the last N
+minutes exceeds the expected loss on the fills it attracts.
+
+**Measure:** bucket fills by minutes-to-kickoff at fill time, and compare
+realized P&L per contract against reward accrued while resting in that bucket.
+
+**Change if:** a bucket shows reward earned below expected loss. Then raise the
+entry gate to that boundary.
+
+**Do not change if:** losses are spread evenly across time-to-kickoff. That
+would mean fill timing is not the driver and the answer is in selection or
+exit instead.
+
+## 6. Which markets and sides precede the losing fills?
 
 **Not yet measured.** This is the version of question 4 that does not cost
 reward: losses come from *which* market and side we quote and *how the
@@ -149,7 +177,7 @@ projection gate in `market_selector.py`, not the quoting rule.
 
 ---
 
-## 6. Ledger growth as a bug signal
+## 7. Ledger growth as a bug signal
 
 **Not a disk concern.** 24G volume, 18G free, ~7MB/day — roughly seven years
 of runway. maker-lab's 2.4G was five full DB snapshots taken before risky
@@ -170,7 +198,7 @@ costing real space. That is exactly how maker-lab reached 2.4G.
 
 ---
 
-## 7. Is projected-reward ranking actually earning more?
+## 8. Is projected-reward ranking actually earning more?
 
 **Decide when:** several days of settled earnings after `112d58b`.
 

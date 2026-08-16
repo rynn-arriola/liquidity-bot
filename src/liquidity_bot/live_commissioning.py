@@ -1511,8 +1511,21 @@ class CommissioningRunner:
         anchor = state.book_observed_at or self._now()
         return anchor + timedelta(seconds=3)
 
+    def _book_is_fresh_enough_to_plan(self, slug: str) -> bool:
+        """Would the reconciler accept this book right now?
+
+        Mirrors the gate in ``ReconcilerPolicy`` (``reconciler.py``): the book
+        must exist and be no older than ``max_book_age_seconds``.
+        """
+
+        state = self.state_for(slug)
+        if state.book is None or state.book_observed_at is None:
+            return False
+        age = (self._now() - state.book_observed_at).total_seconds()
+        return 0 <= age <= self.reconciler.policy.max_book_age_seconds
+
     async def _decide_for_market(
-        self, slug: str, now: datetime,
+        self, slug: str, now: datetime, *, replanned: bool = False,
     ) -> tuple[str | None, float]:
         """Plan and apply at most one mutation for one market.
 
@@ -1593,6 +1606,29 @@ class CommissioningRunner:
             stop = await self._handle_strategy_critical(reason, slug)
             if stop:
                 return stop, 0.0
+            # A refreshed book is only worth fetching if we plan on it while it
+            # is still fresh. Returning straight to `_recovery_delay` -- which
+            # escalates to a 30s cap -- outlives the five-second freshness
+            # budget the refresh just satisfied, so the next visit reports
+            # `book_stale` again and the refresh was wasted. That loop feeds
+            # itself: measured 2026-08-16, 7,535 book_stale events with
+            # consecutive ones 34-75s apart on the same market, and 30 of the
+            # session's 31 retirements were `unrecoverable_book_stale`.
+            #
+            # It also selects against exactly the markets we want. Quiet books
+            # are the ones with the least competition for reward share, and
+            # reward is paid for RESTING, not for trading -- a market with
+            # nothing to send is not a market that is broken.
+            #
+            # Replanning once here also lets the success path below clear
+            # `strategy_state:{slug}`, so a market that recovers stops marching
+            # toward MAX_RECOVERY_ATTEMPTS. `replanned` bounds this to a single
+            # extra attempt per sweep, so a book that will not refresh still
+            # backs off instead of spinning.
+            if (not replanned and reason == "book_stale"
+                    and self._book_is_fresh_enough_to_plan(slug)):
+                return await self._decide_for_market(
+                    slug, self._now(), replanned=True)
             return None, self._recovery_delay(f"strategy_state:{slug}")
         # Per market. A shared counter let one market's repeated failure
         # inflate every market's backoff toward the 30s cap, and let any one

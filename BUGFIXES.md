@@ -471,3 +471,31 @@ retire/release churn closed.
 **Coverage:** two tests, both mutation-verified. Restoring the permanent ban
 fails the cooldown test; dropping the churn guard fails the release test *and*
 the pre-existing `test_an_unquotable_market_is_not_released_just_for_being_flat`.
+
+### `book_stale` recovery expired the refresh it had just fetched — `PENDING`
+
+**Symptom:** 7,535 `book_stale` events in one 7h09m session, and 30 of that
+session's 31 retirements were `unrecoverable_book_stale`.
+
+**Mechanism:** `plan()` returns `book_stale` before doing anything else, so the
+caller ran recovery, which fetched a fresh book and returned — and the caller
+then applied `_recovery_delay`, exponential backoff to a 30-second cap. The
+wait outlived the five-second freshness budget the refresh had just satisfied,
+so the next visit reported `book_stale` again. Measured interval between
+consecutive events on one market: **34–75s, clustered 45–60s**. Every refresh
+was wasted, and twelve of them in a row retired the market.
+
+**Ruled out first:** REST contention. Staleness ran flat at ~250–470/hour
+whether 19 markets or 6 were active, and *rose* per market as markets dropped
+(21 → 49); contention predicts the opposite. The market stream was healthy all
+session and zero books were dropped.
+
+**Fix:** replan once, on the book the refresh just fetched, before conceding
+the backoff. `replanned` bounds it to one extra attempt per sweep, and the
+replan is gated on the book actually being fresh, so a book that never arrives
+still backs off instead of spinning. The success path clears
+`strategy_state:{slug}`, so a recovering market stops marching toward
+permanent retirement.
+
+**Coverage:** two tests, both mutation-verified. Removing the replan fails the
+first; dropping the freshness guard fails the second.

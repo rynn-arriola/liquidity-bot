@@ -1229,6 +1229,7 @@ competition for reward share, since reward is paid for RESTING and not for
 trading. The 5-second budget assumes a continuously-updating book; an illiquid
 market legitimately has nothing to send, and being quiet is not being wrong.
 
-**Not yet fixed.** Candidate fixes: re-plan immediately after a successful
-refresh instead of returning; or exempt `book_stale` from exponential backoff,
-since it is not an escalating fault.
+**Fixed** by replanning once on the refreshed book before conceding the
+backoff, bounded to a single extra attempt per sweep so a book that never
+arrives still yields. The success path then clears `strategy_state:{slug}`, so
+a market that recovers stops marching toward MAX_RECOVERY_ATTEMPTS.

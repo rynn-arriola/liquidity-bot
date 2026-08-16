@@ -2060,6 +2060,79 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_stale_book_replans_on_the_refresh_it_just_fetched(self):
+        """The refresh is only worth fetching if we plan while it is fresh."""
+
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+
+        plans = []
+
+        def plan(_frame):
+            plans.append(1)
+            if len(plans) == 1:
+                return [PlanAction(ActionKind.CRITICAL, slug, "book_stale")]
+            return []
+
+        runner.reconciler.plan = plan
+
+        async def refresh(_now, _slug=None):
+            state.book_observed_at = runner._now()
+
+        runner._refresh_book = refresh
+        # Part-way to the permanent retirement this loop used to guarantee.
+        runner._runtime_error_counts[f"strategy_state:{slug}"] = 5
+
+        stop, delay = await runner._decide_for_market(slug, runner._now())
+
+        self.assertIsNone(stop)
+        # Planned a second time on THIS pass, against the book just fetched.
+        self.assertEqual(len(plans), 2)
+        # And conceded no backoff. `_recovery_delay` escalates to a 30s cap,
+        # which outlives the five-second freshness budget the refresh had just
+        # satisfied -- so the next visit reported `book_stale` again and the
+        # refresh was wasted. Measured 2026-08-16: 7,535 book_stale events,
+        # consecutive ones 34-75s apart on one market.
+        self.assertEqual(delay, 0.0)
+        # The success path clears the escalation, so a market that recovers
+        # stops marching toward MAX_RECOVERY_ATTEMPTS and permanent retirement.
+        self.assertNotIn(
+            f"strategy_state:{slug}", runner._runtime_error_counts)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_book_that_will_not_refresh_still_backs_off(self):
+        """One extra attempt, not a spin: a dead book must still yield."""
+
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+
+        plans = []
+
+        def plan(_frame):
+            plans.append(1)
+            return [PlanAction(ActionKind.CRITICAL, slug, "book_stale")]
+
+        runner.reconciler.plan = plan
+
+        async def refresh(_now, _slug=None):
+            # The refresh runs but the book never actually arrives.
+            state.book_observed_at = runner._now() - timedelta(minutes=5)
+
+        runner._refresh_book = refresh
+
+        stop, delay = await runner._decide_for_market(slug, runner._now())
+
+        self.assertIsNone(stop)
+        self.assertEqual(len(plans), 1)
+        self.assertGreater(delay, 0.0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_market_that_never_exits_is_abandoned_not_endless(self):
         runner, _, notifier = self.build_runner(clock=TickingClock())
         await runner.preflight()

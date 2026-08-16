@@ -1431,6 +1431,48 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             await bot.private_stream.close()
             await bot.market_stream.close()
 
+    async def test_re_asking_about_an_absence_is_throttled(self):
+        """`retrieve` answers a 404 by retrying four times with 0.5/1/2s
+        backoff. Unthrottled, an order the venue will not resolve adds up to
+        3.5s of sleeping to EVERY reconcile, indefinitely -- and `_rest_reconcile`
+        runs on every service cycle and every bind. That ages books, and
+        `book_stale` blocks quoting on its own."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+        asked = []
+
+        async def gone(order_id):
+            asked.append(order_id)
+            raise AdapterError(f"GET /v1/order/{order_id} failed: NotFoundError")
+
+        client.orders.retrieve = gone
+        # One low-level attempt per sweep, so `asked` counts sweeps rather
+        # than `retrieve`'s internal 404 backoff. Unpinned, a single sweep
+        # makes four calls over 3.5s of real sleeping -- which is the cost the
+        # throttle exists to keep off every reconcile.
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        # Three reconciles inside the throttle window.
+        for _ in range(3):
+            await runner._rest_reconcile(runner._now())
+
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+        self.assertEqual(
+            asked.count("exchange-absent"), 1,
+            "one ask per window, not one per reconcile")
+
+        # ...and it asks again once the window has passed.
+        later = runner._now() + timedelta(
+            seconds=runner.ABSENT_RECHECK_SECONDS + 1)
+        await runner._rest_reconcile(later)
+        self.assertEqual(asked.count("exchange-absent"), 2)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.
 

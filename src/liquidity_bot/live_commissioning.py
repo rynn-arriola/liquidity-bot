@@ -189,6 +189,11 @@ class CommissioningRunner:
     # runs every 5 minutes, so this is effectively three summaries of silence.
     QUIET_ALARM_SECONDS = 900.0
 
+    # How often to re-ask the venue about an order we have lost sight of. See
+    # the throttle in `_rest_reconcile`: unbounded re-asking puts a 404's
+    # retry backoff on the critical path of every reconcile.
+    ABSENT_RECHECK_SECONDS = 60.0
+
     def __init__(
         self,
         client: Any,
@@ -253,6 +258,8 @@ class CommissioningRunner:
         # "Up, healthy, and resting nothing" -- see `_alarm_if_quoting_nothing`.
         self._quiet_since: datetime | None = None
         self._quiet_alarm_sent = False
+        # exchange_order_id -> when we last asked the venue about an absence.
+        self._absent_asked_at: dict[str, datetime] = {}
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -739,10 +746,26 @@ class CommissioningRunner:
         # and a persistent 404 must not take the whole reconcile -- and every
         # bind that depends on it -- down with it. Absence is still never read
         # as cancellation: only a terminal state from the venue clears the row.
+        absent_ids = set()
         for row in self.ledger.absent_orders():
             exchange_id = row["exchange_order_id"]
             if not exchange_id or exchange_id in exchange_ids:
                 continue
+            absent_ids.add(exchange_id)
+            # Throttled, unlike the strict sweep above. `_rest_reconcile` runs
+            # on every service cycle and every bind, and `retrieve` answers a
+            # 404 by retrying four times with 0.5/1/2s backoff -- so an order
+            # the venue will not resolve would add up to 3.5s of sleeping to
+            # EVERY reconcile, indefinitely. That ages books, and `book_stale`
+            # already blocks quoting on its own. An absence is not urgent: it
+            # blocks only its own market, and one attempt a minute resolves a
+            # transient inconsistency just as surely as sixty do.
+            asked_at = self._absent_asked_at.get(exchange_id)
+            if (asked_at is not None
+                    and (now - asked_at).total_seconds()
+                    < self.ABSENT_RECHECK_SECONDS):
+                continue
+            self._absent_asked_at[exchange_id] = now
             try:
                 await self.executor.reconcile_order(
                     exchange_id, observed_at=now)
@@ -753,6 +776,11 @@ class CommissioningRunner:
                 # 2026-08-16 stall was invisible for 24 minutes because nothing
                 # about this state was ever reported.
                 await self._report_runtime_error("absent_order", exc)
+        # Forget orders that are no longer absent, so the throttle cannot grow
+        # without bound across a long session.
+        self._absent_asked_at = {
+            key: at for key, at in self._absent_asked_at.items()
+            if key in absent_ids}
         orders = await self.account.fetch_open_orders(observed_at=now)
         positions = await self.account.fetch_positions(observed_at=now)
         # Fills, from the one source that survives a restart. Without this the

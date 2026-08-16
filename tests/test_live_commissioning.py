@@ -2499,8 +2499,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             field["value"] for field in payload["embeds"][0]["fields"])
         # Reporting slot zero only showed no open position here, which is the
         # number an operator reads to decide whether to intervene.
-        self.assertIn(f"{'Positions open':<16}{1:>10}", rendered)
-        self.assertIn(f"Markets active   {2:>10}", rendered)
+        self.assertIn(f"{'Positions open':<17}{1:>10}", rendered)
+        # Reported as resting/managed now: managed alone said nothing about
+        # whether those markets were earning.
+        self.assertIn(f"Markets resting  {'0/2':>10}", rendered)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -2512,10 +2514,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._send_summary(runner._now())
 
-        footer = notifier.payloads[-1][0]["embeds"][0]["footer"]["text"]
         # A silently retired slot looks identical to an idle one otherwise.
-        self.assertIn("retired 1", footer)
-        self.assertIn(slug, footer)
+        # This moved out of the footer and into the rewards block, where the
+        # idle markets are broken down by reason -- the footer had grown to one
+        # unreadable line and nobody was reading it.
+        rewards = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
+                   if "reward" in f["name"].lower()][0]["value"]
+        self.assertIn("Markets resting", rewards)
+        self.assertIn("retired", rewards)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

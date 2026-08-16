@@ -62,6 +62,10 @@ class LiquiditySummary:
     # maps to income is how many of the managed markets actually hold an
     # order. Measured 2026-08-16: 20 managed against 9 resting.
     resting_markets: int = 0
+    # Why the rest are not resting, most common first. The question this
+    # answers is "are we at full capacity, or down ten markets" -- a count of
+    # what is working is only half of that.
+    idle_market_reasons: tuple[tuple[str, int], ...] = ()
     reward_eligible_sides: int = 0
     score_seconds: float = 0.0
     entry_fills: int = 0
@@ -168,10 +172,12 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             "name": "🎁 Liquidity rewards",
             "value": (
                 "```text\n"
-                f"Markets active   {summary.active_markets:>10}\n"
                 f"Markets resting  "
                 f"{f'{summary.resting_markets}/{summary.active_markets}':>10}\n"
-                f"Eligible sides   {summary.reward_eligible_sides:>10}\n"
+                + "".join(
+                    f"  {reason[:15]:<15}{count:>10}\n"
+                    for reason, count in summary.idle_market_reasons[:4])
+                + f"Eligible sides   {summary.reward_eligible_sides:>10}\n"
                 f"Score-seconds    {summary.score_seconds:>10,.2f}\n"
                 f"PAID attributed  {float(paid):>10,.2f}\n"
                 "```"),
@@ -181,10 +187,10 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             "name": "📦 Inventory and exits",
             "value": (
                 "```text\n"
-                f"{entry_label:<16}{summary.entry_fills:>10}\n"
+                f"{entry_label:<17}{summary.entry_fills:>10}\n"
                 f"Exit samples     {summary.exit_samples:>10}\n"
                 f"Exit complete    {100 * summary.exit_completion_rate:>9.1f}%\n"
-                f"{position_label:<16}{summary.open_positions:>10}\n"
+                f"{position_label:<17}{summary.open_positions:>10}\n"
                 f"Oldest age       {summary.max_inventory_age_seconds:>9.1f}s\n"
                 "```"),
             "inline": True,
@@ -225,8 +231,10 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         "description": description,
         "color": color,
         "fields": fields,
-        "footer": {"text": (
-            "Pending/unattributable rewards excluded • exact private state required")},
+        # No footer. It had grown to a single unreadable line of twenty
+        # diagnostics -- catalog counts, scan timings, fill-risk drivers -- none
+        # of which are decisions. They are printed to the log as `[selection]`
+        # instead, where they can be read and grepped rather than skimmed.
         "timestamp": now.isoformat(),
     }]}
 

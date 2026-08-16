@@ -120,14 +120,18 @@ class DiscordTests(unittest.TestCase):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
-            active_markets=20, resting_markets=9)
+            active_markets=20, resting_markets=9,
+            idle_market_reasons=(("target_not_met", 8), ("no_book", 3)))
         rewards = [field for field in build_liquidity_summary(summary)["embeds"][0]
                    ["fields"] if "reward" in field["name"].lower()][0]["value"]
 
-        self.assertIn("Markets active", rewards)
         # Shown as a ratio, because 9 alone does not say what it is 9 of.
         # Measured 2026-08-16: 20 managed against 9 actually holding an order.
         self.assertIn("9/20", rewards)
+        # And the eleven that are not resting are broken down, because
+        # "priced out" and "broken" need very different responses.
+        self.assertIn("target_not_met", rewards)
+        self.assertIn("no_book", rewards)
 
     def test_summary_reports_ledger_size_so_a_full_disk_is_visible(self):
         """The ledger is never rebuilt, so nothing else warns before it fills."""

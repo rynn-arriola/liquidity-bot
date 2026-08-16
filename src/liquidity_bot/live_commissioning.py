@@ -1530,6 +1530,38 @@ class CommissioningRunner:
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
 
+    def _idle_market_reasons(self) -> tuple[tuple[str, int], ...]:
+        """Why each managed market is not resting an order, most common first.
+
+        "Nine of twenty are working" does not say whether the other eleven are
+        broken, priced out, or simply not worth quoting -- and those need very
+        different responses. A market blocked on `target_not_met` is the reward
+        gate declining correctly; one blocked on `book_stale` is a fault.
+
+        Never raises: this exists only to be reported, and the summary is sent
+        from the shutdown loop where an exception reads as a failure to prove
+        flat.
+        """
+
+        counts: dict[str, int] = {}
+        for slug in self.active_slugs:
+            try:
+                if self.ledger.working_orders(slug):
+                    continue
+                if self._is_retired(slug):
+                    reason = "retired"
+                elif (state := self.state_for(slug)).book is None:
+                    reason = "no_book"
+                elif blockers := sorted(set(
+                        state.economic_blocker_by_side.values())):
+                    reason = str(blockers[0])
+                else:
+                    reason = "no_quote_yet"
+            except Exception:
+                reason = "unknown"
+            counts[reason] = counts.get(reason, 0) + 1
+        return tuple(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
     def _ledger_bytes_on_disk(self) -> int:
         """Ledger file plus its WAL sidecar, in bytes.
 
@@ -1855,6 +1887,7 @@ class CommissioningRunner:
             resting_markets=sum(
                 1 for slug in self.active_slugs
                 if self.ledger.working_orders(slug)),
+            idle_market_reasons=self._idle_market_reasons(),
             reward_eligible_sides=sum(
                 len(self.state_for(slug).reward_eligible)
                 for slug in self.active_slugs),
@@ -1908,36 +1941,29 @@ class CommissioningRunner:
             fill_driver = self.state_for(
                 riskiest[0]).fill_risk_driver_by_side.get(
                     riskiest[1], "unknown")
-        payload["embeds"][0]["footer"]["text"] += (
-            f" • session creates {place_count - self._orders_before}"
-            f" • economic sides {','.join(economically_allowed) or 'none'}"
-            f" • max remaining reward ${maximum_remaining:.4f}"
-            f" • 30s fill risk {maximum_fill_probability:.2%} ({fill_driver})"
-            f" • current-market venue earnings paid ${paid_observed:.2f}"
-            f" pending ${pending_observed:.2f}"
-            f" • venue aggregate payout floor "
-            f"${self.config.aggregate_reward_payout_floor_usd:.2f} reporting-only")
-        if self._retired_ever:
-            payload["embeds"][0]["footer"]["text"] += (
-                f" • retired {len(self._retired_ever)}"
-                f" ({','.join(sorted(self._retired_ever))})")
-        if self._market_selection is not None:
-            payload["embeds"][0]["footer"]["text"] += (
-                f" • catalog {self._market_selection.catalog_markets}"
-                f" • executable {self._market_selection.executable_catalog_markets}"
-                f" • rewarded {self._market_selection.rewarded_executable_markets}"
-                f" • unsupported {self._market_selection.unsupported_programs}"
-                f" • books ranked {self._market_selection.books_evaluated}"
-                f" • catalog tight skipped "
-                f"{self._market_selection.catalog_spread_filtered_markets}"
-                f" • viable markets {self._market_selection.viable_markets}")
-        if self._selection_scan_seconds_last is not None:
-            payload["embeds"][0]["footer"]["text"] += (
-                f" • selection scan {self._selection_scan_seconds_last:.1f}s")
-        if self._rotation_transition_seconds_last is not None:
-            payload["embeds"][0]["footer"]["text"] += (
-                " • last flat rotation transition "
-                f"{self._rotation_transition_seconds_last:.1f}s")
+        # These are diagnostics, not decisions. They used to be appended to the
+        # embed footer, which grew to one unreadable line of twenty values.
+        # Logged instead, where they can be grepped.
+        print(
+            f"[selection] at={now.isoformat()} "
+            f"session_creates={place_count - self._orders_before} "
+            f"economic_sides={','.join(economically_allowed) or 'none'} "
+            f"max_remaining_reward={maximum_remaining:.4f} "
+            f"fill_risk_30s={maximum_fill_probability:.4f} "
+            f"fill_driver={fill_driver} "
+            f"earnings_paid={paid_observed:.2f} "
+            f"earnings_pending={pending_observed:.2f} "
+            f"retired={len(self._retired_ever)}"
+            + (f" catalog={self._market_selection.catalog_markets}"
+               f" executable={self._market_selection.executable_catalog_markets}"
+               f" rewarded={self._market_selection.rewarded_executable_markets}"
+               f" books_ranked={self._market_selection.books_evaluated}"
+               f" viable={self._market_selection.viable_markets}"
+               if self._market_selection is not None else "")
+            + (f" scan_seconds={self._selection_scan_seconds_last:.1f}"
+               if self._selection_scan_seconds_last is not None else ""),
+            flush=True,
+        )
         await self.notifier.send_payload_async(payload, critical=critical)
 
     async def _report_runtime_error(

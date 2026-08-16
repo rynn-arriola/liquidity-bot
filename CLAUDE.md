@@ -55,7 +55,10 @@ not installed there; query the ledger with `python3` and open it read-only
 (`file:...?mode=ro`) so a live runner is never disturbed.
 
 Connection details (host, SSH key) are deliberately **not** in this repo. They
-are in the operator's local notes.
+are in the operator's local notes. To set up a new laptop, desktop or phone,
+see `docs/MACHINE_SETUP.md` — it covers what travels via git, why no
+workstation needs the API credentials, and how to authorise and revoke a
+machine's SSH key.
 
 Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `stop_commissioning.sh` (graceful; waits up to 300s for a flat proof).

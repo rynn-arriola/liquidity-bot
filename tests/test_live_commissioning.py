@@ -938,6 +938,76 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._is_barred_from_quoting("market-one"))
         self.assertFalse(runner._is_barred_from_quoting("market-two"))
 
+    async def test_a_dud_primary_market_is_dropped_not_refused(self):
+        """Observed 2026-08-16T21:36Z, on the restart after the crash fix.
+
+        Slot zero was refreshed unguarded while every other slot was best
+        effort, so it was the single point of failure the rest of that loop
+        exists to avoid. Its book came back with no levels on either side,
+        `parse_book_response` raised, and startup exited 2 -- which the
+        supervisor never restarts -- over one dud market out of twenty. About
+        one market in four publishes a one-sided book, so drawing a bad slot
+        zero is not rare.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        original = runner._refresh_book
+
+        async def empty_primary(now, slug=None):
+            if (slug or runner.market_slug) == "market-one":
+                raise AdapterError("book is empty on both sides")
+            return await original(now, slug)
+
+        runner._refresh_book = empty_primary
+
+        # Must not raise: the healthy market carries the session.
+        await runner._refresh_bound_books(runner._now())
+
+        self.assertEqual(runner.active_slugs, ("market-two",))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_refuses_when_no_market_has_a_book(self):
+        """Dropping every market would bind an empty set, which leaves
+        `market_slug` raising and takes the run loop down on the next call."""
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+
+        async def all_empty(now, slug=None):
+            raise AdapterError("book is empty on both sides")
+
+        runner._refresh_book = all_empty
+
+        with self.assertRaises(CommissioningRefused):
+            await runner._refresh_bound_books(runner._now())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_recovering_market_still_refuses_rather_than_be_dropped(self):
+        """It holds a position we were restarted to retire. Dropping it
+        abandons live risk, which is the one thing startup may not do."""
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner._recovery_slugs = {"market-one"}
+
+        async def empty_primary(now, slug=None):
+            if (slug or runner.market_slug) == "market-one":
+                raise AdapterError("book is empty on both sides")
+            return None
+
+        runner._refresh_book = empty_primary
+
+        with self.assertRaises(AdapterError):
+            await runner._refresh_bound_books(runner._now())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_servicing_failure_retires_one_market_not_the_session(self):
         """The 2026-08-16T19:01Z crash, as a test.
 

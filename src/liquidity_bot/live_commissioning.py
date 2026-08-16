@@ -970,32 +970,27 @@ class CommissioningRunner:
             else:
                 await self._select_reward_market(now)
                 now = self._now()
-        # The primary must prove out; the rest are best effort. Requiring all
-        # eight would let one unlucky market block startup entirely, and
+        # Every bound market is best effort, including slot zero. Requiring all
+        # of them would let one unlucky market block startup entirely, and
         # startup failure is the most expensive kind -- nothing quotes at all.
+        #
+        # Slot zero used to be exempt from that reasoning and refreshed
+        # unguarded, which made it the single point of failure the rest of this
+        # loop exists to avoid. Observed 2026-08-16T21:36Z: the primary
+        # published a book with no levels on either side, `parse_book_response`
+        # raised `book is empty on both sides`, and the whole startup exited 2
+        # -- a code the supervisor never restarts -- over one dud market out of
+        # twenty. About one market in four publishes a one-sided book (see
+        # adapters.py), so drawing a bad slot zero is not rare.
+        #
+        # A market we are RECOVERING is different and still refuses: it holds a
+        # position we were restarted to retire, and dropping it would abandon
+        # live risk.
         # `_recovery_slugs`, not `_retired_ever`. They are equal here -- at
         # startup nothing else has retired yet -- but `_retired_ever` is a
         # reporting set that now outlives the bar it used to imply, and a
         # control decision must not read from it.
-        recovering = set(self._recovery_slugs) & set(self.active_slugs)
-        primary = self.active_slugs[0] if self.active_slugs else None
-        await self._refresh_contracts(
-            now, for_exit=primary is not None and primary in recovering)
-        await self._refresh_book(now)
-        extras = self.active_slugs[1:]
-        if extras:
-            healthy = [self.market_slug]
-            for slug in extras:
-                try:
-                    await self._refresh_contracts(
-                        now, slug, for_exit=slug in recovering)
-                    await self._refresh_book(now, slug)
-                    healthy.append(slug)
-                except Exception as exc:
-                    await self._report_runtime_error(
-                        f"startup_market_dropped:{slug}", exc)
-            if len(healthy) != len(self.active_slugs):
-                self._bind_markets(tuple(healthy))
+        await self._refresh_bound_books(now)
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
         # account REST reconciliation remains the authoritative safety check.
@@ -1866,6 +1861,46 @@ class CommissioningRunner:
                 return stop, 0.0
             return None, self._recovery_delay(f"action_driver:{slug}")
         return None, 0.0
+
+    async def _refresh_bound_books(self, now: datetime) -> None:
+        """Prove a book for every bound market, dropping the ones that fail.
+
+        Every slot is best effort, including slot zero. Requiring all of them
+        would let one unlucky market block startup entirely, and startup
+        failure is the most expensive kind -- nothing quotes at all.
+
+        Slot zero used to be exempt and refreshed unguarded, which made it the
+        single point of failure the rest of this loop exists to avoid. Observed
+        2026-08-16T21:36Z: the primary published a book with no levels on
+        either side, `parse_book_response` raised `book is empty on both
+        sides`, and startup exited 2 -- a code the supervisor never restarts --
+        over one dud market out of twenty. About one market in four publishes a
+        one-sided book (see adapters.py), so drawing a bad slot zero is not
+        rare.
+
+        Two things still refuse. A market we are RECOVERING holds a position we
+        were restarted to retire, so dropping it would abandon live risk. And
+        dropping every market would bind an empty set, which leaves
+        `market_slug` raising and takes the run loop down on its next call.
+        """
+
+        recovering = set(self._recovery_slugs) & set(self.active_slugs)
+        healthy: list[str] = []
+        for slug in self.active_slugs:
+            try:
+                await self._refresh_contracts(
+                    now, slug, for_exit=slug in recovering)
+                await self._refresh_book(now, slug)
+                healthy.append(slug)
+            except Exception as exc:
+                if slug in recovering:
+                    raise
+                await self._report_runtime_error(
+                    f"startup_market_dropped:{slug}", exc)
+        if not healthy:
+            raise CommissioningRefused("no bound market has a usable book")
+        if len(healthy) != len(self.active_slugs):
+            self._bind_markets(tuple(healthy))
 
     async def _service_bound_markets(self) -> str:
         """Visit every bound market, surviving any one of them failing.

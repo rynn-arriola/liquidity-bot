@@ -517,6 +517,29 @@ class ExecutionLedger:
             sql += " AND client_order_id NOT LIKE 'venue:%'"
         return self.query(sql + " ORDER BY event_at", tuple(params))
 
+    def absent_orders(self, market_slug: str | None = None) -> list[sqlite3.Row]:
+        """Orders we lost sight of, so they can be asked about again.
+
+        `UNKNOWN_ABSENT` is deliberately not a working state -- it is our
+        failure to see an order, not a venue transition. But that also kept it
+        out of `working_orders`, which is the set `_rest_reconcile` re-reads
+        from the venue, and its intent is already RECONCILED, so it fell out of
+        the other re-read set too. Nothing asked about it ever again and it sat
+        absent for the rest of the session.
+
+        That is not cosmetic: `risk_state_known(None)` counts absences
+        account-wide, so one stuck row made the account-wide gate false
+        forever, and every stream bind timed out waiting for a readiness that
+        could no longer arrive. See BUGFIXES 2026-08-16.
+        """
+
+        sql = "SELECT * FROM execution_orders WHERE status='UNKNOWN_ABSENT'"
+        params: list[Any] = []
+        if market_slug is not None:
+            sql += " AND market_slug=?"
+            params.append(market_slug)
+        return self.query(sql + " ORDER BY event_at", tuple(params))
+
     def position(self, market_slug: str) -> Decimal:
         row = self.connection.execute(
             "SELECT net_qty FROM execution_positions WHERE market_slug=?",

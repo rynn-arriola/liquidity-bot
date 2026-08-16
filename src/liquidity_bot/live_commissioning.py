@@ -716,6 +716,32 @@ class CommissioningRunner:
         for exchange_id in sorted(exchange_ids):
             await self.executor.reconcile_order(
                 exchange_id, observed_at=now)
+        # Then the orders we have already lost sight of. These are in neither
+        # set above -- `UNKNOWN_ABSENT` is not a working state and their
+        # intents are long since RECONCILED -- so before this nothing ever
+        # asked about them again and they stayed absent for the rest of the
+        # session. One such row holds `risk_state_known(None)` false
+        # account-wide, which is what wedged every stream bind on 2026-08-16.
+        #
+        # Best-effort, unlike the strict sweep above: those are live risk and a
+        # failure there must stop the reconcile, while these are already lost
+        # and a persistent 404 must not take the whole reconcile -- and every
+        # bind that depends on it -- down with it. Absence is still never read
+        # as cancellation: only a terminal state from the venue clears the row.
+        for row in self.ledger.absent_orders():
+            exchange_id = row["exchange_order_id"]
+            if not exchange_id or exchange_id in exchange_ids:
+                continue
+            try:
+                await self.executor.reconcile_order(
+                    exchange_id, observed_at=now)
+                self._runtime_error_counts.pop("absent_order", None)
+            except Exception as exc:
+                # Escalates on repeat through the usual attempt counter. A
+                # wedge that looks healthy is the worst outcome there is: the
+                # 2026-08-16 stall was invisible for 24 minutes because nothing
+                # about this state was ever reported.
+                await self._report_runtime_error("absent_order", exc)
         orders = await self.account.fetch_open_orders(observed_at=now)
         positions = await self.account.fetch_positions(observed_at=now)
         # Fills, from the one source that survives a restart. Without this the
@@ -2118,6 +2144,21 @@ class CommissioningRunner:
     async def _open_streams_for_active_market(self) -> None:
         """Bind fresh public/private streams and re-prove account state."""
 
+        # Close what we are about to drop. `_rotate_reward_market_inner` closes
+        # the old pair itself, but the top-up path did not, so every top-up
+        # leaked a private and a market socket -- four top-ups in the
+        # 2026-08-16 session alone, on an account whose private feed is already
+        # split across several connections to stay under the per-connection
+        # subscription cap. Doing it here covers every caller. Best-effort: a
+        # socket we are discarding must never be able to fail the bind that
+        # replaces it, and closing an already-closed stream is a no-op.
+        for stale in (self.private_stream, self.market_stream):
+            if stale is None:
+                continue
+            try:
+                await stale.close()
+            except Exception:
+                traceback.print_exc()
         private = self.private_stream_factory(self.client)
         market = self.market_stream_factory(self.client)
         self.private_stream = private

@@ -1345,3 +1345,38 @@ reaches it.
 genuinely quieter and the fix is being credited for it. Distinguishing them
 needs the resting-fraction data from the summary work -- if markets rest a
 healthy share of wall-clock time, the churn is benign.
+
+## The same predicate, asked scoped and unscoped, is a place bugs hide
+
+Measured 2026-08-16 from a live 36-minute stall in which the bot quoted
+nothing while looking completely healthy.
+
+`risk_state_known(market_slug)` applies its `UNKNOWN_ABSENT` test **only when a
+slug is passed**. That scoping was itself a fix (§6g): account-wide, one
+market's ordinary in-flight cancel blanked all the others and every market
+quarantined its resting quote.
+
+But the scoping only helps callers that pass a slug. `_frame` does.
+`_wait_for_initial_private_state` does not -- it asks `gate.ready()`
+account-wide, which is defensible for a fresh bind. So a single absent order
+in a market that had *already been released* was simultaneously:
+
+- harmless to every per-market decision, and
+- fatal to every stream bind in the process.
+
+Both readings were true at once, which is exactly why the wrong one survived
+scrutiny. The absent order was explicitly considered and dismissed early --
+"that test is scoped, and that market is gone" -- and the dismissal was correct
+about the scoped callers and wrong about the whole system.
+
+**The general lesson:** when a predicate takes an optional narrowing argument,
+its behaviour is really two predicates, and safety reasoning has to name which
+one it is talking about. Enumerate the call sites of both forms before
+concluding a state is contained. Here: `grep -n "risk_state_known(" src/` is a
+five-second check that would have redirected the first hour of diagnosis.
+
+**Corollary, on retries.** The same stall retried its failed operation four
+times and failed identically each time. A retry that keeps failing is evidence
+the fault is *below* the thing retrying -- not evidence that retry is the fix.
+Shipping the recovery alone would have converted a silent hang into a loud
+infinite loop and looked like progress. See BUGFIXES 2026-08-16.

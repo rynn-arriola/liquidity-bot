@@ -1177,6 +1177,97 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def _absent_order(self, runner, client, *, venue_state):
+        """One order the ledger holds working and the venue no longer lists."""
+
+        client.orders.rows["exchange-absent"] = {
+            "id": "exchange-absent",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": venue_state,
+            "createTime": NOW.isoformat(),
+        }
+        runner.ledger.apply_order_event(
+            "ws", "leaving-the-book",
+            OrderState(
+                client_order_id="liquidity-absent",
+                exchange_order_id="exchange-absent",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.ledger.apply_order_snapshot(
+            "snapshot-without-it", [], as_of=runner._now(),
+            observed_at=runner._now(), complete=True)
+
+    async def test_rest_reconcile_reasks_about_an_absent_order(self):
+        """The 2026-08-16 wedge, at its root.
+
+        `UNKNOWN_ABSENT` is in neither set `_rest_reconcile` re-read -- it is
+        not a working state, and the order's intent is already RECONCILED -- so
+        nothing ever asked the venue about it again. It stayed absent, and
+        because `risk_state_known(None)` counts absences account-wide, the
+        account-wide gate stayed false forever. Every stream bind then timed
+        out waiting for a readiness that could never arrive: four binds, four
+        identical `TimeoutError`s, 36 minutes of quoting nothing.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+
+        # Precondition: wedged exactly as production was.
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+        self.assertFalse(runner.ledger.risk_state_known())
+
+        await runner._rest_reconcile(runner._now())
+
+        # Asked, answered, and released -- by a terminal state from the venue,
+        # never by reading absence as cancellation.
+        self.assertEqual(runner.ledger.absent_orders(), [])
+        self.assertTrue(runner.ledger.risk_state_known())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
+        """Best-effort, or the cure is the disease.
+
+        These orders are already lost, so a persistent 404 on one must not take
+        down the reconcile that every stream bind depends on -- that would swap
+        one permanent wedge for another. It stays absent and gets reported.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+
+        async def gone(order_id):
+            raise AdapterError(f"GET /v1/order/{order_id} failed: NotFoundError")
+
+        client.orders.retrieve = gone
+
+        # Must not raise.
+        await runner._rest_reconcile(runner._now())
+
+        # Still absent and still blocking -- correctly, we have no evidence --
+        # but now it is reported instead of silently wedging the bot.
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+        self.assertIn("absent_order", runner._runtime_error_counts)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_one_markets_absent_order_does_not_blank_another(self):
         """The reason quotes died two seconds after being placed.
 

@@ -31,9 +31,15 @@ Ground rules that came out of these:
 
 ## 2026-08-16
 
-### A failed top-up leaves the gate disconnected forever and the bot never quotes again
+### One order we lost sight of wedged every stream bind and stopped all quoting
 
-Observed live 2026-08-16 15:37Z on `efbd332`. Fixed same day.
+Observed live 2026-08-16 15:33Z on `efbd332`. Fixed same day.
+
+**Read the mechanism below before the fix.** The first diagnosis of this bug
+was wrong in a way worth recording: it concluded the bot "never retried" the
+failed bind. It retried four times. Every retry failed *identically*, for a
+reason one layer down — and a fix aimed at the retry alone would have shipped a
+loud infinite loop instead of a silent hang, and been called done.
 
 **Symptom:** the process stays up and healthy-looking — supervisor and runner
 both alive, REST still working, account flat — but it places **nothing**, for
@@ -52,34 +58,55 @@ On this run: 997 `book_stale` between 15:07 and 15:36, then zero, and 144
 `execution_state_unknown` from 15:38 onward with no `[action]` line after
 15:36:31.
 
-**Mechanism:** `_top_up_active_markets` ends with
-`await self._open_streams_for_active_market()`. That method reassigns
-`self.private_stream`/`self.market_stream` to the new objects, calls
-`gate.on_connect()`, and then may raise from `_wait_for_initial_private_state`
-(15s timeout). Its `except` runs `gate.on_disconnect()`, closes both streams,
-and re-raises. The caller catches it as a plain runtime error:
+**Mechanism, in the order it actually happened.**
 
-```python
-except Exception as exc:
-    await self._report_runtime_error("market_top_up", exc)
-    next_selection = self._now() + timedelta(seconds=60)
+**1. An order goes absent and nothing ever asks about it again.** At 15:33:50Z
+`BXFF5TKQGDK5` (`aec-itfwo-annlaz-frapar-2026-08-16`, 1.66 of 5 filled) left a
+complete open-order snapshot and was marked `UNKNOWN_ABSENT` /
+`missing_from_complete_snapshot`. That status is deliberately *not* a working
+state — it records our failure to see an order, not a venue transition. But
+`_rest_reconcile` re-reads exactly two sets from the venue: `working_orders()`
+and orders behind `unresolved_intents()`. An absent order is in neither, and
+its intent was already `RECONCILED`. **So it was never asked about again**, and
+`UNKNOWN_ABSENT` became permanent.
+
+**2. One absent row makes the account-wide gate false forever.**
+`risk_state_known(market_slug)` scopes its absence test *only when a slug is
+passed*. `_wait_for_initial_private_state` calls `gate.ready(self.ledger,
+now=now)` with **no slug** — account-wide — so it counts that one row and can
+never return true.
+
+**3. Every stream bind therefore times out.**
+`_open_streams_for_active_market` ends in `_wait_for_initial_private_state`,
+which loops until `gate.ready()` or its 15s deadline. Readiness could no longer
+arrive, so `private_stream.next_event(timeout=remaining)` ran out and raised a
+bare `asyncio.TimeoutError` — which is why the log line carries no message.
+
+**4. A failed bind closes both streams and disconnects the gate.** Its `except`
+runs `gate.on_disconnect()`, closes both streams, re-raises. The caller logs it
+as an ordinary recoverable error, backs off 60s, and continues the run loop —
+now holding two closed streams with `gate.connected = False`. Every market
+reports `execution_state_unknown`, and the answer to unknown state is to
+quarantine.
+
+**5. It retried, and the retries could not have worked.** This is the part the
+first diagnosis got wrong. Top-up re-ran three more times and each bind failed
+identically:
+
+```
+15:37:42  component=market_top_up attempt=1 error=TimeoutError:
+15:41:28  component=market_top_up attempt=2 error=TimeoutError:
+15:56:28  component=market_top_up attempt=3 error=TimeoutError:
+16:03:44  component=market_top_up attempt=4 error=TimeoutError:
 ```
 
-— logs it, backs off, and **continues the run loop**. The runner is now left
-holding closed stream objects with `gate.connected = False`, and nothing ever
-sets it back. `gate.ready()` is account-wide on `connected`, so *every* market
-reports `execution_state_unknown` forever.
-
-`_recover_private_stream` is the path that would fix this, and it does call
-`gate.on_connect()` — but it only fires when the private stream task *raises*
-in the run loop. Reading the already-closed stream never produced that
-exception: there is not one `component=private_stream` line in the whole
-session's log. The supervisor cannot help either, because the process never
-exits.
-
-Confirmed at 15:37:42Z: `component=market_top_up attempt=1 error=TimeoutError:`
-(bare, no message — the asyncio timeout), 21s after the `[top-up]` line at
-15:37:21Z, which is `_rest_reconcile` plus the 15s private-state wait.
+Four attempts, four identical failures, ~19-21s apart from their `[top-up]`
+line — `_rest_reconcile` plus the 15s wait. No retry could ever succeed while
+step 1 held. Neither `_recover_private_stream` nor `_recover_market_stream`
+fired either: both trigger on a `next_*` task *raising*, and reading a stream
+we closed deliberately never raised — the session logged not one
+`component=private_stream` line. The supervisor could not help because the
+process never exited.
 
 **Ruled out** — do not re-chase these:
 
@@ -87,10 +114,12 @@ Confirmed at 15:37:42Z: `component=market_top_up attempt=1 error=TimeoutError:`
   `RECONCILED`.
 - *Unowned `venue:` orders*, the one genuinely account-wide test left in
   `risk_state_known()`. Zero rows in any working state.
-- *A stuck `UNKNOWN_ABSENT` order.* There is exactly one
-  (`BXFF5TKQGDK5`, `aec-itfwo-annlaz-frapar-2026-08-16`, absent since
-  15:33:50Z), but that test is scoped by `market_slug` and that market was
-  released by the same top-up. It cannot explain the other 19.
+- *That the absent order only affected its own market.* It was tempting —
+  `annlaz-frapar` was released by the very top-up that failed, so it looked
+  irrelevant to the other 19, and the absence test *is* per-market. The trap is
+  that `_wait_for_initial_private_state` asks account-wide, where the scoping
+  does not apply. Scoped callers and unscoped callers of the same function
+  disagreeing is what made this hard to see.
 - *A dead stream reader.* `fd=15` held a 39,772-byte `Recv-Q` backlog on first
   look, which looks exactly like a stalled consumer — it drained to 0 within
   three seconds. Those sockets are the REST client, still working.
@@ -100,8 +129,32 @@ throughout, and every order from the 15:07 cohort had already been cancelled by
 15:36. The cost is pure downtime: reward accrues only for resting, and the bot
 rested nothing for the entire window.
 
-**Fix:** a failed bind now leaves a standing request to rebind, and the run
-loop honours it.
+**Fix, in three parts.** Only the first is the root cause; the other two are
+what turned a recoverable fault into 36 silent minutes.
+
+**1. Re-ask about absent orders (the actual fix).** `_rest_reconcile` now
+sweeps `ledger.absent_orders()` in addition to working orders and unresolved
+intents, so an `UNKNOWN_ABSENT` row gets re-retrieved until the venue gives it
+a terminal state. Absence is still never read as cancellation — only a real
+terminal state clears the row, per §6c.
+
+That sweep is deliberately **best-effort**, unlike the strict one above it.
+Working orders are live risk and a failure there must stop the reconcile;
+absent orders are already lost, and letting a persistent 404 abort the whole
+reconcile would take down every bind that depends on it — swapping one
+permanent wedge for another. Failures are reported under `absent_order` so
+repeats escalate through the normal attempt counter instead of sitting silent.
+
+**2. Close streams before replacing them.** `_open_streams_for_active_market`
+now closes the outgoing pair first. `_rotate_reward_market_inner` already did
+this itself; the top-up path did not, so **every top-up leaked a private and a
+market socket** — four in this session alone, on an account whose private feed
+is already split across several connections to stay under the per-connection
+subscription cap. Doing it at the bind covers every caller. Best-effort: a
+socket being discarded must never fail the bind replacing it.
+
+**3. A failed bind now leaves a standing request to rebind**, and the run loop
+honours it.
 
 - `_open_streams_for_active_market` sets `self._streams_need_rebind = True` on
   its failure path and clears it on success. The rotation path composes
@@ -122,11 +175,25 @@ now cancels resting orders that the top-up path was specifically designed to
 leave alone. That is the right trade — with the private stream down a fill can
 land unseen, and quoting blind is what the gate exists to prevent.
 
-Regression tests in `TopUpSafetyTests`:
-`test_a_failed_bind_marks_the_streams_for_rebind`,
+Without part 1, parts 2 and 3 would have shipped a *loud infinite retry* — the
+bind would have failed forever exactly as it did live, just with a Discord
+alert attached. Worth remembering the next time a recovery looks like a fix.
+
+Regression tests. Root cause, in `LiveCommissioningTests`:
+`test_rest_reconcile_reasks_about_an_absent_order`,
+`test_an_unresolvable_absence_does_not_break_the_reconcile`. Recovery, in
+`TopUpSafetyTests`: `test_a_failed_bind_marks_the_streams_for_rebind`,
 `test_a_successful_bind_clears_the_rebind_request`,
-`test_recovery_rebinds_both_streams_and_resumes`. Mutation-checked — flipping
-the flag to `False` on the failure path fails two of the three.
+`test_recovery_rebinds_both_streams_and_resumes`. All mutation-checked —
+emptying the absent sweep fails the first two, flipping the rebind flag to
+`False` fails two of the last three.
+
+**Residual risk, accepted knowingly.** If the venue permanently 404s an absent
+order, the account-wide gate stays false and every bind still fails — the bot
+refuses to quote rather than trading blind, which is correct — but it now
+alerts instead of wedging silently. Making that case self-clearing means
+deciding an order's fate without venue evidence, which is precisely what §6c
+says not to do. If it ever fires, it wants an operator, not a code change.
 
 ---
 

@@ -34,6 +34,7 @@ from liquidity_bot.market_selector import (
     RewardMarketSelection,
     SideOpportunity,
 )
+from liquidity_bot.market_state import MarketState
 from liquidity_bot.models import BookLevel, BookSnapshot, MarketIncentive, MarketMetadata
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
@@ -2197,6 +2198,50 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # one market to keep seven is the trade retirement makes -- losing
         # every market is not a trade, it is a broken session.
         self.assertEqual(stop, "critical:market_retirement_limit_exceeded")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_ordinary_attrition_over_a_long_session_does_not_stop(self):
+        """Only a burst is systemic. A lifetime total is just longevity."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        stop = None
+        for index in range(runner.config.max_markets + 1):
+            slug = f"market-{index}"
+            stop = await runner._retire_market(slug, "stuck")
+            # Space the faults an hour apart, the way a day's games kick off.
+            # Observed 2026-08-16: 31 markets retired across 7h09m, 466 orders
+            # sent, account flat -- and the session stopped anyway, because the
+            # count it was measured against could only ever grow.
+            entry = runner._retired[slug]
+            entry.retired_at -= timedelta(
+                hours=runner.config.max_markets - index)
+
+        self.assertIsNone(stop)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_retirements_after_kickoff_are_not_counted_as_faults(self):
+        """A started game retiring its market is the market ending, not a bug."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        kicked_off = runner._now() - timedelta(minutes=5)
+        stop = None
+        for index in range(runner.config.max_markets + 1):
+            slug = f"market-{index}"
+            state = MarketState(slug)
+            state.market = SimpleNamespace(game_start=kicked_off)
+            runner._markets[slug] = state
+            # The exact shape of the 2026-08-16 stop: a synchronized morning
+            # slate goes book_stale together, exhausts recovery together, and
+            # retires together -- a burst, but not a fault.
+            stop = await runner._retire_market(slug, "unrecoverable_book_stale")
+
+        self.assertIsNone(stop)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

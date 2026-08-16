@@ -412,3 +412,31 @@ us *opening* risk, so `no longer pregame` failed startup.
 
 **Fix:** `_refresh_contracts(for_exit=True)` skips those gates; recovery-bound
 markets are marked retired so they exit and never quote.
+
+### A healthy 7-hour session stopped for outliving its markets — `PENDING`
+
+**Symptom:** the session stopped at 07:27 UTC on 2026-08-16 with
+`critical:market_retirement_limit_exceeded`, after 7h09m. It had sent 466
+orders and the account was flat. Nothing was actually wrong.
+
+**Mechanism:** the systemic bound compared `_retired_ever` — a set that only
+ever grows — against `max_markets`. `unrecoverable_book_*` is permanent by
+`PERMANENT_RETIREMENT_PREFIXES`, so a retired market never leaves that set.
+Any session therefore trips the bound simply by outliving twenty of its
+markets. Measured attrition that day was 31 markets over 7h09m (~4.4/hour), of
+which **30 were `unrecoverable_book_stale`** — books going quiet as their games
+kicked off, which retirement handles *correctly*, since a live game must not be
+quoted. The bound's own comment says it exists to catch "one full slate of
+retirements", i.e. a burst; it was measured against a session lifetime total.
+
+The 07:24–07:27 cluster also shows the second half of the problem: a
+synchronized morning kickoff retires a slate's worth of markets together, which
+is a burst *and* is not a fault.
+
+**Fix:** count only faults inside `RETIREMENT_BURST_WINDOW_SECONDS` (900), and
+exclude markets whose `game_start` has already passed — those are the market
+ending, not the bot failing. Unknown game time still counts as a fault, so the
+last guard against churning every slot is never weakened by a gap.
+
+**Coverage:** two tests, each mutation-verified. Restoring the cumulative count
+fails both; dropping only the kickoff exclusion fails only the kickoff test.

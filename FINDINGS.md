@@ -1173,3 +1173,22 @@ profitability claim or scaling decision.
 5. ~~Should the reducing quote rest at the touch or at break-even basis?~~
    **Answered** 2026-08-14: the touch, no floor. A basis floor sorts winners
    into passive exits and strands losers until they settle. See §2.
+
+## Session-lifetime counters cannot bound a churning system
+
+Measured 2026-08-16. Markets are consumed continuously: a game kicks off, its
+book goes quiet, `book_stale` exhausts `MAX_RECOVERY_ATTEMPTS`, and the market
+retires permanently. That is correct behaviour — a live game must not be quoted
+— but it means **retirement is the normal end of a market's life, not an
+exception**. Observed rate: 31 markets over 7h09m, ~4.4/hour, 30 of them
+`unrecoverable_book_stale`.
+
+Any health bound measured against a cumulative session total therefore fires on
+longevity rather than on sickness, and fires *later* the healthier the session
+is — the opposite of what a guard should do. Bounds on this system must measure
+a **rate or a burst inside a window**, never a lifetime count.
+
+Corollary, and the reason a window alone is not sufficient: sports markets kick
+off in **synchronized slates**, so a whole slate of markets can retire within
+minutes of each other with nothing wrong. Any burst detector must exclude
+markets whose `game_start` has passed, or the morning slate reads as a cascade.

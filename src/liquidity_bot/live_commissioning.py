@@ -116,6 +116,18 @@ RETIRED_EXIT_RETRY_SECONDS = 60
 # and every other market keeps quoting.
 MAX_RETIREMENT_ROUNDS = 10
 
+# How recently a fault must have landed to count toward the systemic bound.
+# The bound exists to catch a whole slate failing AT ONCE. Measured instead
+# against a session-lifetime total it catches every long HEALTHY session,
+# because that total only ever grows: `unrecoverable_book_*` is permanent by
+# PERMANENT_RETIREMENT_PREFIXES, so a retired market never leaves the count
+# and a session trips the bound simply by outliving twenty of its markets.
+# Fifteen minutes covers a real cascade -- book_stale needs MAX_RECOVERY_ATTEMPTS
+# failures at ~60s each, so a dead feed retires the whole slate inside ~12
+# minutes -- while a day's ordinary attrition (measured 2026-08-16: 31 markets
+# over 7h09m, about 4.4/hour) never comes close.
+RETIREMENT_BURST_WINDOW_SECONDS = 900
+
 RETIRING_STRATEGY_CRITICALS = frozenset({
     "hard_exit_attempt_limit_exceeded",
     "hard_exit_retry_window_exceeded",
@@ -2395,14 +2407,42 @@ class CommissioningRunner:
                 "running.",
                 critical=True,
             )
-        # One full slate of retirements is not eight unlucky books, it is a
-        # systemic fault. Stop rather than churn every slot. Markets bound by
-        # recovery share the retired set (they must never quote) but were not
-        # retired for a fault, so they do not count toward the systemic bound.
-        faulted = self._retired_ever - self._recovery_slugs
-        if len(faulted) > self.config.max_markets:
+        # One full slate of retirements AT ONCE is not unlucky books, it is a
+        # systemic fault. Stop rather than churn every slot.
+        #
+        # Two things are excluded, because both produce that shape without any
+        # fault at all. Markets bound by recovery share the retired set (they
+        # must never quote) but were not retired for a fault. And a market
+        # whose game has started is retired by LIFECYCLE: its book stops
+        # updating, book_stale exhausts its recoveries, and it retires
+        # permanently -- correctly, since a live game must not be quoted.
+        #
+        # Observed 2026-08-16: the session stopped after 7h09m having retired
+        # 31 markets, 30 of them `unrecoverable_book_stale` as their games
+        # kicked off. It had sent 466 orders and the account was flat. Nothing
+        # was wrong; a cumulative counter had simply outlived twenty markets,
+        # and a synchronized morning kickoff retired a slate's worth together.
+        horizon = now - timedelta(seconds=RETIREMENT_BURST_WINDOW_SECONDS)
+        recent_faults = {
+            name for name, entry in self._retired.items()
+            if name not in self._recovery_slugs
+            and entry.retired_at >= horizon
+            and not self._retired_past_kickoff(name, now)}
+        if len(recent_faults) > self.config.max_markets:
             return "critical:market_retirement_limit_exceeded"
         return None
+
+    def _retired_past_kickoff(self, slug: str, now: datetime) -> bool:
+        """Has this market's game already started?
+
+        Such a retirement is the market ending, not the bot failing. Unknown
+        game time counts as a fault: the systemic bound is the last guard
+        against churning every slot, so it must not be weakened by a gap.
+        """
+
+        state = self._markets.get(slug)
+        start = getattr(getattr(state, "market", None), "game_start", None)
+        return start is not None and start <= now
 
     # Retirement reasons that being flat does not resolve. A market retired
     # because its book will not parse is still unquotable once flat, so

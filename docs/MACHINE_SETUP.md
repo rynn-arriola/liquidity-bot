@@ -24,12 +24,32 @@ Generate a key **on the machine that will use it**. Never copy a private key
 between machines — that is the thing that makes keys unsafe. Copying the
 `.pub` half is fine; it is public.
 
-On the new machine:
+On the new machine — **Windows / PowerShell** (both workstations here are
+Windows). Step one needs an elevated prompt, the rest do not:
+
+```powershell
+Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent   # admin, once
+ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\makerlab_droplet -C "desktop-2026-08"
+ssh-add $env:USERPROFILE\.ssh\makerlab_droplet
+Get-Content $env:USERPROFILE\.ssh\makerlab_droplet.pub
+```
+
+macOS or Linux:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/makerlab_droplet -C "desktop-2026-08"
+ssh-add ~/.ssh/makerlab_droplet          # --apple-use-keychain on macOS
 cat ~/.ssh/makerlab_droplet.pub
 ```
+
+**Set a passphrase.** This key is the only thing between a stolen machine and a
+server running a live trading bot with funded API keys. The agent above means
+you type it once per boot rather than once per command.
+
+The cost is real and worth knowing: **an encrypted key breaks non-interactive
+SSH** (`BatchMode=yes`) unless the agent holds it. Every deploy and status
+command in this repo is non-interactive, so if they suddenly fail with
+`Permission denied`, the agent is not loaded — run `ssh-add` again.
 
 Then, **from a machine that already has access**, append that public key:
 

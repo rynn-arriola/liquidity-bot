@@ -63,7 +63,14 @@ class ControlledTrialStartup:
             blockers.append("shared account has nonzero positions")
         if self.ledger.unresolved_intents():
             blockers.append("execution ledger has unresolved intents")
-        if not self.ledger.risk_state_known():
+        # Ownership only. An order we merely lost sight of blocks its OWN
+        # market -- `_frame` asks per market and keeps asking -- but it must
+        # not refuse the whole session: this blocker is not in
+        # `_startup_recovery_is_scoped`'s allowed set, so it raises
+        # CommissioningRefused and exits 2, which the supervisor never
+        # restarts. One unexplained row would have kept the bot down
+        # permanently while nineteen healthy markets went unquoted.
+        if not self.ledger.ownership_is_known():
             blockers.append("exchange order ownership or state is unknown")
         return StartupReport(
             not blockers, tuple(blockers), len(orders), nonzero)
@@ -115,26 +122,50 @@ class PrivateStateGate:
         elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
             self.balance_snapshot_seen = True
 
-    def ready(self, ledger: ExecutionLedger, *, now: datetime,
-              market_slug: str | None = None) -> bool:
-        """Whether the private view is fresh and execution state provable.
+    def session_ready(self, ledger: ExecutionLedger, *,
+                      now: datetime) -> bool:
+        """Whether the private view itself is connected, fresh and sane.
 
-        Connection, snapshot and silence checks are account-wide: they measure
-        whether our whole view of the venue can be trusted. ``market_slug``
-        scopes only the execution-state test, because an in-flight cancel in
-        one market says nothing about another. See FINDINGS 6g.
+        Everything here is genuinely account-wide: the connection, both
+        snapshots, silence, and the one ownership fact that means another
+        process is on our key. What it deliberately does NOT require is that
+        every market's bookkeeping is settled -- that is per-market, and asking
+        for it here is what let a single stuck row in one market stop the whole
+        account from trading.
+
+        This is what a stream bind must prove. A bind establishes that we can
+        SEE the venue; whether any particular market may quote is a separate
+        question, asked per market by `ready` below and answered again on every
+        pass. See BUGFIXES 2026-08-16.
         """
 
         if not (self.connected and self.rest_reconciled
                 and not self.order_snapshot_in_progress
                 and self.balance_snapshot_seen
-                and ledger.risk_state_known(market_slug)
+                and ledger.ownership_is_known()
                 and self.last_message_at
                 and self.last_reconcile_at):
             return False
         freshest_state = max(self.last_message_at, self.last_reconcile_at)
         silence = (now - freshest_state).total_seconds()
         return 0 <= silence <= self.max_silence_seconds
+
+    def ready(self, ledger: ExecutionLedger, *, now: datetime,
+              market_slug: str | None = None) -> bool:
+        """Whether this market may build new risk right now.
+
+        The session checks above, plus the per-market execution-state test.
+        ``market_slug`` scopes that test, because an in-flight cancel in one
+        market says nothing about another. See FINDINGS 6g.
+
+        Called with no slug this is still account-wide and still strict -- that
+        is the right question for "is every market settled", and the wrong one
+        for "can we see the venue". Callers that want the latter must ask
+        `session_ready`.
+        """
+
+        return (self.session_ready(ledger, now=now)
+                and ledger.risk_state_known(market_slug))
 
 
 @dataclass(frozen=True)

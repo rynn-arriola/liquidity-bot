@@ -1185,6 +1185,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    def _complete_neighbour_frame(self, runner):
+        """Give market-two a full frame so `state_known` is what decides."""
+
+        primary = runner.state_for("market-one")
+        neighbour = runner.state_for("market-two")
+        neighbour.market = replace(primary.market, slug="market-two")
+        neighbour.incentive = primary.incentive
+        neighbour.book = replace(primary.book, slug="market-two")
+        neighbour.book_observed_at = primary.book_observed_at
+
     async def _absent_order(self, runner, client, *, venue_state):
         """One order the ledger holds working and the venue no longer lists."""
 
@@ -1306,6 +1316,106 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # but now it is reported instead of silently wedging the bot.
         self.assertEqual(len(runner.ledger.absent_orders()), 1)
         self.assertIn("absent_order", runner._runtime_error_counts)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_unresolvable_absence_only_stops_its_own_market(self):
+        """The containment the 2026-08-16 outage was missing.
+
+        An order we cannot get an answer about must block the market it is in
+        -- we genuinely do not know that market's state -- and nothing else.
+        Account-wide, one such row failed every stream bind, and a failed bind
+        closes both streams, so nineteen healthy markets stopped quoting for a
+        row belonging to a twentieth that had already been released.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self._complete_neighbour_frame(runner)
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+
+        async def gone(order_id):
+            raise AdapterError(f"GET /v1/order/{order_id} failed: NotFoundError")
+
+        client.orders.retrieve = gone
+        # Precondition: it really is unresolvable, so containment is the only
+        # thing that can keep the other market quoting.
+        self.assertFalse(runner.ledger.risk_state_known())
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+
+        # The bind must survive it -- this is what failed four times live.
+        await runner._open_streams_for_active_market()
+        self.assertTrue(runner.gate.connected)
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertTrue(runner.gate.session_ready(runner.ledger, now=runner._now()))
+
+        # Blocked where we are actually blind, and nowhere else.
+        self.assertFalse(runner._frame(runner._now(), "market-one").state_known)
+        self.assertTrue(runner._frame(runner._now(), "market-two").state_known)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_unresolvable_absence_does_not_refuse_startup(self):
+        """It must never again be able to keep the bot from starting."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+
+        async def gone(order_id):
+            raise AdapterError(f"GET /v1/order/{order_id} failed: NotFoundError")
+
+        client.orders.retrieve = gone
+
+        restarted, _, _ = self.build_runner(ledger=runner.ledger, client=client)
+        # Must not raise CommissioningRefused.
+        await restarted.preflight()
+
+        self.assertEqual(len(restarted.ledger.absent_orders()), 1)
+        self.assertTrue(restarted.ledger.ownership_is_known())
+        for bot in (runner, restarted):
+            await bot.private_stream.close()
+            await bot.market_stream.close()
+
+    async def test_an_unowned_venue_order_still_stops_everything(self):
+        """The one fact that IS account-wide must not have been loosened.
+
+        An order resting on our key that this bot never placed means another
+        process is trading the account. No market is safe, and no bind should
+        succeed, whatever any per-market bookkeeping says.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self._complete_neighbour_frame(runner)
+        runner.ledger.apply_order_event(
+            "ws", "someone-elses-order",
+            OrderState(
+                client_order_id="venue:not-ours",
+                exchange_order_id="exchange-not-ours",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner.ledger.ownership_is_known())
+        # No bind may succeed while another process is on our key.
+        self.assertFalse(
+            runner.gate.session_ready(runner.ledger, now=runner._now()))
+        self.assertFalse(runner.gate.ready(runner.ledger, now=runner._now()))
+        # Stronger than a blocked frame, and for every market rather than the
+        # one the order names: unowned ownership is a terminal safety event.
+        for slug in ("market-one", "market-two"):
+            with self.assertRaises(RuntimeInvariantViolation):
+                runner._frame(runner._now(), slug)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

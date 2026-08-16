@@ -1111,9 +1111,25 @@ class ExecutionLedger:
             absent_params = (market_slug,)
         unknown_orders = self.connection.execute(
             absent_sql, absent_params).fetchone()[0]
-        unowned_working = self.connection.execute(
+        return unknown_orders == 0 and self.ownership_is_known()
+
+    def ownership_is_known(self) -> bool:
+        """No order resting on our key that this bot never placed.
+
+        The one test here that is genuinely account-wide, and the only one that
+        should ever stop every market at once: a `venue:` order means something
+        is true of the account we cannot explain -- another process on the same
+        key -- and no market is safe while that holds.
+
+        Split out from `risk_state_known` because the rest of that predicate is
+        per-market bookkeeping. Callers that are asking "is the account sane"
+        want this; callers asking "may this market quote" want the scoped
+        predicate. Conflating them is what let one market's stuck row stop the
+        whole account. See BUGFIXES 2026-08-16.
+        """
+
+        return self.connection.execute(
             "SELECT COUNT(*) FROM execution_orders WHERE client_order_id LIKE "
             "'venue:%' AND status IN "
             "('OPEN','NEW','PARTIAL','PENDING','SUBMITTED')"
-        ).fetchone()[0]
-        return unknown_orders == 0 and unowned_working == 0
+        ).fetchone()[0] == 0

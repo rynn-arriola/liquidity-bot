@@ -787,7 +787,13 @@ class CommissioningRunner:
             event = await self.private_stream.next_event(timeout=remaining)
             now = self._now()
             await self._observe_private(event, now)
-            if self.gate.ready(self.ledger, now=now):
+            # `session_ready`, not `ready`: a bind proves we can SEE the venue.
+            # Asking the account-wide `ready` here meant one market's unsettled
+            # bookkeeping could fail the bind for all twenty -- and a bind that
+            # fails closes both streams, so the markets that were perfectly
+            # fine stopped quoting too. Whether any given market may quote is
+            # asked per market, every pass, in `_frame`.
+            if self.gate.session_ready(self.ledger, now=now):
                 return
         raise CommissioningUnavailable(
             "private stream did not become reconciled and fresh")

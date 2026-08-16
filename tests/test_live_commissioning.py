@@ -360,11 +360,19 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         notifier=None,
         auto=False,
         reward_selector=None,
+        ledger=None,
+        client=None,
     ):
-        root = Path(tempfile.mkdtemp(prefix="liquidity-commissioning-"))
-        ledger = ExecutionLedger(root / "ledger.db")
-        self.addCleanup(ledger.close)
-        client = FakeClient()
+        # `ledger` and `client` let a test build a SECOND runner over the state
+        # a previous one left behind -- which is what a restart actually is,
+        # and the only way to cover what preflight does with a ledger it did
+        # not create.
+        if ledger is None:
+            root = Path(tempfile.mkdtemp(prefix="liquidity-commissioning-"))
+            ledger = ExecutionLedger(root / "ledger.db")
+            self.addCleanup(ledger.close)
+        if client is None:
+            client = FakeClient()
         notifier = notifier or FakeNotifier()
         config = CommissioningConfig(
             market_slug=AUTO_REWARD_MARKET if auto else "market-one",
@@ -1238,6 +1246,39 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.ledger.risk_state_known())
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_preflight_clears_an_absence_left_by_a_previous_session(self):
+        """Otherwise the bot can never start again.
+
+        The absent row survives in the ledger across a restart. Preflight only
+        reconciled when there were working orders or unresolved intents -- an
+        absence is neither -- so the sweep that could clear it never ran.
+        `ControlledTrialStartup` then reads `risk_state_known()` account-wide,
+        blocks on "exchange order ownership or state is unknown", and that
+        blocker is not in `_startup_recovery_is_scoped`'s allowed set: preflight
+        raises CommissioningRefused and exits 2, which the supervisor never
+        restarts.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._absent_order(
+            runner, client, venue_state="ORDER_STATE_CANCELED")
+        self.assertFalse(runner.ledger.risk_state_known())
+
+        # A second session against the same ledger, exactly as a restart sees
+        # it -- the absence is already there before preflight runs.
+        restarted, _, _ = self.build_runner(ledger=runner.ledger, client=client)
+        self.assertEqual(len(restarted.ledger.absent_orders()), 1)
+
+        await restarted.preflight()
+
+        self.assertEqual(restarted.ledger.absent_orders(), [])
+        self.assertTrue(restarted.ledger.risk_state_known())
+        for bot in (runner, restarted):
+            await bot.private_stream.close()
+            await bot.market_stream.close()
 
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.

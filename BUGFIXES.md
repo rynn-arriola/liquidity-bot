@@ -145,6 +145,18 @@ reconcile would take down every bind that depends on it — swapping one
 permanent wedge for another. Failures are reported under `absent_order` so
 repeats escalate through the normal attempt counter instead of sitting silent.
 
+**1b. Reconcile at startup when an absence is pending.** The same blind spot
+sat in `preflight`, which only reconciled `if working_orders(owned_only=True)
+or unresolved_intents()`. An absence is neither, so the sweep that clears it
+never ran, and the absent row survives a restart in the ledger.
+`ControlledTrialStartup` then blocks on "exchange order ownership or state is
+unknown" — a blocker `_startup_recovery_is_scoped` does **not** allow — so
+preflight raises `CommissioningRefused` and exits 2, which the supervisor never
+restarts. **One order we lost sight of would have stopped the bot from ever
+starting again.** Caught by mutation-checking before the restart, not after:
+reverting this line reproduces `CommissioningRefused: exchange order ownership
+or state is unknown` exactly.
+
 **2. Close streams before replacing them.** `_open_streams_for_active_market`
 now closes the outgoing pair first. `_rotate_reward_market_inner` already did
 this itself; the top-up path did not, so **every top-up leaked a private and a
@@ -181,6 +193,7 @@ alert attached. Worth remembering the next time a recovery looks like a fix.
 
 Regression tests. Root cause, in `LiveCommissioningTests`:
 `test_rest_reconcile_reasks_about_an_absent_order`,
+`test_preflight_clears_an_absence_left_by_a_previous_session`,
 `test_an_unresolvable_absence_does_not_break_the_reconcile`. Recovery, in
 `TopUpSafetyTests`: `test_a_failed_bind_marks_the_streams_for_rebind`,
 `test_a_successful_bind_clears_the_rebind_request`,

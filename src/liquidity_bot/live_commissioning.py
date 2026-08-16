@@ -957,7 +957,18 @@ class CommissioningRunner:
         await self.private_stream.start(list(self.active_slugs))
         self.gate.on_connect()
         await self.market_stream.start(list(self.active_slugs))
-        if self.ledger.working_orders(owned_only=True) or self.ledger.unresolved_intents():
+        # Absent orders belong here for the same reason they belong in the
+        # `_rest_reconcile` sweep: they are in neither of the other two sets,
+        # so without this the reconcile that could clear them never runs at
+        # startup. `ControlledTrialStartup` then reads `risk_state_known()`
+        # account-wide, finds the absence, and blocks on "exchange order
+        # ownership or state is unknown" -- which `_startup_recovery_is_scoped`
+        # does not allow, so preflight raises CommissioningRefused and exits 2,
+        # a code the supervisor never restarts. One order we lost sight of
+        # would have kept the bot from ever starting again.
+        if (self.ledger.working_orders(owned_only=True)
+                or self.ledger.unresolved_intents()
+                or self.ledger.absent_orders()):
             await self._rest_reconcile(now)
         await self._refresh_earnings(now)
         accepted = ReadinessVerdict(

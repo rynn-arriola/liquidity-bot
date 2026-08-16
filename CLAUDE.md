@@ -28,6 +28,29 @@ real account.** Every change can lose it.
    per-machine and do not sync, which is why everything durable lives in these
    files instead.
 
+## What is authoritative for what
+
+Git is the source of truth for **code and decisions**, and nothing else. Four
+questions have a different authority, and collapsing them has already produced
+two wrong calls:
+
+| question | authority |
+|---|---|
+| why something is the way it is | this repo |
+| what code is actually running | `DEPLOYED_COMMIT` + the runner's command line on the droplet |
+| what limits are in effect | `commissioning.py` defaults, **and** the runner's command line, which would override them |
+| do we hold a position or an order | **the venue**, queried live — never the ledger |
+| trading history and P&L | the ledger on the droplet (currently wrong by about -$22.41; see `NEXT.md`) |
+
+The repo records intent. The droplet is the fact of what executes. The venue is
+the fact of what is owned. They drift apart silently — `DEPLOYED_COMMIT` is
+written by hand and goes stale the moment someone forgets — and on 2026-08-16
+the markdown confidently stated safety limits the code had disagreed with for
+weeks, in the direction that made the bot look ~20x safer than it was.
+
+**A number in prose is a copy, not a source.** Quote it with the date it was
+verified, or cite `commissioning.py`.
+
 ## Where things live
 
 | file | what it is |

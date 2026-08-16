@@ -176,6 +176,57 @@ class OpportunityTests(unittest.TestCase):
         )
 
 
+class RankingTests(unittest.IsolatedAsyncioTestCase):
+    """Only twenty slots exist, so which twenty is the whole game."""
+
+    async def test_the_richer_pool_wins_the_slot(self):
+        """Ranked by projected reward, not by a field that ties everywhere.
+
+        `_opportunity_key` led with -best_expected_net_value, which is floored
+        to 1e-09 on every side whenever the reward-cost gate is advisory -- so
+        every market TIED on the primary key and ranking fell through to
+        tiebreakers that do not predict earnings. Measured live 2026-08-15: the
+        chosen twenty overlapped the best twenty on only seven, holding a slot
+        worth 0.000014 while one worth 0.010063 went unquoted.
+        """
+        # IDENTICAL pools and targets, so every old tiebreaker ties. The only
+        # difference is depth inside the reward band -- the competition. A thin
+        # book means a bigger share of the same pool, which is exactly what
+        # projected reward measures and what the old key could not see.
+        slugs = ("crowded", "thin")
+        gateway = FakeGateway(
+            {s: market(s) for s in slugs},
+            {s: incentive(s, pool=100.0) for s in slugs},
+            {"crowded": book("crowded", touch_size=5000),
+             "thin": book("thin", touch_size=5)})
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(quote_size=1.0),
+            fill_hazard_model=FixedFillHazard(0.05))
+
+        out = await selector.select(now=NOW)
+        ranked = [item.market.slug for item in out.top_viable(2)]
+
+        self.assertEqual(
+            ranked[0], "thin",
+            "the market where our size is a bigger share must win the slot")
+
+    async def test_projected_reward_total_sums_the_eligible_sides(self):
+        gateway = FakeGateway(
+            {"one": market("one")}, {"one": incentive("one", pool=100.0)},
+            {"one": book("one")})
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(quote_size=1.0),
+            fill_hazard_model=FixedFillHazard(0.05))
+
+        out = await selector.select(now=NOW)
+        item = out.opportunities[0]
+
+        self.assertAlmostEqual(
+            item.projected_reward_total,
+            sum(s.projection.projected_reward for s in item.sides
+                if s.projection is not None and s.projection.eligible))
+
+
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_reward_programs_are_considered_not_only_high_pool(self):
         markets = {slug: market(slug) for slug in ("high", "low")}

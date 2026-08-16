@@ -31,6 +31,31 @@ Ground rules that came out of these:
 
 ## 2026-08-15
 
+### Market selection ranked on a field that ties everywhere
+
+**Symptom:** of the 20 markets bound, only **7** were in the best 20 by
+projected reward. A slot worth `0.000014` was held while one worth `0.010063`
+went unquoted — a 700x spread inside the same slate.
+
+**Mechanism:** `_opportunity_key` led with `-best_expected_net_value`. That
+value is floored to `1e-09` on every side whenever
+`enforce_reward_cost_gate` is False — advisory since 2026-08-14. So every
+market tied on the primary key and ranking fell through to tiebreakers that do
+not predict earnings. **One field served as both the economic filter and the
+sort key**, so switching the gate off silently switched ranking off too, and
+nothing failed loudly.
+
+**Fix:** `projected_reward_total` becomes the primary key. The old key is
+demoted rather than deleted — it becomes meaningful again if the gate is
+re-armed — and the remaining tiebreakers keep their order, since it was never
+established they weren't protecting against something real.
+
+**Coverage gap, stated plainly:** the unit tests do NOT discriminate this.
+`maximum_remaining_reward` is already a tiebreaker and tracks projected reward
+closely on a two-market fixture, so reverting the primary key still passes.
+The divergence only appears across a live 80-market slate. Verify with
+`/tmp/rank.py` on the droplet: chosen-20 vs best-20 overlap was **7/20**.
+
 ### Already-retired markets escalated themselves to abandonment
 
 **Symptom:** the same market retiring over and over — round 1, 2, 4, 8 — then

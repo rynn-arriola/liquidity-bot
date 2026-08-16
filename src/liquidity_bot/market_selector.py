@@ -118,6 +118,25 @@ class RewardMarketOpportunity:
         )
 
     @property
+    def projected_reward_total(self) -> float:
+        """What this market is actually expected to pay us.
+
+        Folds in pool size, our SHARE of it, and the time remaining -- share
+        being order_score / total_score, where total_score is everyone else's
+        depth inside the reward band. So a small denominator, meaning little
+        competition, is what makes a market worth a slot.
+
+        Only twenty slots exist, so which twenty is the whole game. Measured
+        2026-08-15: the selected twenty overlapped the best twenty by this
+        number on only SEVEN, and a slot worth 0.000014 was held while one
+        worth 0.010063 went unquoted -- a 700x spread inside the same slate.
+        """
+
+        return sum(
+            item.projection.projected_reward for item in self.sides
+            if item.projection is not None and item.projection.eligible)
+
+    @property
     def reward_density(self) -> float:
         return self.period.reward_pool / self.period.target_size
 
@@ -336,6 +355,21 @@ def _opportunity_key(
     best = item.best_expected_net_value
     return (
         0 if item.viable_sides else 1,
+        # Projected reward first, because it is the quantity we are paid on.
+        #
+        # This was `-best_expected_net_value`, which is floored to 1e-09 for
+        # every side whenever enforce_reward_cost_gate is False -- advisory
+        # since 2026-08-14. So every market TIED on the primary key and the
+        # ranking fell through to tiebreakers that do not predict earnings.
+        # One field served as both the economic filter and the sort key, so
+        # switching the gate off silently switched the ranking off too, and
+        # nothing failed loudly.
+        #
+        # The old key is kept immediately below rather than deleted: when the
+        # gate is re-armed it becomes meaningful again and resumes as a
+        # tiebreak. The remaining keys stay in order because it has not been
+        # established that they were not protecting against something real.
+        -item.projected_reward_total,
         -(best if best is not None else 0.0),
         -item.historical_reward_yield_prior,
         item.midpoint_distance,

@@ -563,6 +563,57 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(actions[0].side, "offer")
 
+    def test_an_expensive_early_cross_is_refused_and_keeps_resting(self):
+        """The cap that could never fire.
+
+        `max_exit_loss` served BOTH this and the entry gate, wired to the $40
+        session stop -- and five contracts cannot lose $40, so every crossed
+        loss went through unchallenged, including the $6.61 and $6.15 measured
+        on 2026-08-16. `max_early_exit_loss` separates the two.
+        """
+
+        collapsed = book(T0, bid=.05, offer=.07, depth=100)
+        reconciler = DesiredStateReconciler(
+            policy(age=15, max_early_exit_loss=0.5))
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=60), position="2", orders=(),
+            opened=T0, entry=.90, snapshot=collapsed))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
+        self.assertEqual(actions[0].reason, "hard_exit_price_cap_exceeded")
+
+    def test_the_kickoff_deadline_overrides_the_early_exit_cap(self):
+        """A cap must never hold a position into settlement."""
+
+        collapsed = book(T0, bid=.05, offer=.07, depth=100)
+        reconciler = DesiredStateReconciler(
+            policy(age=900, force_exit_before_start_seconds=300,
+                   max_early_exit_loss=0.5))
+        at_deadline = T0 + timedelta(hours=5) - timedelta(seconds=200)
+
+        actions = reconciler.plan(frame(
+            now=at_deadline, position="2", orders=(),
+            opened=at_deadline - timedelta(seconds=5), entry=.90,
+            snapshot=collapsed))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "hard_inventory_timeout")
+
+    def test_the_early_exit_cap_does_not_touch_the_entry_gate(self):
+        """Entry reads `max_exit_loss`; only the early cross reads the new one.
+
+        Tightening the shared number would have tightened entry ~50x and
+        refused most markets. Same book, same entry gate, both caps.
+        """
+
+        tight = DesiredStateReconciler(policy(max_early_exit_loss=0.01))
+        loose = DesiredStateReconciler(policy(max_early_exit_loss=40.0))
+
+        self.assertEqual(
+            [(a.kind, a.side, a.price) for a in tight.plan(frame())],
+            [(a.kind, a.side, a.price) for a in loose.plan(frame())])
+
     def test_a_profitable_exit_steps_one_tick_inside_the_touch(self):
         """Priority is leaving, not the last cent.
 

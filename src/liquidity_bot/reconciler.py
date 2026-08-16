@@ -55,6 +55,25 @@ class ReconcilerPolicy:
     max_market_worst_loss: float
     max_portfolio_worst_loss: float
     max_exit_loss: float
+    # What an EARLY cross may cost, before the kickoff deadline makes it
+    # mandatory. Separate from `max_exit_loss` above, which is the ENTRY gate
+    # -- do not open a side whose stressed close would cost more than this.
+    # Both read the same number until 2026-08-16, and it was wired to the $40
+    # session stop, so the exit half could never fire: five contracts cannot
+    # lose $40. It was harmless at the original 1 contract / 1 market / $2 and
+    # became meaningless as size grew, exactly as the loss stops and the
+    # exposure budgets did before they were split.
+    #
+    # $4.00 chosen from the 17 observed crossed losses: 0.10 0.36 0.64 0.70
+    # 0.83 1.01 1.59 2.15 2.32 2.42 3.00 3.05 3.23 3.60 4.20 6.15 6.61.
+    # Median 2.32, p75 3.23, p90 6.15. A cap here blocks 3 and defers $16.96
+    # of $41.96 -- 40% of the damage from 18% of the events -- while leaving
+    # the median exit untouched. Deliberately NOT tighter: at $0.75 it blocks
+    # 13 of 17 and defers $40.16, which is not trimming a tail, it is a policy
+    # of never crossing before kickoff, and it defers rather than avoids the
+    # loss. That trade needs evidence about mean reversion between the
+    # inventory clock and kickoff, which we do not have.
+    max_early_exit_loss: float = 4.0
     exit_depth_haircut: float = 0.5
     taker_theta: float = 0.06
     max_book_age_seconds: float = 5.0
@@ -80,7 +99,7 @@ class ReconcilerPolicy:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
             raise ValueError("quote size and inventory age must be positive")
         if min(self.max_market_worst_loss, self.max_portfolio_worst_loss,
-               self.max_exit_loss) <= 0:
+               self.max_exit_loss, self.max_early_exit_loss) <= 0:
             raise ValueError("loss budgets must be positive")
         if self.max_portfolio_worst_loss < self.max_market_worst_loss:
             raise ValueError("portfolio budget must cover a market budget")
@@ -430,7 +449,7 @@ class DesiredStateReconciler:
                     # exit-side depth of 1.0 (FINDINGS section 5).
                     return self._critical(frame, "hard_exit_deferred_thin_book")
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
-            if (exit_result.pnl < -self.policy.max_exit_loss
+            if (exit_result.pnl < -self.policy.max_early_exit_loss
                     and not pre_kickoff_due):
                 # Before the kickoff deadline a too-expensive exit can wait for
                 # a better book. At the deadline it cannot: refusing here holds

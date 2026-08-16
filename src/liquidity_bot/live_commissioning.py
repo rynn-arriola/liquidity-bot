@@ -321,6 +321,7 @@ class CommissioningRunner:
             max_market_worst_loss=float(config.max_market_exposure_usd),
             max_portfolio_worst_loss=float(config.max_portfolio_exposure_usd),
             max_exit_loss=float(config.max_market_loss_usd),
+            max_early_exit_loss=float(config.max_early_exit_loss_usd),
             exit_depth_haircut=.5,
             max_book_age_seconds=5,
             cancel_confirm_grace_seconds=5,

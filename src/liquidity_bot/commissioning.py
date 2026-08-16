@@ -122,6 +122,22 @@ class CommissioningConfig:
     max_market_loss_usd: Decimal = Decimal("40")
     max_session_loss_usd: Decimal = Decimal("40")
     hard_stop_loss_usd: Decimal = Decimal("45")
+    # What an EARLY cross may cost, before the kickoff deadline makes one
+    # mandatory. A third member of the family split on 2026-08-14: it read
+    # `max_market_loss_usd` and so could never fire, because five contracts
+    # cannot lose $40. "Stop the session after losing $40" and "do not pay
+    # more than $4 to leave one position ahead of the deadline" are different
+    # statements, and the entry gate is a third thing again -- it keeps
+    # `max_market_loss_usd`, so entry behaviour is unchanged by this.
+    #
+    # Chosen from the 17 crossed losses measured 2026-08-16 (median $2.32,
+    # p75 $3.23, p90 $6.15): $4 blocks the three worst and defers $16.96 of
+    # $41.96, 40% of the damage from 18% of the events, leaving the median
+    # exit alone. Tighter values are not a tail cut -- $0.75 blocks 13 of 17 --
+    # and a cap defers a loss rather than avoiding it, so buying that trade
+    # needs mean-reversion evidence between the inventory clock and kickoff
+    # that we do not have yet. See FINDINGS.
+    max_early_exit_loss_usd: Decimal = Decimal("4")
     # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
     # one pair of numbers served as both, which is incoherent once size grows:
     # "stop after losing $40" and "never hold more than $40 of worst case" are

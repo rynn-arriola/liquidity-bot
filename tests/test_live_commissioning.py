@@ -995,6 +995,90 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_no_alarm_before_the_quiet_threshold(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(["market-one"])
+        notifier.messages.clear()  # preflight sends its own startup banner
+        start = runner._now()
+
+        await runner._alarm_if_quoting_nothing(start, resting=0, reasons=())
+        await runner._alarm_if_quoting_nothing(
+            start + timedelta(seconds=runner.QUIET_ALARM_SECONDS - 1),
+            resting=0, reasons=())
+
+        self.assertEqual(notifier.messages, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_quoting_nothing_for_too_long_alarms_once_with_the_reason(self):
+        """Both 2026-08-16 outages looked healthy and earned nothing, and both
+        were found by an operator happening to look. Reward accrues only for
+        resting time, so this alarms on the symptom and reports the cause."""
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(["market-one"])
+        notifier.messages.clear()  # preflight sends its own startup banner
+        start = runner._now()
+        late = start + timedelta(seconds=runner.QUIET_ALARM_SECONDS + 1)
+
+        await runner._alarm_if_quoting_nothing(start, resting=0, reasons=())
+        await runner._alarm_if_quoting_nothing(
+            late, resting=0, reasons=(("execution_state_unknown", 20),))
+
+        self.assertEqual(len(notifier.messages), 1)
+        body, critical = notifier.messages[0]
+        self.assertIn("execution_state_unknown=20", body)
+        self.assertTrue(critical, "an earning outage needs to page, not log")
+
+        # Edge-triggered: an alarm that repeats every summary gets muted.
+        await runner._alarm_if_quoting_nothing(
+            late + timedelta(seconds=3600), resting=0, reasons=())
+        self.assertEqual(len(notifier.messages), 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_quoting_again_clears_and_reports_recovery(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(["market-one"])
+        notifier.messages.clear()  # preflight sends its own startup banner
+        start = runner._now()
+        await runner._alarm_if_quoting_nothing(start, resting=0, reasons=())
+        await runner._alarm_if_quoting_nothing(
+            start + timedelta(seconds=runner.QUIET_ALARM_SECONDS + 1),
+            resting=0, reasons=())
+
+        await runner._alarm_if_quoting_nothing(
+            start + timedelta(seconds=1200), resting=3, reasons=())
+
+        self.assertEqual(len(notifier.messages), 2)
+        self.assertIn("quoting again", notifier.messages[1][0])
+        self.assertIsNone(runner._quiet_since)
+        # ...and it can arm again for the next outage.
+        self.assertFalse(runner._quiet_alarm_sent)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_recovery_before_the_threshold_says_nothing(self):
+        """A rotation or top-up rebind passes through zero resting. That is
+        not an outage and must not page anyone."""
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(["market-one"])
+        notifier.messages.clear()  # preflight sends its own startup banner
+        start = runner._now()
+
+        await runner._alarm_if_quoting_nothing(start, resting=0, reasons=())
+        await runner._alarm_if_quoting_nothing(
+            start + timedelta(seconds=60), resting=4, reasons=())
+
+        self.assertEqual(notifier.messages, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_quarantine_scoped_to_one_market_spares_the_others(self):
         """One market's fault must not cancel seven healthy quotes.
 

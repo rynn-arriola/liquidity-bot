@@ -182,6 +182,13 @@ class CommissioningResult:
 class CommissioningRunner:
     """Compose the tested primitives into one deliberately narrow live loop."""
 
+    # How long "up but resting nothing" may last before it is worth waking
+    # someone. Long enough that a rotation, a top-up rebind or a slate between
+    # kickoffs passes quietly; short enough that neither 2026-08-16 outage
+    # could have run its full length unannounced. The summary that drives it
+    # runs every 5 minutes, so this is effectively three summaries of silence.
+    QUIET_ALARM_SECONDS = 900.0
+
     def __init__(
         self,
         client: Any,
@@ -243,6 +250,9 @@ class CommissioningRunner:
         # ever retries -- observed live 2026-08-16, 24 minutes of silent
         # downtime before an operator noticed. See BUGFIXES 2026-08-16.
         self._streams_need_rebind = False
+        # "Up, healthy, and resting nothing" -- see `_alarm_if_quoting_nothing`.
+        self._quiet_since: datetime | None = None
+        self._quiet_alarm_sent = False
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -1976,27 +1986,29 @@ class CommissioningRunner:
                       if oldest_book is not None else None)
         private_age = ((now - self.gate.last_message_at).total_seconds()
                        if self.gate.last_message_at else None)
+        # Counted from resting orders, never from `[action]` log activity: a
+        # market that placed its quotes and is resting quietly logs no actions
+        # at all, so an activity-based count falls exactly when things are
+        # going well. Measured 2026-08-16 -- it read 17 while only 9 markets
+        # actually held an order.
+        #
+        # Reads the ledger directly rather than `_working_orders`, which raises
+        # RuntimeInvariantViolation on an order with no owned place intent. The
+        # summary is also sent from the shutdown loop, where that exception is
+        # caught as a failure to prove flat -- so a reporting metric would have
+        # kept a flat process from stopping.
+        resting_markets = sum(
+            1 for slug in self.active_slugs
+            if self.ledger.working_orders(slug))
+        idle_reasons = self._idle_market_reasons()
         payload = build_liquidity_summary(LiquiditySummary(
             mode="LIVE",
             readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
             observed_at=now,
             session_started_at=self.started_at or now,
             active_markets=len(self.active_slugs),
-            # Counted from resting orders, never from `[action]` log activity:
-            # a market that placed its quotes and is resting quietly logs no
-            # actions at all, so an activity-based count falls exactly when
-            # things are going well. Measured 2026-08-16 -- it read 17 while
-            # only 9 markets actually held an order.
-            #
-            # Reads the ledger directly rather than `_working_orders`, which
-            # raises RuntimeInvariantViolation on an order with no owned place
-            # intent. The summary is also sent from the shutdown loop, where
-            # that exception is caught as a failure to prove flat -- so a
-            # reporting metric would have kept a flat process from stopping.
-            resting_markets=sum(
-                1 for slug in self.active_slugs
-                if self.ledger.working_orders(slug)),
-            idle_market_reasons=self._idle_market_reasons(),
+            resting_markets=resting_markets,
+            idle_market_reasons=idle_reasons,
             reward_eligible_sides=sum(
                 len(self.state_for(slug).reward_eligible)
                 for slug in self.active_slugs),
@@ -2074,6 +2086,61 @@ class CommissioningRunner:
             flush=True,
         )
         await self.notifier.send_payload_async(payload, critical=critical)
+        await self._alarm_if_quoting_nothing(
+            now, resting=resting_markets, reasons=idle_reasons)
+
+    async def _alarm_if_quoting_nothing(
+        self, now: datetime, *, resting: int, reasons: tuple[tuple[str, int], ...],
+    ) -> None:
+        """Say something when the process is healthy and earning nothing.
+
+        Every other guard in this file targets a failure already seen. This one
+        targets the shape they all shared: the process up, the log ticking, the
+        supervisor content, and not one order resting. Both 2026-08-16 outages
+        looked exactly like that -- 36 minutes wedged on a stale absence, then
+        79 minutes down after a crash -- and both were found by an operator
+        happening to look, not by anything the bot said.
+
+        Reward accrues only for resting time, so "up but resting nothing" is
+        the symptom that matters regardless of which defect caused it, which is
+        why this alarms on the symptom and merely reports the cause.
+
+        Zero resting is not automatically a fault -- the economic gate declining
+        every market is a legitimate quiet, and so is a slate between kickoffs.
+        The blocker breakdown is what separates them, so it is carried in the
+        message rather than judged here: `target_not_met` reads very
+        differently from `execution_state_unknown` on twenty markets.
+
+        Edge-triggered. It fires once when the quiet passes the threshold and
+        once more when quoting resumes, never on every summary -- an alert that
+        repeats every five minutes is one that gets muted, and a muted alert is
+        worse than none.
+        """
+
+        if not self.active_slugs:
+            return
+        if resting > 0:
+            if self._quiet_since is not None:
+                if self._quiet_alarm_sent:
+                    await self.notifier.send_async(
+                        f"✅ Liquidity Bot is quoting again: {resting} of "
+                        f"{len(self.active_slugs)} markets resting.")
+                self._quiet_since = None
+                self._quiet_alarm_sent = False
+            return
+        if self._quiet_since is None:
+            self._quiet_since = now
+            return
+        quiet_for = (now - self._quiet_since).total_seconds()
+        if self._quiet_alarm_sent or quiet_for < self.QUIET_ALARM_SECONDS:
+            return
+        self._quiet_alarm_sent = True
+        detail = ", ".join(f"{name}={count}" for name, count in reasons) or "none"
+        await self.notifier.send_async(
+            f"⚠️ Liquidity Bot has rested NO orders for {quiet_for / 60:.0f} "
+            f"minutes across {len(self.active_slugs)} bound markets. Reward "
+            f"accrues only while resting. Idle reasons: {detail}.",
+            critical=True)
 
     async def _report_runtime_error(
         self, component: str, exc: Exception, attempt: int | None = None,

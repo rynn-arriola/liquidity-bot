@@ -201,12 +201,33 @@ Regression tests. Root cause, in `LiveCommissioningTests`:
 emptying the absent sweep fails the first two, flipping the rebind flag to
 `False` fails two of the last three.
 
-**Residual risk, accepted knowingly.** If the venue permanently 404s an absent
-order, the account-wide gate stays false and every bind still fails — the bot
-refuses to quote rather than trading blind, which is correct — but it now
-alerts instead of wedging silently. Making that case self-clearing means
-deciding an order's fate without venue evidence, which is precisely what §6c
-says not to do. If it ever fires, it wants an operator, not a code change.
+**Verified in production 2026-08-16T16:44Z**, restarting on `a02bbfe` with the
+offending row still in the live ledger. Eight minutes in: **18 orders resting
+across 18 markets**, one transient `execution_state_unknown` (the ordinary
+in-flight cancel), and every other recovery line `book_stale` — which is the
+normal startup state, fired once per market before its first book. Compare the
+broken window: 144 `execution_state_unknown` and zero placements.
+
+**The stuck row did NOT resolve, and the reason is worth recording.** The sweep
+asked; the venue answered with the record it had already given us, whose
+`event_at` is still `15:14:37.322033`. `_accept_event` keys on
+`order:<id>:<event_at>`, so that answer deduped against the copy applied at
+15:14:45 and changed nothing. And even without the dedupe it would not have
+helped: that record is non-terminal, so `resolves_absence` would not fire. The
+venue has dropped the order from its open-order snapshot while still serving a
+working status for it on `GET /v1/order/{id}` — an inconsistency we cannot
+resolve from our side.
+
+So the residual risk is real and it landed. **It now costs nothing**, which is
+the whole point of the containment work: `annlaz-frapar` is not bound (its game
+started long ago) and the row blocks only that dead market. Before the
+containment change this same row stopped all twenty.
+
+If it ever needs actually clearing, the honest options are an operator
+adjudication or letting a replayed venue record resolve an absence despite the
+dedupe. The latter is a real change to event-identity semantics and should not
+be made casually — a replay is normally exactly what dedupe exists to reject.
+Neither is worth doing while the cost is zero.
 
 ---
 

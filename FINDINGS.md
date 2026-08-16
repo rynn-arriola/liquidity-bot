@@ -1484,3 +1484,61 @@ one-sided-record defect (manual closes, IOC exits that never reach
 **Fixed so far:** exits now rest one tick inside the touch while still at or
 above entry, to raise passive fill probability and reach the clock less often.
 The `max_exit_loss` split is identified but NOT yet done.
+
+## Re-pricing costs ~70 seconds of not resting, and that is where coverage goes
+
+Measured 2026-08-16T21:47-21:56Z, first clean session after the day's fixes.
+
+The Discord summary read **8 of 20 markets resting**, with idle reasons
+`no_quote_yet 6` and `target_not_met 6`. `target_not_met` is the reward gate
+declining correctly -- the venue pays only once a side reaches `targetSize`.
+`no_quote_yet` is the interesting half: it means the market HAS a book, has NO
+economic blocker, and still holds no order.
+
+Those markets are not idle. They are being worked constantly -- 18 of 20 saw an
+action inside three minutes -- but the orders do not stay. One market's bid
+walked 0.69 -> 0.72 -> 0.75 -> 0.87 in six minutes, and every move produced a
+`resting_price_left_the_touch` cancel followed by a replacement on a LATER pass:
+
+```
+21:49:49  PLACE  bid 0.69
+21:50:10  CANCEL bid              rested 21s
+21:51:24  PLACE  bid 0.72           <- 74s holding nothing
+21:51:57  CANCEL bid              rested 33s
+21:52:44  PLACE  bid 0.75           <- 47s holding nothing
+21:54:22  CANCEL bid              rested 98s
+21:56:06  PLACE  bid 0.87           <- 70s holding nothing
+```
+
+Across every market and side in that window:
+
+```
+cancel -> next place on the SAME side: 6 samples
+  median 69.4s   mean 81.2s   min 40.0s   max 157.6s
+  total dark time: 487s across 6 re-prices
+```
+
+**A re-price costs about seventy seconds of not earning.** The cancel is one
+mutation and the replacement is another, the driver applies at most one
+mutation per market per service pass, so the two land on different passes and
+the gap is a full service interval. On a book that moves, a side spends roughly
+half its life dark, and the resting count reads 8-9 out of 20 no matter how
+healthy the process is.
+
+**This is not churn in the 2026-08-14 sense** -- those quotes died two seconds
+after placement to a state bug. These cancels are all correct: the touch really
+did move, and an order off the touch earns a discounted score or nothing. The
+loss is in the latency between deciding to re-price and having re-priced.
+
+**Do not fix this by widening the cancel trigger.** Leaving a stale order at the
+old price trades dark time for scoring at a discount, and the reward formula is
+`discountFactor ^ ticks * size` -- the penalty compounds per tick, so a badly
+stale order is worth little more than no order. The candidates worth testing
+are (a) a shorter service interval, which shrinks every gap directly, and (b)
+placing the replacement before cancelling the old, which removes the gap
+entirely at the cost of briefly holding two quotes on one side -- bounded, but
+it doubles that side's exposure for the overlap and needs its own risk check.
+
+**Unmeasured:** the resting FRACTION over a long window, which is the number
+that actually maps to reward. 8/20 is an instantaneous count and understates
+coverage if the dark windows are staggered across markets.

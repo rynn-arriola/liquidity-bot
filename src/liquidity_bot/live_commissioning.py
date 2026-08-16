@@ -1524,8 +1524,12 @@ class CommissioningRunner:
         must exist and be no older than ``max_book_age_seconds``.
         """
 
-        state = self.state_for(slug)
-        if state.book is None or state.book_observed_at is None:
+        # `.get`, not `state_for`: this is a predicate and must not create
+        # state. `_bind_markets` deliberately discards entries for markets the
+        # session no longer holds, so that a stale book can never authorize a
+        # quote -- a read that resurrects the key works against that contract.
+        state = self._markets.get(slug)
+        if state is None or state.book is None or state.book_observed_at is None:
             return False
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
@@ -2177,6 +2181,34 @@ class CommissioningRunner:
                 and not any(str(row["market_slug"]) == slug
                             for row in self.ledger.unresolved_intents()))
 
+    def _position_near_its_flatten_deadline(self, now: datetime) -> bool:
+        """True when held inventory is close enough to kickoff that a scan hurts.
+
+        The top-up runs in exactly the state full rotation refuses to run in --
+        `_safe_to_scan()` False, which includes holding a position. The
+        rotation blockers are not only about quarantining orders: they also
+        keep a long blocking scan away from live inventory. A selection scan
+        measured 25-26 seconds, and for its duration `_decide_for_market` runs
+        for no market, so `_inventory_plan` cannot issue the pre-kickoff
+        flatten. Spending any of the 300-second window that way risks the one
+        outcome the whole exit design exists to prevent: settlement.
+
+        Unknown game time counts as near. A scan is deferrable; a missed
+        flatten is not.
+        """
+
+        margin = self.reconciler.policy.force_exit_before_start_seconds * 2
+        for slug in self.active_slugs:
+            if self.ledger.position(slug) == 0:
+                continue
+            state = self._markets.get(slug)
+            start = getattr(getattr(state, "market", None), "game_start", None)
+            if start is None:
+                return True
+            if (start - now).total_seconds() <= margin:
+                return True
+        return False
+
     async def _top_up_active_markets(self, now: datetime) -> bool:
         """Replace kicked-off markets without disturbing the ones still resting.
 
@@ -2201,6 +2233,8 @@ class CommissioningRunner:
         if not self.config.auto_select_reward_markets:
             return False
         if self.reward_selector is None:
+            return False
+        if self._position_near_its_flatten_deadline(now):
             return False
         expired = [slug for slug in self.active_slugs
                    if self._expired_and_flat(slug, now)]
@@ -2227,6 +2261,17 @@ class CommissioningRunner:
             f"released_slugs={','.join(sorted(expired))}",
             flush=True,
         )
+        if not replacements and not keep:
+            # Releasing everything to hold nothing is never an improvement on
+            # holding dead markets. `_bind_markets(())` leaves `market_slug`
+            # raising RuntimeError, and the next caller that omits a slug --
+            # `_refresh_book(now)` among them -- takes the run loop down.
+            print(
+                f"[top-up] at={self._now().isoformat()} skipped=nothing_retained "
+                f"expired={len(expired)}",
+                flush=True,
+            )
+            return False
         if not replacements:
             # Still worth releasing: a dead market costs a REST refresh every
             # service cycle and reports `book_stale` every time.
@@ -3314,6 +3359,12 @@ class CommissioningRunner:
                     except Exception as exc:
                         await self._report_runtime_error(
                             "market_top_up", exc)
+                        # Back off exactly as the rotation path does. Without
+                        # this `next_selection` stays in the past, the branch
+                        # re-enters on the very next iteration, and a failing
+                        # scan retries forever -- cancelling and rebuilding
+                        # both stream tasks every pass.
+                        next_selection = self._now() + timedelta(seconds=60)
                     market_task = asyncio.create_task(
                         self.market_stream.next_book())
                     private_task = asyncio.create_task(

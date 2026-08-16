@@ -3750,3 +3750,91 @@ class MarketTopUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(runner._expired_and_flat(slug, runner._now()))
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+
+class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
+    """The two ways the top-up could take the session down."""
+
+    build_runner = LiveCommissioningTests.build_runner
+
+    async def armed(self, replacements=()):
+        """A runner with auto-select armed -- the fixture ships it disabled,
+        which silently made the first version of these tests vacuous."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, auto_select_reward_markets=True)
+
+        class Selector:
+            async def select(self, *, now):
+                return SimpleNamespace(
+                    opportunities=(), selected=None,
+                    top_viable=lambda *a, **k: tuple(
+                        SimpleNamespace(market=SimpleNamespace(slug=s))
+                        for s in replacements))
+
+        runner.reward_selector = Selector()
+        return runner
+
+    async def test_top_up_never_binds_an_empty_active_set(self):
+        """`_bind_markets(())` leaves `market_slug` raising and kills the loop."""
+
+        runner = await self.armed(replacements=())
+        before = runner.active_slugs
+        for slug in before:
+            runner.state_for(slug).market = SimpleNamespace(
+                game_start=runner._now() - timedelta(minutes=45))
+        # Precondition: without this the test proves nothing.
+        self.assertTrue(all(runner._expired_and_flat(s, runner._now())
+                            for s in before))
+
+        self.assertFalse(await runner._top_up_active_markets(runner._now()))
+        # Holding dead markets beats holding none.
+        self.assertEqual(runner.active_slugs, before)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_top_up_defers_while_inventory_nears_its_flatten_deadline(self):
+        """A scan is deferrable; a missed pre-kickoff flatten is not."""
+
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed(replacements=("market-three",))
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        runner.state_for(held).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(seconds=120))
+        runner.state_for(dead).market = SimpleNamespace(
+            game_start=runner._now() - timedelta(minutes=45))
+        runner.ledger.apply_position_event(
+            "ws", "near-kickoff-position",
+            PositionState(held, Decimal("5"), runner._now()),
+            received_at=runner._now())
+
+        # Preconditions: there IS work to do, so only the deadline guard can
+        # be what stops it.
+        self.assertTrue(runner._expired_and_flat(dead, runner._now()))
+        self.assertTrue(
+            runner._position_near_its_flatten_deadline(runner._now()))
+
+        self.assertFalse(await runner._top_up_active_markets(runner._now()))
+        self.assertEqual(set(runner.active_slugs), {held, dead})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_distant_position_does_not_defer_the_top_up(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed()
+        slug = runner.market_slug
+        runner.state_for(slug).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=4))
+        runner.ledger.apply_position_event(
+            "ws", "distant-position",
+            PositionState(slug, Decimal("5"), runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(
+            runner._position_near_its_flatten_deadline(runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()

@@ -620,3 +620,34 @@ position with nothing working the exit.
 **Coverage:** three tests, both guards mutation-verified. Removing the flatness
 check fails the held-position case; removing the kickoff check fails the
 pre-kickoff case.
+
+### Review of the top-up found two ways it could kill the session — `PENDING`
+
+Self-review of `112d58b..HEAD`, all five findings in code written the same day.
+
+1. **Empty active set (high).** With every market expired and no replacements
+   available, `_bind_markets(())` left `market_slug` raising RuntimeError and
+   the next slug-less caller took the run loop down. Now the release is skipped
+   entirely: holding dead markets beats holding none.
+2. **Retry storm (high).** A failing top-up did not advance `next_selection`,
+   so the branch re-entered every iteration, cancelling and rebuilding both
+   stream tasks forever with no backoff. Now backs off 60s, matching rotation.
+3. **Scan across a flatten deadline (medium).** The top-up runs precisely when
+   `_safe_to_scan()` is False, which includes holding a position — and I did
+   not think hard enough about *why* rotation refuses there. The blockers are
+   not only about quarantining orders; they keep a 25-second blocking scan away
+   from live inventory, during which `_inventory_plan` cannot issue the
+   pre-kickoff flatten. Now defers while any held position is within twice the
+   flatten window. Unknown game time counts as near.
+4. **Predicate with a side effect (low).** `_book_is_fresh_enough_to_plan`
+   called `state_for`, resurrecting `_markets` entries that `_bind_markets`
+   deliberately discards. Reads `.get` now.
+5. **Truncated idle counts (low).** The summary showed four reasons, so counts
+   could fail to sum to `active - resting` on the field whose job is answering
+   "are we at capacity". Folds the remainder into `other`.
+
+**Coverage note worth keeping:** the first tests written for 1 and 2 were
+**vacuous** — the runner fixture ships `auto_select_reward_markets=False`, so
+`_top_up_active_markets` returned at its first line and never reached the
+logic. Both mutants survived, which is the only reason it was caught. The
+tests now arm auto-select explicitly and assert their preconditions.

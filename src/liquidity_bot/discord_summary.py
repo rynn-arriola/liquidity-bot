@@ -174,9 +174,18 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
                 "```text\n"
                 f"Markets resting  "
                 f"{f'{summary.resting_markets}/{summary.active_markets}':>10}\n"
+                # Show the top three and fold the rest into `other`, so the
+                # numbers always account for every idle market. Truncating
+                # silently made the counts fail to sum to
+                # active - resting, on the one field whose job is answering
+                # "are we at capacity".
                 + "".join(
                     f"  {reason[:15]:<15}{count:>10}\n"
-                    for reason, count in summary.idle_market_reasons[:4])
+                    for reason, count in summary.idle_market_reasons[:3])
+                + ("".join(
+                    f"  {'other':<15}"
+                    f"{sum(c for _, c in summary.idle_market_reasons[3:]):>10}\n")
+                   if len(summary.idle_market_reasons) > 3 else "")
                 + f"Eligible sides   {summary.reward_eligible_sides:>10}\n"
                 f"Score-seconds    {summary.score_seconds:>10,.2f}\n"
                 f"PAID attributed  {float(paid):>10,.2f}\n"

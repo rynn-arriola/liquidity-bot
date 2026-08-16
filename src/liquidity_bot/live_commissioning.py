@@ -720,7 +720,15 @@ class CommissioningRunner:
         self._earnings_by_status = totals
         self._earnings_observed_at = now
 
-    async def _rest_reconcile(self, now: datetime) -> None:
+    async def _rest_reconcile(self, now: datetime, *, tag: str = "") -> None:
+        """Re-read the whole account from REST and apply it to the ledger.
+
+        `tag` namespaces the snapshot event ids. Two reconciles at the same
+        clock reading would otherwise build the same id from different content,
+        which the ledger correctly rejects as a replay -- so a caller that may
+        run alongside another at the same instant passes its own tag.
+        """
+
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
         exchange_ids = {
@@ -805,7 +813,7 @@ class CommissioningRunner:
             self._runtime_error_counts.pop("execution_backfill", None)
         except Exception as exc:
             await self._report_runtime_error("execution_backfill", exc)
-        stamp = now.isoformat()
+        stamp = f"{tag}:{now.isoformat()}" if tag else now.isoformat()
         self.ledger.apply_order_snapshot(
             f"commissioning-rest-orders:{stamp}", orders,
             as_of=now, observed_at=now, complete=True)
@@ -953,6 +961,33 @@ class CommissioningRunner:
         # orders, positions and unresolved intents.
         self.config.assert_authorized(now=now)
         self.cutoff_at = None
+        # Reconcile against the venue BEFORE deciding what to recover.
+        #
+        # `_identified_recovery_markets` reads the ledger, and the ledger stops
+        # updating the moment a runner dies -- so after a crash it describes the
+        # account as it was at the crash, not as it is now. Observed
+        # 2026-08-16T21:36Z and again at 21:41: the ledger still held one
+        # working order and a 5-lot position in `dumvit-midmih` from the 19:01
+        # crash, while the venue held neither. Preflight bound that market for
+        # recovery, its game had kicked off at 19:45 and finished, so its book
+        # came back empty on both sides and startup exited 2 -- twice, refusing
+        # to start over a position that did not exist.
+        #
+        # Cheap and unconditional: one whole-account read, before any decision
+        # depends on what we think we hold. Everything downstream -- the
+        # recovery binding, `ControlledTrialStartup`, the flat proof -- is more
+        # accurate for it, and on a clean start it finds nothing and costs one
+        # round trip.
+        reconciled_at_startup = False
+        try:
+            await self._rest_reconcile(now, tag="startup")
+            reconciled_at_startup = True
+            now = self._now()
+        except Exception as exc:
+            # Not fatal on its own. `ControlledTrialStartup` below still proves
+            # the account against the venue and refuses if it cannot, so a
+            # transient read here must not be the thing that stops the session.
+            await self._report_runtime_error("startup_reconcile", exc)
         if self.config.auto_select_reward_markets:
             recovery_slugs = self._identified_recovery_markets()
             if recovery_slugs:
@@ -1006,9 +1041,14 @@ class CommissioningRunner:
         # does not allow, so preflight raises CommissioningRefused and exits 2,
         # a code the supervisor never restarts. One order we lost sight of
         # would have kept the bot from ever starting again.
-        if (self.ledger.working_orders(owned_only=True)
-                or self.ledger.unresolved_intents()
-                or self.ledger.absent_orders()):
+        # Skipped when the startup reconcile above already ran: it is the same
+        # whole-account read, and repeating it at the same clock reading reuses
+        # the snapshot event id, which the ledger correctly rejects as a replay
+        # with different content. This runs only when that one failed.
+        if (not reconciled_at_startup
+                and (self.ledger.working_orders(owned_only=True)
+                     or self.ledger.unresolved_intents()
+                     or self.ledger.absent_orders())):
             await self._rest_reconcile(now)
         await self._refresh_earnings(now)
         accepted = ReadinessVerdict(

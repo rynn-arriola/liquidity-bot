@@ -938,6 +938,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._is_barred_from_quoting("market-one"))
         self.assertFalse(runner._is_barred_from_quoting("market-two"))
 
+    async def test_a_stale_ledger_position_does_not_force_a_recovery_bind(self):
+        """Observed 2026-08-16T21:36Z and again at 21:41.
+
+        The ledger stops updating the moment a runner dies, so after a crash it
+        describes the account as it was then. It still held a working order and
+        a 5-lot position from the 19:01 crash while the venue held neither.
+        Preflight read the ledger, bound that market for recovery, and its game
+        had long since finished -- so its book came back empty on both sides and
+        startup exited 2, which the supervisor never restarts. The bot refused
+        to start over a position that did not exist.
+        """
+
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner, _, _ = self.build_runner(auto=True, clock=TickingClock())
+        stale = "aec-dead-market-2026-08-16"
+        runner.ledger.apply_position_event(
+            "ws", "stale-from-a-crashed-session",
+            PositionState(stale, Decimal("5"), runner._now()),
+            received_at=runner._now())
+
+        # Precondition: read straight from the ledger, this looks like risk.
+        self.assertIn(stale, runner._identified_recovery_markets())
+
+        # The venue snapshot is authoritative and says the account is flat.
+        await runner._rest_reconcile(runner._now(), tag="startup")
+
+        self.assertEqual(runner._identified_recovery_markets(), ())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_dud_primary_market_is_dropped_not_refused(self):
         """Observed 2026-08-16T21:36Z, on the restart after the crash fix.
 

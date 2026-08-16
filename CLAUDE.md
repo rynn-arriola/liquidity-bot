@@ -18,6 +18,15 @@ real account.** Every change can lose it.
    instant the runner dies, so after a crash it describes the account *as it
    was*. Query the venue directly before concluding anything about exposure —
    this has produced a wrong call before.
+5. **`git pull` first, push before you stop.** This repo is worked from more
+   than one machine, and `FINDINGS.md`, `BUGFIXES.md` and `NEXT.md` are all
+   append-heavy, so two machines editing a stale copy conflict in the file that
+   exists to stop work being repeated. Pull at the start of every session, and
+   commit and push anything learned before ending one — a finding that only
+   exists on one laptop is a finding the other machine will re-derive.
+   Nothing else carries context between machines: Claude's memory files are
+   per-machine and do not sync, which is why everything durable lives in these
+   files instead.
 
 ## Where things live
 

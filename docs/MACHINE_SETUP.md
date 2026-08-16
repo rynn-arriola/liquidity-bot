@@ -88,6 +88,31 @@ here: it runs in a sandboxed cloud environment, so it may not be able to reach
 your droplet over SSH. Confirm that before relying on it for anything
 operational.
 
+## Keeping machines in sync
+
+**Start Claude Code from inside the repo directory.** `CLAUDE.md` is read from
+the working directory at session start; launching from anywhere else, or
+`cd`-ing in afterwards, gets a session with no context.
+
+```powershell
+cd <path>\liquidity-bot
+git pull
+claude
+```
+
+**Pull first, push last, every session.** `FINDINGS.md`, `BUGFIXES.md` and
+`NEXT.md` are append-heavy and written from both machines, so working from a
+stale copy conflicts in exactly the files that exist to stop work being
+repeated.
+
+Claude's memory files are **per-machine and do not sync**. Nothing carries
+between machines except what is committed, which is why the rules, the measured
+facts and the queue all live in tracked files rather than in memory.
+
+To confirm context loaded on a new machine, ask the session something only
+`CLAUDE.md` would know — for example what to check before theorising about a
+bug. The answer should mention grepping `FINDINGS.md` first.
+
 ## First five minutes on a new machine
 
 ```bash

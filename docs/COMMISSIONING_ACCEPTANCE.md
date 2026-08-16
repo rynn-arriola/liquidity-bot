@@ -111,8 +111,10 @@ failures keep the process alive in a no-new-risk recovery state. Known quotes
 are canceled, the affected stream is recreated, and whole-account REST plus
 fresh stream state must pass before quoting resumes. Runtime errors retain a
 credential-redacted stack in `commissioning.log` with bounded Discord alerts.
-The former 06:00 cutoff is replaced by graceful operator stop; the $2 market,
-$5 session, and $15 hard loss stops remain terminal.
+The former 06:00 cutoff is replaced by graceful operator stop; the loss stops
+remain terminal. (Corrected 2026-08-16: this read $2/$5/$15. Live values are a
+$40 market stop, a $40 session stop and a $45 emergency hard stop --
+`commissioning.py` is the authority.)
 
 The first operator-controlled run later exposed an IOC confirmation race. The
 30-second exact-position exit filled, but the next strategy pass saw its local

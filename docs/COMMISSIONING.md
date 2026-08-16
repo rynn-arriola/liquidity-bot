@@ -12,7 +12,9 @@ strategy is profitable and not permission to scale.
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- one contract per quote (one bid and one offer may rest while flat);
+- 5 contracts per quote across at most 20 concurrently bound markets (one bid
+  and one offer may rest per market while flat) -- corrected 2026-08-16, this
+  read "one contract per quote"; `commissioning.py` is the authority;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
@@ -25,14 +27,19 @@ strategy is profitable and not permission to scale.
 - cancel the opposite building order immediately after the first fill;
 - work the exact reducing quantity passively at the active touch only when that
   is no worse than basis; otherwise wait at the break-even basis price;
-- at 30 seconds, confirm passive cancels and flatten the exact position with a
+- at 900 seconds of inventory age, or 300 seconds before kickoff whichever
+  comes first, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
-  attempts within 30 seconds and 10 seconds to confirm an individual attempt;
+  attempts within 30 seconds and 10 seconds to confirm an individual attempt.
+  An early cross costing more than $4 is refused and the position keeps resting
+  -- but the kickoff deadline overrides that cap, because nothing may settle
+  (corrected 2026-08-16; this read "at 30 seconds");
 - end maker quoting after the first taker exit in a session, with a separate
   $0.02 positive execution-fee ceiling, so an unmatched-fill cost cannot become
   a repeating cycle;
-- $2 per-market soft stop, $5 marked-account-equity session stop, and $15
-  emergency marked-account-equity hard stop;
+- $40 per-market soft stop, $40 marked-account-equity session stop, and $45
+  emergency marked-account-equity hard stop (corrected 2026-08-16; this read
+  $2/$5/$15). Both soft tiers sit at $40 so exactly one threshold can fire;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account

@@ -104,13 +104,19 @@ exit must clear resting orders before it can cross, but the soft reducer
 re-places every pass, so the cancel confirmation keeps losing the race.
 `cancel_confirm_grace_seconds` is 5.0.
 
-## 5. Capital deployment: max_markets 8 -> 30
+## 5. Capital deployment: max_markets is now 20, not 8
 
-~$40 of $385 works at a time (5 x 8 markets x 2 sides). The 8 is a WebSocket
-subscription limit (10 per connection: 1 orders + 8 positions + 1 balance), not
-a risk decision. Connections are independent and each carries its own quota
-(measured, FINDINGS 7), so 30 markets is 4 connections. maker-lab ran 30.
-Biggest earning lever left.
+**Partly done.** This item was written when `max_markets` was 8 and described
+raising it to 30. It is **20** today; the 8 was a per-connection WebSocket
+subscription limit (10 per connection: 1 orders + 8 positions + 1 balance)
+mistaken for an account-wide one. Connections are independent and each carries
+its own quota, and 29 subscriptions were later sustained.
+
+What remains open is whether 20 is the right number, and that is now an
+**earning** question rather than a plumbing one -- see item 2. Measured
+2026-08-16, only 27 of a possible 40 sides ever quoted, so adding slots may
+just add idle ones. Establish why sides sit on `target_not_met` before raising
+it further.
 
 ## 6. Discord alert severity
 

@@ -79,10 +79,12 @@ letting inventory ride to settlement.
 
 ## Scale rule
 
-The operator-authorized commissioning exception is one selected market at a
-time, one contract
-per quote, a 30-second inventory timeout, a $2 per-market soft cap, a $5
-session soft cap, a $15 emergency hard stop, and graceful operator stop. Do
+The operator-authorized commissioning exception is, **as configured and
+running** (corrected 2026-08-16; this read one market, one contract, a
+30-second timeout and $2/$5/$15 caps): up to 20 concurrently bound markets, 5
+contracts per quote, a 900-second inventory timeout with a 300-second
+pre-kickoff flatten, a $40 per-market soft cap, a $40 session soft cap, a $45
+emergency hard stop, and graceful operator stop. Do
 not add a market or contract until the scale gate sees three attributable
 paid reward days, 20 independent paid events, five clean sessions, positive
 conservative net after actual exit costs, and a ledger/exchange difference no

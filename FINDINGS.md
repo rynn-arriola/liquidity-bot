@@ -1645,11 +1645,19 @@ superseded text struck through rather than deleted, per the WATCHLIST rule --
 "eight is measured, not chosen" was used as grounds not to investigate raising
 it, and deleting the claim would hide why the ceiling stood for so long.
 
-**Not yet corrected**, all still carrying stale numbers: `COMMISSIONING.md`,
-`PHASE5_ACCEPTANCE.md`, `SCALE_REVIEW.md`, and NEXT item 5. Also open: FINDINGS
-has **duplicate section numbers** -- two each of 10, 12 and 13 -- while other
-documents cite findings by number and WATCHLIST graduates entries "to FINDINGS
-with the number that decided it". Those citations are ambiguous.
+**All corrected 2026-08-16**: `README.md`, invariants 13/25/57,
+`COMMISSIONING.md`, `PHASE5_ACCEPTANCE.md`, `SCALE_REVIEW.md`,
+`COMMISSIONING_ACCEPTANCE.md`, `IMPLEMENTATION_PLAN.md` and NEXT item 5.
+
+**One part of that audit did not hold.** It also reported FINDINGS carrying
+duplicate section numbers -- two each of 10, 12 and 13 -- which would matter,
+since other documents cite findings by number and WATCHLIST graduates entries
+"to FINDINGS with the number that decided it". Checked exhaustively: FINDINGS
+has 16 numbered headings, sections 1-8 plus 6b-6i, **no duplicates and no
+sections 10, 12 or 13 at all**. `SAFETY_INVARIANTS.md` has 63 invariants, also
+with no duplicates; 10, 12 and 13 exist there and are unique, which is the
+likely source of the confusion. Recorded because a false structural claim is
+worth closing explicitly -- otherwise it gets re-investigated.
 
 **Rule going forward:** a safety number in prose is a copy, not a source. Cite
 `commissioning.py` or quote the value with the date it was verified.

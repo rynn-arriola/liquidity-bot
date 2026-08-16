@@ -1305,3 +1305,43 @@ and manage fills, not to avoid the window. Combined with the scale of the two
 sides — reward ~$25/day against trading ~-$1.2/day, so losses are about 5% of
 reward — effort spent increasing RESTING TIME is worth more than effort spent
 improving fill quality.
+
+## The `book_stale` replan works, and the event COUNT is the wrong metric
+
+Measured 2026-08-16, comparing the pre-fix session (00:18-07:27) against the
+post-fix one on `bae9f41`.
+
+```
+escalation depth on book_stale
+
+NEW (65 min)              OLD (7h09m)
+  attempt=1   2350          attempt=5    80
+  attempt=2     11          attempt=6    56
+  attempt=3     20          attempt=7    51
+  attempt=7      1          attempt=8    43
+                            attempt=9    39
+  max reached: 7            attempt=10   37
+  retirements: 0            attempt=11   34
+                            attempt=12   32  <- permanent retirement
+```
+
+**99% of staleness now resolves on the first attempt**, and nothing reaches
+`MAX_RECOVERY_ATTEMPTS`. Pre-fix, markets climbed the full ladder and hit 12
+thirty-two times, each one a permanent `unrecoverable_book_stale` retirement --
+the mechanism that burned twenty slots in forty minutes and ended the session
+on `market_retirement_limit_exceeded`.
+
+**The raw event count went UP, from ~400/hour to ~2,190/hour, and that is not
+a regression.** The fix removes a backoff that escalated to 30 seconds, so a
+market that previously failed once per 45 seconds now re-checks promptly. More
+events, each resolving. Counting `book_stale` lines measures how often we LOOK,
+not how often we are broken.
+
+**Use escalation depth, not event count.** `attempt=N` is the metric that maps
+to harm, because retirement is what costs a slot and only sustained failure
+reaches it.
+
+**Not fully closed:** the alternative reading is that this session's books are
+genuinely quieter and the fix is being credited for it. Distinguishing them
+needs the resting-fraction data from the summary work -- if markets rest a
+healthy share of wall-clock time, the churn is benign.

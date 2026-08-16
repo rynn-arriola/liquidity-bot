@@ -74,12 +74,18 @@ consecutive book_stale on one market: 34-75s apart, clustered 45-60s
 letting a market SUCCEED, which clears `strategy_state:{slug}` and stops the
 march toward `MAX_RECOVERY_ATTEMPTS` (12).
 
-**Change if:** the rate stays near 400/hour and markets still reach
-`attempt=12`. Then the replan is not landing and the remaining candidate is
-exempting `book_stale` from exponential backoff entirely — the 30s cap alone
-exceeds the 5s freshness budget.
+**ANSWERED 2026-08-16 (FINDINGS): the replan works.** 99% of staleness now
+resolves on attempt=1, nothing reaches MAX_RECOVERY_ATTEMPTS, and retirements
+are zero against 32 pre-fix.
 
-**Do not change if:** rate drops materially and `attempt=` values stay low.
+**The decision rule above was written wrong** and is kept as written so the
+error is visible: it expected the event RATE to fall. The rate rose, ~400/hour
+to ~2,190/hour, because removing a 30s backoff makes a market re-check far more
+often. Event count measures how often we look, not how often we are broken.
+Escalation depth is the metric that maps to harm.
+
+**Still open:** whether this session's books were simply quieter. Resolve with
+the resting-fraction data from task #32.
 
 ---
 

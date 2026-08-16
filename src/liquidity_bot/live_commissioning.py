@@ -1524,6 +1524,27 @@ class CommissioningRunner:
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
 
+    def _log_shutdown(self, market_slug: str, decision: str, **fields: Any) -> None:
+        """Log one shutdown decision, the way `[action]` logs a live one.
+
+        Shutdown builds its own ``PlanAction`` and calls ``driver.apply_one``
+        directly, so none of it ever reached the `[action]` log. When the exit
+        budget was exhausted on krovit-sukiho (2026-08-15) the alert said the
+        budget was gone and nothing recorded where it went -- not the prices
+        tried, not whether depth refused, not whether the market was skipped
+        for a working order. Shutdown is when a position gets stranded
+        overnight, so it is the last path that should be invisible.
+        """
+
+        detail = " ".join(
+            f"{name}={value}" for name, value in fields.items()
+            if value is not None)
+        print(
+            f"[shutdown] at={self._now().isoformat()} market={market_slug} "
+            f"decision={decision}" + (f" {detail}" if detail else ""),
+            flush=True,
+        )
+
     async def _decide_for_market(
         self, slug: str, now: datetime, *, replanned: bool = False,
     ) -> tuple[str | None, float]:
@@ -2836,6 +2857,9 @@ class CommissioningRunner:
                                 else "ORDER_SIDE_BUY")
                             if any(str(order["side"]) != reducing
                                    for order in working):
+                                self._log_shutdown(
+                                    market_slug, "cancel_building",
+                                    position=position, working=len(working))
                                 await self.kill_switch.initiate(
                                     market_slug, now=now)
                                 continue
@@ -2849,14 +2873,35 @@ class CommissioningRunner:
                             # below instead, which is the pre-existing path for
                             # exactly this state.
                             if working:
+                                self._log_shutdown(
+                                    market_slug, "parked", position=position,
+                                    working=len(working),
+                                    seconds_to_kickoff=(
+                                        None if start is None
+                                        else round((start - now).total_seconds())))
                                 parked.append(market_slug)
                                 continue
                     if working and not unresolved:
+                        self._log_shutdown(
+                            market_slug, "cancel_working", position=position,
+                            working=len(working))
                         await self.kill_switch.initiate(market_slug, now=now)
                         continue
                     if position == 0 or working or unresolved:
+                        # Silence here made a stuck shutdown look exactly like
+                        # a finished one. A flat market is genuinely nothing to
+                        # report; one still holding is waiting on something and
+                        # must say so.
+                        if position != 0:
+                            self._log_shutdown(
+                                market_slug, "waiting", position=position,
+                                working=len(working), unresolved=unresolved)
                         continue
                     if exit_attempts >= self.config.max_shutdown_exit_attempts:
+                        self._log_shutdown(
+                            market_slug, "budget_exhausted",
+                            position=position, attempts=exit_attempts,
+                            budget=self.config.max_shutdown_exit_attempts)
                         await alert(
                             "🚨 Liquidity Bot exhausted its shutdown exit budget. "
                             "Maker quoting remains terminal; manual intervention "
@@ -2881,6 +2926,14 @@ class CommissioningRunner:
                         qty=float(abs(position)), depth_haircut=.5)
                     if (not exit_result.complete
                             or exit_result.worst_price is None):
+                        # This raise is why a shutdown could burn its whole
+                        # budget without ever sending an order. Say so before
+                        # raising, or the alert reports a spent budget with no
+                        # trace of what refused.
+                        self._log_shutdown(
+                            market_slug, "depth_refused", position=position,
+                            entry_side=entry_side, haircut=0.5,
+                            complete=exit_result.complete)
                         raise RuntimeError(
                             "insufficient stressed depth to flatten exact "
                             "position")
@@ -2894,6 +2947,15 @@ class CommissioningRunner:
                     # Count before mutation because a transport failure
                     # after send may still have reached the venue.
                     exit_attempts += 1
+                    # Logged before the send, for the same reason the counter
+                    # increments before it: a transport failure after the send
+                    # may still have reached the venue, and a record written
+                    # only on success would omit exactly those cases.
+                    self._log_shutdown(
+                        market_slug, "flatten", position=position, side=side,
+                        price=exit_result.worst_price, qty=abs(position),
+                        attempt=exit_attempts,
+                        budget=self.config.max_shutdown_exit_attempts)
                     await self.driver.apply_one(
                         [action], market=state.market,
                         position=position, now=now)
@@ -2929,6 +2991,15 @@ class CommissioningRunner:
             except Exception as exc:
                 shutdown_failures += 1
                 delay = min(2 ** min(shutdown_failures - 1, 5), 30)
+                # Recorded unconditionally. The traceback below is gated on
+                # `alert`, which is rate-limited by
+                # shutdown_alert_interval_seconds -- so inside that window a
+                # failing shutdown produced no Discord message AND no local
+                # record at all. That combination is why the krovit-sukiho
+                # budget exhaustion could not be diagnosed afterwards.
+                self._log_shutdown(
+                    slug, "failed", error=type(exc).__name__,
+                    failures=shutdown_failures)
                 if await alert(
                         "🚨 Liquidity Bot cannot yet prove flat during shutdown "
                         f"({type(exc).__name__}). Process remains in recovery."):

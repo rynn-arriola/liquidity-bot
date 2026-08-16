@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import tempfile
 import unittest
 from argparse import Namespace
@@ -2380,6 +2381,34 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # an unexitable contract and settlement.
         self.assertIn(slug, runner._shutdown_slugs())
         self.assertFalse(runner._whole_account_safe_to_stop())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_shutdown_decisions_are_logged_in_a_parseable_line(self):
+        """Format is load-bearing: these lines are read back to diagnose."""
+
+        import contextlib
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            runner._log_shutdown(
+                "market-one", "flatten", position=5, side="offer",
+                price=0.41, qty=5, attempt=2,
+                # None-valued fields are dropped rather than printed as "None",
+                # which would make the line harder to read at 3am.
+                seconds_to_kickoff=None)
+        line = captured.getvalue().strip()
+
+        self.assertTrue(line.startswith("[shutdown] at="))
+        self.assertIn("market=market-one", line)
+        self.assertIn("decision=flatten", line)
+        self.assertIn("position=5", line)
+        self.assertIn("price=0.41", line)
+        self.assertIn("attempt=2", line)
+        self.assertNotIn("seconds_to_kickoff", line)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

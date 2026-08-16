@@ -499,3 +499,30 @@ permanent retirement.
 
 **Coverage:** two tests, both mutation-verified. Removing the replan fails the
 first; dropping the freshness guard fails the second.
+
+### The shutdown exit path left no record of what it tried — `PENDING`
+
+**Symptom:** `🚨 Liquidity Bot exhausted its shutdown exit budget` on
+`krovit-sukiho` (2026-08-15) with nothing to explain it. No prices tried, no
+indication whether depth refused, whether the market was skipped for a working
+order, or whether the send itself threw.
+
+**Mechanism:** shutdown builds its own `PlanAction` and calls
+`driver.apply_one` directly, so it never passes the `[action]` logging in
+`_decide_for_market`. Every branch of the loop — parking, cancelling,
+skipping, refusing on depth, flattening — was silent. Worse, the `except`
+around the loop only prints a traceback when `alert()` fires, and `alert()` is
+rate-limited by `shutdown_alert_interval_seconds`; inside that window a failure
+produced **no Discord message and no local record at all**.
+
+**Fix:** a `[shutdown]` log line mirroring `[action]`, at eight decision points
+— `cancel_building`, `parked`, `cancel_working`, `waiting`, `budget_exhausted`,
+`depth_refused`, `flatten`, `failed`. The flatten logs *before* the send, for
+the same reason the attempt counter increments before it: a transport failure
+after the send may still have reached the venue, so a record written only on
+success would omit exactly the cases worth having. The failure line is written
+unconditionally, independent of alert throttling.
+
+**Coverage:** the line format is tested (it is parsed back when diagnosing).
+The call sites themselves are straight-line logging and are **not** covered;
+they get their first real exercise on the next live shutdown.

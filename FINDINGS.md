@@ -1233,3 +1233,38 @@ market legitimately has nothing to send, and being quiet is not being wrong.
 backoff, bounded to a single extra attempt per sweep so a book that never
 arrives still yields. The success path then clears `strategy_state:{slug}`, so
 a market that recovers stops marching toward MAX_RECOVERY_ATTEMPTS.
+
+## Crossing at 900s vs at the pre-kickoff flatten: no case for waiting
+
+Measured 2026-08-16 against the live ledger (92 fills, 29 reconstructed round
+trips). P&L is computed in the venue's own `side` frame -- SELL proceeds minus
+BUY costs on a matched pair -- which is unambiguous and avoids the intent
+inversion that produced three wrong diagnoses earlier.
+
+```
+                                  n   total    per-contract median   winners
+passive exits                     9   +$1.05          +0.0380          7/9
+taker exits                      20   -$4.76          -0.0740          4/20
+  taker <900s (pre-kickoff only)  8   -$2.51          -0.0750          2/8
+  taker >=900s (inventory clock) 12   -$2.25          -0.0590          2/12
+```
+
+Sub-900s taker exits can only be the pre-kickoff flatten, because the inventory
+clock has not fired yet -- that is what makes the split possible without book
+snapshots we do not have.
+
+**The inventory-clock crossings were slightly BETTER per contract than the
+pre-kickoff ones** (-0.059 vs -0.075). That is the opposite direction from
+"holding is cheaper", and it is consistent with the adverse-selection argument:
+what survives to the kickoff deadline is the inventory the market moved away
+from, exiting into thinner pre-game books.
+
+**This does not settle it.** n=8 against n=12 with per-contract variance far
+larger than the 1.6c difference, and the two groups are confounded -- the
+sub-900s group is near-kickoff *by construction*, so it faces worse books for
+reasons other than timing. The honest reading is: **no evidence supports
+waiting past 900s, and weak evidence says it costs.** Keep the current policy.
+
+Caveat on the passive row, repeating section 2: which exits resolve passively
+is partly construction, not policy. Do not read +0.038 vs -0.074 as the gain
+from a policy change -- read it as why resting time is worth protecting.

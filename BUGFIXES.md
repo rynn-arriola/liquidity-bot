@@ -1168,3 +1168,64 @@ flatten -- bounded by the kickoff deadline it already honours -- or exit with a
 code that says "known position, retry later" rather than 3. Parking during
 shutdown is right; parking again on every restart is what turns a $2.80 position
 into an outage. See NEXT.
+
+## Order confirmations run at 90% of the 10s timeout; churn pushed one over
+
+**Symptom.** The bot stopped at 2026-08-17T18:50:16Z and stayed down ~18
+minutes. Nobody was alerted; the operator noticed.
+
+```
+"stop_reason": "risk_stop:critical failure: order mutation unresolved for more than 10 seconds"
+"flat": false
+```
+
+**Mechanism.** Two things combined, and the second is the interesting one.
+
+A reducing (exit) quote on `aec-setkameua-rakser-hosnik-2026-08-17` churned for
+four minutes, cancelling and re-placing **at the same price** every ~20s:
+
+```
+18:46:50 PLACE 0.47   18:47:19 PLACE 0.47   18:47:58 PLACE 0.47
+18:48:25 PLACE 0.47   18:49:27 PLACE 0.47
+```
+
+`_reducing` cancels any resting order failing
+`_matches(order, price=passive_price, qty=qty)` -- exact price *and* exact
+`remaining_qty` -- then re-places at `passive_price` on the next pass. Something
+made an order at the right price fail that test repeatedly. **Not diagnosed
+further**; the qty half is the remaining suspect.
+
+The churn alone is only wasted budget. What made it terminal is the confirm
+latency, visible in `execution_orders` as the gap between `event_at` and
+`received_at`:
+
+```
+18:46:27 -> 18:46:36    9s
+18:47:11 -> 18:47:20    9s
+18:47:37 -> 18:47:49   12s
+18:48:17 -> 18:48:26    9s
+18:49:19 -> 18:49:28    9s
+```
+
+**Every mutation confirms in ~9 seconds against a 10-second timeout.** The bot
+runs permanently at 90% of that budget, so the stop is not really "a mutation
+hung" -- it is "enough mutations were attempted that one crossed a line we were
+always sitting against". The churn supplied the attempts.
+
+**Cost.** ~18 minutes of not quoting. No money lost -- the account was verified
+flat at the venue (0 orders, 0 positions, balance $440.67) before restarting.
+
+**Fixed?** No. Service restored by restart only. Three things remain:
+
+1. **The confirm timeout has no headroom.** 9s against 10s is not a margin.
+   Either the timeout is too tight for this venue or confirms are too slow;
+   neither has been measured properly. This is the real fix and it is not done.
+2. **The same-price re-place churn** in `_reducing` -- why an order at the
+   correct price keeps failing `_matches`.
+3. **The bot exited non-flat, so the supervisor refused to restart** (exit 3),
+   which is `NEXT.md` item 0 firing for the second time in one day. That is what
+   turned a stop into an 18-minute outage.
+
+**And nothing alerted.** `_alarm_if_quoting_nothing` lives inside the runner, so
+a dead runner sends nothing. A dead-man alarm outside the process is the missing
+piece that makes every fault above unbounded in duration.

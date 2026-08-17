@@ -2180,11 +2180,33 @@ Actual payouts land as `ACTIVITY_TYPE_TRANSFER` rows in
 2026-08-17T14:26:23    $5.83  COMPLETED   liquidity reward payout
 ```
 
-Two payouts arrived *the same afternoon* the incentives endpoint still showed
-$102.79 sitting in PENDING and nothing PAID since 08-10. The two views do not
-reconcile and are not meant to: **the incentives endpoint is an accrual ledger,
-the transfer history is cash.** Never answer "have we been paid" from the
-former.
+### ...and the correction to THAT, an hour later: they reconcile exactly
+
+The paragraph above originally concluded the two views "do not reconcile and are
+not meant to". Wrong, and worth keeping visible because the mistake is easy to
+repeat. Watched for another twenty minutes, a third payout landed and the totals
+matched to the cent:
+
+```
+2026-08-11T15:35   32.06
+2026-08-17T14:20    5.85
+2026-08-17T14:26    5.83
+2026-08-17T14:33   42.77
+                  ------
+                   86.51   ==  the PAID column, exactly
+```
+
+**The `date` column is the date reward was EARNED, not the date it was paid.**
+So "nothing PAID since 2026-08-10" never meant "no money has arrived since
+08-10" -- it meant "reward earned after 08-10 has not been paid yet", which was
+true when read and stopped being true while it was being read. PAID is cash
+received and it is reliable; the trap is reading its date as a payment date.
+
+Payouts also arrive in bursts, not on a daily schedule: three landed within
+thirteen minutes on 08-17, clearing two full earning days at once. A single
+reading of this table says nothing about whether payouts have stalled. Compare
+two readings, or read the transfer history, which is what
+`accountBalanceChange.description = "liquidity reward payout"` gives you.
 
 The same activity stream is also the only place deposits appear:
 

@@ -1854,6 +1854,32 @@ class CommissioningRunner:
             # toward MAX_RECOVERY_ATTEMPTS. `replanned` bounds this to a single
             # extra attempt per sweep, so a book that will not refresh still
             # backs off instead of spinning.
+            if reason == "book_stale":
+                # Diagnostic only, no behaviour change. Measured 2026-08-17:
+                # seven markets held slots for 54-130 minutes and never placed
+                # a single order, every visit reporting `book_stale` at
+                # attempt=1 -- while their books fetched cleanly from REST,
+                # two-sided and open, and no `quiet_book_rest_refresh` error
+                # was ever logged for them. So the refresh does not fail; the
+                # planner just never sees a fresh book, and nothing recorded
+                # enough to say why. These three numbers separate the
+                # candidates: a refresh that never fires (age keeps growing,
+                # `since_refresh` large), one that fires but lands stale
+                # (`age` already over budget right after a refresh), and a
+                # replan that is never reached (`fresh_enough` false).
+                state = self.state_for(slug)
+                now_at = self._now()
+                age = state.book_age_seconds(now_at)
+                due = state.next_book_refresh
+                print(
+                    f"[book-stale-why] at={now_at.isoformat()} market={slug} "
+                    f"age={'none' if age is None else round(age, 1)} "
+                    f"refresh_due_in="
+                    f"{'none' if due is None else round((due - now_at).total_seconds(), 1)} "
+                    f"fresh_enough={self._book_is_fresh_enough_to_plan(slug)} "
+                    f"replanned={replanned}",
+                    flush=True,
+                )
             if (not replanned and reason == "book_stale"
                     and self._book_is_fresh_enough_to_plan(slug)):
                 return await self._decide_for_market(

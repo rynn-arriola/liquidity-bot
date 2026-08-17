@@ -2232,3 +2232,65 @@ luck rather than design.
 **To do:** teach `rewards_report.py` to read the transfer history and show cash
 received beside accrued, and pull the full deposit history at a moment when the
 bot is stopped. See NEXT.
+
+## True P&L without the ledger: equity minus funding. The bot is ~break-even
+
+Measured 2026-08-17T15:00Z, from venue cash movements only -- no ledger, no
+model, no settlement data. This is the one P&L calculation today that did not
+collapse when the ledger turned out to be wrong, and it should be the default.
+
+**Account-wide** (complete history; the activity walk reached `eof` in 20 pages):
+
+```
+equity now                420.23
+deposits in              4408.00
+withdrawals out          1798.50
+remediation credits       224.60   (two goodwill payouts, 06-27 and 07-02)
+net funding in           2834.10
+reward received           117.77
+
+all-in P&L              -2413.87
+trading alone           -2531.64
+```
+
+That loss is almost entirely **pre-liquidity-bot**: maker-lab traded 06/07 at
+1000+ contracts a side against this bot's 5-10.
+
+**This bot alone.** Its era starts 2026-08-10, and the identity closes:
+
+```
+equity_now = equity_at_08_10 + funding_since + reward_received + trading_since
+    420.23 = E + 450.00 + 91.94 + T
+         T = -121.71 - E
+```
+
+`E >= 0`, so **trading since 08-10 has lost at least $121.71** -- far worse than
+the -$29.88 the ledger reports for 08-14..17, which places roughly $90 of loss
+in 08-10..13, the days the ledger does not cover at all. Independent
+confirmation that the ledger understates losses, arrived at without using it.
+
+Total reward earned 08-10..16 is $140.70, so:
+
+```
+net = T + reward = 18.99 - E
+```
+
+| E (equity on 08-10) | net result |
+|---|---|
+| 0 | +18.99 |
+| ~19 | break-even |
+| >19 | negative |
+
+There were $250 of deposits over 08-05..09 and the account was trading into
+08-10, so E was very probably well above $19. **The honest read is
+roughly break-even, likely slightly negative** -- reward very nearly covers
+trading losses but does not clearly beat them.
+
+**Do not restate this as "+$24".** An earlier figure that afternoon compared
+08-14..17 ledger trading against 08-14..16 reward and got +24.31; it missed the
+worse 08-10..13 trading entirely because those fills are not in the ledger.
+
+**E is not recoverable.** Equity on 08-10 cannot be read back from the venue,
+which is precisely why `accounting.py` writes dated snapshots -- from now on
+this question is a subtraction, not an inference. Take a snapshot before any
+change whose effect you will want to measure.

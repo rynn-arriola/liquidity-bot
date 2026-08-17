@@ -1750,3 +1750,55 @@ That points at **selection**, not the order path: rank on whether a book holds
 still long enough to rest in, not only on projected reward. Two markets is a
 hypothesis, not a result -- it needs the touch-move rate correlated against
 resting fraction across a full slate before anything is changed.
+
+## 55% of our resting time is spent where reward is not
+
+Measured 2026-08-17T02:20Z over the 21:47Z session: 42 markets, 56.4 hours of
+total resting time, bucketed by how far from kickoff each resting second
+occurred (`scripts/resting_by_kickoff.py`).
+
+```
+ mins to kickoff    resting   share    projected reward (section above)
+            0-15      1.58h    2.8%    n=1, not read
+           15-30      2.64h    4.7%    0.000313   100% pay
+           30-60      5.42h    9.6%    0.000327   100% pay
+          60-120     15.78h   28.0%    0.000204    90% pay
+         120-240     21.50h   38.1%    0.000022    67% pay
+            240+      9.47h   16.8%    0.000022    67% pay
+
+inside the 0-120 window that pays: 45.1%
+```
+
+Reward accrues per second of resting, so a bucket's share of resting time is
+directly comparable to its reward density. **The largest single bucket, 38% of
+all resting time, is the worst-paying one.** More than half of everything the
+bot did in four hours was spent where a third of markets pay nothing and the
+median pays a fourteenth of the 15-30 minute window.
+
+**This is the largest earning lever identified so far**, and unlike the five
+theories that died during the same session it is a direct measurement of our own
+behaviour rather than an inference about a mechanism.
+
+**Why it happens.** `_opportunity_key` ranks on `projected_reward_total` first,
+which should already prefer near-kickoff markets since that projection is what
+falls off with distance. `game_start` appears in the key only as the **seventh
+tiebreaker**, behind six continuous-valued fields that essentially never tie. So
+proximity influences selection only through the projection, and the projection
+is evidently not separating the buckets in practice.
+
+**Two caveats that bound the conclusion.**
+
+1. The reward figures are *projected* at a snapshot, not realised. The venue
+   exposes no per-period earnings breakdown (no period field on
+   `GET /v1/incentives/earnings`), so resting time cannot be attributed to money
+   directly. This compares our time against a projection, not against income.
+2. **Every market passes through every bucket.** Resting at 240+ costs nothing
+   if that slot would otherwise sit empty. The cost is only real if
+   near-kickoff candidates were passed over -- and with `viable=85` against 20
+   slots there is a 4:1 oversupply, which makes it likely but not proven.
+
+**The measurement that would close it:** the time-to-kickoff distribution of the
+85 viable candidates at selection time. If most are inside two hours, distant
+markets are displacing them and the ranking needs proximity promoted out of
+seventh place. If most are distant too, the slate simply had nothing nearer and
+nothing is being lost.

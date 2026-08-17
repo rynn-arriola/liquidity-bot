@@ -1849,3 +1849,77 @@ change.** The others: REST contention, re-price latency, same-price churn,
 `book_stale` as a fault, and markets being unable to quote. The pattern that
 caught all six was checking the specific claim rather than the plausible
 mechanism.
+
+## Trading losses now exceed reward. The 5% premise no longer holds
+
+Measured 2026-08-17T12:0xZ over 203 fills and 93 markets.
+
+This project's founding economics, recorded above, are "~$25/day in rewards
+against about -$1.2/day in trading P&L -- losses are ~5% of reward", and nearly
+every design decision follows from that ratio. **It is no longer true.**
+
+Realised P&L attributed to the day of each market's first fill, split by whether
+both sides of the round trip were actually recorded:
+
+```
+day        complete   P&L    | one-sided   P&L      reward that day
+2026-08-14      2    -5.03   |     1     -2.93       5.48
+2026-08-15     23   -11.22   |     5     -9.88      28.46
+2026-08-16     14   -27.58   |     6     -9.60      20.25
+2026-08-17     27   -51.03   |    15    -26.32      not posted
+TOTAL          66   -94.86   |    27    -48.73
+```
+
+The `one-sided` column is the known bookkeeping defect (NEXT TOP PRIORITY) and
+is not trustworthy. **The `complete` column is** -- both fills recorded, priced
+in the venue's own frame by `realized_pnl`. It shows:
+
+```
+2026-08-15   reward +28.46   trading -11.22   net +17.24
+2026-08-16   reward +20.25   trading -27.58   net  -7.33
+2026-08-17   reward      ?   trading -51.03   (half a day)
+```
+
+**The bot went from profitable to loss-making around 2026-08-16**, and the loss
+rate is accelerating: -5.03, -11.22, -27.58, -51.03. Per-market loss is growing
+too, not just market count -- -0.49/market on 08-15 against -1.89/market on
+08-17.
+
+**The mechanism is crossed exits.** By category:
+
+```
+exit crossed (TAKER)   55 markets   -85.19   median -1.21   worst -8.33
+NO EXIT RECORDED       27 markets   -48.73   (bookkeeping, not trustworthy)
+exit passive (MAKER)   11 markets    -9.67   median -0.31
+```
+
+A passively-exited market loses a median of **31 cents**. A crossed one loses
+**$1.21**, four times as much, and there are five times as many of them.
+
+And the maker/taker mix inverted:
+
+```
+2026-08-15   37 MAKER   18 TAKER   33% taker
+2026-08-16   13 MAKER   36 TAKER   73% taker
+2026-08-17   25 MAKER   68 TAKER   73% taker
+```
+
+Entries are makers and exits are takers in the venue's frame, so 73% taker means
+**almost every position is now being exited by crossing rather than resting
+out**. Total fees flipped from a rebate to **+$3.46 paid**.
+
+**Why size is NOT the lever.** Reward scores `discount ** ticks * size` and
+losses scale with size too, so cutting `quote_size` scales both sides equally
+and leaves the ratio unchanged. What changed the ratio is the taker share.
+
+**What is not yet established:** why the taker share doubled between 08-15 and
+08-16. Candidates, none tested: more concurrent positions (`max_markets` 8 ->
+20) meaning more of them reach the 900s inventory clock; thin books that cannot
+be exited passively at all (measured separately -- a 19c spread with our exit at
+the touch and the only bid 19 cents away); and the pre-kickoff flatten firing
+more often. **Do not act on any of these without measuring first** -- six
+theories died during this session.
+
+**The immediate implication is a risk decision, not an engineering one.** The
+bot is currently losing more on trading than it earns in reward, on the numbers
+that are trustworthy, and the trend is one-directional across four days.

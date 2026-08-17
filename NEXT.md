@@ -282,6 +282,14 @@ Small now -- a handful of cancels an hour, down from ~7/minute.
   four values belong in a password manager.
 - **`/root/maker-lab/credentials.py` is mode 644** -- world-readable on the
   droplet, holding a funded API secret. Should be 600.
+- **Nothing starts the bot after a droplet reboot** (verified 2026-08-17).
+  There is no systemd unit and no `@reboot` crontab entry -- the only cron line
+  is the nightly ledger backup. `supervise_commissioning.sh` restarts the
+  *runner*, but nothing restarts the *supervisor*, so a reboot leaves the bot
+  down silently until someone notices it stopped earning. Deliberate is fine;
+  unexamined is not, and auto-start has its own hazard (a boot into a non-flat
+  account, which item 0 shows the runner handles badly). Decide and write it
+  down either way.
 - **Passphrase on the SSH keys.** Rynn-PC's `makerlab_droplet` key has none.
   `ssh-keygen -p -f ~/.ssh/makerlab_droplet`, then load ssh-agent, or
   non-interactive deploys break.

@@ -1981,7 +1981,8 @@ horizon is reverted.
 exit run to the kickoff deadline, and the cost of being wrong is holding
 inventory longer. That is an operator risk decision, not a code change.
 
-## Settlement, priced against the venue's own resolutions: -$21.12 on 45 markets
+## Settlement, priced against the venue's own resolutions
+## (first reading -$21.12 -- SUPERSEDED the same day, see the correction below)
 
 Every earlier attempt to answer "what happens if we ride to settlement" was an
 inference. This one is not. The venue publishes no settlement rows, but it
@@ -2067,3 +2068,48 @@ warning when this happens -- the suite just prints OK.
 
 `check_sync.sh` now diffs `tests/` as well and fails on drift. Sync `tests/`
 whenever you sync `src/`; `scp` of individual files makes forgetting the default.
+
+### CORRECTION, same day: -$21.12 became +$5.90 once the ledger was repaired
+
+The number above was measured hours before the `isAggressor` fix reached the
+droplet, so it was computed on a ledger that was missing about 30% of its fills
+-- and the missing ones were overwhelmingly the **passive** side. Within twenty
+minutes of deploying the fix and restarting, the same command reported:
+
+```
+                        before repair      after repair
+ledger fills                    212               300
+  MAKER / TAKER                        163 MAKER / 137 TAKER
+  BUY_LONG / BUY_SHORT                 146 / 146  (exactly balanced)
+closed pairs             49 mkts -12.65    89 mkts -32.60
+settled positions        45 mkts -21.12    12 mkts  +5.90
+```
+
+**The mechanism is the whole point.** A missing passive fill is a missing *leg*.
+Every position whose hedge never reached the ledger looked like a naked bet
+carried into settlement, when the account had actually been flat on it all
+along. Repairing the ledger moved 33 markets out of the settled bucket and into
+closed pairs, and the settled bucket flipped from a $21 loss to a $6 gain.
+
+**So the conclusion drawn above -- "riding is not free money, the positions that
+already ride are losing" -- is not supported.** It was an artefact of counting
+one leg of a two-legged position. The honest statement is that we do not yet
+know what riding costs, because we have never had a complete ledger to measure
+it on. Do not carry the -$21.12 forward, and do not carry forward the win-rate
+comparison against break-even either; both were computed on half-positions.
+
+**What survives.** The *method* is sound -- resolutions are published, the
+winner prices at 1, our fills record the side we hold. The mechanical part was
+never in doubt. What was wrong was its input.
+
+**This is also the clearest possible demonstration of the fill defect's cost.**
+The bot was not mis-trading. It was mis-*recording*, and every number built on
+top -- `realized_pnl`, the loss stops, the settlement study, the case for
+changing the exit policy -- inherited the error and pointed the wrong way.
+Nothing measured before 2026-08-17T13:20Z on this ledger should be trusted.
+
+**Still incomplete.** `fetch_executions` reads two pages of 100 activities per
+sweep, so the backfill reaches back only as far as recent history; older gaps
+persist. 7 markets holding $19.00 of cost still carry no `outcome` and cannot be
+priced at all. Re-measure once the ledger stops moving -- and check that it has
+stopped before quoting any figure from it.

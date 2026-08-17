@@ -6,10 +6,15 @@ actually moved -$48.69 -- wrong by 3x, in the number the loss stops read.
 
 Three sources, made to agree:
 
-  1. **Closed pairs**, from the local ledger, priced with no ambiguity. Every
-     fill the bot sends is a PURCHASE (FINDINGS 6i -- two intents, never four),
-     so one YES plus one NO settles at exactly 1.0000 and a matched pair
-     realises `1.00 - paid`. Needs no direction, outcome or settlement data.
+  1. **Closed positions**, from the local ledger, priced with no ambiguity.
+     One YES plus one NO settles at exactly 1.0000, so a matched pair realises
+     `1.00 - paid` with no direction, outcome or settlement data needed.
+
+     The bot itself only ever sends the two BUY intents (FINDINGS 6i -- two
+     intents, never four), but an operator closing a position by hand produces
+     a SELL_* fill, so quantities and costs here are NET. A market that was
+     bought and then sold back out lands at a residual of zero and is realised
+     by the same expression as a matched pair.
 
   2. **Settled positions** (`--settlements`). The venue publishes no settlement
      rows, but it does publish the answer: a resolved market carries `outcomes`
@@ -52,6 +57,8 @@ from liquidity_bot.probe import client_from_environment  # noqa: E402
 
 BUY_LONG = "ORDER_INTENT_BUY_LONG"
 BUY_SHORT = "ORDER_INTENT_BUY_SHORT"
+SELL_LONG = "ORDER_INTENT_SELL_LONG"
+SELL_SHORT = "ORDER_INTENT_SELL_SHORT"
 
 
 def _money(value) -> Decimal:
@@ -70,27 +77,44 @@ def _from_ledger(db: str):
         lambda: {"L_q": Decimal(0), "L_c": Decimal(0), "L_out": None,
                  "S_q": Decimal(0), "S_c": Decimal(0), "S_out": None})
     spent = fees = Decimal(0)
-    inverted = 0
+    unknown_intent = 0
     for row in conn.execute("SELECT market_slug,intent,price,qty,fee,outcome "
                             "FROM execution_fills"):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
-        spent += qty * price
         fees += Decimal(str(row["fee"] or 0))
         book = per_market[row["market_slug"]]
+        # Quantities and costs are NET. The bot itself only ever sends the two
+        # buy intents (FINDINGS 6i), so for a long time every row here was a
+        # purchase and `spent += qty * price` was right for all of them.
+        #
+        # An operator closing a position by hand breaks that: it lands as a
+        # SELL_* fill, and 2026-08-17 produced the first one this script ever
+        # saw. Treating it as a purchase was wrong twice over -- it added the
+        # sale proceeds to "paid", and it left the position looking open when
+        # the account was flat. Verified against the balance: 5 contracts sold
+        # at 0.50 with an 0.08 fee moved the account +2.42, cash IN.
         if row["intent"] == BUY_LONG:
             book["L_q"] += qty
             book["L_c"] += qty * price
             book["L_out"] = book["L_out"] or row["outcome"]
+            spent += qty * price
         elif row["intent"] == BUY_SHORT:
             book["S_q"] += qty
             book["S_c"] += qty * price
             book["S_out"] = book["S_out"] or row["outcome"]
+            spent += qty * price
+        elif row["intent"] == SELL_LONG:
+            book["L_q"] -= qty
+            book["L_c"] -= qty * price
+            spent -= qty * price
+        elif row["intent"] == SELL_SHORT:
+            book["S_q"] -= qty
+            book["S_c"] -= qty * price
+            spent -= qty * price
         else:
-            # SELL_* is the frame the venue inverts and that was never
-            # validated here. Counted, never priced.
-            inverted += 1
+            unknown_intent += 1
     conn.close()
-    return per_market, spent, fees, inverted
+    return per_market, spent, fees, unknown_intent
 
 
 def _residual(book):
@@ -176,13 +200,23 @@ async def main() -> int:
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
-    per_market, spent, fees, inverted = _from_ledger(args.db)
+    per_market, spent, fees, unknown_intent = _from_ledger(args.db)
 
     closed_pnl = Decimal(0)
     closed = open_ = 0
     open_cost = Decimal(0)
     for book in per_market.values():
-        pairs = min(book["L_q"], book["S_q"])
+        pairs = max(min(book["L_q"], book["S_q"]), Decimal(0))
+        if book["L_q"] - book["S_q"] == 0:
+            # Nothing is held any more. Either the two legs matched into pairs
+            # that settle at exactly 1.00 each, or the position was sold back
+            # out -- and both are fully realised, with the same expression.
+            # Only the pair case existed until an operator closed a position by
+            # hand; before this, a bought-then-sold market showed a residual of
+            # zero, was priced by neither branch, and its P&L silently vanished.
+            closed_pnl += pairs - (book["L_c"] + book["S_c"])
+            closed += 1
+            continue
         if pairs > 0:
             lc = book["L_c"] / book["L_q"] * pairs if book["L_q"] else Decimal(0)
             sc = book["S_c"] / book["S_q"] * pairs if book["S_q"] else Decimal(0)
@@ -206,9 +240,10 @@ async def main() -> int:
                   if str(getattr(r, "status", "")) == "PENDING")
 
     print(f"ledger fills priced      : {closed + open_:5d} markets")
-    if inverted:
-        print(f"  inverted SELL_* fills excluded: {inverted}")
-    print(f"paid for all fills       : {float(spent):12.2f}")
+    if unknown_intent:
+        print(f"  fills with an unrecognised intent: {unknown_intent}")
+    print(f"net cash paid for fills  : {float(spent):12.2f}   "
+          "(buys less sells)")
     print(f"fees                     : {float(fees):+12.2f}   (negative = rebate)")
     print(f"closed pairs             : {closed:5d} markets  "
           f"P&L {float(closed_pnl):+.2f}")

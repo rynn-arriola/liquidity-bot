@@ -110,6 +110,12 @@ Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `scripts/resting_fraction.py` measures what share of time each side actually
 holds a live order — the quantity that maps to reward.
 
+`scripts/rewards_report.py` answers "what have we actually earned" — daily
+table, per-market and per-league breakdown, straight from the venue. Query it
+account-wide; passing a market slug to `/v1/incentives/earnings` returns \$0 even
+for markets that plainly earned. A missing day means either "not posted yet" or
+"earned nothing", and one reading cannot tell them apart — re-run a day later.
+
 `scripts/backup_ledger.py` runs nightly from cron at 04:17 UTC and keeps 30
 dated snapshots in `backups/daily/`. It uses SQLite's online backup API, so it
 is safe against the live writer — never `cp` a WAL database. **Those snapshots

@@ -1981,6 +1981,14 @@ horizon is reverted.
 exit run to the kickoff deadline, and the cost of being wrong is holding
 inventory longer. That is an operator risk decision, not a code change.
 
+> **SUPERSEDED 2026-08-17T15:2xZ -- do not act on this section alone.** Measured
+> on clean data, P&L degrades monotonically with holding time (+23.8c under
+> 300s, falling to -23.5c past an hour), which is the opposite of what "give the
+> passive exit more room" predicts. This section's comparison is confounded by
+> exposure duration: kickoff-driven exits had little time to go wrong, clock
+> driven ones had 900+ seconds first. The decision taken was to **leave the
+> clock at 900**. See "Before relaxing the 900s clock" at the end of this file.
+
 ## Settlement, priced against the venue's own resolutions
 ## (first reading -$21.12 -- SUPERSEDED the same day, see the correction below)
 
@@ -2294,3 +2302,85 @@ worse 08-10..13 trading entirely because those fills are not in the ledger.
 which is precisely why `accounting.py` writes dated snapshots -- from now on
 this question is a subtraction, not an inference. Take a snapshot before any
 change whose effect you will want to measure.
+
+## Before relaxing the 900s clock, read this: P&L degrades monotonically with holding time
+
+Measured 2026-08-17T15:2xZ on **2026-08-17 fills only** -- the first day the
+ledger recorded fills correctly, so the only day this can be asked of. Written
+because the operator was about to relax `max_inventory_age_seconds` on the
+strength of the reversal section above, and this cut argues the other way.
+
+### First, the reversal's inputs check out
+
+The reversal was measured at 12:3xZ, *before* the `isAggressor` fix reached the
+droplet at 13:20Z -- the same broken ledger that forced the settlement finding
+to be withdrawn. The obvious worry was that missing passive fills would make
+pairs look crossed that were completed passively, manufacturing exactly that
+conclusion. **That worry was wrong**, and it is recorded so nobody spends the
+time again:
+
+```
+                    crossed share    per crossed pair
+2026-08-15 (dirty)      63%              +4.4c
+2026-08-16 (dirty)     100%              +1.4c
+2026-08-17 (CLEAN)      95%              -6.1c      n=58
+```
+
+The clean day shows *more* crossing, not less, and reproduces the -6.2c the
+dirty analysis reported to within a tenth of a cent. The crossed-pair penalty
+is real.
+
+(The clean day's `both legs MAKER` row is n=3 at 0.3633 paid/pair. Do not quote
+it -- paying 36c for something that settles at 1.00 is a partial-pair artefact
+of proportional cost allocation, not a 64c edge.)
+
+### But holding time predicts loss, monotonically
+
+```
+pair completion time, 2026-08-17, n=61
+
+     0-300s    n=11   +23.8c per pair
+   300-900s    n=12    -5.1c
+  900-1800s    n=23    -4.5c
+ 1800-3600s    n=9    -13.2c
+   3600s+      n=6    -23.5c
+```
+
+**"Give the passive exit more room" predicts the opposite of this.** Pairs that
+got more time should do better; they do steadily worse. Relaxing the clock moves
+positions from the -4.5c bucket into the -13.2c and -23.5c ones.
+
+### The likely reason the reversal looked convincing
+
+It compared what *ended* the position -- clock-driven crossings (-19c median)
+against kickoff-driven ones (+5c). But a kickoff-driven exit is a position
+entered close to kickoff, so it had **little time to go wrong**; a clock-driven
+one had 900+ seconds of exposure first. That comparison is confounded by
+**exposure duration**, and the table above says duration is what predicts the
+loss. The reversal may have measured "positions held longer lose more" and
+attributed it to "crossing at the clock is expensive".
+
+Both the original section and the reversal flagged this confound. Neither
+resolved it. It is now the whole question.
+
+### What would actually settle it
+
+Not more history -- every historical cut is confounded the same way, because
+what gets held longer is chosen by the market, not by us. **Randomise:** run
+part of the book at 900s and part at 2700s, assigned randomly and running
+concurrently, so both arms see the same hours and the same books. Compare
+per-pair P&L by arm. Use a small treatment arm (~5 of 20 markets) to bound the
+downside.
+
+### Decision taken 2026-08-17: leave it at 900
+
+Three reasons, in order of weight. The clock is a **risk control** -- it bounds
+inventory age at all, and without it a position rides to the pre-kickoff
+flatten (~2h at the current horizon, ~6h if that is reverted), with settlement
+behind that and settlement measured as a loser. The evidence for relaxing it
+points the wrong way on the only clean day available. And the account is near
+break-even at roughly +/-$3/day, where a variance-increasing change swamps the
+signal it is meant to reveal.
+
+**Do not relax this parameter on historical analysis alone.** If it is revisited,
+it is the A/B or nothing.

@@ -1,5 +1,32 @@
 # Next session — outstanding fixes
 
+## 0. A parked position bricks the runner until the kickoff window (2026-08-17)
+
+Hit live during a routine deploy restart; full write-up in `BUGFIXES.md`.
+
+Shutdown parks a position rather than dumping it into a thin book, which is
+right. Startup then enters `RECOVERY_ONLY`, lives ~18 seconds, cannot fill a
+passive exit in that time, parks again, and returns exit 3 — the code the
+supervisor never restarts. The only mechanism that clears the position is the
+300s pre-kickoff flatten, and reaching it requires staying alive. So the bot is
+down until the window opens or the market settles. A $2.80 position took the
+session offline for ~15 minutes.
+
+Worked around by hand: start inside the pre-kickoff window and recovery
+flattens through the normal ladder.
+
+**The fix is one of two, and it is a judgement call:**
+
+1. Let `RECOVERY_ONLY` stay alive until it can flatten, bounded by the kickoff
+   deadline it already honours. Closest to intent; means a recovery process can
+   live for hours holding one position and quoting nothing.
+2. Give "known position, cannot flatten yet" its own exit code that the
+   supervisor retries with long backoff, keeping exit 3 for genuinely
+   unexplained state.
+
+(2) is smaller and keeps exit 3 meaning what it says. Do not weaken exit 3
+itself — an unexplained position must still stop the account.
+
 ## TOP PRIORITY (2026-08-16): the $40 stop is computing from one-sided fills
 
 **Measured 2026-08-15 06:53Z.** `realized_by_market()` returns:

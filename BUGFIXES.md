@@ -1120,3 +1120,51 @@ Self-review of `112d58b..HEAD`, all five findings in code written the same day.
 `_top_up_active_markets` returned at its first line and never reached the
 logic. Both mutants survived, which is the only reason it was caught. The
 tests now arm auto-select explicitly and assert their preconditions.
+
+## A parked position bricks the bot until the pre-kickoff window opens
+
+**Symptom.** A routine restart to deploy a fix took the bot down entirely. The
+graceful stop reported success and exit 0, but the account was not flat, and
+every subsequent start died within twenty seconds:
+
+```
+[shutdown] market=aec-cs2-nvo-mel-2026-08-18 decision=parked position=5.0000 working=1 seconds_to_kickoff=1190
+{ "flat": false, "stop_reason": "startup_recovery_only" }
+[supervisor] process exited without proving flat; not restarting
+```
+
+**Mechanism.** Two correct rules that deadlock when combined.
+
+Shutdown will not dump a position into a thin book, so outside the 300s
+pre-kickoff flatten window it *parks*: leaves one passive exit resting and
+exits. `stop_commissioning.sh` reports success because it only waits for the
+process to die, and the process died as designed.
+
+Startup then finds leftover state, enters `RECOVERY_ONLY`, and immediately
+requests stop. That run lives about eighteen seconds -- nowhere near long
+enough for a passive exit to fill -- so it parks again and returns:
+
+```python
+if not result.flat:
+    return 3          # the code the supervisor never restarts
+```
+
+Exit 3 is deliberate: a position nobody can explain must not trade again until
+a human looks. But here the position is fully explained, and the only mechanism
+that would clear it -- the pre-kickoff flatten -- requires the runner to stay
+alive until the window opens. It cannot, because it exits before then. The bot
+is down until either the window opens or the market settles.
+
+**Cost.** $2.80 of exposure (5 contracts of "Noir Verse" at 0.56, a MAKER fill
+carrying a 2c rebate) held unmanaged, and roughly fifteen minutes of not
+quoting during an active session. The money was never the risk; the outage was.
+
+**Fix applied 2026-08-17.** Operational, not code: start the runner *inside* the
+300s pre-kickoff window, where recovery flattens through the normal exit ladder,
+proves flat, and exits 5 so the supervisor starts a real session.
+
+**Not yet fixed in code.** Recovery should either stay alive until it can
+flatten -- bounded by the kickoff deadline it already honours -- or exit with a
+code that says "known position, retry later" rather than 3. Parking during
+shutdown is right; parking again on every restart is what turns a $2.80 position
+into an outage. See NEXT.

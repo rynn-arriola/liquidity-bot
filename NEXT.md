@@ -27,6 +27,36 @@ flattens through the normal ladder.
 (2) is smaller and keeps exit 3 meaning what it says. Do not weaken exit 3
 itself — an unexplained position must still stop the account.
 
+## 0b. One-off deep backfill of 2026-08-14..16 (2026-08-17)
+
+The `isAggressor` fix repaired the ledger from 13:20Z on 2026-08-17, and it has
+converged — 300 fills, stable. Today is clean. **The three days before it are
+not**, and they never will be without a deliberate backfill:
+
+```
+2026-08-17   181 fills   101 maker (56%)   <- the real split
+2026-08-16    58 fills    22 maker (38%)   <- passive legs still missing
+2026-08-15    55 fills    37 maker
+2026-08-14     6 fills     3 maker
+```
+
+`fetch_executions` reads two pages (200 activities) per sweep by design, so it
+repaired recent history and stopped. Everything older was written by the broken
+code and still counts one leg of two.
+
+Separately, **26 markets from 08-14/15 carry no `outcome` at all**, so their
+settled positions cannot be priced even in principle — that is the $19.00
+`accounting.py --settlements` reports as unpriceable.
+
+**Until this is done, no all-time P&L figure is decision-grade.** Equity from
+the venue and anything after 13:20Z 08-17 are fine.
+
+**Do it with the bot stopped.** Paging full venue history is precisely what
+triggered rate limiting before; analysis shares the one 4 req/s governor with
+the live runner. A stopped bot has the whole budget and nothing to lose from
+spending it. Raise `max_pages` for that single run only — do not raise the
+default, and do not put history paging in `accounting.py`.
+
 ## TOP PRIORITY (2026-08-16): the $40 stop is computing from one-sided fills
 
 **Measured 2026-08-15 06:53Z.** `realized_by_market()` returns:

@@ -81,6 +81,57 @@ Also still open from the earlier measurement: 13 of 40 sides never quoted at
 all, sitting on `target_not_met`. Confirm whether that is stable across slates
 or a property of one late-evening card. Same gate as item 7.
 
+## 2b. Seven markets held a slot for up to 130 minutes and never quoted (2026-08-17)
+
+Measured over the 2026-08-16T21:47Z session. **This is the largest identified
+loss of coverage and it is bigger than items 2 and 3 combined.**
+
+```
+markets serviced this session:  34
+never placed a single order:     7
+
+  bound 130 min   aec-itfme-kritam-yuchi-2026-08-16
+  bound 114 min   aec-itfme-hanlu-badidr-2026-08-17
+  bound 114 min   aec-itfme-pathom-filkos-2026-08-17
+  bound  98 min   aec-itfwo-katmansofsha-megheucritig-2026-08-17
+  bound  84 min   aec-setkamecz-rocjan-listom-2026-08-17
+  bound  84 min   aec-setkameua-khadmy-lipole-2026-08-17
+  bound  54 min   aec-itfme-yuqjin-hezih-2026-08-17
+```
+
+Roughly 680 market-minutes of slots held while earning nothing. At a snapshot,
+20 markets were bound and 8 were resting.
+
+**Symptom:** a permanent `book_stale` loop. Visited, book older than
+`max_book_age_seconds` (5.0), refresh, back off, visited again ~35s later, still
+too old. `attempt=1` on nearly every one, so the escalation metric reads healthy
+and none is ever retired -- they simply never quote.
+
+**The shape of the problem.** The freshness bound is 5s but the per-market visit
+interval is ~35s (median, 582 samples). A market therefore only quotes if its
+WebSocket book happens to update within 5s of the visit. Active books do; quiet
+books never do.
+
+**Why this may be the worst possible markets to lose.** FINDINGS section 6h
+records that 93% of all reward ever paid came from table tennis and lower-tier
+tennis -- thin, quiet books. Those are precisely the books least likely to
+publish an update inside a 5-second window. The bot may be systematically unable
+to quote its most valuable markets.
+
+**Not diagnosed:** why the existing replan-once rescue does not save these.
+`_decide_for_market` replans when `not replanned and reason == "book_stale" and
+self._book_is_fresh_enough_to_plan(slug)`, so the REST refresh should make the
+book fresh and the replan should proceed. It evidently does not for these
+markets. Establish whether the refresh is firing at all for them, whether it
+succeeds, and whether the book it returns is already older than 5s on arrival,
+before changing anything.
+
+**Do not simply widen `max_book_age_seconds`.** It exists so a quote is never
+placed on data that no longer describes the market, and the 2026-08-14 churn
+came from quoting stale books. If the answer is that quiet books need a
+different freshness rule than active ones, that is a deliberate policy change
+with its own evidence, not a constant to nudge.
+
 ## 3. Re-price latency -- WEAKENED, probably not worth doing (2026-08-17)
 
 Kept rather than deleted because the reasoning was sound and only the magnitude

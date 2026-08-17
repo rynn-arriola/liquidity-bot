@@ -35,6 +35,12 @@ real account.** Every change can lose it.
    Deployed-but-not-pushed is invisible to the other machine and will be
    clobbered by the next deploy from it. Both fail silently.
 
+   To answer "is the droplet in sync?", run `./scripts/check_sync.sh <host>`.
+   It compares the droplet's `src/` against this working copy and checks that
+   `DEPLOYED_COMMIT` is telling the truth. Docs and scripts running ahead is
+   expected and is reported as harmless — forcing them level would mean
+   restarting a healthy bot to ship a README fix.
+
 ## What is authoritative for what
 
 Git is the source of truth for **code and decisions**, and nothing else. Four

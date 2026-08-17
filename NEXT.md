@@ -81,6 +81,65 @@ Also still open from the earlier measurement: 13 of 40 sides never quoted at
 all, sitting on `target_not_met`. Confirm whether that is stable across slates
 or a property of one late-evening card. Same gate as item 7.
 
+## 1b. Root cause of the untrustworthy accounting, and the order to fix it
+
+Found 2026-08-17. Everything below TOP PRIORITY depends on this, because every
+strategy question is judged against P&L and P&L is currently wrong by 3-10x.
+
+**The mechanism is one filter.** `AsyncAccountSnapshotGateway.fetch_executions`
+drops any execution whose resolved client id starts with `venue:`:
+
+```python
+if str(execution.client_order_id).startswith("venue:"):
+    continue
+```
+
+That filter is CORRECT and was added for a real bug -- a trade has two legs, the
+venue reports both, and without it every trade was recorded twice, which made
+realised P&L read flat on a market holding risk (2026-08-15, valorant-ff-ep).
+
+The defect is that `resolve_client_id` also returns `venue:` for **our own**
+fills when we have no order record for them -- an operator's manual close, or an
+order whose record was lost. So "the counterparty's leg" and "our leg we cannot
+attribute" are indistinguishable, and both are discarded.
+
+**Everything traces back to it:** the -$22.41 of markets with an entry and no
+exit; `realized_pnl` reading -$143.59 against a real -$48.69; and the
+riding-vs-crossing comparison, where 40 of 57 "ridden" markets had a TAKER first
+fill -- impossible for a post-only entry, so their entry was simply never
+recorded.
+
+### Order of work
+
+1. **Identify our own leg without relying on our order records.** Needs one
+   inspection of a real trade payload for an ownership marker. Cheap, but do it
+   when the venue is healthy -- analysis shares the 4 req/s governor with the
+   runner and paging history has already triggered rate limiting twice.
+2. **Record every fill of ours, attributable or not.** Flag the unattributed
+   ones rather than dropping them, so double-counting stays impossible while
+   nothing of ours is lost.
+3. **Snapshot positions and equity around settlement windows.** The venue
+   publishes no settlement rows at all (240 activity rows, every one
+   ACTIVITY_TYPE_TRADE), so settlement can only be derived. Account-level
+   derivation already works in `scripts/accounting.py`; per-market needs
+   position snapshots on both sides of a resolution.
+4. **Replace `realized_pnl` with the matched-pair calculation.** Written and
+   validated in `scripts/accounting.py`: a YES+NO pair settles at exactly
+   1.0000, so a closed pair realises `1.00 - paid`, needing no direction,
+   outcome or settlement data. Do this AFTER 1-3, and only once reconciliation
+   confirms it -- it is the number the $40 loss stops read.
+5. **Fail loudly when the model and the account disagree.** The 3x error sat
+   there undetected for days. Nothing compared the ledger to the balance.
+
+### Not to be done before this
+
+Reverting the 2-hour horizon, changing the 900s inventory clock, and the
+riding-vs-crossing question are all queued and all wait on this. Each was
+measured tonight against P&L, and every one of those measurements is suspect
+until the accounting is trustworthy. `scripts/accounting.py` recorded its first
+baseline snapshot on 2026-08-17; the second run makes settlements exactly
+derivable for the window between them.
+
 ## 2b. Markets can be very slow to place their first order (2026-08-17)
 
 **Rewritten after the diagnostic. The original version of this item blamed

@@ -2161,3 +2161,52 @@ than tripping anything.
 **And note what this does NOT block.** Fill recording going forward was already
 fixed and verified. This only concerns repairing 2026-08-14..16 retrospectively,
 which affects historical reporting and nothing the bot does next.
+
+## Reward PAID/PENDING is not cash. The transfer history is
+
+`/v1/incentives/earnings` reports a `status` of PAID or PENDING per row, and
+`scripts/rewards_report.py` totals them. On 2026-08-17 that read PAID $37.91 /
+PENDING $102.79, with nothing marked PAID after 08-10 -- which was read, by me,
+as "the venue has not paid us in a week". **That reading was wrong**, and the
+operator caught it by simply looking at their balance.
+
+Actual payouts land as `ACTIVITY_TYPE_TRANSFER` rows in
+`GET /v1/portfolio/activities`, carrying `accountBalanceChange` with
+`description = "liquidity reward payout"`:
+
+```
+2026-08-11T15:35:07   $32.06  COMPLETED   liquidity reward payout
+2026-08-17T14:20:17    $5.85  COMPLETED   liquidity reward payout
+2026-08-17T14:26:23    $5.83  COMPLETED   liquidity reward payout
+```
+
+Two payouts arrived *the same afternoon* the incentives endpoint still showed
+$102.79 sitting in PENDING and nothing PAID since 08-10. The two views do not
+reconcile and are not meant to: **the incentives endpoint is an accrual ledger,
+the transfer history is cash.** Never answer "have we been paid" from the
+former.
+
+The same activity stream is also the only place deposits appear:
+
+```
+2026-08-10  $50  COMPLETED  Polymarket Deposit
+2026-08-11 $300  REJECTED   Apple Pay
+2026-08-11 $400  COMPLETED  Apple Pay
+```
+
+Deposits are what make a true P&L possible at all -- `equity - deposits` needs
+no ledger and no model. **Do not compute it from a partial page walk.** The read
+above covers 8 pages; there was trading in 2026-06/07, so earlier deposits
+almost certainly sit outside it, and a bottom line drawn from an incomplete
+deposit list is worse than no bottom line.
+
+**Cost of getting this wrong.** Paging 60 pages to find these rows tripped venue
+rate limiting while the bot was quoting -- the second time in this project, both
+times mine. Six pages was enough to find the rows; the query is bounded at eight
+now. The runner was unaffected (uptime unbroken, escalation never past
+`attempt=3`, the 120 concurrent errors were ordinary `book_stale`), but that was
+luck rather than design.
+
+**To do:** teach `rewards_report.py` to read the transfer history and show cash
+received beside accrued, and pull the full deposit history at a moment when the
+bot is stopped. See NEXT.

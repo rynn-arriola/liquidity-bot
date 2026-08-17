@@ -27,6 +27,34 @@ flattens through the normal ladder.
 (2) is smaller and keeps exit 3 meaning what it says. Do not weaken exit 3
 itself — an unexplained position must still stop the account.
 
+## 0a. Report reward CASH, not just accrual — and get the deposit history
+
+`/v1/incentives/earnings` PAID/PENDING is an **accrual** view and does not track
+cash. On 2026-08-17 it showed nothing PAID since 08-10 while two payouts landed
+that same afternoon. Full detail in FINDINGS; the short version:
+
+```
+2026-08-11T15:35   $32.06  COMPLETED  liquidity reward payout
+2026-08-17T14:20    $5.85  COMPLETED  liquidity reward payout
+2026-08-17T14:26    $5.83  COMPLETED  liquidity reward payout
+```
+
+Cash payouts are `ACTIVITY_TYPE_TRANSFER` rows in `/v1/portfolio/activities`
+with `accountBalanceChange.description = "liquidity reward payout"`.
+
+**Two jobs:**
+
+1. Teach `scripts/rewards_report.py` to show cash received alongside accrued,
+   so "have we been paid" is answerable from one command. Bound the paging —
+   8 pages found everything; 60 tripped venue rate limiting while the bot quoted.
+2. **Pull the full deposit history with the bot stopped.** Deposits are the
+   missing term in a true P&L: `equity - deposits - reward_received` is the
+   trading result, and it needs no ledger, no model and no settlement data —
+   it would sidestep the entire untrustworthy-ledger problem. Partial reads so
+   far show $50 (08-10) and $400 (08-11), but 2026-06/07 trading implies
+   earlier deposits outside the window. **Do not draw a bottom line until the
+   deposit list is known complete.**
+
 ## 0b. One-off deep backfill of 2026-08-14..16 (2026-08-17)
 
 The `isAggressor` fix repaired the ledger from 13:20Z on 2026-08-17, and it has

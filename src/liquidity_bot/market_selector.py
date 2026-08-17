@@ -422,8 +422,11 @@ class RewardMarketSelector:
         # Market list rows carry every immutable field needed for selection.
         # Join one bulk catalog snapshot to batched incentive responses instead
         # of retrieving metadata once for every rewarded slug.  Only the
-        # documented six-hour day-of window can authorize this executor, so
-        # filter by that clock before asking for incentive rows.
+        # documented six-hour day-of window can authorize this executor, and
+        # `selection_horizon_seconds` narrows it further to the part of that
+        # window where reward is actually paid. Filter by that clock before
+        # asking for incentive rows, so a market we will not quote never costs
+        # an incentive row or a book fetch.
         catalog = await self.gateway.list_sports_markets()
         window_end = now + timedelta(
             seconds=self.policy.selection_horizon_seconds)

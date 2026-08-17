@@ -2470,3 +2470,55 @@ study in that gap: entries rest as makers, exits cross as takers, **95% of
 pairs complete by crossing**, and a crossed pair costs -6.1c. A displayed 3.8c
 edge does not survive that. Treat it as an unvalidated input, not a starting
 advantage -- which is the same caution #1 exists to teach.
+
+## Why the bot quotes 3 markets and not 20: ~90% of books are tighter than 2c
+
+Asked live 2026-08-17T18:11Z with 3 of 20 slots in use. The `[selection]` log
+line could not answer it, so the selector was run by hand. Recorded because the
+question will recur and the answer is stable.
+
+```
+catalog markets             16250
+in the 2h horizon              45
+carrying rewards               44
+  - unsupported program         0
+  - book too tight to enter    40    <- 91% of rewarded markets
+  = eligible pregame            4
+books actually read             4
+  - deferred (book budget)      0
+  - book read failures          0
+  = VIABLE                      3    of 20 slots
+```
+
+**`_catalog_spread_can_enter` is the dominant filter by a wide margin.** It
+drops any market whose catalog BBO spread is under `minimum_entry_spread` (2c),
+before a book is ever read. That is the same rule FINDINGS already records as
+the top rejection cause (`spread_below_2c`, 8,229 hits) -- now quantified as a
+share: **it removes ~9 of every 10 rewarded markets.**
+
+**The 20-slot limit has never been the constraint.** Neither has the 2-hour
+horizon (45 markets were inside it), book staleness (0 read failures), the book
+budget (0 deferred), or unsupported programs (0). Every market that dropped out
+did so on a deliberate economic rule.
+
+### How to tell "normal" from "broken" in one command
+
+`scripts/usable_markets.py`. The five counters in the `[selection]` line cannot
+distinguish the two cases; these can, and none of them are logged:
+
+| counter | non-zero means |
+|---|---|
+| `failures` | markets lost to **book read errors** -- a real fault |
+| `deferred_markets` | more candidates than `max_book_candidates` will price |
+| `unsupported_programs` | reward programs this executor does not implement |
+| `catalog_spread_filtered` | books too tight -- **normal**, and usually ~90% |
+
+`executable_catalog_markets == 0` is a schedule trough, normal at quiet hours:
+the same bot showed `viable=14` at 13:25Z and `viable=1` at 18:00Z the same day.
+Compare against a busy hour before concluding anything from one reading.
+
+**This is also the only real lever on market count.** Lowering
+`minimum_entry_spread` would take eligible markets from 4 to ~44. It buys
+thinner margins in exchange, against a measured -6.1c cost per crossed pair and
+95% of pairs completing by crossing. Not obviously a good trade, and not to be
+changed during a measurement week.

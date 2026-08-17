@@ -120,6 +120,17 @@ bound each settlement window. **Do not add venue history paging to it** -- an
 earlier version did and triggered rate limiting, because analysis shares one
 4 req/s governor with the live runner.
 
+`scripts/usable_markets.py` answers **"why is it quoting 3 markets and not 20 —
+is that a problem or normal?"** Use it whenever that question comes up; do not
+answer it from the `[selection]` log line, which prints five counters that
+cannot tell "nothing is eligible" apart from "markets are being lost to book
+errors". The counters that separate them (`catalog_spread_filtered`,
+`unsupported_programs`, `failures`, `deferred_markets`) exist on the selection
+object and are never logged. The script runs the real selector read-only,
+prints the whole funnel, lists what is resting at the venue, and states a
+verdict. `--rejects` lists the tight-book markets with their spreads. It costs
+~50 venue calls, so never loop it.
+
 `scripts/rewards_report.py` answers "what have we actually earned" — daily
 table, per-market and per-league breakdown, straight from the venue. Query it
 account-wide; passing a market slug to `/v1/incentives/earnings` returns \$0 even

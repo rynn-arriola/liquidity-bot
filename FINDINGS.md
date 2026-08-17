@@ -1923,3 +1923,60 @@ theories died during this session.
 **The immediate implication is a risk decision, not an engineering one.** The
 bot is currently losing more on trading than it earns in reward, on the numbers
 that are trustworthy, and the trend is one-directional across four days.
+
+## The 900s inventory clock now looks like the expensive one -- reversing an earlier read
+
+Measured 2026-08-17T12:3xZ on 203 fills, against the 92 that produced the
+earlier section "Crossing at 900s vs the pre-kickoff flatten: no case for
+waiting". **That section's conclusion no longer holds on the larger sample.**
+It is superseded rather than deleted, because it was used to keep the current
+policy.
+
+Method differs from that section and is stated so the two are not confused:
+every fill the bot sends is now a PURCHASE (FINDINGS 6i -- two intents, never
+four), so a matched YES+NO pair settles at exactly 1.0000 and per-contract P&L
+is `1 - paid`, with no intent-inversion ambiguity at all.
+
+```
+bucket                              n   total/contract    median
+crossed <900s (kickoff-driven)     12        -0.4705     +0.0500
+crossed >=900s (inventory clock)   29        -2.1825     -0.1898
+```
+
+Crossing driven by the kickoff deadline has a **positive** median (+5c per
+contract); crossing driven by the inventory clock has a **-19c** median. The
+earlier reading had these the other way round at -0.075 against -0.059, on 8
+and 12 samples.
+
+**Why this is coherent with everything else measured today.** Splitting the same
+49 completed pairs by how they were assembled:
+
+```
+both legs MAKER            7 mkts   paid 0.9714/pair   +2.9c per pair
+mixed (one leg crossed)   40 mkts   paid 1.0620/pair   -6.2c per pair
+```
+
+A pair bought entirely passively is profitable; a pair completed by crossing is
+not. The 900-second clock is precisely the thing that ends passive completion
+early and moves a market from the first bucket to the second. 40 of 49 pairs --
+82% -- were completed by crossing.
+
+**What it does NOT establish.** The two buckets are confounded exactly as the
+earlier section warned: the sub-900s group is near-kickoff by construction. That
+confound was used to explain why sub-900s looked *worse*; it now looks *better*
+despite it, which strengthens rather than weakens the reversal, but does not
+remove it. n=12 against n=29 with per-contract variance far larger than the
+difference in totals.
+
+**This is not a tuning parameter.** `assert_authorized` pins
+`max_inventory_age_seconds` to exactly 900 and `force_exit_before_start_seconds`
+to exactly 300, and the bot refuses to arm otherwise. Changing it edits the
+authorized commissioning envelope, and the 900s clock is a risk control as well
+as an exit policy -- it bounds how long inventory is held at all. Removing it
+means a position can be carried until the pre-kickoff flatten, which under the
+current 2-hour selection horizon is up to ~2 hours, and up to ~6 hours if that
+horizon is reverted.
+
+**The decision, stated plainly:** the evidence now favours letting the passive
+exit run to the kickoff deadline, and the cost of being wrong is holding
+inventory longer. That is an operator risk decision, not a code change.

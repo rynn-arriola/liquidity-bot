@@ -3,17 +3,27 @@
 
 Reward is paid for RESTING, not for placing, so the count of markets quoting at
 an instant understates or overstates coverage depending on when you look. This
-measures the fraction of wall-clock time each (market, side) held a live order,
-which is the quantity that maps to reward.
+measures the fraction of time each (market, side) held a live order.
 
 Read-only: opens the ledger with `mode=ro` so it is safe against a live runner.
 
     python3 scripts/resting_fraction.py [--db PATH] [--since ISO] [--top N]
+                                        [--coverage 0.8]
 
-An order's resting window is taken as the PLACE intent's `created_at` through
-the order's terminal `event_at`. Orders still working are counted through
-"now". Windows are clipped to the reporting window, so a session that began
-mid-window is not credited for time before it.
+**Two denominators, and the difference matters.** Markets rotate as games kick
+off -- a 3.7h window saw 27 markets pass through 20 slots -- so a market bound
+for ten minutes can never rest for more than 4% of the window however well it
+quoted. Dividing by the window therefore measures rotation, not performance:
+the first version of this script reported a 30% mean that was almost entirely
+that artifact.
+
+So each side is reported against its own market's active span (first placement
+to last terminal, or now), and the headline mean covers only sides whose market
+was present for most of the window -- those are the ones whose number reflects
+how well it quoted rather than how long it was bound.
+
+An order's resting window is the PLACE intent's `created_at` through the order's
+terminal `event_at`; orders still working count through now.
 """
 
 from __future__ import annotations
@@ -40,13 +50,15 @@ def main() -> int:
     parser.add_argument("--since", default=None,
                         help="ISO start; defaults to the earliest PLACE intent")
     parser.add_argument("--top", type=int, default=25)
+    parser.add_argument("--coverage", type=float, default=0.8,
+                        help="a market must be active this fraction of the "
+                             "window to count toward the headline mean")
     args = parser.parse_args()
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     now = datetime.now(timezone.utc)
 
-    # When each order started resting: its PLACE intent.
     placed: dict[str, datetime] = {}
     for row in conn.execute(
             "SELECT client_order_id, created_at FROM execution_intents "
@@ -55,7 +67,6 @@ def main() -> int:
         if at is None:
             continue
         key = str(row["client_order_id"])
-        # Earliest wins: an intent replayed later must not shorten the window.
         if key not in placed or at < placed[key]:
             placed[key] = at
 
@@ -65,48 +76,70 @@ def main() -> int:
     working = {"OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED"}
     resting: dict[tuple[str, str], float] = defaultdict(float)
     orders: dict[tuple[str, str], int] = defaultdict(int)
+    # A market's active span: first placement to last terminal (or now while it
+    # still holds something). This is the denominator that isolates how well a
+    # market quoted from how long it happened to be bound.
+    first_at: dict[str, datetime] = {}
+    last_at: dict[str, datetime] = {}
 
     for row in conn.execute(
             "SELECT client_order_id, market_slug, side, status, event_at "
             "FROM execution_orders"):
         start = placed.get(str(row["client_order_id"]))
         if start is None:
-            continue  # not ours, or placed before this ledger
-        end = now if str(row["status"]) in working else _parse(row["event_at"])
+            continue
+        live = str(row["status"]) in working
+        end = now if live else _parse(row["event_at"])
         if end is None:
             continue
         start = max(start, since)
         end = min(end, now)
         if end <= start:
             continue
+        slug = str(row["market_slug"])
         side = "bid" if "BUY" in str(row["side"]).upper() else "offer"
-        key = (str(row["market_slug"]), side)
-        resting[key] += (end - start).total_seconds()
-        orders[key] += 1
+        resting[(slug, side)] += (end - start).total_seconds()
+        orders[(slug, side)] += 1
+        if slug not in first_at or start < first_at[slug]:
+            first_at[slug] = start
+        if slug not in last_at or end > last_at[slug]:
+            last_at[slug] = end
 
     if not resting:
         print("no resting intervals in window -- is the ledger populated?")
         return 1
 
-    by_market: dict[str, float] = defaultdict(float)
-    for (slug, _side), seconds in resting.items():
-        by_market[slug] += seconds
+    def span_of(slug: str) -> float:
+        return max((last_at[slug] - first_at[slug]).total_seconds(), 1.0)
 
     print(f"window: {since.isoformat()} -> {now.isoformat()}  "
           f"({window / 60:.1f} min)")
-    print(f"markets seen: {len(by_market)}   sides tracked: {len(resting)}\n")
-    print(f"{'resting%':>9} {'orders':>7}  market / side")
-    rows = sorted(resting.items(), key=lambda kv: -kv[1])
-    for (slug, side), seconds in rows[:args.top]:
-        pct = 100.0 * seconds / window
-        print(f"{pct:8.1f}% {orders[(slug, side)]:7d}  {slug[:44]:44s} {side}")
+    print(f"markets seen: {len(first_at)}   sides tracked: {len(resting)}\n")
+    print(f"{'of span':>8} {'of window':>10} {'span':>7} {'orders':>7}  market / side")
 
-    total = sum(resting.values())
-    sides = len(resting)
-    print(f"\nmean resting fraction per side: "
-          f"{100.0 * total / (window * sides):.1f}%  ({sides} sides)")
-    print("A side at 100% held an order for the whole window; reward accrues "
-          "only over that time.")
+    # Only sides whose market was around long enough to judge. A market that
+    # placed once and ended three minutes later scores 100% of its span, which
+    # is true and useless -- it would otherwise sort to the top and bury the
+    # markets the number is actually about.
+    rows = sorted((kv for kv in resting.items()
+                   if span_of(kv[0][0]) >= args.coverage * window),
+                  key=lambda kv: -kv[1] / span_of(kv[0][0]))
+    for (slug, side), seconds in rows[:args.top]:
+        span = span_of(slug)
+        print(f"{100.0 * seconds / span:7.1f}% {100.0 * seconds / window:9.1f}% "
+              f"{span / 60:6.0f}m {orders[(slug, side)]:7d}  {slug[:40]:40s} {side}")
+
+    full = [(k, v) for k, v in resting.items()
+            if span_of(k[0]) >= args.coverage * window]
+    short = len(resting) - len(full)
+    if full:
+        mean = sum(v / span_of(k[0]) for k, v in full) / len(full)
+        print(f"\nmean resting fraction, markets present >={args.coverage:.0%} "
+              f"of the window: {100.0 * mean:.1f}%  ({len(full)} sides)")
+    print(f"excluded {short} side(s) whose market was bound too briefly to "
+          f"judge -- rotation, not performance")
+    print("Reward accrues only while an order rests. 'of span' is the honest "
+          "number; 'of window' is what a naive count would report.")
     return 0
 
 

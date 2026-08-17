@@ -1661,3 +1661,45 @@ worth closing explicitly -- otherwise it gets re-investigated.
 
 **Rule going forward:** a safety number in prose is a copy, not a source. Cite
 `commissioning.py` or quote the value with the date it was verified.
+
+## Resting fraction, measured properly: 63% -- and the re-price penalty is small
+
+Measured 2026-08-17T01:35Z over a 228-minute live window, 27 markets through 20
+slots, 43 sides.
+
+**The first version of this measurement was wrong.** It divided each side's
+resting time by the whole window, and markets rotate as games kick off -- so a
+market bound for ten minutes could score at most 4% however perfectly it quoted.
+That reported a 30.0% mean which was almost entirely rotation, not performance.
+`scripts/resting_fraction.py` now divides by each market's own active span and
+reports the headline mean only over markets present for >=80% of the window.
+
+```
+ of span  of window   span  orders  market / side
+   92.4%      91.3%   226m      29  sirvea-salnic    bid
+   92.3%      74.7%   185m      24  urevad-sirvea    bid
+   90.5%      89.4%   226m      12  chitsa-yinhua    offer
+   86.3%      85.3%   226m      24  marshi-yujahn    offer
+   85.2%      84.1%   226m      30  chitsa-yinhua    bid
+   68.3%      67.4%   226m      58  yujkim-ziyzho    bid
+   41.9%      41.4%   226m      23  reikom-alejon    offer
+    3.7%       3.7%   226m      13  zhixia-ryunak    bid
+
+mean over markets present >=80% of window: 62.8%  (13 sides)
+```
+
+**Re-pricing costs far less than the six-sample estimate suggested.** The side
+with 30 placements rests 85.2%; the one with 58 rests 68.3%; the one with 29
+rests 92.4%. Order count barely predicts resting fraction. NEXT item 3 was
+written on a 25-minute window and a 6-sample gap measurement, and it
+**overstates the case** -- a side re-pricing thirty times still rests 85%.
+
+The real spread is between markets, not between busy and quiet sides: two
+markets sit at 3.7% and 6.7% on a full 226-minute span, which is where the
+coverage is actually being lost. That is worth understanding before optimising
+the mutation path.
+
+**Method note for whoever repeats this.** Denominator choice dominated the
+answer: the same data reads 30% or 63% depending on it, and 30% would have
+justified work that 63% does not. State the denominator whenever quoting a
+resting number.

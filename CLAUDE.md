@@ -110,6 +110,16 @@ Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `scripts/resting_fraction.py` measures what share of time each side actually
 holds a live order — the quantity that maps to reward.
 
+`scripts/accounting.py` is the P&L you can trust. The ledger's `realized_pnl`
+read -\$143.59 on 2026-08-17 when the account had moved -\$48.69 -- wrong by 3x,
+in the number the loss stops use. This prices only what is unambiguous (a
+matched YES+NO pair settles at exactly 1.0000) and reconciles the rest against
+marked equity, so `settlements = equity_change + paid_for_fills - reward_paid`
+falls out exactly. It records a dated snapshot each run; consecutive snapshots
+bound each settlement window. **Do not add venue history paging to it** -- an
+earlier version did and triggered rate limiting, because analysis shares one
+4 req/s governor with the live runner.
+
 `scripts/rewards_report.py` answers "what have we actually earned" — daily
 table, per-market and per-league breakdown, straight from the venue. Query it
 account-wide; passing a market slug to `/v1/incentives/earnings` returns \$0 even

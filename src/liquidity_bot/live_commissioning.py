@@ -3830,9 +3830,12 @@ class CommissioningRunner:
                     now = self._now()
                     unresolved_age = self._oldest_unresolved_age_seconds(now)
                     if unresolved_age is not None:
-                        if (unresolved_age > 10 and self.risk_guard is not None):
+                        limit = self.config.unresolved_mutation_timeout_seconds
+                        if (unresolved_age > limit
+                                and self.risk_guard is not None):
                             self.risk_guard.trip_critical(
-                                "order mutation unresolved for more than 10 seconds")
+                                "order mutation unresolved for more than "
+                                f"{limit:.0f} seconds")
                         if now >= next_summary:
                             await self._send_summary(now)
                             next_summary = now + timedelta(minutes=5)

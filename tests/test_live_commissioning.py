@@ -2466,6 +2466,35 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "temporary", "FAILED", updated_at=NOW)
         self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
 
+    async def test_unresolved_mutation_timeout_clears_the_measured_range(self):
+        """The terminal stop must not fire inside normal venue latency.
+
+        Hardcoded at 10s, this stopped the live bot twice in forty minutes on
+        2026-08-17. Measured that day over 5,023 intents: p50 4.54s, p90 8.22s,
+        p95 9.49s, p99 16.36s, max 37.72s -- so the *terminal* stop was armed
+        at the p95 of ordinary operation and 4.0% of mutations crossed it as a
+        matter of routine. The slow tail is reconciliation queueing behind the
+        shared 4 req/s governor, not a stuck venue.
+        """
+
+        runner, _, _ = self.build_runner()
+        limit = runner.config.unresolved_mutation_timeout_seconds
+
+        # Clear of the whole distribution observed on the day it fired.
+        self.assertGreater(limit, 37.72)
+
+        runner.ledger.prepare_intent(
+            "slow", "PLACE", "market-one", "slow-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        # p99 of real traffic must be survivable, not terminal.
+        self.assertLess(
+            runner._oldest_unresolved_age_seconds(NOW + timedelta(seconds=16.4)),
+            limit)
+        # A mutation that is genuinely never coming back still trips.
+        self.assertGreater(
+            runner._oldest_unresolved_age_seconds(NOW + timedelta(seconds=300)),
+            limit)
+
     async def test_quiet_change_driven_book_refreshes_before_stale_limit(self):
         runner, _, _ = self.build_runner()
         runner.book_observed_at = NOW

@@ -183,6 +183,26 @@ class CommissioningConfig:
     # re-armed from measured data rather than from the arbitrary 0.5 and 2x it
     # was built on.
     enforce_reward_cost_gate: bool = False
+    # How long a mutation may sit unresolved before the session is stopped as
+    # critical. This was hardcoded at 10 seconds and stopped the bot twice in
+    # forty minutes on 2026-08-17.
+    #
+    # Measured that day over 5,023 intents, `updated_at - created_at`:
+    #
+    #     p50 4.54s   p90 8.22s   p95 9.49s   p99 16.36s   max 37.72s
+    #
+    # **The terminal stop was armed at the p95 of normal operation** -- 203 of
+    # 5,023 mutations (4.0%) crossed 10 seconds as a matter of routine. The
+    # slow tail is not a stuck venue; it is reconciliation itself queueing
+    # behind the shared 4 req/s governor, so a burst of mutations makes its own
+    # resolution slow.
+    #
+    # 60 seconds sits well clear of the whole observed distribution (nothing
+    # all day exceeded 45s) while still catching a mutation that is genuinely
+    # never coming back. Widening it does not weaken the invariant: unresolved
+    # state still quarantines the market, still blocks new risk, and still
+    # forces shutdown through equity and stream-freshness checks.
+    unresolved_mutation_timeout_seconds: float = 60.0
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     # A single permitted taker exit ended the session on its first crossed
     # fill, which made exit evidence impossible to collect: SCALE_REVIEW asks

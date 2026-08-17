@@ -2384,3 +2384,89 @@ signal it is meant to reveal.
 
 **Do not relax this parameter on historical analysis alone.** If it is revisited,
 it is the A/B or nothing.
+
+## Architectural audit, 2026-08-17: nine defects, all verified against the code
+
+Written by the operator while planning the sibling Kalshi build, and checked
+line by line here before recording. **All nine hold.** Line references are to
+the state at commit 974c9ab.
+
+1. **The EV gate is a no-op.** `enforce_reward_cost_gate: bool = False`
+   (`commissioning.py:185`). The blocker is computed and then stripped from
+   `economic_blocker_by_side` when the gate is off
+   (`live_commissioning.py:1382`), so the reconciler's filter is vacuous. A
+   carefully-built EV model whose output is discarded. The same field was also
+   the ranking key, so disabling the gate silently disabled the ranking, and
+   nothing failed loudly; it now ranks on `projected_reward_total`.
+2. **`spread_capture = 0.0` and `maker_rebate = 0.0`, hardcoded** (invariant
+   34) in both the runner (`live_commissioning.py:1339,1342`) and the selector
+   (`market_selector.py:312,313`), because live evidence never arrived. The EV
+   expression therefore carries one revenue term and two cost terms.
+3. **One mutation per pass** -- a cancel and its replacement land on separate
+   visits, so a re-price costs two sweep intervals of dark time, against a
+   reward that is a time integral over resting orders. **Second-order in
+   practice**, see below.
+4. **`book_stale` as a CRITICAL is a category error.** "No new data" becomes a
+   fault path with escalating backoff, and it selects against quiet books --
+   precisely the low-competition, high-share markets. 30 of 31 retirements in
+   one session were `unrecoverable_book_stale`. Staleness should gate new risk,
+   not trigger a fault.
+5. **Reward projection works for one of three phases.** `project_order_reward`
+   returns `period_duration_unproven` for anything but `day_of`
+   (`rewards.py:299`), because only that period has a provable six-hour clock.
+   Two-thirds of the lifecycle is unprojectable.
+6. **The fill-hazard model is the weakest empirical foundation here.** One day,
+   a different bot, a different venue, censored at first fill, and a max over
+   marginal Wilson upper bounds -- deliberately not a joint model (invariant
+   43) -- so the estimate is whichever single bin is highest: blunt and nearly
+   constant. It multiplies the unwind loss in the only term gating entry.
+   `HISTORICAL_REWARD_YIELD_PER_CONTRACT_HOUR` admits its units are wrong and
+   is fenced to ranking only.
+7. **The 0.5 reward haircut has no evidence behind it** (`rewards.py:262`) and
+   multiplies into every projection (`rewards.py:356`).
+8. **No settlements table, and nothing writes one** -- confirmed, `settlement`
+   does not appear in `execution_ledger.py`. Every resolved position books as a
+   total loss of entry cost regardless of outcome, which on a binary venue is
+   where the money is.
+9. **Policy duplicated** between `_evaluate_rewards`
+   (`live_commissioning.py:1197`) and `evaluate_market_opportunity`
+   (`market_selector.py:227`). Changing one alone does nothing; that cost a
+   deploy cycle to discover.
+
+### Three corrections to the audit
+
+**#1's root cause is now known and fixed.** The gate is off because P&L could
+not be validated; P&L could not be validated because `fetch_executions` read
+`aggressorExecution` plus `makerExecutions`, a key the venue does not publish.
+~60% of fills are passive and none were recorded. Fixed 2026-08-17T13:20Z. So
+the sharper statement is: **the gate was not disabled because the model was
+wrong, but because the measurement apparatus was broken.** That is now
+repairable, which makes #1 the keystone rather than a lament.
+
+**#3 is second-order, on two independent slates.** `NEXT.md` item 3 measured
+the re-price cost as smaller than feared; that was discounted as one slate.
+Today's cancel reasons are a second, agreeing:
+
+```
+side_no_longer_desired          608   72.6%   <- the economic gate, a policy question
+resting_price_left_the_touch    158   18.9%   <- re-pricing, what #3 is about
+cancel_building_after_fill        8    1.0%
+```
+
+Re-pricing is a fifth of the churn. The dominant term is the gate declining
+sides, which more throughput would not touch.
+
+**The audit contains no economics, and that is the missing tenth item.**
+Reward runs ~$20/day against trading losses of ~$16-17/day: **the strategy is
+near break-even before any of the nine is fixed.** Nine clean fixes buy a
+well-instrumented break-even bot. Weigh that before spending on them.
+
+### A caution carried to the Kalshi build
+
+The Kalshi pair edge cited alongside this audit -- $0.0379 median, positive in
+98.2% of 22,030 snapshots -- is a **snapshot** measurement of what the book
+displayed, not a realized measurement of what was captured. This repo is a case
+study in that gap: entries rest as makers, exits cross as takers, **95% of
+pairs complete by crossing**, and a crossed pair costs -6.1c. A displayed 3.8c
+edge does not survive that. Treat it as an unvalidated input, not a starting
+advantage -- which is the same caution #1 exists to teach.

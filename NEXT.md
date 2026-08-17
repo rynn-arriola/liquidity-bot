@@ -1,5 +1,63 @@
 # Next session — outstanding fixes
 
+## THE PLAN (agreed 2026-08-17). Read this before picking anything up
+
+**The keystone is re-arming the EV gate.** Of the nine defects in the
+architectural audit (FINDINGS, "Architectural audit, 2026-08-17"), item 1 is the
+only one that changes what the bot does with money. The gate is off because P&L
+could not be validated; P&L could not be validated because ~60% of fills were
+never recorded. **That was fixed and verified in production on 2026-08-17T13:20Z**,
+so the reason for disabling the gate no longer applies. Right now the bot quotes
+whatever the venue calls eligible while a built EV model sits discarded.
+
+It is also the only direct attack on the real problem: reward runs ~$20/day
+against trading losses of ~$16-17/day, so **the strategy is near break-even**.
+
+### Order of work
+
+1. **Let it run.** 2026-08-17 is the first day of correct fill data. The gate
+   cannot be re-armed against a model nobody can validate, and validation needs
+   several clean days. Free, and already happening. Take the daily
+   `accounting.py` snapshot so `equity - funding - reward` becomes a trend.
+2. **Fix the restart deadlock** (item 0). Uptime protection, no risk-envelope
+   change, no reward cost. It bricked the bot for ~15 minutes on 08-17 and will
+   again on the next non-flat restart. Downtime is the one thing that reliably
+   costs reward.
+3. **Build the settlements table** (audit item 8). The data source is known --
+   resolved markets publish `outcomes`/`outcomePrices` with the winner at
+   exactly 1, and `accounting.py --settlements` already prices them. Until it is
+   written, every resolved position books as a total loss of entry cost. This is
+   what makes P&L *complete* rather than merely *correct*.
+4. **Validate, then re-arm the gate.** With clean fills plus settlements the EV
+   model can finally be checked against realized outcomes. At that point audit
+   items 5 (projections work only for `day_of`) and 7 (the evidence-free 0.5
+   haircut) stop being footnotes and become blockers, because they feed the gate
+   you are about to trust.
+
+### Explicitly not doing
+
+- **Relaxing the 900s clock.** Evidence points the other way; see FINDINGS
+  "Before relaxing the 900s clock".
+- **Quoting one tick off the touch.** Scales reward and losses together, the
+  same reason size was ruled out. Adverse selection likely worsens the ratio.
+- **Any further deep backfill.** Attempted 08-17 and reverted; see item 0b.
+
+### The question underneath, to be answered deliberately
+
+The audit is nine architectural defects and **no economics**. Fixing all nine
+buys a well-instrumented break-even bot. Given the sibling Kalshi repo, and that
+several items (3's throughput, 5's clocks) are claimed not to exist there, the
+nine may be worth more as a **lessons list for that build** than as a fix list
+for this one. Decide it on purpose rather than by default.
+
+### Small thing spotted 2026-08-17T15:4xZ
+
+`market_incentive_refresh` retries `CommissioningUnavailable: ... is no longer
+pregame` with escalating backoff to `attempt=14` before retiring -- 78 of them
+in one afternoon. A match having started is **permanent**, not transient. Same
+category error as audit item 4, cheap to fix, wastes REST budget shared with
+quoting.
+
 ## 0. A parked position bricks the runner until the kickoff window (2026-08-17)
 
 Hit live during a routine deploy restart; full write-up in `BUGFIXES.md`.

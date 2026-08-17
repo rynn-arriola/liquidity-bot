@@ -2044,3 +2044,26 @@ triggered venue rate limiting by walking trade history while the bot was quoting
 
 **16 positions could not be priced**: 11 not yet resolved, 5 with no `outcome`
 recorded on the fill. The second group is the remaining coverage hole.
+
+## The on-droplet test suite is only a gate if `tests/` was deployed too
+
+`check_sync.sh` compared `src/` and nothing else, so `tests/` drifted silently.
+Deploying the `isAggressor` fix on 2026-08-17 then produced this:
+
+```
+FAIL: test_a_fill_only_the_venue_saw_still_reaches_the_stop
+AssertionError: 0.0 != -3.05 within 2 places
+```
+
+Correct new code, failing on the droplet and passing locally. The droplet's copy
+of that test predated the fix and built its trades with no `isAggressor` key, so
+the new `leg = aggressor if isAggressor else passive` read `passiveExecution`,
+found nothing, recorded no fills, and reported `realized_pnl` of 0.00.
+
+**The false failure is the benign direction.** The reverse is the dangerous one:
+a stale test that no longer exercises the deployed path *passes*, and the gate
+CLAUDE.md requires before a restart certifies nothing at all. There is no
+warning when this happens -- the suite just prints OK.
+
+`check_sync.sh` now diffs `tests/` as well and fails on drift. Sync `tests/`
+whenever you sync `src/`; `scp` of individual files makes forgetting the default.

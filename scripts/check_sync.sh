@@ -54,6 +54,31 @@ else
     status=1
 fi
 
+# 1b. Do the droplet's TESTS match too?
+#
+# Not cosmetic. CLAUDE.md makes "run the suite on the droplet" the gate before
+# a restart, and a stale tests/ makes that gate lie in both directions. On
+# 2026-08-17 the droplet's copy of test_a_fill_only_the_venue_saw_still_reaches
+# _the_stop predated the isAggressor fix -- it built trades with no
+# `isAggressor` key -- so correct new code failed the gate and looked like a
+# regression. The reverse is worse: an old test that no longer exercises the
+# deployed path passes, and the gate certifies nothing.
+$SSH "$HOST" "cd $REMOTE && for f in tests/*.py; do \
+    printf '%s  %s\n' \"\$(md5sum < \"\$f\" | cut -d' ' -f1)\" \"\$(basename \$f)\"; \
+    done | sort -k2" > /tmp/.sync_remote_t 2>/dev/null
+for f in tests/*.py; do
+    printf '%s  %s\n' "$(md5sum < "$f" | cut -d' ' -f1)" "$(basename "$f")"
+done | sort -k2 > /tmp/.sync_local_t
+
+if diff -q /tmp/.sync_local_t /tmp/.sync_remote_t >/dev/null 2>&1; then
+    echo "OK   droplet tests/ is byte-identical to this working copy"
+else
+    echo "DRIFT  droplet tests/ differs -- the on-droplet suite is not the gate"
+    echo "       you think it is. Sync tests/ before trusting a pass or a fail:"
+    diff /tmp/.sync_local_t /tmp/.sync_remote_t | sed 's/^/       /'
+    status=1
+fi
+
 # 2. Is DEPLOYED_COMMIT telling the truth about that code?
 if git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
     if [ -z "$(git diff --name-only "$deployed" HEAD -- src/)" ]; then
@@ -73,5 +98,5 @@ fi
 lag=$(git diff --name-only "$deployed" HEAD 2>/dev/null | grep -vc '^src/' || true)
 [ "${lag:-0}" -gt 0 ] && echo "note ${lag} non-runner file(s) ahead of the droplet (docs/scripts -- harmless)"
 
-rm -f /tmp/.sync_local /tmp/.sync_remote
+rm -f /tmp/.sync_local /tmp/.sync_remote /tmp/.sync_local_t /tmp/.sync_remote_t
 exit $status

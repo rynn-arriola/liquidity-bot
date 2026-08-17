@@ -1802,3 +1802,50 @@ is evidently not separating the buckets in practice.
 markets are displacing them and the ranking needs proximity promoted out of
 seventh place. If most are distant too, the slate simply had nothing nearer and
 nothing is being lost.
+
+## ...and there is nothing nearer to rest in. Do not "fix" the ranking
+
+Measured 2026-08-17T02:22Z, immediately after the section above, by running the
+live selector read-only and bucketing its viable candidates by time to kickoff.
+
+```
+viable candidates: 74
+        0-15      1
+       30-60      4
+      60-120      4
+     120-240      8
+        240+     57
+
+inside the 0-120 window: 9 of 74  (12%)   against 20 slots
+```
+
+**Only nine candidates exist inside the paying window, for twenty slots.** The
+55% of resting time spent beyond two hours is therefore not selection choosing
+badly -- it is the overnight slate having almost nothing nearer. Promoting
+`game_start` out of seventh place in `_opportunity_key` would take those nine
+first and then fill eleven slots with distant markets anyway.
+
+This confirms, rather than assumes, the caveat recorded with the previous
+section: resting at 240+ costs nothing when the slot would otherwise sit empty.
+The measurement stands; the action does not follow from it.
+
+**What would change the answer:** the same scan run during a dense slate --
+European or US afternoon -- when many markets are inside two hours. If near
+candidates then outnumber slots and the ranking still fills up with distant
+ones, proximity genuinely is mis-weighted. Overnight tells you nothing about
+that.
+
+**An unexplained discrepancy, left open deliberately.** The top-ranked distant
+candidates here project `0.011986`, `0.011767`, `0.011682`, while the section
+above records a 120+ bucket median of `0.000022` -- a 500x gap on what is
+nominally the same quantity, `projected_reward_total` summed over eligible
+sides. Either the two measurements are not the same field, or one is wrong.
+Until that is resolved, **neither number should be used to justify a change to
+selection**, because the whole argument for reweighting rests on projections
+being comparable across buckets.
+
+**Sixth theory this session that measurement stopped before it became a code
+change.** The others: REST contention, re-price latency, same-price churn,
+`book_stale` as a fault, and markets being unable to quote. The pattern that
+caught all six was checking the specific claim rather than the plausible
+mechanism.

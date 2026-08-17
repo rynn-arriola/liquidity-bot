@@ -44,57 +44,67 @@ that settles at $1 is +$2.00 while the books say -$3.07, so nothing downstream
 -- resting fraction, exit policy, selection -- can be judged against P&L until
 this is fixed.
 
-## 2. Sides that never quote at all (2026-08-16)
+## 2. Book stability is probably the real selection lever (2026-08-17)
 
-Measured over a 25.6 min live window with `scripts/resting_fraction.py`: only
-**27 of a possible 40 sides** (20 markets x 2) ever placed an order. The other
-13 sat on `target_not_met` -- the venue pays only once a side reaches
-`targetSize`, so the bot correctly declines to quote below it.
+**Promoted from "sides that never quote", which was measured on a 25-minute
+window and is superseded by the 3.8-hour numbers below.**
 
-That is bigger than anything in the order path. Fixing the re-price latency
-(item 3) recovers about a third of the time on 27 sides; getting more sides past
-the reward gate addresses 13 sides that currently earn nothing at all.
-
-**This is a SELECTION change, not an execution one.** Rank candidates by whether
-their sides actually clear `targetSize` now, rather than discovering it after
-binding a slot. Related to item 7 below (`target_not_met` churn), which is the
-same gate seen from the resting side.
-
-**First step:** confirm the 13 is stable over hours rather than a property of
-one late-evening slate. `scripts/resting_fraction.py` reports it.
-
-## 3. Re-price latency: a cancel and its replacement are two visits (2026-08-16)
-
-Measured live, two independent numbers that agree:
+Resting fraction, markets present for >=80% of a 228-minute window, dividing by
+each market's own active span (`scripts/resting_fraction.py`):
 
 ```
-per-market visit interval:  median 35.2s  (582 samples, 22 markets)
-cancel -> replace gap:      median 69.4s  (6 samples)
-2 x 35.2 = 70.4  ~=  69.4
+92.4%  sirvea-salnic  bid    29 orders    3 price-cancels
+85.2%  chitsa-yinhua  bid    30 orders   21 price-cancels
+68.3%  yujkim-ziyzho  bid    58 orders
+41.9%  reikom-alejon  offer  23 orders
+ 3.7%  zhixia-ryunak  bid    13 orders   19 price-cancels
+
+mean 62.8% (13 sides)
 ```
 
-`apply_one` executes at most one mutation per pass, so a
-`resting_price_left_the_touch` cancel lands on one visit and its replacement on
-the next. A side re-pricing six times in 25 min rested **66.9%** against 88.9%
-for a side that never re-priced -- roughly a third of its earning time.
+The spread is **between markets, not between busy and quiet sides**. Order count
+barely predicts resting fraction. What does track is how often the touch moves:
+`zhixia-ryunak` logged 19 `resting_price_left_the_touch` cancels and rests 3.7%;
+`sirvea-salnic` logged 3 and rests 92.4%, its cancels being
+`side_no_longer_desired` from the economic gate instead.
 
-The one-mutation limit is deliberate and its reason is sound: several mutations
-through a 4 req/s governor take real time, and a book that ages meanwhile must
-report `book_stale` rather than quote on stale data.
+**Hypothesis:** a book that moves every 40 seconds cannot be rested in, so its
+projected reward is never realised however good the projection was. Selection
+ranks on projected reward and takes no account of whether the book holds still
+long enough to collect it.
 
-Candidates, least invasive first:
+**This is a hypothesis from two markets, not a result.** Before changing any
+selection code, correlate touch-move rate against resting fraction across a
+full slate. If it holds, rank on stability alongside projected reward.
 
-- **Revisit a market right after it mutates** instead of making it wait a full
-  sweep. Weakens no gate; only reorders the queue.
-- **Issue a re-price as one visit.** Both halves already come from the same
-  fresh frame, and waiting 35s for the second half is *worse* for price
-  accuracy. Risk is the placement landing before the cancel confirms, briefly
-  doubling that side's exposure -- needs a confirm-then-place step.
-- **Shorten the visit interval.** ~1.6s of sweep per market at 22 markets. What
-  dominates that 1.6s is **unmeasured** -- measure before changing.
+Also still open from the earlier measurement: 13 of 40 sides never quoted at
+all, sitting on `target_not_met`. Confirm whether that is stable across slates
+or a property of one late-evening card. Same gate as item 7.
 
-**Do not start this before item 1.** Its payoff is measured in reward, and
-reward cannot be weighed against a P&L that is currently wrong by -$22.41.
+## 3. Re-price latency -- WEAKENED, probably not worth doing (2026-08-17)
+
+Kept rather than deleted because the reasoning was sound and only the magnitude
+was wrong; deleting it invites re-deriving it.
+
+Written from a 25-minute window and a 6-sample gap measurement:
+`apply_one` executes one mutation per pass, so a cancel and its replacement land
+on separate visits, and the gap is two sweep intervals (median visit 35.2s,
+median gap 69.4s, 582 and 6 samples respectively). That part still holds.
+
+**What does not hold is the cost.** Over 3.8 hours the side that re-priced 30
+times rests 85.2%, the one that re-priced 58 rests 68.3%, and the one with 29
+rests 92.4%. The original claim -- roughly a third of earning time lost -- came
+from a single 25-minute sample.
+
+Same-price churn was also checked, since one market's log looked like a
+textbook flapping-touch bug: 119 re-prices across the session, **12 returned to
+the same price (10%)**, 14 minutes of dark time out of 228. Dwell hysteresis
+would recover minutes per hour and cost resting at a stale price, which reward
+discounts per tick.
+
+**Do not start this.** If the mutation path is ever touched, the least invasive
+candidate is revisiting a market right after it mutates rather than making it
+wait a full sweep -- that weakens no gate and only reorders the queue.
 
 ## 4. hard_exit_blocked_cancel_unconfirmed loop
 
@@ -131,6 +141,30 @@ Small now -- a handful of cancels an hour, down from ~7/minute.
 ## 8. API rate
 
 4 req/s against maker-lab's 0.3. ~2,500 placements without a ban, but untested.
+
+## 9. Housekeeping carried out of 2026-08-16
+
+- **Off-droplet backups.** `scripts/backup_ledger.py` runs nightly at 04:17 UTC
+  and keeps 30 snapshots, but they sit on the same droplet and do not survive
+  losing it. Pulling one down is still manual. The credentials file has no
+  backup at all beyond the copy at `D:\polybot\maker-lab\credentials.py`;
+  four values belong in a password manager.
+- **`/root/maker-lab/credentials.py` is mode 644** -- world-readable on the
+  droplet, holding a funded API secret. Should be 600.
+- **Passphrase on the SSH keys.** Rynn-PC's `makerlab_droplet` key has none.
+  `ssh-keygen -p -f ~/.ssh/makerlab_droplet`, then load ssh-agent, or
+  non-interactive deploys break.
+- **`MarketReadOnlyStream._dropped_books` is write-only.** Incremented on every
+  unparseable book and never read by anything, though its comment claims "a
+  rising number is visible". It should be in the summary; its absence forced a
+  diagnosis by distribution on 2026-08-16.
+- **`reconciler.py` has an unreachable `raise`** immediately after the
+  `minimum_entry_spread` check -- dead code left from a removed spread-hysteresis
+  validation.
+- **Repo visibility unresolved.** `docs/MACHINE_SETUP.md` carries
+  `<DROPLET_HOST>` rather than the address because it is not known whether the
+  GitHub repo is public. If private, fill it in; if public, consider that the
+  repo now documents the loss stops, safety gates and a live P&L defect.
 
 ---
 

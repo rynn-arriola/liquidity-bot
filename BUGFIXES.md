@@ -1229,3 +1229,68 @@ flat at the venue (0 orders, 0 positions, balance $440.67) before restarting.
 **And nothing alerted.** `_alarm_if_quoting_nothing` lives inside the runner, so
 a dead runner sends nothing. A dead-man alarm outside the process is the missing
 piece that makes every fault above unbounded in duration.
+
+## A skipped book refresh cleared the failure counter, so dead markets never retired
+
+**Symptom.** The runner was up for 2h11m and had not placed an order in
+**1h56m**. It looked healthy from outside: process alive, supervisor content,
+log ticking, `[selection]` lines every five minutes, `retired=0` then `1`.
+
+```
+markets referenced 20:10-21:50Z
+     86  aec-setkamemd-salvea-spiole-2026-08-17   <- book empty, game already started
+      2  (five others, selection candidates only)
+
+[top-up] events in that window:  0
+component=reward_market_selection    attempt=79
+component=quiet_book_rest_refresh   440 failures, escalation never past attempt=3
+```
+
+Nineteen of twenty slots sat free while viable markets existed.
+
+**Mechanism.** `_service_market_state` clears the per-market failure counter
+whenever `_refresh_quiet_book_if_due` returns without raising:
+
+```python
+state.next_book_refresh = await self._refresh_quiet_book_if_due(...)
+self._runtime_error_counts.pop(f"quiet_book_rest_refresh:{slug}", None)
+```
+
+But that helper returns without raising in **two** cases -- a refresh that
+succeeded, and a refresh that was never attempted:
+
+```python
+if now < next_refresh:
+    return next_refresh          # not due; nothing fetched, nothing proven
+```
+
+Counting the second as success reset the very counter it then needed to
+accumulate. Retirement fires at `MAX_RECOVERY_ATTEMPTS = 12` **consecutive**
+failures, and the counter was being wiped every few seconds by a no-op return,
+so it never passed 3 in 440 failures. `unrecoverable_book_stale` could not
+fire, the dead market kept its slot, its failing refresh starved the loop, and
+`reward_market_selection` escalated to attempt=79 -- so top-up never ran once.
+
+**This is why "hundreds of `attempt=1` is a healthy bot" cut the wrong way
+here.** That heuristic is in CLAUDE.md and it is right in general, but a market
+whose game has started has a book that is empty *forever*, and the reset made
+permanent failure look exactly like ordinary quiet.
+
+**Cost.** ~2 hours of zero quoting on a live session. No money lost -- the
+account was flat throughout (verified at the venue: 0 orders, 0 positions).
+
+**Fix.** `_refresh_quiet_book_if_due` now records
+`_refreshed_book_this_call`, and the caller clears the counter only when a
+refresh actually ran. Consecutive failures accumulate, reach 12, and the market
+retires as designed.
+
+**Mutation-checked, and the first attempt was wrong.** The initial test
+exercised the helper in isolation and passed with the fix reverted -- vacuous,
+because the counter is cleared by the *caller*. Rewritten against
+`_service_market_state`, reverting now fails with `None != 11`. 446 tests pass
+locally and on the droplet.
+
+**Still open:** the `_alarm_if_quoting_nothing` path did not visibly surface
+this. It sends to Discord and writes nothing to the log, so whether it fired
+cannot be determined from the droplet -- which is itself the problem. A silent
+2-hour stall on a live money bot was found by the operator, not the bot.

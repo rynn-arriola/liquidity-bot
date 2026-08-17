@@ -268,6 +268,10 @@ class CommissioningRunner:
         # Markets this session has stopped quoting but must still flatten.
         # They stay in the active set so their exit keeps being worked.
         self._retired: dict[str, RetiredMarket] = {}
+        # Did the last `_refresh_quiet_book_if_due` actually fetch a book, or
+        # return early because it was not due? The caller clears a failure
+        # counter on success and both look like success without this.
+        self._refreshed_book_this_call: bool = False
         # Every slug this session has retired, for reporting only. Barring is
         # driven by `_retired_until` so it expires; see the constant.
         self._retired_ever: set[str] = set()
@@ -1658,13 +1662,31 @@ class CommissioningRunner:
     async def _refresh_quiet_book_if_due(
         self, next_refresh: datetime, slug: str | None = None,
     ) -> datetime:
+        """Refresh a quiet book, and record whether a refresh actually ran.
+
+        ``_refreshed_book_this_call`` exists because the caller clears the
+        `quiet_book_rest_refresh` failure counter whenever this returns without
+        raising -- and this returns without raising in two very different
+        cases: a refresh that succeeded, and a refresh that was never attempted
+        because it was not due yet.
+
+        Treating the second as success reset the counter it could never then
+        accumulate. Measured live 2026-08-17: 440 failures on one market with
+        a permanently empty book, escalation never passing attempt=3 against a
+        MAX_RECOVERY_ATTEMPTS of 12, so `unrecoverable_book_stale` never fired
+        and the market held its slot for **two hours** while nineteen slots sat
+        free and the bot placed no orders at all.
+        """
+
         # Read time inside this boundary, after every upstream awaited call.
         state = self.state_for(slug or self.market_slug)
         now = self._now()
+        self._refreshed_book_this_call = False
         if now < next_refresh:
             return next_refresh
         if state.book_is_quiet(now, max_age_seconds=3):
             await self._refresh_book(now, state.slug)
+            self._refreshed_book_this_call = True
         # Anchor the next check to the actual book receipt. If a due check was
         # skipped because a WebSocket book arrived 2.9 seconds ago, scheduling
         # three seconds from *now* would cross the five-second stale limit.
@@ -2053,8 +2075,13 @@ class CommissioningRunner:
         try:
             state.next_book_refresh = await self._refresh_quiet_book_if_due(
                 state.next_book_refresh or now, slug)
-            self._runtime_error_counts.pop(
-                f"quiet_book_rest_refresh:{slug}", None)
+            # Only a refresh that actually RAN proves the book is readable. A
+            # "not due yet" return proves nothing, and clearing the counter on
+            # it stopped consecutive failures from ever accumulating to
+            # MAX_RECOVERY_ATTEMPTS -- see _refresh_quiet_book_if_due.
+            if self._refreshed_book_this_call:
+                self._runtime_error_counts.pop(
+                    f"quiet_book_rest_refresh:{slug}", None)
         except Exception as exc:
             await self._report_runtime_error(
                 f"quiet_book_rest_refresh:{slug}", exc)

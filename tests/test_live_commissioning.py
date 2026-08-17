@@ -2466,6 +2466,40 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "temporary", "FAILED", updated_at=NOW)
         self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
 
+    async def test_skipped_book_refresh_does_not_clear_the_failure_counter(self):
+        """A dead market must still reach MAX_RECOVERY_ATTEMPTS and retire.
+
+        The caller clears `quiet_book_rest_refresh:<slug>` whenever
+        `_refresh_quiet_book_if_due` returns without raising -- and it returns
+        without raising both when a refresh succeeded and when none was due.
+        Counting the second as success reset the counter it could never then
+        accumulate.
+
+        Measured live 2026-08-17: 440 failures on one permanently-empty book,
+        escalation never passing attempt=3 against MAX_RECOVERY_ATTEMPTS of 12.
+        The market held its slot for two hours, top-up never ran once, and the
+        bot placed no orders at all while nineteen slots sat free.
+        """
+
+        runner, _, _ = self.build_runner()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        key = f"quiet_book_rest_refresh:{slug}"
+
+        # Eleven consecutive failures already banked -- one short of retiring.
+        runner._runtime_error_counts[key] = MAX_RECOVERY_ATTEMPTS - 1
+        # Nothing is due, so the pass does no book work at all.
+        state.next_book_refresh = runner._now() + timedelta(seconds=30)
+        state.next_contract_refresh = runner._now() + timedelta(seconds=30)
+
+        await runner._service_market_state(slug, runner._now())
+
+        self.assertEqual(
+            runner._runtime_error_counts.get(key), MAX_RECOVERY_ATTEMPTS - 1,
+            "a not-due book refresh proves nothing and must not clear "
+            "accumulated failures -- doing so is what let a permanently dead "
+            "market hold a slot for two hours")
+
     async def test_unresolved_mutation_timeout_clears_the_measured_range(self):
         """The terminal stop must not fire inside normal venue latency.
 

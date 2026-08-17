@@ -1365,7 +1365,7 @@ which is the one genuinely account-wide invariant, so it wants a full session
 and real tests -- including one proving an absent order in an OPEN market is
 still never resolved.
 
-### Partial fix deployed 2026-08-17T22:40Z — and it did NOT clear them
+### FIXED 2026-08-17T22:51Z. First attempt failed; the data corrected it
 
 `resolve_absent_order_in_settled_market` plus `_market_has_settled` are in and
 tested (448 pass, both mutation-checked: an OPEN market no longer licenses a
@@ -1390,7 +1390,27 @@ not it. Candidates, none tested:
   (returns False on the staleness rule rather than raising)
 - `_rest_reconcile` returns before reaching the absent sweep
 
-**Start here:** instrument the sweep to log per-row what it did -- asked,
-skipped, applied, declined. Right now it is silent in every branch, which is
-why this took a whole evening to even locate. The deployed change is harmless
-until the real path is understood.
+**The answer, measured.** Every one of the twenty stuck orders sat in a market
+the venue reported `RESOLVED` -- and `retrieve` answered for all of them without
+raising. So the NotFound branch was simply the wrong place for the check:
+
+> An order in a resolved market cannot be live, whatever `retrieve` returns.
+
+Settlement is the whole test; the re-ask is irrelevant once it holds. Moving the
+check out of the exception branch into the main sweep path fixed it immediately:
+
+```
+                        before      after
+UNKNOWN_ABSENT             20          0
+resolved by new path        0         20
+rotation blocked (10min)   14          0
+placements (10min)          -         47
+```
+
+Rotation was unblocked for the first time that day.
+
+**Lesson.** The first version was built from an inferred mechanism ("the venue
+cannot answer") rather than an observed one. Checking the actual market status
+of the stuck rows took one query and would have pointed straight at the right
+branch. The sweep is still silent per-row -- instrumenting it remains worth
+doing, because that silence is why this cost an evening to locate.

@@ -778,27 +778,30 @@ class CommissioningRunner:
                     < self.ABSENT_RECHECK_SECONDS):
                 continue
             self._absent_asked_at[exchange_id] = now
+            # Checked BEFORE the re-ask, and deliberately not inside an error
+            # branch. The first version of this only resolved on a NotFound
+            # from `retrieve`, and measured 2026-08-17 that never happened:
+            # all twenty stuck rows sat in markets the venue reported
+            # RESOLVED, `retrieve` answered without raising, and the rows
+            # never left `UNKNOWN_ABSENT` -- so rotation stayed blocked
+            # account-wide and the bot quoted almost nothing for an evening.
+            #
+            # An order in a resolved market cannot be live whatever `retrieve`
+            # returns, so settlement is the whole test and the re-ask is
+            # irrelevant once it holds.
+            if await self._market_has_settled(str(row["market_slug"])):
+                if self.ledger.resolve_absent_order_in_settled_market(
+                        exchange_id, observed_at=now, reason="market_resolved"):
+                    await self.notifier.send_async(
+                        "Liquidity Bot resolved an absent order in settled "
+                        f"market {row['market_slug']}; it can no longer be "
+                        "live there, and rotation is unblocked.")
+                self._runtime_error_counts.pop("absent_order", None)
+                continue
             try:
                 await self.executor.reconcile_order(
                     exchange_id, observed_at=now)
                 self._runtime_error_counts.pop("absent_order", None)
-            except AdapterError as exc:
-                # The venue says it has no such order. That is normally
-                # consistency lag and `retrieve` has already retried it four
-                # times -- but once the MARKET has settled the answer can never
-                # arrive, and the row blocks rotation account-wide forever.
-                if "NotFound" in str(exc) and await self._market_has_settled(
-                        str(row["market_slug"])):
-                    if self.ledger.resolve_absent_order_in_settled_market(
-                            exchange_id, observed_at=now,
-                            reason="retrieve_not_found"):
-                        await self.notifier.send_async(
-                            "Liquidity Bot resolved an absent order the venue "
-                            f"no longer knows in settled market "
-                            f"{row['market_slug']}; rotation is unblocked.")
-                    self._runtime_error_counts.pop("absent_order", None)
-                    continue
-                await self._report_runtime_error("absent_order", exc)
             except Exception as exc:
                 # Escalates on repeat through the usual attempt counter. A
                 # wedge that looks healthy is the worst outcome there is: the

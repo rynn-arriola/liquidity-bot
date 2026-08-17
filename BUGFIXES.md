@@ -1294,3 +1294,73 @@ locally and on the droplet.
 this. It sends to Discord and writes nothing to the log, so whether it fired
 cannot be determined from the droplet -- which is itself the problem. A silent
 2-hour stall on a live money bot was found by the operator, not the bot.
+
+## UNKNOWN_ABSENT orders never resolve, and permanently block market rotation
+
+**This is the cause of the repeated stalls on 2026-08-17, and it outranks
+everything else fixed that day.**
+
+**Symptom.** The runner is up, healthy, flat, and quoting one market or none.
+Slots stay empty for hours. `[selection]` keeps reporting viable markets it
+never binds. Restarting appears to help for a few minutes, then it stalls again.
+
+**Mechanism.** Measured 22:28Z:
+
+```
+19 orders in UNKNOWN_ABSENT   reason: missing_from_complete_snapshot
+oldest 04:40:33Z -- nearly 18 hours earlier
+unresolved intents: none      venue:-owned orders: 0
+```
+
+`risk_state_known()` is False while any order is `UNKNOWN_ABSENT`.
+`_rotation_blockers()` therefore returns *"whole-account execution state is not
+known"*, and `_rotate_reward_market_inner` raises:
+
+```
+AdapterError: reward-market rotation blocked: whole-account execution state is not known   (x11)
+```
+
+**Rotation is blocked outright.** The bot cannot rebind to new markets, so it
+stays pinned to whatever it already holds while free slots sit idle.
+
+**Why they never clear.** The absent sweep in `_rest_reconcile` does call
+`executor.reconcile_order(exchange_id)` once a minute per absent order, and
+that calls `gateway.retrieve`. But these orders belong to markets that have
+since **settled and closed**, so the venue cannot return a terminal state for
+them. The sweep's own comment anticipates it -- *"an order the venue will not
+resolve"* -- and then treats the failure as a transient error to report rather
+than a permanent condition to handle. The order stays absent forever.
+
+The design is right: *absence is never read as cancellation* (CLAUDE.md), and
+only a terminal state from the venue may resolve a lost order. The gap is that
+**a market which has settled makes the question unanswerable**, and nothing
+handles that case.
+
+**This degrades monotonically.** Every order the bot loses sight of permanently
+subtracts from its ability to rotate. Accumulation started by 04:40Z and by
+22:28Z had reached 19. Restarts do not clear it -- the bot restarted four times
+on 08-17 and the 04:40 order survived all of them, because the state is durable
+in the ledger.
+
+**Cost.** Most of an evening's quoting. Every "the bot is not trading"
+investigation on 08-17 traces here.
+
+**Not fixed.** Bot stopped flat pending a proper fix.
+
+### The fix, and the constraint on it
+
+A settled market is *affirmative* evidence, not absence: if the market is
+closed, no order can be live in it, so resolving the order is not "reading
+absence as cancellation". That distinction is what makes a safe fix possible.
+
+Shape: when `reconcile_order` finds the venue does not know the order, check the
+market's status (`retrieve_by_slug`; resolved markets carry
+`MARKET_STATUS_RESOLVED` -- `scripts/accounting.py` already does this), and only
+if resolved, write a terminal state. Never on a 404 alone; a 404 can be
+transient, a settled market cannot un-settle.
+
+Touches `live_orders.reconcile_order`, the sweep in `live_commissioning`, and a
+terminal-state write in `execution_ledger`. It sits on `risk_state_known()`,
+which is the one genuinely account-wide invariant, so it wants a full session
+and real tests -- including one proving an absent order in an OPEN market is
+still never resolved.

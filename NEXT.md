@@ -1,5 +1,48 @@
 # Next session — outstanding fixes
 
+## 00. START HERE (2026-08-17): stuck UNKNOWN_ABSENT orders block all rotation
+
+**The bot is STOPPED and flat, pending this.** Full write-up in `BUGFIXES.md`.
+
+19 orders sit in `UNKNOWN_ABSENT`, oldest from 04:40Z. `risk_state_known()` is
+False while any exists, so `_rotation_blockers()` returns "whole-account
+execution state is not known" and market rotation raises. The bot cannot rebind
+to new markets and quotes almost nothing while slots sit free. This is the cause
+of every "bot is not trading" stall on 08-17, and restarts do not clear it --
+the state is durable in the ledger and survived four restarts that day.
+
+**Fix shape.** The sweep already re-asks the venue once a minute, but these
+orders belong to markets that have **settled**, so no terminal state can ever
+come back. A settled market is affirmative evidence rather than absence -- if
+the market is closed, no order can be live in it -- so resolving the order does
+not violate "absence is never read as cancellation".
+
+  1. In `live_orders.reconcile_order`, detect the venue not knowing the order.
+  2. Check the market with `retrieve_by_slug`; only `MARKET_STATUS_RESOLVED`
+     counts (`scripts/accounting.py` already reads this).
+  3. Only then write a terminal state. **Never on a not-found alone** -- that
+     can be transient; a settled market cannot un-settle.
+
+Touches `live_orders`, the sweep in `live_commissioning`, and a terminal write
+in `execution_ledger`. It sits on the one account-wide invariant, so it needs
+real tests -- including one proving an absent order in an OPEN market is still
+never resolved.
+
+**Unblocking without the code fix:** verify at the venue that each of the 19
+markets is settled and the account is flat, then resolve those rows in the
+ledger by hand. Faster, but it is a data edit on the ownership path -- take a
+backup first (`scripts/backfill_executions.py` shows the online-backup call).
+
+## Also from 2026-08-17, smaller
+
+- **`reject_reason` is never captured.** All 16 rejections that day recorded
+  `None`, so a rejection says nothing about why. 0.6% of orders, not urgent.
+- **A dead-man alarm outside the runner.** `_alarm_if_quoting_nothing` lives
+  inside the process and sends only to Discord, writing nothing to the log, so
+  a stall cannot be diagnosed from the droplet and a dead runner alerts nobody.
+  Every fault on 08-17 was found by the operator, never by the bot.
+
+
 ## THE PLAN (agreed 2026-08-17). Read this before picking anything up
 
 **The keystone is re-arming the EV gate.** Of the nine defects in the

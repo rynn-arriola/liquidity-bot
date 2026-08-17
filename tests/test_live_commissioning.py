@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import tempfile
 import unittest
 from argparse import Namespace
@@ -968,6 +969,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._identified_recovery_markets(), ())
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    def test_a_venue_transport_failure_exits_retryable_not_terminal(self):
+        """Exit 2 is never restarted; exit 5 is. The venue not answering must
+        not be permanent.
+
+        These shared exit 2 with a genuine state refusal, so three separate
+        venue blips on 2026-08-16/17 downed the bot for good on a flat account:
+        `GET /v1/incentives/earnings` 500, `GET /v1/orders/open` 500 returning
+        an HTML error page, and a book empty on both sides.
+        """
+        import liquidity_bot.live_commissioning as module
+
+        for error, expected in ((AdapterError("GET /v1/orders/open failed"), 5),
+                                (CommissioningRefused("open orders"), 2)):
+            with self.subTest(error=type(error).__name__):
+                def blow_up(_args, exc=error):
+                    raise exc
+
+                original = module._run
+                module._run = blow_up
+                argv = sys.argv
+                sys.argv = ["live_commissioning", "--market-slug", "m",
+                            "--arm-live", "--accept-one-contract-risk",
+                            "--exclusive-api-key", "--maker-lab-stopped"]
+                try:
+                    with self.assertRaises(SystemExit) as caught:
+                        module.main()
+                finally:
+                    module._run = original
+                    sys.argv = argv
+                self.assertEqual(caught.exception.code, expected)
 
     async def test_an_earnings_failure_does_not_refuse_startup(self):
         """Observed 2026-08-17T03:05Z on a flat account with nothing wrong.

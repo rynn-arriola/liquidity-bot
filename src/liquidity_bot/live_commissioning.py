@@ -3973,8 +3973,28 @@ def main() -> int:
     args = parser.parse_args()
     try:
         result = asyncio.run(_run(args))
-    except (CommissioningRefused, AdapterError) as exc:
+    except CommissioningRefused as exc:
+        # State we must not trade from: open orders, a position, unresolved
+        # intents, ownership we cannot explain. Terminal on purpose -- exit 2
+        # is the code the supervisor never restarts, because a human has to
+        # look before this account trades again.
         parser.exit(2, f"commissioning refused: {exc}\n")
+    except AdapterError as exc:
+        # The venue did not answer. That is transport, and it says nothing
+        # about whether our state is safe -- so it must NOT be terminal.
+        #
+        # These shared exit 2 with the refusal above, and a venue blip
+        # therefore downed the bot permanently. Three separate outages on
+        # 2026-08-16/17, each a different endpoint, each on a flat account
+        # with nothing wrong: `GET /v1/incentives/earnings` 500,
+        # `GET /v1/orders/open` 500 returning an HTML error page, and a book
+        # that came back empty on both sides.
+        #
+        # Exit 5 is the supervisor's recoverable code: it restarts with
+        # backoff and still gives up after MAX_FAST_CRASHES deaths inside
+        # FAST_CRASH_SECONDS, so a venue that is genuinely down still stops
+        # the session and alerts rather than spinning.
+        parser.exit(5, f"commissioning transport failure: {exc}\n")
     print(json.dumps({
         "started_at": result.started_at.isoformat(),
         "cutoff_at": (

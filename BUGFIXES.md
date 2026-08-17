@@ -80,6 +80,36 @@ downstream. The run loop already treated a failure here as recoverable and
 `_refresh_earnings` was guarded there -- preflight simply did not have the same
 guard.
 
+**4. And the root of all three: a venue that did not answer was treated as an
+account that was not safe.** `main` caught `CommissioningRefused` and
+`AdapterError` in the same handler and exited **2** for both:
+
+```python
+except (CommissioningRefused, AdapterError) as exc:
+    parser.exit(2, f"commissioning refused: {exc}
+")
+```
+
+Those mean opposite things. `CommissioningRefused` says the account state is
+unsafe to trade from -- open orders, a position, unresolved intents, ownership
+we cannot explain -- and exit 2 is right, because a human must look before this
+account trades again. `AdapterError` says the venue did not reply. It carries no
+information about our state at all, and making it permanent means any 500
+anywhere in preflight downs the bot until someone notices.
+
+Transport failures now exit **5**, the supervisor's recoverable code: restart
+with backoff, and still give up after `MAX_FAST_CRASHES` deaths inside
+`FAST_CRASH_SECONDS`, so a venue that is genuinely down stops the session and
+alerts rather than spinning. Guarding the three individual call sites above
+was worth doing, but this is the fix that covers the ones not yet found.
+
+Observed while deploying the fix for #3: within minutes the venue returned
+`APITimeoutError` on `GET /v1/order/{id}`, `InternalServerError` with an HTML
+error page on `GET /v1/portfolio/positions`, `APITimeout` on `GET /v1/incentives`,
+and finally `InternalServerError` on `GET /v1/orders/open` -- which refused
+startup again. The venue was simply having a bad night, and the bot had no way
+to wait it out.
+
 **The pattern, which is the actual lesson.** Every one of these is a guard that
 existed somewhere else and did not cover one path: best-effort book refresh
 that skipped slot zero, a venue reconcile that ran after the decision instead of

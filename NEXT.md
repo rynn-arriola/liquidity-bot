@@ -81,56 +81,50 @@ Also still open from the earlier measurement: 13 of 40 sides never quoted at
 all, sitting on `target_not_met`. Confirm whether that is stable across slates
 or a property of one late-evening card. Same gate as item 7.
 
-## 2b. Seven markets held a slot for up to 130 minutes and never quoted (2026-08-17)
+## 2b. Markets can be very slow to place their first order (2026-08-17)
 
-Measured over the 2026-08-16T21:47Z session. **This is the largest identified
-loss of coverage and it is bigger than items 2 and 3 combined.**
+**Rewritten after the diagnostic. The original version of this item blamed
+`book_stale` and was wrong** -- the fourth time in one session that reading
+`book_stale` as a fault produced a false diagnosis. It is kept in this form
+rather than deleted because the measurement underneath it is real.
+
+**What is real.** Over the 21:47Z session, 7 of 34 markets serviced held a slot
+for 54 to 130 minutes without placing a single order -- roughly 680
+market-minutes earning nothing, while 20 markets were bound and 8 resting.
+
+**What was wrong.** They were not incapable of quoting. `hanlu-badidr` and
+`rocjan-listom`, two of the seven, placed their first orders at 02:02:09Z --
+minutes after being measured as "never placed" -- with proper `liquidity-`
+client ids, correctly recorded in the ledger. They were slow, not broken.
+
+**`book_stale` was not the cause.** A `[book-stale-why]` diagnostic added to the
+critical path reports, on every one of these markets:
 
 ```
-markets serviced this session:  34
-never placed a single order:     7
-
-  bound 130 min   aec-itfme-kritam-yuchi-2026-08-16
-  bound 114 min   aec-itfme-hanlu-badidr-2026-08-17
-  bound 114 min   aec-itfme-pathom-filkos-2026-08-17
-  bound  98 min   aec-itfwo-katmansofsha-megheucritig-2026-08-17
-  bound  84 min   aec-setkamecz-rocjan-listom-2026-08-17
-  bound  84 min   aec-setkameua-khadmy-lipole-2026-08-17
-  bound  54 min   aec-itfme-yuqjin-hezih-2026-08-17
+age=0.0  refresh_due_in=-2.3  fresh_enough=True  replanned=False
 ```
 
-Roughly 680 market-minutes of slots held while earning nothing. At a snapshot,
-20 markets were bound and 8 were resting.
+The book is **zero seconds old** by the time the critical is handled. The
+planner saw a stale book, the handler refreshed it, and the replan fires
+immediately -- the `d748f03` fix working exactly as designed. `book_stale` here
+is the bot looking, not the bot blocked, which is what FINDINGS already says
+about that signal.
 
-**Symptom:** a permanent `book_stale` loop. Visited, book older than
-`max_book_age_seconds` (5.0), refresh, back off, visited again ~35s later, still
-too old. `attempt=1` on nearly every one, so the escalation metric reads healthy
-and none is ever retired -- they simply never quote.
+**So the open question is narrower and economic:** why do some markets take an
+hour or more before the economic gate first admits a side? The blockers seen on
+idle markets are `target_not_met` and `outside_reward_cutoff`, both correct
+refusals in themselves. What is not established is whether an hour of refusal
+reflects the market genuinely not paying, or a gate that is too slow to notice
+when it starts paying.
 
-**The shape of the problem.** The freshness bound is 5s but the per-market visit
-interval is ~35s (median, 582 samples). A market therefore only quotes if its
-WebSocket book happens to update within 5s of the visit. Active books do; quiet
-books never do.
+**Next step:** log the blocker on every pass for one slow market from bind to
+first placement, and see whether the gate flips once or oscillates. Do not touch
+`max_book_age_seconds` -- that bound is not involved.
 
-**Why this may be the worst possible markets to lose.** FINDINGS section 6h
-records that 93% of all reward ever paid came from table tennis and lower-tier
-tennis -- thin, quiet books. Those are precisely the books least likely to
-publish an update inside a 5-second window. The bot may be systematically unable
-to quote its most valuable markets.
-
-**Not diagnosed:** why the existing replan-once rescue does not save these.
-`_decide_for_market` replans when `not replanned and reason == "book_stale" and
-self._book_is_fresh_enough_to_plan(slug)`, so the REST refresh should make the
-book fresh and the replan should proceed. It evidently does not for these
-markets. Establish whether the refresh is firing at all for them, whether it
-succeeds, and whether the book it returns is already older than 5s on arrival,
-before changing anything.
-
-**Do not simply widen `max_book_age_seconds`.** It exists so a quote is never
-placed on data that no longer describes the market, and the 2026-08-14 churn
-came from quoting stale books. If the answer is that quiet books need a
-different freshness rule than active ones, that is a deliberate policy change
-with its own evidence, not a constant to nudge.
+**Note also:** a restart on 2026-08-17T02:05Z produced 13 markets quoting within
+90 seconds, against 8 after nearly four hours on the previous selection. That
+suggests slate composition matters more than anything in the order path, which
+points back at item 2.
 
 ## 3. Re-price latency -- WEAKENED, probably not worth doing (2026-08-17)
 

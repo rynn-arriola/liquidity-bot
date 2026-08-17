@@ -84,42 +84,52 @@ class AsyncAccountSnapshotGateway:
                 trade = activity.get("trade")
                 if not isinstance(trade, dict):
                     continue
-                legs = [trade.get("aggressorExecution")]
-                maker = trade.get("makerExecutions")
-                if isinstance(maker, list):
-                    legs.extend(maker)
-                for leg in legs:
-                    if not isinstance(leg, dict):
-                        continue
-                    if str(leg.get("type") or "").upper() not in {
+                # A trade has two legs and the venue reports BOTH -- ours and
+                # the counterparty's. `isAggressor` says which one is ours,
+                # and it is exact: checked against our own order ids over 25
+                # consecutive trades on 2026-08-17, True matched the aggressor
+                # leg 10/10 and False matched the passive leg 15/15.
+                #
+                # This used to read `aggressorExecution` plus `makerExecutions`
+                # -- a key the venue does not publish; the passive leg is
+                # `passiveExecution`. So whenever WE were the passive side, our
+                # execution was never read at all and the counterparty's
+                # aggressor leg was read instead, then discarded for not
+                # matching one of our orders. **60% of fills are passive** (15
+                # of those same 25), and passive is the normal case for a
+                # market maker, so most fills reached the ledger only if the
+                # private WebSocket happened to deliver them -- which is
+                # exactly what a restart or a socket gap loses.
+                #
+                # That single defect is why realized_pnl read -$143.59 against
+                # a real -$48.69, why 27 markets held an entry and no exit, and
+                # why markets showed a TAKER first fill that a post-only entry
+                # cannot produce. See NEXT item 1b.
+                leg = (trade.get("aggressorExecution")
+                       if trade.get("isAggressor")
+                       else trade.get("passiveExecution"))
+                if isinstance(leg, dict):
+                    if str(leg.get("type") or "").upper() in {
                             "EXECUTION_TYPE_FILL",
                             "EXECUTION_TYPE_PARTIAL_FILL"}:
-                        continue
-                    try:
-                        execution = normalize_execution(
-                            leg, observed_at=observed_at,
-                            resolve_client_id=self.resolve_client_id)
-                    except AdapterError:
-                        # Malformed rather than foreign. Failing the whole
-                        # sweep over one leg would lose our own fills too.
-                        continue
-                    # A trade has two sides and the venue reports both. Only
-                    # ONE of them is ours. normalize_execution does not care
-                    # who owns an execution -- it succeeds on any well-formed
-                    # one -- so without this every trade was recorded twice,
-                    # once as our fill and once as the counterparty's.
-                    # Observed 2026-08-15 on aec-valorant-ff-ep: SELL 5 @ 0.39
-                    # and BUY 5 @ 0.39 at the same instant, against a real
-                    # position of +5. Offsetting phantom fills make realised
-                    # P&L read flat on a market that is holding risk, which is
-                    # the number the $40 stop trusts.
-                    #
-                    # `venue:` is this project's existing marker for an order
-                    # we cannot claim; the kill switch already refuses to
-                    # cancel anything carrying it.
-                    if str(execution.client_order_id).startswith("venue:"):
-                        continue
-                    rows[execution.execution_id] = execution
+                        try:
+                            execution = normalize_execution(
+                                leg, observed_at=observed_at,
+                                resolve_client_id=self.resolve_client_id)
+                        except AdapterError:
+                            # Malformed rather than foreign. Failing the whole
+                            # sweep over one leg would lose our own fills too.
+                            execution = None
+                        if execution is not None:
+                            # Deliberately NOT filtered on `venue:` any more.
+                            # Ownership is now established by `isAggressor`,
+                            # which is a fact about the trade; `venue:` only
+                            # means we hold no order record, which is also true
+                            # of an operator's manual close and of any order
+                            # whose record was lost. Dropping those discarded
+                            # our own fills -- the original double-counting bug
+                            # is prevented by taking exactly one leg here.
+                            rows[execution.execution_id] = execution
             cursor = str(response.get("nextCursor") or "").strip() or None
             if not cursor or response.get("eof"):
                 break

@@ -29,6 +29,74 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-17 (accounting)
+
+### 60% of our fills were never recorded: the parser read a key the venue does not publish
+
+Found 2026-08-17 while trying to make P&L trustworthy. **This is the root cause
+of every accounting symptom measured that day.**
+
+**Symptom:** `realized_pnl` read **-$143.59** while the account had actually
+moved **-$48.69**. 27 markets held an entry with no exit ever recorded
+(-$22.41). Markets showed a TAKER first fill, which a post-only entry cannot
+produce. A riding-vs-crossing comparison came out contaminated because 40 of 57
+"ridden" markets were simply missing their opening fill.
+
+**Mechanism.** `AsyncAccountSnapshotGateway.fetch_executions` read the legs of a
+trade as:
+
+```python
+legs = [trade.get("aggressorExecution")]
+maker = trade.get("makerExecutions")     # <- key the venue never publishes
+if isinstance(maker, list):
+    legs.extend(maker)
+```
+
+The passive leg is `passiveExecution`. `makerExecutions` does not exist, so the
+list was always just the aggressor leg. Whenever WE were the passive side, our
+execution was never read at all -- instead the counterparty's aggressor leg was
+read and then discarded for not matching one of our orders.
+
+**Passive is the normal case for a market maker.** Sampling 25 consecutive
+trades: 15 were ours-as-passive, 10 ours-as-aggressor. So roughly 60% of fills
+reached the ledger only if the private WebSocket happened to deliver them --
+and the REST sweep exists precisely because the WebSocket does not survive a
+restart or a socket gap. Anything lost there was lost permanently.
+
+**The second half of the defect** was how ownership was decided:
+
+```python
+if str(execution.client_order_id).startswith("venue:"):
+    continue
+```
+
+Correct in intent -- a trade has two legs, both are reported, recording both
+made P&L read flat on a market holding risk (2026-08-15, valorant-ff-ep). But
+`resolve_client_id` returns `venue:` for **our own** fills whenever we hold no
+order record: an operator's manual close, or an order whose record was lost. So
+"the counterparty's leg" and "our unattributable leg" were indistinguishable and
+both were dropped.
+
+**Fix.** The venue states ownership directly. `trade.isAggressor` selects which
+leg is ours, and it is exact -- checked against our own order ids across 25
+consecutive trades, True matched the aggressor leg 10/10 and False matched the
+passive leg 15/15. Taking exactly one leg prevents the original double-counting
+without needing the `venue:` test at all, so unattributable fills of ours are
+now recorded instead of discarded.
+
+**Cost:** every strategy question asked on 2026-08-16/17 was weighed against
+P&L that was wrong by 3-10x, and several hours went into analysing numbers that
+could not have been right. Test:
+`test_only_our_leg_of_a_trade_is_recorded`, which asserts the passive leg is
+kept and the aggressor leg is not. Mutation-checked -- reverting to
+`aggressorExecution` alone fails it.
+
+**Not yet done:** settlements still have nowhere to be recorded, because the
+venue publishes no settlement rows at all. See NEXT item 1b for the remaining
+order of work.
+
+---
+
 ## 2026-08-17
 
 ### Preflight refused startup three separate times, each for something harmless

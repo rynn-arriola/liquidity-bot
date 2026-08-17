@@ -3851,9 +3851,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # Sold 5 at 0.65, bought back at 0.96. Only the venue ever saw either.
         client.portfolio.trades = [
-            {"id": "t1", "aggressorExecution": execution(
+            {"id": "t1", "isAggressor": True, "aggressorExecution": execution(
                 "e1", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT", "0.65", "5")},
-            {"id": "t2", "aggressorExecution": execution(
+            {"id": "t2", "isAggressor": True, "aggressorExecution": execution(
                 "e2", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG", "0.96", "5")},
         ]
 
@@ -3909,25 +3909,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_the_counterpartys_side_of_a_trade_is_not_recorded(self):
-        """A trade has two sides and the venue reports both. One is ours.
+    async def test_only_our_leg_of_a_trade_is_recorded(self):
+        """A trade has two legs and the venue reports both. `isAggressor` says
+        which is ours.
 
-        normalize_execution succeeds on any well-formed execution regardless of
-        who owns it, so every trade was being recorded twice -- once as our
-        fill and once as the counterparty's. Observed 2026-08-15 on
-        aec-valorant-ff-ep: SELL 5 @ 0.39 and BUY 5 @ 0.39 at the same instant
-        against a real position of +5. Offsetting phantom fills make realised
-        P&L read flat on a market that is holding risk, which is the number the
-        $40 stop trusts.
+        Recording both made every trade appear twice -- once as our fill and
+        once as the counterparty's. Observed 2026-08-15 on aec-valorant-ff-ep:
+        SELL 5 @ 0.39 and BUY 5 @ 0.39 at the same instant against a real
+        position of +5. Offsetting phantom fills make realised P&L read flat on
+        a market holding risk, which is the number the $40 stop trusts.
+
+        Ownership is NOT decided by whether we recognise the order id. That was
+        the old rule, and it discarded our own fills whenever we held no order
+        record -- an operator's manual close, or an order whose record was lost.
         """
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()
         slug = runner.config.market_slug
+        # We are the PASSIVE side here, which is the normal case for a market
+        # maker and the case the old parser could not see at all: it looked for
+        # `makerExecutions`, a key the venue does not publish.
         client.portfolio.trades = [{
             "id": "t1",
-            # Neither leg is claimed by any intent of ours.
+            "isAggressor": False,
             "aggressorExecution": {
-                "id": "theirs", "tradeId": "theirs",
+                "id": "theirs", "tradeId": "t1",
                 "type": "EXECUTION_TYPE_FILL",
                 "lastPx": {"value": "0.39", "currency": "USD"},
                 "lastShares": "5",
@@ -3943,12 +3949,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                     "state": "ORDER_STATE_FILLED",
                     "createTime": NOW.isoformat()},
             },
+            "passiveExecution": {
+                "id": "ours", "tradeId": "t1",
+                "type": "EXECUTION_TYPE_FILL",
+                "lastPx": {"value": "0.61", "currency": "USD"},
+                "lastShares": "5",
+                "commissionNotionalCollected": {
+                    "value": "0.0000", "currency": "USD"},
+                "transactTime": NOW.isoformat(),
+                "order": {
+                    "id": "our-order", "marketSlug": slug,
+                    "side": "ORDER_SIDE_BUY",
+                    "intent": "ORDER_INTENT_BUY_SHORT",
+                    "price": {"value": "0.61", "currency": "USD"},
+                    "quantity": "5", "cumQuantity": "5",
+                    "state": "ORDER_STATE_FILLED",
+                    "createTime": NOW.isoformat()},
+            },
         }]
 
         await runner._rest_reconcile(runner._now())
 
-        self.assertEqual(
-            runner.ledger.query("SELECT * FROM execution_fills"), [])
+        fills = runner.ledger.query("SELECT * FROM execution_fills")
+        self.assertEqual(len(fills), 1, "exactly one leg of a trade is ours")
+        self.assertEqual(fills[0]["execution_id"], "ours")
+        self.assertNotIn("theirs", {row["execution_id"] for row in fills})
 
     async def test_a_position_outside_the_selected_set_is_still_serviced(self):
         """A position must not lose its manager when selection moves on.

@@ -1364,3 +1364,33 @@ terminal-state write in `execution_ledger`. It sits on `risk_state_known()`,
 which is the one genuinely account-wide invariant, so it wants a full session
 and real tests -- including one proving an absent order in an OPEN market is
 still never resolved.
+
+### Partial fix deployed 2026-08-17T22:40Z — and it did NOT clear them
+
+`resolve_absent_order_in_settled_market` plus `_market_has_settled` are in and
+tested (448 pass, both mutation-checked: an OPEN market no longer licenses a
+resolution, and the ledger write refuses any row that is not `UNKNOWN_ABSENT`).
+
+**It does not fire in production.** After a restart with the fix live:
+
+```
+UNKNOWN_ABSENT:               20  (unchanged)
+resolved by the new path:      0
+rotation blocked events:      14  (still blocking)
+component=absent_order errors: 0  <- the sweep reports NOTHING
+```
+
+Zero errors *and* zero resolutions means the retrieve is not raising NotFound at
+all, so **the premise that the venue cannot answer is wrong, or the sweep never
+reaches those rows.** The rows do have `exchange_order_id` values, so that is
+not it. Candidates, none tested:
+
+- the sweep's `exchange_id in exchange_ids` skip is matching them
+- `retrieve` succeeds and `apply_order_event` silently declines to apply
+  (returns False on the staleness rule rather than raising)
+- `_rest_reconcile` returns before reaching the absent sweep
+
+**Start here:** instrument the sweep to log per-row what it did -- asked,
+skipped, applied, declined. Right now it is silent in every branch, which is
+why this took a whole evening to even locate. The deployed change is harmless
+until the real path is understood.

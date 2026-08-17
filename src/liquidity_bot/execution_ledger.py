@@ -540,6 +540,42 @@ class ExecutionLedger:
             params.append(market_slug)
         return self.query(sql + " ORDER BY event_at", tuple(params))
 
+    def resolve_absent_order_in_settled_market(
+        self, exchange_order_id: str, *, observed_at: datetime, reason: str,
+    ) -> bool:
+        """Close out an absence the venue can no longer answer.
+
+        `absent_orders` exists to be re-asked, and normally the venue answers.
+        It cannot once the market has **settled**: `retrieve` returns NotFound
+        forever, the row stays `UNKNOWN_ABSENT`, and because
+        `risk_state_known()` counts absences account-wide, market rotation is
+        blocked for the rest of the session. Measured 2026-08-17: 19 such rows,
+        the oldest 18 hours old, `_rotation_blockers()` returning
+        "whole-account execution state is not known" on every pass, and the bot
+        pinned to one market while nineteen slots sat idle. It degrades
+        monotonically and survives restarts, because the state is durable here.
+
+        **This is not reading absence as cancellation.** That rule exists
+        because an unseen order might still be working, and acting on that
+        guess risks trading against ourselves. A settled market removes the
+        guess: no order can be live in a market the venue has resolved. The
+        caller must prove that settlement first -- this method only writes.
+
+        Deliberately narrow: `UNKNOWN_ABSENT` only, never a working or already
+        terminal row, and it reports whether it changed anything so a caller
+        cannot mistake a no-op for a resolution.
+        """
+
+        received = _time(observed_at, "observed_at")
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE execution_orders SET status='EXPIRED',"
+                " unknown_reason=?, received_at=?"
+                " WHERE exchange_order_id=? AND status='UNKNOWN_ABSENT'",
+                (f"settled_market:{reason}"[:200], received,
+                 str(exchange_order_id)))
+            return cursor.rowcount > 0
+
     def position(self, market_slug: str) -> Decimal:
         row = self.connection.execute(
             "SELECT net_qty FROM execution_positions WHERE market_slug=?",

@@ -782,6 +782,23 @@ class CommissioningRunner:
                 await self.executor.reconcile_order(
                     exchange_id, observed_at=now)
                 self._runtime_error_counts.pop("absent_order", None)
+            except AdapterError as exc:
+                # The venue says it has no such order. That is normally
+                # consistency lag and `retrieve` has already retried it four
+                # times -- but once the MARKET has settled the answer can never
+                # arrive, and the row blocks rotation account-wide forever.
+                if "NotFound" in str(exc) and await self._market_has_settled(
+                        str(row["market_slug"])):
+                    if self.ledger.resolve_absent_order_in_settled_market(
+                            exchange_id, observed_at=now,
+                            reason="retrieve_not_found"):
+                        await self.notifier.send_async(
+                            "Liquidity Bot resolved an absent order the venue "
+                            f"no longer knows in settled market "
+                            f"{row['market_slug']}; rotation is unblocked.")
+                    self._runtime_error_counts.pop("absent_order", None)
+                    continue
+                await self._report_runtime_error("absent_order", exc)
             except Exception as exc:
                 # Escalates on repeat through the usual attempt counter. A
                 # wedge that looks healthy is the worst outcome there is: the
@@ -2433,6 +2450,27 @@ class CommissioningRunner:
             if self.ledger.working_orders(market):
                 raise AdapterError(
                     f"runtime recovery order is still working in {market}")
+
+    async def _market_has_settled(self, slug: str) -> bool:
+        """Has the venue RESOLVED this market? Proof, not inference.
+
+        The only thing that licenses resolving an absent order, so it must be
+        affirmative and it must fail closed. A market that is merely closed,
+        missing, unparseable, or unreachable returns False and the order stays
+        absent -- the safe direction, because a stuck row costs quoting while a
+        wrongly-resolved one costs a position we think we do not hold.
+        """
+
+        try:
+            raw = await self.gateway._call(
+                f"GET /v1/markets/{slug}",
+                lambda: self.gateway.client.markets.retrieve_by_slug(slug))
+        except Exception:
+            return False
+        market = raw.get("market", raw) if isinstance(raw, dict) else None
+        if not isinstance(market, dict):
+            return False
+        return str(market.get("status")) == "MARKET_STATUS_RESOLVED"
 
     def _rotation_blockers(self) -> tuple[str, ...]:
         """Require whole-account flat, owned, resolved state before rebinding."""

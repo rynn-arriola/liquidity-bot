@@ -2466,6 +2466,66 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "temporary", "FAILED", updated_at=NOW)
         self.assertIsNone(runner._oldest_unresolved_age_seconds(NOW))
 
+    async def test_absent_order_resolves_only_when_its_market_settled(self):
+        """A settled market is proof; a NotFound alone is not.
+
+        19 rows sat UNKNOWN_ABSENT on 2026-08-17, oldest 18 hours old, because
+        their markets had settled and `retrieve` could never answer. Since
+        `risk_state_known()` counts absences account-wide, rotation was blocked
+        outright and the bot quoted almost nothing while slots sat idle.
+        """
+
+        runner, _, _ = self.build_runner()
+        slug = runner.market_slug
+        ledger = runner.ledger
+
+        def absent(exchange_id):
+            ledger.connection.execute(
+                "INSERT OR REPLACE INTO execution_orders(client_order_id,"
+                "exchange_order_id,market_slug,side,price,original_qty,"
+                "filled_qty,status,event_at,received_at,unknown_reason) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (f"c-{exchange_id}", exchange_id, slug, "ORDER_SIDE_BUY",
+                 "0.45", "5", "0", "UNKNOWN_ABSENT", NOW.isoformat(),
+                 NOW.isoformat(), "missing_from_complete_snapshot"))
+            ledger.connection.commit()
+
+        # A SETTLED market resolves the absence and unblocks rotation.
+        absent("settled-1")
+        self.assertTrue(any(
+            r["exchange_order_id"] == "settled-1"
+            for r in ledger.absent_orders()))
+        self.assertTrue(
+            ledger.resolve_absent_order_in_settled_market(
+                "settled-1", observed_at=NOW, reason="retrieve_not_found"))
+        self.assertFalse(
+            any(r["exchange_order_id"] == "settled-1"
+                for r in ledger.absent_orders()),
+            "a resolved absence must leave the absent set")
+
+        # Idempotent, and never touches a row that is not UNKNOWN_ABSENT.
+        self.assertFalse(
+            ledger.resolve_absent_order_in_settled_market(
+                "settled-1", observed_at=NOW, reason="retrieve_not_found"),
+            "resolving twice must report that nothing changed")
+
+    async def test_market_has_settled_fails_closed(self):
+        """Anything short of a RESOLVED market must return False."""
+
+        runner, client, _ = self.build_runner()
+        for response in ({"market": {"status": "MARKET_STATUS_OPEN"}},
+                         {"market": {}}, {}, None, "nonsense"):
+            client.markets.retrieve_by_slug = AsyncMock(return_value=response)
+            self.assertFalse(
+                await runner._market_has_settled("market-one"),
+                f"{response!r} must not license resolving an absence")
+        client.markets.retrieve_by_slug = AsyncMock(
+            side_effect=AdapterError("boom"))
+        self.assertFalse(await runner._market_has_settled("market-one"))
+        client.markets.retrieve_by_slug = AsyncMock(
+            return_value={"market": {"status": "MARKET_STATUS_RESOLVED"}})
+        self.assertTrue(await runner._market_has_settled("market-one"))
+
     async def test_skipped_book_refresh_does_not_clear_the_failure_counter(self):
         """A dead market must still reach MAX_RECOVERY_ATTEMPTS and retire.
 

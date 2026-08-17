@@ -1703,3 +1703,50 @@ the mutation path.
 answer: the same data reads 30% or 63% depending on it, and 30% would have
 justified work that 63% does not. State the denominator whenever quoting a
 resting number.
+
+## Same-price re-place churn: looked obvious, measured at 10%
+
+2026-08-17T01:40Z. Recorded because the sample that suggested it was vivid and
+wrong, and the next person will find the same sample.
+
+`zhixia-ryunak` rests 3.7% of a full 226-minute span across 37 placements, and
+its action log reads like a textbook churn bug -- cancel for
+`resting_price_left_the_touch`, then re-place at the IDENTICAL price, four
+cycles in a row, ~40s dark each time:
+
+```
+01:33:32 PLACE  bid 0.43
+01:34:38 CANCEL bid  resting_price_left_the_touch
+01:35:26 PLACE  bid 0.43     <- same price
+01:36:18 CANCEL bid
+01:36:56 PLACE  bid 0.43     <- same price
+```
+
+The obvious reading is a flapping touch being chased, with a known fix shape --
+the `reward_eligibility_dwell_seconds` hysteresis already exists for exactly
+that failure on the eligibility gate.
+
+**Measured across the whole session instead of that one market:**
+
+```
+re-prices after a price-left-the-touch cancel: 119
+  came back to the SAME price:  12   (10%)
+  genuinely moved:             107   (90%)
+  dark time on same-price trips: median 49s, 14 min total
+```
+
+14 minutes of 228, across 43 sides. Adding dwell hysteresis to the re-price
+trigger would recover a few minutes an hour at the cost of resting at a stale
+price, and reward discounts per tick from the touch.
+
+**What the data does support** is that the poor-resting markets are the ones
+whose touch moves constantly. `zhixia-ryunak` logged 19
+`resting_price_left_the_touch` cancels and rests 3.7%; `sirvea-salnic` logged 3
+and rests 92.4%, with its cancels being `side_no_longer_desired` (the economic
+gate) instead. A book that moves every 40 seconds cannot be rested in, so its
+projected reward is never realised no matter how good the projection was.
+
+That points at **selection**, not the order path: rank on whether a book holds
+still long enough to rest in, not only on projected reward. Two markets is a
+hypothesis, not a result -- it needs the touch-move rate correlated against
+resting fraction across a full slate before anything is changed.

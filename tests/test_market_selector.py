@@ -25,7 +25,7 @@ NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
 def market(
     slug: str,
     *,
-    starts_in_hours: int = 5,
+    starts_in_hours: int = 1,
     market_type_v2: str = "SPORTS_MARKET_TYPE_MONEYLINE",
     catalog_bid: float | None = .49,
     catalog_offer: float | None = .51,
@@ -209,6 +209,65 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             ranked[0], "thin",
             "the market where our size is a bigger share must win the slot")
+
+    async def test_a_distant_market_is_not_selected_at_all(self):
+        """A slot out there is negative expected value, not free.
+
+        The venue's `day_of` reward period runs six hours and the selector used
+        all of it. FINDINGS measures the 120+ minute bucket at a median
+        projected reward of 0.000022 with 67% of markets paying anything,
+        against 0.000313 and 100% at 15-30 minutes -- so a distant slot carries
+        the full risk of being filled and exiting at a loss in exchange for
+        approximately nothing. An empty slot strictly dominates it.
+        """
+        gateway = FakeGateway(
+            {"soon": market("soon", starts_in_hours=1),
+             "later": market("later", starts_in_hours=5)},
+            {s: incentive(s, pool=100.0) for s in ("soon", "later")},
+            # `later` is the RICHER book -- thinner touch, bigger share -- so
+            # projection alone would rank it first. It must not be offered.
+            {"soon": book("soon", touch_size=5000),
+             "later": book("later", touch_size=5)})
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(quote_size=1.0),
+            fill_hazard_model=FixedFillHazard(0.05))
+
+        out = await selector.select(now=NOW)
+
+        self.assertEqual([i.market.slug for i in out.opportunities], ["soon"])
+        self.assertNotIn(
+            "later", gateway.book_calls,
+            "a market outside the horizon must not even cost a book fetch")
+
+    async def test_the_horizon_is_configurable_back_to_six_hours(self):
+        """Revertible by config rather than by deploy."""
+
+        gateway = FakeGateway(
+            {"soon": market("soon", starts_in_hours=1),
+             "later": market("later", starts_in_hours=5)},
+            {s: incentive(s, pool=100.0) for s in ("soon", "later")},
+            {"soon": book("soon", touch_size=5000),
+             "later": book("later", touch_size=5)})
+        selector = RewardMarketSelector(
+            gateway,
+            RewardSelectionPolicy(quote_size=1.0,
+                                  selection_horizon_seconds=21600),
+            fill_hazard_model=FixedFillHazard(0.05))
+
+        out = await selector.select(now=NOW)
+
+        self.assertEqual(
+            sorted(i.market.slug for i in out.opportunities),
+            ["later", "soon"])
+
+    def test_the_horizon_cannot_exceed_the_authorized_window(self):
+        """Narrowing is a strategy choice; widening past the venue's `day_of`
+        period would be selecting markets that cannot be paid at all."""
+
+        with self.assertRaises(ValueError):
+            RewardSelectionPolicy(selection_horizon_seconds=21601)
+        with self.assertRaises(ValueError):
+            RewardSelectionPolicy(selection_horizon_seconds=0)
 
     async def test_projected_reward_total_sums_the_eligible_sides(self):
         gateway = FakeGateway(

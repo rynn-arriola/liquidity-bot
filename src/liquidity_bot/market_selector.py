@@ -58,10 +58,31 @@ class RewardSelectionPolicy:
     # place only did nothing, because a market that never becomes viable here
     # is never bound for the runner to evaluate at all.
     enforce_reward_cost_gate: bool = False
+    # How far ahead of kickoff a market may be and still be selected.
+    #
+    # The venue's `day_of` reward period runs six hours, and this used to take
+    # all of it. That is the window in which reward CAN be paid, not the window
+    # in which it is: FINDINGS measures the 120+ minute bucket at a median
+    # projected reward of 0.000022 with only 67% of markets paying anything,
+    # against 0.000313 and 100% at 15-30 minutes.
+    #
+    # A slot spent out there is not free. It carries the full risk of being
+    # filled and having to exit at a loss, in exchange for approximately no
+    # reward -- so it is negative expected value, and an empty slot strictly
+    # dominates it. Narrowing is also strictly more conservative than the
+    # authorized six-hour window, never wider.
+    #
+    # Nothing is given up by waiting: every market passes through this window
+    # on its way to kickoff, and selection re-runs often enough to pick it up
+    # when it does. Set to 21600 to restore the previous six-hour behaviour.
+    selection_horizon_seconds: float = 7200.0
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
             raise ValueError("selection size and horizon must be positive")
+        if not 0 < self.selection_horizon_seconds <= 21600:
+            raise ValueError(
+                "selection horizon must be inside the authorized six hours")
         if not 0 < self.projection_haircut <= 1:
             raise ValueError("selection reward haircut must be in (0, 1]")
         if not 0 < self.exit_depth_haircut <= 1:
@@ -404,7 +425,8 @@ class RewardMarketSelector:
         # documented six-hour day-of window can authorize this executor, so
         # filter by that clock before asking for incentive rows.
         catalog = await self.gateway.list_sports_markets()
-        window_end = now + timedelta(hours=6)
+        window_end = now + timedelta(
+            seconds=self.policy.selection_horizon_seconds)
         executable_catalog = {
             market.slug: market
             for market in catalog

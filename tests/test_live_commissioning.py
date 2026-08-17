@@ -969,6 +969,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_an_earnings_failure_does_not_refuse_startup(self):
+        """Observed 2026-08-17T03:05Z on a flat account with nothing wrong.
+
+        `GET /v1/incentives/earnings` returned InternalServerError during
+        preflight and the process exited 2 -- a code the supervisor never
+        restarts. Earnings are reporting, not a safety input: delayed by days,
+        never authorizing an entry or an exit, and read by nothing downstream.
+        The run loop already treated a failure here as recoverable; preflight
+        did not.
+        """
+
+        runner, client, _ = self.build_runner()
+        original = client.get
+
+        async def failing(path, *, query=None, authenticated=False):
+            if path == "/v1/incentives/earnings":
+                raise AdapterError(
+                    "GET /v1/incentives/earnings failed: InternalServerError")
+            return await original(path, query=query,
+                                  authenticated=authenticated)
+
+        client.get = failing
+
+        # Must not raise.
+        await runner.preflight()
+
+        self.assertIsNone(runner._earnings_observed_at)
+        self.assertIn("reward_earnings_refresh", runner._runtime_error_counts)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_dud_primary_market_is_dropped_not_refused(self):
         """Observed 2026-08-16T21:36Z, on the restart after the crash fix.
 

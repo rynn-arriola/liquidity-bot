@@ -29,6 +29,79 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-17
+
+### Preflight refused startup three separate times, each for something harmless
+
+Three distinct outages in one night, all the same shape: an unguarded call in
+`preflight` raised, `CommissioningRefused` propagated, and the process exited
+**2** -- the one code `supervise_commissioning.sh` never restarts. Each time the
+account was flat and nothing was actually wrong.
+
+**Symptom, identical in all three:** the Discord sequence
+
+```
+1. Liquidity Bot supervisor started for one-contract commissioning.
+2. Liquidity Bot LIVE runner failure: <something>
+3. Liquidity Bot startup was refused. Nothing was launched.
+```
+
+and `[supervisor] startup refused; not restarting` in `supervisor.log`. The bot
+stays down until a human notices.
+
+**1. Slot zero was exempt from the guard the other slots had.** `preflight`
+refreshed every bound market's book best-effort and dropped the failures --
+except the primary, which it refreshed unguarded first. That made slot zero the
+single point of failure the rest of the loop existed to prevent. Its book came
+back with no levels on either side, `parse_book_response` raised `book is empty
+on both sides`, and one dud market out of twenty took the whole startup down.
+`adapters.py` notes about one market in four publishes a one-sided book, so
+drawing a bad slot zero is routine. Fixed by treating every slot the same
+(`_refresh_bound_books`), keeping two deliberate refusals: a market we are
+RECOVERING holds a position we were restarted to retire, and dropping every
+market would bind an empty set.
+
+**2. Recovery was decided from a ledger that had stopped updating.**
+`_identified_recovery_markets` reads the ledger, and the ledger freezes the
+moment a runner dies -- so after a crash it describes the account as it *was*.
+It still held a working order and a 5-lot position in `dumvit-midmih` from the
+19:01 crash while the venue held neither. Preflight bound that market for
+recovery, its game had kicked off at 19:45 and finished, so its book was empty
+and startup exited 2. **Twice, over a position that did not exist.** Fixed by
+doing one whole-account REST read before any decision depends on what we think
+we hold. `_rest_reconcile` gained a `tag` because two reconciles at the same
+clock reading build the same snapshot event id from different content, which
+the ledger correctly rejects as a replay.
+
+**3. A venue 500 on an earnings fetch.** `GET /v1/incentives/earnings` returned
+`InternalServerError` and refused startup. Earnings are reporting, not a safety
+input: delayed by days, never authorizing an entry or an exit, read by nothing
+downstream. The run loop already treated a failure here as recoverable and
+`_refresh_earnings` was guarded there -- preflight simply did not have the same
+guard.
+
+**The pattern, which is the actual lesson.** Every one of these is a guard that
+existed somewhere else and did not cover one path: best-effort book refresh
+that skipped slot zero, a venue reconcile that ran after the decision instead of
+before it, an earnings guard present in the run loop and absent in preflight.
+Six fixes tonight had this shape. **Preflight is the most dangerous place in
+this codebase for an unguarded call**, because its failure mode is exit 2 and
+exit 2 is permanent.
+
+Worth auditing the rest of `preflight` for calls that can raise on transient
+venue conditions and asking, for each, whether failing it should really cost the
+session.
+
+**Cost:** three outages, the longest 79 minutes, all with a flat account and no
+real fault. Tests:
+`test_a_dud_primary_market_is_dropped_not_refused`,
+`test_startup_refuses_when_no_market_has_a_book`,
+`test_a_recovering_market_still_refuses_rather_than_be_dropped`,
+`test_a_stale_ledger_position_does_not_force_a_recovery_bind`,
+`test_an_earnings_failure_does_not_refuse_startup`. All mutation-checked.
+
+---
+
 ## 2026-08-16 (second incident)
 
 ### A book with no bids killed the runner, and the supervisor would not restart it

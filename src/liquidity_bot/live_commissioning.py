@@ -1050,7 +1050,19 @@ class CommissioningRunner:
                      or self.ledger.unresolved_intents()
                      or self.ledger.absent_orders())):
             await self._rest_reconcile(now)
-        await self._refresh_earnings(now)
+        try:
+            await self._refresh_earnings(now)
+        except Exception as exc:
+            # Earnings are reporting, not a safety input: they are delayed by
+            # days, never authorize an entry or an exit, and nothing below
+            # reads them. The run loop already treats a failure here as
+            # recoverable; preflight did not, so a venue-side blip refused
+            # startup outright. Observed 2026-08-17T03:05Z --
+            # `GET /v1/incentives/earnings` returned InternalServerError and
+            # the process exited 2, a code the supervisor never restarts, with
+            # a flat account and nothing wrong with it.
+            self._earnings_observed_at = None
+            await self._report_runtime_error("reward_earnings_refresh", exc)
         accepted = ReadinessVerdict(
             "COMMISSIONING_REWARD_ECONOMICS_ENFORCED", True, False, (),
             ("scale remains blocked until attributable paid rewards calibrate",))

@@ -57,6 +57,25 @@ the live runner. A stopped bot has the whole budget and nothing to lose from
 spending it. Raise `max_pages` for that single run only — do not raise the
 default, and do not put history paging in `accounting.py`.
 
+**ATTEMPTED 2026-08-17 AND REVERTED — read FINDINGS before retrying.**
+`scripts/backfill_executions.py` exists and works, and running it bare was
+still wrong. Two blockers, neither fixable with a flag:
+
+1. Venue history is the **account's**. It reaches back to 2026-06 and imported
+   ~700 markets of maker-lab trading; no field distinguishes the two bots.
+2. `apply_execution` rebuilds **positions**. Replaying a settled market's fills
+   left the ledger holding 345 positions the venue does not have, and a runner
+   that believes it holds inventory plans exits for it — real orders against
+   phantom positions. Caught pre-restart; ledger restored from the snapshot the
+   script takes automatically.
+
+**The prerequisite is a fills-only write path** that does not touch
+`execution_positions`, plus a date floor to exclude the maker-lab era. Until
+both exist, `--dry-run` only. The script now warns loudly if a run leaves
+non-zero positions behind.
+
+This is historical reporting only. Going-forward accuracy is already fixed.
+
 ## TOP PRIORITY (2026-08-16): the $40 stop is computing from one-sided fills
 
 **Measured 2026-08-15 06:53Z.** `realized_by_market()` returns:

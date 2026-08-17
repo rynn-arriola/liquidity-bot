@@ -2113,3 +2113,51 @@ sweep, so the backfill reaches back only as far as recent history; older gaps
 persist. 7 markets holding $19.00 of cost still carry no `outcome` and cannot be
 priced at all. Re-measure once the ledger stops moving -- and check that it has
 stopped before quoting any figure from it.
+
+## The venue's fill history is the ACCOUNT's, and replaying it forges positions
+
+Attempted 2026-08-17 to repair the three days of fills written before the
+`isAggressor` fix. Walking the venue's full activity history and replaying it
+through `apply_execution` did work -- 300 fills became 1495 -- and it was still
+the wrong thing to do, for two reasons that were not obvious beforehand.
+
+**1. There is no field that says which bot placed a fill.** The history reaches
+back to 2026-06 and is the *account's*, so it imported ~700 markets of maker-lab
+trading. The two are trivially distinguishable by eye and not at all in code:
+
+```
+2026-07-03 .. 07-20   ~270 fills    0-4% MAKER    1000+ contracts/side  (maker-lab)
+2026-08-09 onward     ~780 fills   50-100% MAKER     5-10 contracts/side  (this bot)
+```
+
+A liquidity-bot-only ledger cannot be reconstructed from venue history alone.
+
+**2. Replaying fills rebuilds POSITIONS, and that is the dangerous half.**
+`apply_execution` maintains `execution_positions`. Replaying the fills of a
+market that has since settled leaves the ledger holding a position the venue
+does not have. The result: **345 non-zero positions** in markets settled days
+or weeks earlier, against a venue reporting zero.
+
+```
+aec-cs2-nexo-gel-2026-08-12       net_qty = -25.00     (settled 5 days earlier)
+aec-wtt-giopic-chalut-2026-08-10  net_qty =  -6.57
+```
+
+That is not a reporting error. **A runner that believes it holds inventory
+plans exits for it**, so restarting would have placed real orders against
+positions that do not exist. Caught before the restart; ledger restored from
+the pre-backfill snapshot, bot restarted flat and quoting.
+
+**What this rules out.** "Just replay the history" is not available as a repair
+for the pre-fix days. A safe version needs a mode that writes fills *without*
+touching positions, which the ledger API does not expose today. `--dry-run` is
+safe and tells you the shape of what is there; a real run is not.
+
+**The loss stops were never at risk**, checked at the time: the stop reads
+`ledger.realized_pnl() - self._realized_baseline`, and the baseline is
+re-snapshotted at startup and daily, so imported history is absorbed rather
+than tripping anything.
+
+**And note what this does NOT block.** Fill recording going forward was already
+fixed and verified. This only concerns repairing 2026-08-14..16 retrospectively,
+which affects historical reporting and nothing the bot does next.

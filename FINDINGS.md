@@ -1980,3 +1980,67 @@ horizon is reverted.
 **The decision, stated plainly:** the evidence now favours letting the passive
 exit run to the kickoff deadline, and the cost of being wrong is holding
 inventory longer. That is an operator risk decision, not a code change.
+
+## Settlement, priced against the venue's own resolutions: -$21.12 on 45 markets
+
+Every earlier attempt to answer "what happens if we ride to settlement" was an
+inference. This one is not. The venue publishes no settlement rows, but it
+publishes the answer: a resolved market carries `outcomes` and `outcomePrices`,
+and the winning outcome prices at exactly `1`. Our fills already record
+`outcome` -- the side we hold. So for any position that went to settlement,
+payout is `qty` if our side won and `0` if it did not. No model, no proxy.
+
+`scripts/accounting.py --settlements`, run 2026-08-17 against the live ledger:
+
+```
+priced           45 markets  (14 won / 31 lost)
+staked                98.14
+returned              77.02
+settlement P&L       -21.12
+win rate              31.1%     (break-even 46.0%)
+
+worst:  -8.15  Teodor Lefter     qty 10.00  paid 8.15 -> 0.00
+        -4.64  Dominik Matic     qty  8.42  paid 4.64 -> 0.00
+        -4.50  Maria Andrienko   qty  5.00  paid 4.50 -> 0.00
+```
+
+We paid 46c on average for these and they came in 31% of the time. That is a
+21.5% loss on stake, and it is a real cash number, not `realized_pnl`.
+
+**The sample is selected, and that is the whole caveat.** These 45 are not a
+random slice of our trading -- they are the positions the exit ladder *failed to
+close*. A position reaches settlement precisely when nobody would take the other
+side at a price we would accept, which is disproportionately when it is moving
+against us. So -$21.12 is what riding cost on the trades that were hardest to
+exit; it is **not** the counterfactual for a policy of deliberately riding
+everything, which would include the easy-to-exit winners too. Read it as an
+upper bound on the damage, not as an estimate of the policy.
+
+**What it does settle:** the "just let them ride" option is not free money.
+Whatever the exit policy costs in crossed spreads, the positions that already
+ride are losing more than that per dollar staked. Anyone proposing to hold
+longer has to explain why the held sample would look different from this one.
+
+### The cross-check that makes the number trustworthy
+
+The report reconciles three independent sources and prints the gap:
+
+```
+equity_change = -(paid for fills) + settlements + rewards_paid
+```
+
+Marked equity is ground truth; fills and reward come from the account; that
+leaves settlements derivable by subtraction. Derived-by-subtraction and
+measured-from-resolutions must agree, and a gap means fills are missing from the
+ledger. Both figures are *deltas between snapshots* -- the first version of this
+compared a 25-minute window against an all-time total and printed a $31 "gap"
+that was pure units error. A zero-length window now correctly reports a zero
+gap.
+
+Resolutions are final once published, so they are cached in `data/resolutions.json`
+and only unseen markets cost a venue call. This matters: analysis shares the one
+4 req/s governor with the live runner, and an earlier version of this analysis
+triggered venue rate limiting by walking trade history while the bot was quoting.
+
+**16 positions could not be priced**: 11 not yet resolved, 5 with no `outcome`
+recorded on the fill. The second group is the remaining coverage hole.

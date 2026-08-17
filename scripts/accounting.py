@@ -4,37 +4,31 @@
 The ledger's `realized_pnl` reported -$143.59 on 2026-08-17 when the account had
 actually moved -$48.69 -- wrong by 3x, in the number the loss stops read.
 
-This computes P&L two ways and makes them agree, or says loudly that they do not.
+Three sources, made to agree:
 
   1. **Closed pairs**, from the local ledger, priced with no ambiguity. Every
      fill the bot sends is a PURCHASE (FINDINGS 6i -- two intents, never four),
      so one YES plus one NO settles at exactly 1.0000 and a matched pair
-     realises `1.00 - paid`. No direction, no outcome, no settlement data.
+     realises `1.00 - paid`. Needs no direction, outcome or settlement data.
 
-  2. **The account**, from marked equity. Ground truth.
+  2. **Settled positions** (`--settlements`). The venue publishes no settlement
+     rows, but it does publish the answer: a resolved market carries `outcomes`
+     and `outcomePrices`, and the winner prices at exactly 1. Our fills record
+     `outcome` -- the side we hold -- so payout is `qty` if ours won, else 0.
+     One venue call per market, hence opt-in.
 
-        equity_change = -(paid for trades) + settlements + rewards_paid
+  3. **The account**, from marked equity. Ground truth.
 
-     so settlements are derivable exactly, without knowing which side won.
+        equity_change = -(paid for fills) + settlements + rewards_paid
 
-**Deliberately cheap against the venue: two calls, balance and earnings.**
-Everything else comes from the ledger. Earlier versions of this walked the
-venue's trade history and triggered rate limiting -- the analysis shares one
-4 req/s governor with the live runner, so a report that pages history is
-competing with the bot for the budget it needs to quote.
+Everything except `--settlements` is two venue calls; the rest is local. An
+earlier version paged the venue's trade history and triggered rate limiting --
+analysis shares one 4 req/s governor with the live runner, so a report that
+walks history competes with the bot for the budget it needs to quote.
 
-That means this inherits the ledger's blind spot: fills the runner could not
-tie to one of its own orders are missing. The reconciliation is what EXPOSES
-that -- if derived settlements look implausible, unrecorded fills are the
-reason. Fixing the ingestion is runner work, not report work.
-
-Per-market settlement outcomes are not recoverable from history: when several
-positions settle in one window the balance gives one number and the venue
-publishes no settlement rows at all. Going forward they are, which is why each
-run records a dated snapshot -- consecutive snapshots bound each window.
-
-    python3 scripts/accounting.py                # report and snapshot
-    python3 scripts/accounting.py --no-snapshot  # report only
+    python3 scripts/accounting.py                    # report and snapshot
+    python3 scripts/accounting.py --settlements      # + price settled positions
+    python3 scripts/accounting.py --no-snapshot      # report only
 """
 
 from __future__ import annotations
@@ -73,11 +67,11 @@ def _from_ledger(db: str):
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     per_market = defaultdict(
-        lambda: {"L_q": Decimal(0), "L_c": Decimal(0),
-                 "S_q": Decimal(0), "S_c": Decimal(0)})
+        lambda: {"L_q": Decimal(0), "L_c": Decimal(0), "L_out": None,
+                 "S_q": Decimal(0), "S_c": Decimal(0), "S_out": None})
     spent = fees = Decimal(0)
     inverted = 0
-    for row in conn.execute("SELECT market_slug,intent,price,qty,fee "
+    for row in conn.execute("SELECT market_slug,intent,price,qty,fee,outcome "
                             "FROM execution_fills"):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         spent += qty * price
@@ -86,9 +80,11 @@ def _from_ledger(db: str):
         if row["intent"] == BUY_LONG:
             book["L_q"] += qty
             book["L_c"] += qty * price
+            book["L_out"] = book["L_out"] or row["outcome"]
         elif row["intent"] == BUY_SHORT:
             book["S_q"] += qty
             book["S_c"] += qty * price
+            book["S_out"] = book["S_out"] or row["outcome"]
         else:
             # SELL_* is the frame the venue inverts and that was never
             # validated here. Counted, never priced.
@@ -97,11 +93,86 @@ def _from_ledger(db: str):
     return per_market, spent, fees, inverted
 
 
+def _residual(book):
+    """The unmatched leg: what we still held after pairing off."""
+    residual = book["L_q"] - book["S_q"]
+    if residual == 0:
+        return None
+    long_side = residual > 0
+    qty = abs(residual)
+    whole = book["L_q"] if long_side else book["S_q"]
+    cost = book["L_c"] if long_side else book["S_c"]
+    held = book["L_out"] if long_side else book["S_out"]
+    paid = cost / whole * qty if whole else Decimal(0)
+    return qty, paid, held
+
+
+async def _price_settlements(client, per_market, cache_path: Path):
+    """Price each unmatched position against its market's published resolution.
+
+    A resolution is final, so it is cached on disk: only markets we have never
+    seen resolved cost a venue call. That matters because this shares the one
+    4 req/s governor with the live runner -- an uncached rerun over 60 markets
+    spends budget the bot needs to quote, and an earlier version of this
+    analysis triggered venue rate limiting exactly that way.
+    """
+
+    cache = {}
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text())
+        except Exception:
+            cache = {}
+
+    priced, unknown = [], []
+    fetched = 0
+    for slug, book in sorted(per_market.items()):
+        found = _residual(book)
+        if not found:
+            continue
+        qty, paid, held = found
+        if not held:
+            unknown.append((slug, "no outcome recorded on the fill"))
+            continue
+        lookup = cache.get(slug)
+        if lookup is None:
+            try:
+                raw = await client.markets.retrieve_by_slug(slug)
+                market = raw.get("market", raw) if isinstance(raw, dict) else raw
+                fetched += 1
+                if str(market.get("status")) != "MARKET_STATUS_RESOLVED":
+                    unknown.append((slug, "not resolved yet"))
+                    continue
+                names = json.loads(market.get("outcomes") or "[]")
+                prices = json.loads(market.get("outcomePrices") or "[]")
+                lookup = {str(n): str(p) for n, p in zip(names, prices)}
+                cache[slug] = lookup           # cached only once RESOLVED
+            except Exception as exc:
+                unknown.append((slug, type(exc).__name__))
+                continue
+        if str(held) not in lookup:
+            unknown.append((slug, f"outcome {held!r} not among {list(lookup)}"))
+            continue
+        won = Decimal(lookup[str(held)]) >= 1
+        payout = qty if won else Decimal(0)
+        priced.append((slug, held, qty, paid, payout, payout - paid))
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache, indent=1, sort_keys=True))
+    return priced, unknown, fetched
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
     parser.add_argument("--snapshots", default="data/accounting_snapshots.json")
     parser.add_argument("--no-snapshot", action="store_true")
+    parser.add_argument("--resolutions", default="data/resolutions.json",
+                        help="cache of settled market resolutions (final, so "
+                             "cached forever once seen)")
+    parser.add_argument("--settlements", action="store_true",
+                        help="price settled positions against each market's "
+                             "resolution (one venue call per market)")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -117,35 +188,68 @@ async def main() -> int:
             sc = book["S_c"] / book["S_q"] * pairs if book["S_q"] else Decimal(0)
             closed_pnl += pairs - lc - sc
             closed += 1
-        if book["L_q"] != book["S_q"]:
+        found = _residual(book)
+        if found:
             open_ += 1
-            long_side = book["L_q"] > book["S_q"]
-            whole = book["L_q"] if long_side else book["S_q"]
-            cost = book["L_c"] if long_side else book["S_c"]
-            if whole:
-                open_cost += cost / whole * abs(book["L_q"] - book["S_q"])
+            open_cost += found[1]
 
     gateway = AsyncReadOnlyGateway(client_from_environment())
     account = AsyncAccountSnapshotGateway(gateway)
-    balance = await account.fetch_balance(observed_at=now)          # call 1
+    balance = await account.fetch_balance(observed_at=now)
     equity = _money(getattr(balance, "marked_equity", 0))
-    earnings = await gateway.fetch_earnings()                        # call 2
-    paid = sum(Decimal(str(getattr(r, "reward", 0) or 0))
-               for r in earnings if str(getattr(r, "status", "")) == "PAID")
+    earnings = await gateway.fetch_earnings()
+    paid_reward = sum(Decimal(str(getattr(r, "reward", 0) or 0))
+                      for r in earnings
+                      if str(getattr(r, "status", "")) == "PAID")
     pending = sum(Decimal(str(getattr(r, "reward", 0) or 0))
-                  for r in earnings if str(getattr(r, "status", "")) == "PENDING")
+                  for r in earnings
+                  if str(getattr(r, "status", "")) == "PENDING")
 
     print(f"ledger fills priced      : {closed + open_:5d} markets")
     if inverted:
-        print(f"  fills in the inverted SELL_* frame, excluded: {inverted}")
+        print(f"  inverted SELL_* fills excluded: {inverted}")
     print(f"paid for all fills       : {float(spent):12.2f}")
     print(f"fees                     : {float(fees):+12.2f}   (negative = rebate)")
     print(f"closed pairs             : {closed:5d} markets  "
           f"P&L {float(closed_pnl):+.2f}")
-    print(f"unmatched (rode/open)    : {open_:5d} markets  "
+    print(f"unmatched (settled/open) : {open_:5d} markets  "
           f"cost {float(open_cost):.2f}")
-    print(f"\nreward   PAID {float(paid):8.2f}   PENDING {float(pending):8.2f}")
+    print("")
+    print(f"reward   PAID {float(paid_reward):8.2f}   PENDING {float(pending):8.2f}")
     print(f"account marked equity    : {float(equity):12.2f}")
+
+    settled_pnl = None
+    if args.settlements:
+        print("")
+        print("pricing settled positions against each market's resolution...")
+        priced, unknown, fetched = await _price_settlements(
+            gateway.client, per_market, Path(args.resolutions))
+        print(f"  ({fetched} venue calls; the rest came from the cache)")
+        if priced:
+            won = [r for r in priced if r[4] > 0]
+            staked = sum(r[3] for r in priced)
+            returned = sum(r[4] for r in priced)
+            units = sum(r[2] for r in priced)
+            settled_pnl = returned - staked
+            print(f"  priced                   : {len(priced):5d} markets "
+                  f"({len(won)} won / {len(priced) - len(won)} lost)")
+            print(f"  staked                   : {float(staked):12.2f}")
+            print(f"  returned                 : {float(returned):12.2f}")
+            print(f"  settlement P&L           : {float(settled_pnl):+12.2f}")
+            print(f"  win rate                 : "
+                  f"{100.0 * len(won) / len(priced):11.1f}%   "
+                  f"(break-even {float(staked / units) * 100:.1f}%)")
+            print("")
+            print("  worst settled positions:")
+            for slug, held, qty, paid, payout, pnl in sorted(
+                    priced, key=lambda r: r[5])[:5]:
+                print(f"    {float(pnl):+7.2f}  held {str(held)[:18]:<18} "
+                      f"qty {float(qty):6.2f}  paid {float(paid):6.2f} -> "
+                      f"{float(payout):6.2f}   {slug[:30]}")
+        if unknown:
+            print(f"  could not price          : {len(unknown):5d}")
+            for slug, why in unknown[:5]:
+                print(f"      {slug[:40]:<40} {why}")
 
     path = Path(args.snapshots)
     history = []
@@ -158,31 +262,48 @@ async def main() -> int:
         last = history[-1]
         d_equity = equity - Decimal(last["equity"])
         d_spent = spent - Decimal(last["spent"])
-        d_paid = paid - Decimal(last["reward_paid"])
-        settlements = d_equity + d_spent - d_paid
-        d_closed = closed_pnl - Decimal(last["closed_pnl"])
-        print(f"\n--- since {last['at']} ---")
+        d_paid = paid_reward - Decimal(last["reward_paid"])
+        derived = d_equity + d_spent - d_paid
+        print("")
+        print(f"--- since {last['at']} ---")
         print(f"  equity moved           : {float(d_equity):+12.2f}")
         print(f"  paid for fills         : {float(d_spent):12.2f}")
         print(f"  reward actually paid   : {float(d_paid):+12.2f}")
-        print(f"  closed-pair P&L        : {float(d_closed):+12.2f}")
-        print(f"  => settlements received: {float(settlements):+12.2f}"
-              "   (derived; exact at account level)")
-        print("\n  If settlements look impossible -- larger than the inventory "
-              "that could\n  have settled, or negative -- the ledger is missing "
-              "fills. That is the\n  signal this report exists to give.")
+        print(f"  => settlements derived : {float(derived):+12.2f}")
+        if settled_pnl is not None and "settled_pnl" in last:
+            # Compare like with like: the derived figure covers the window
+            # between snapshots, so the measured one must be a delta too.
+            # Comparing a window against an all-time total is meaningless and
+            # the first version of this printed exactly that.
+            measured = settled_pnl - Decimal(last["settled_pnl"])
+            print(f"  settlements measured   : {float(measured):+12.2f}"
+                  "   (from resolutions, same window)")
+            gap = derived - measured
+            print(f"  gap                    : {float(gap):+12.2f}")
+            if abs(gap) > Decimal("1"):
+                print("  GAP: the account moved by more than the fills and "
+                      "resolutions explain.")
+                print("  Fills are still missing from the ledger, or a market "
+                      "resolved that we did not price.")
+        elif settled_pnl is not None:
+            print("  (run with --settlements again next time to cross-check "
+                  "the derived figure)")
     else:
-        print("\nno previous snapshot -- this run sets the baseline. "
-              "Run it again later and settlements become exactly derivable.")
+        print("")
+        print("no previous snapshot -- this run sets the baseline.")
 
     if not args.no_snapshot:
         history.append({"at": now.isoformat(), "equity": str(equity),
                         "spent": str(spent), "fees": str(fees),
-                        "reward_paid": str(paid), "reward_pending": str(pending),
-                        "closed_pnl": str(closed_pnl)})
+                        "reward_paid": str(paid_reward),
+                        "reward_pending": str(pending),
+                        "closed_pnl": str(closed_pnl),
+                        **({"settled_pnl": str(settled_pnl)}
+                           if settled_pnl is not None else {})})
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(history, indent=1))
-        print(f"\nsnapshot recorded ({len(history)} total) -> {path}")
+        print("")
+        print(f"snapshot recorded ({len(history)} total) -> {path}")
     return 0
 
 

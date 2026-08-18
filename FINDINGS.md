@@ -2606,3 +2606,76 @@ looked. Two different quantities share one column. **Do not size a timeout off
 this distribution**; the 2026-08-17 fix did exactly that (10s ≈ the then-p95)
 and armed the guard at the middle of normal operation. Measure the specific
 transition you are bounding, on rows you have confirmed mean what you think.
+
+## Venue maintenance makes the unresolved-mutation stop unrecoverable
+
+Measured 2026-08-18T17:08-17:25Z, during a Polymarket maintenance window.
+Mutations returned `InternalServerError` while reads kept working.
+
+What that does to the bot, in order:
+
+1. `POST /v1/orders` 500s and returns **no exchange id**, so the PLACE intent
+   goes `UNCERTAIN` with `exchange_order_id = NULL`. Nothing can ever resolve
+   it: the reconcile asks the venue *by exchange id*, and there is no id to
+   ask about. This one intent alone arms the 60s critical stop permanently.
+2. The stop fires and shutdown begins.
+3. Shutdown's cancels 500 too. `_retry_uncertain_cancels` re-issued one cancel
+   **31 times over 15 minutes** and got an identical 500 every time. The retry
+   worked exactly as designed and could not possibly succeed.
+4. Shutdown exhausts its budget with orders still resting, so `flat: false`
+   and exit 3 -- which the supervisor never restarts.
+5. On the next start, preflight refuses: `shared account has open orders;
+   execution ledger has unresolved intents` -- exit 2, also never restarted.
+
+**No client-side retry can fix a venue that is not accepting mutations.** The
+useful question is not "how do we retry harder" but "how do we come back
+afterwards", and today the answer was: we do not, without a human.
+
+`_startup_recovery_is_scoped` exists for exactly these three blockers, but it
+authorises only markets in the **current** active set. After a maintenance
+outage the stuck orders sit in markets the selector will not pick again -- one
+of the six was `aec-cs2-oldboyspl-navij-2026-08-11`, a week old and long
+settled -- so the designed recovery path cannot claim them and the bot stays
+refused. That is the gap to close, not the retry.
+
+Also worth knowing: **29 of the 30 unresolved intents were retries of a single
+cancel.** Each attempt opens its own intent, which is correct (the state
+machine forbids `UNCERTAIN -> SUBMITTING`), and they all resolve together on
+the terminal state -- but a raw count of unresolved intents badly overstates
+how many distinct things are stuck. Count by `exchange_order_id`, not by row.
+
+## The venue changes an order's STATE without advancing its event timestamp
+
+Measured 2026-08-18, and it had been silently wedging rotation. Order
+`BYTCVSJ4EDJT` on `aec-cs2-oldboyspl-navij-2026-08-11`:
+
+```
+18:11:30  read as PARTIAL   lastTransactTime 2026-08-18T18:08:27.222776Z
+18:16     read as CANCELED  lastTransactTime 2026-08-18T18:08:27.222776Z
+```
+
+Same timestamp, different state. `reconcile_order` built its event id as
+`order:{id}:{event_at}`, so the second read was byte-identical in identity to
+the first, `_accept_event` rejected it as a replay, and `_upsert_order` never
+ran at all.
+
+That matters more than it looks. `_upsert_order` is where the ledger already
+knows how to handle this -- `resolves_absence` deliberately lets a terminal
+state outrank an `UNKNOWN_ABSENT` row even when `event_at` looks stale -- but
+that code was **unreachable** through the reconcile path. The row could never
+leave `UNKNOWN_ABSENT`, and `risk_state_known()` counts absences
+**account-wide**, so one order stuck this way blocks rotation for every market.
+The bot keeps quoting whatever it already holds and can never rebind.
+
+**`lastTransactTime` is not a version.** Do not use a venue timestamp alone as
+an idempotency key for anything whose state can change under it. The fix keys
+the reconcile event on `(id, event_at, status)`; each still applies at most
+once, and `_upsert_order` keeps its own ordering and terminal guards, so a
+stale or backwards transition is still refused where it should be.
+
+**A test that seeds the order some other way cannot catch this.** The first
+version of the regression test applied the order through a `ws` event, so the
+`rest_reconcile` event id was never consumed, no collision occurred, and it
+passed against the unfixed code. The collision has to be built by calling
+`_rest_reconcile` twice. (Two calls at one frozen clock reading also need
+distinct `tag`s, or the snapshot event id collides for an unrelated reason.)

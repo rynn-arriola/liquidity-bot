@@ -315,6 +315,23 @@ class LiveOrderExecutor:
         order = normalize_order(
             response["order"], observed_at=observed_at,
             resolve_client_id=self.ledger.resolve_client_order_id)
+        # The status is part of the event identity, not just the timestamp.
+        # The venue can change an order's STATE without advancing its event
+        # time: measured 2026-08-18, BYTCVSJ4EDJT was read as PARTIAL at
+        # lastTransactTime 18:08:27.222776Z, and after being cancelled it still
+        # reported 18:08:27.222776Z -- now as CANCELED. Keyed on time alone
+        # that is a replay, so `_accept_event` rejected it, `_upsert_order`
+        # never ran, and the row could never leave `UNKNOWN_ABSENT`. The
+        # ledger already knows how to handle this (`resolves_absence` lets a
+        # terminal state outrank an absence) but that code was unreachable.
+        # Rotation is blocked account-wide while any absence stands, so one
+        # order stuck this way stops the bot rebinding at all.
+        #
+        # Safe to make the key finer: each (id, time, status) still applies at
+        # most once, and `_upsert_order` keeps its own ordering and terminal
+        # guards, so a stale or backwards transition is still refused there.
         self.ledger.apply_order_event(
-            "rest_reconcile", f"order:{exchange_order_id}:{order.event_at.isoformat()}",
+            "rest_reconcile",
+            f"order:{exchange_order_id}:{order.event_at.isoformat()}"
+            f":{order.status}",
             order, received_at=observed_at)

@@ -1827,6 +1827,75 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_terminal_state_at_an_unchanged_timestamp_still_applies(self):
+        """The venue can change an order's STATE without moving its clock.
+
+        Measured 2026-08-18: BYTCVSJ4EDJT was read as PARTIAL at
+        lastTransactTime 18:08:27.222776Z. It was then cancelled, and the
+        venue reported CANCELED at the *same* 18:08:27.222776Z. Keyed on time
+        alone that is a replay, so `_accept_event` rejected it before
+        `_upsert_order` could run -- and `_upsert_order` is where the ledger
+        already knows a terminal state outranks an absence. The row could
+        never leave `UNKNOWN_ABSENT`, and rotation is blocked account-wide
+        while any absence stands, so the bot stopped rebinding entirely.
+
+        The collision has to be built through `_rest_reconcile` itself. An
+        earlier version of this test seeded the order with a `ws` event, so
+        the reconcile event id was never consumed, no replay occurred, and it
+        passed against the unfixed code.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        client.orders.rows["exchange-frozen"] = {
+            "id": "exchange-frozen",
+            "clientOrderId": "liquidity-frozen",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            # The only time field, so event_at cannot drift between reads.
+            "createTime": NOW.isoformat(),
+        }
+        runner.ledger.prepare_intent(
+            "intent-frozen", "PLACE", "market-one", "liquidity-frozen",
+            {"marketSlug": "market-one"}, created_at=runner._now())
+        runner.ledger.transition_intent(
+            "intent-frozen", "SUBMITTING", updated_at=runner._now())
+        runner.ledger.transition_intent(
+            "intent-frozen", "ACKNOWLEDGED", updated_at=runner._now(),
+            exchange_order_id="exchange-frozen")
+
+        # First read consumes order:exchange-frozen:<createTime> as OPEN.
+        await runner._rest_reconcile(runner._now())
+        self.assertEqual(runner.ledger.absent_orders(), [])
+
+        # The venue cancels it and reports the terminal state at the SAME
+        # event time, then stops listing it so a complete snapshot marks it
+        # absent -- which is precisely what happened in production.
+        client.orders.rows["exchange-frozen"]["state"] = "ORDER_STATE_CANCELED"
+        runner.ledger.apply_order_snapshot(
+            "snapshot-without-frozen", [], as_of=runner._now(),
+            observed_at=runner._now(), complete=True)
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+
+        # Distinct tag: the test clock is frozen, and two reconciles at one
+        # clock reading would build the same snapshot event id from different
+        # content, which the ledger correctly rejects. That is what `tag` is
+        # for and is unrelated to what is under test here.
+        await runner._rest_reconcile(runner._now(), tag="after-cancel")
+
+        self.assertEqual(
+            runner.ledger.absent_orders(), [],
+            "a terminal state must resolve an absence even when the venue "
+            "reports it at an already-seen timestamp")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.
 

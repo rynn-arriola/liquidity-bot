@@ -147,6 +147,107 @@ def _money(value) -> Decimal:
 
 
 
+
+def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
+           free, positions, orders, fills_today, fills_all, session_loss,
+           session_cap, viable, tight, rewarded, reward_paid, reward_pending,
+           uptime):
+    """A Discord embed in the house style the runner already uses.
+
+    Deliberately NOT a second format. `discord_summary.py` established the
+    vocabulary -- a colour-coded side-stripe, an `##` headline, emoji field
+    names and monospace text bodies -- and a parallel ANSI message would have
+    been a third thing to read.
+    """
+
+    from liquidity_bot.discord_summary import GREEN, ORANGE, RED
+
+    if failures:
+        colour, icon = RED, "\U0001f6d1"
+        state = "NOT WORKING \u00b7 " + ", ".join(failures)
+    elif idle_bound:
+        colour, icon = ORANGE, "\U0001f7e0"
+        state = "WORKING \u00b7 {} slot(s) wasted".format(len(idle_bound))
+    else:
+        colour, icon = GREEN, "\U0001f7e2"
+        state = "WORKING"
+
+    def money(value):
+        return "n/a" if value is None else "${:+,.2f}".format(float(value))
+
+    def plain(value):
+        return "n/a" if value is None else "${:,.2f}".format(float(value))
+
+    def meter(used, cap, width=12):
+        # ANSI does not render inside a Discord text fence, but block
+        # characters do, so the terminal's visual cue survives here.
+        cap = max(float(cap), 1e-9)
+        filled = max(0, min(width, int(round(width * float(used) / cap))))
+        return "\u2588" * filled + "\u2591" * (width - filled)
+
+    def row(label, value, width=10):
+        return "{:<19}{:>{w}}\n".format(label, value, w=width)
+
+    description = (
+        "## {} {}\n".format(icon, state)
+        + "**TODAY {}**   \u00b7   TOTAL {}\n".format(
+            money(today_pnl), money(total_pnl))
+        + "_up {}_\n".format(uptime))
+    if total_pnl is not None:
+        description += ("> _TOTAL is account-wide since inception, so it "
+                        "includes pre-bot trading._\n")
+
+    health_text = "".join(
+        "{:<14}{:>6}\n".format(name[:14], level) for level, name, _ in health)
+
+    slots_text = (row("quoting", len(quoted), 5)
+                  + row("bound, not quoting", len(idle_bound), 5)
+                  + row("empty", free, 5))
+    if viable is not None:
+        slots_text += (row("viable now", viable, 5)
+                       + row("rewarded <2h", rewarded, 5)
+                       + row("refused, tight", tight, 5))
+
+    headroom = session_cap - session_loss
+    risk_text = (row("positions", positions)
+                 + row("resting orders", orders)
+                 + row("trades today", fills_today)
+                 + row("trades lifetime", "{:,}".format(fills_all))
+                 + "\n"
+                 + "used      {}  {}\n".format(
+                     meter(session_loss, session_cap), plain(session_loss))
+                 + "remaining {}  {}\n".format(
+                     meter(headroom, session_cap), plain(headroom))
+                 + "stop at   {}\n".format(plain(session_cap)))
+
+    reward_text = (row("paid", plain(reward_paid))
+                   + row("pending", plain(reward_pending)))
+
+    fence = "```text\n"
+    fields = [
+        {"name": "\U0001f6e0\ufe0f Health",
+         "value": fence + health_text + "```", "inline": True},
+        {"name": "\U0001f4ca Slots (of 20)",
+         "value": fence + slots_text + "```", "inline": True},
+        {"name": "\u26a0\ufe0f Position & stop loss",
+         "value": fence + risk_text + "```", "inline": False},
+        {"name": "\U0001f381 Rewards",
+         "value": fence + reward_text + "```", "inline": False},
+    ]
+    if idle_bound:
+        fields.append({
+            "name": "\U0001f7e0 Bound but not quoting",
+            "value": fence + "".join(s[:44] + "\n" for s in idle_bound[:5])
+                     + "```",
+            "inline": False})
+    return {"embeds": [{
+        "color": colour,
+        "description": description,
+        "fields": fields,
+        "footer": {"text": now.strftime("dashboard \u00b7 %Y-%m-%d %H:%M:%SZ")},
+    }]}
+
+
 def _signed(value) -> str:
     """Green above zero, red below. The only two colours that matter here."""
     if value is None:
@@ -273,10 +374,11 @@ async def main() -> int:
     parser.add_argument("--markets", action="store_true")
     parser.add_argument("--pnl", action="store_true")
     parser.add_argument("--all", action="store_true")
+    parser.add_argument("--color", action="store_true")
+    parser.add_argument("--discord", action="store_true")
     parser.add_argument("--no-color", action="store_true")
     # Discord renders ANSI inside an ```ansi fence, and piping to it
     # is not a tty, so colour has to be forced rather than detected.
-    parser.add_argument("--color", action="store_true")
     args = parser.parse_args()
     if args.all:
         args.markets = args.pnl = True
@@ -398,11 +500,13 @@ async def main() -> int:
     print("")
     return await _sections(args, now, lines, gateway if venue_ok else None,
                            orders, quoted, positions, equity,
-                           fills_today, fills_all, failures)
+                           fills_today, fills_all, failures,
+                           health, today_pnl, total_pnl)
 
 
 async def _sections(args, now, lines, gateway, orders, quoted, positions,
-                    equity, fills_today, fills_all, failures) -> int:
+                    equity, fills_today, fills_all, failures,
+                    health=(), today_pnl=None, total_pnl=None) -> int:
     viable = None
     tight = rewarded = 0
     if args.markets and gateway is not None:
@@ -512,6 +616,40 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
     print(line(paint("d", "  own stop re-baselines daily, so treat this as directional")))
     print(box_bottom())
     print("")
+
+
+    if args.discord:
+        try:
+            from liquidity_bot.notifications import DiscordNotifier
+            from liquidity_bot.probe import load_runtime_secrets
+            reward_paid = reward_pending = None
+            if gateway is not None:
+                try:
+                    paid = pending = Decimal(0)
+                    for entry in await gateway.fetch_earnings():
+                        amount = Decimal(str(getattr(entry, "reward", 0) or 0))
+                        status = str(getattr(entry, "status", "")).upper()
+                        if status == "PAID":
+                            paid += amount
+                        elif status == "PENDING":
+                            pending += amount
+                    reward_paid, reward_pending = paid, pending
+                except Exception:
+                    pass
+            DiscordNotifier(load_runtime_secrets()).send_payload(
+                _embed(now=now, failures=failures, health=health,
+                       today_pnl=today_pnl, total_pnl=total_pnl,
+                       quoted=quoted, idle_bound=idle_bound, free=free,
+                       positions=positions, orders=orders,
+                       fills_today=fills_today, fills_all=fills_all,
+                       session_loss=session_loss, session_cap=session_cap,
+                       viable=viable, tight=tight, rewarded=rewarded,
+                       reward_paid=reward_paid, reward_pending=reward_pending,
+                       uptime=_uptime()))
+            print(paint("d", "  posted to Discord"))
+        except Exception as exc:
+            print(paint("y", "  Discord post failed: {}: {}".format(
+                type(exc).__name__, exc)))
 
     if args.pnl and gateway is not None:
         await _pnl(now, gateway, equity)

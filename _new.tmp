@@ -1,0 +1,8 @@
+    def meter(used, cap, width=14):
+        """Plain-text bar. ANSI does not render inside a Discord text fence,
+        but block characters do, so the terminal's visual cue survives here."""
+        cap = max(float(cap), 1e-9)
+        filled = max(0, min(width, int(round(width * float(used) / cap))))
+        return "\u2588" * filled + "\u2591" * (width - filled)
+
+    def row(label, value, width=10):

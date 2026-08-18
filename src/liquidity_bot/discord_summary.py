@@ -223,28 +223,33 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # 3 of 20 slots filled, and all three of the three viable markets were
     # quoted -- 88% of rewarded markets had books tighter than 2c and were
     # refused before a book was ever read.
+    # Three different things get called "an idle slot", and only two of them
+    # are faults. Keep them apart:
+    #
+    #   idle   a slot BOUND to a market that is resting no order. The slot is
+    #          occupied and earning nothing -- it cannot be given to another
+    #          market until it is released. This is the wasted one.
+    #   unmet  a market that IS viable and is not being quoted at all. Supply
+    #          exists and is going uncollected.
+    #   free   capacity with nothing viable to put in it. Not a fault, and on
+    #          a quiet evening it is most of the board.
     unmet = max(0, summary.viable_markets - summary.resting_markets)
+    free = max(0, summary.slot_capacity - summary.active_markets)
     if not integrity_ok or summary.readiness_status == "DO_NOT_START_TRIAL":
         color, icon = RED, "\U0001f6d1"
         state = "NOT WORKING"
-    elif summary.slot_capacity:
-        # Supply is known, so idle slots can be judged rather than guessed at.
-        if unmet:
-            color, icon = ORANGE, "\U0001f7e0"
-            state = f"WORKING · {unmet} viable market(s) not quoted"
-        elif idle:
-            color, icon = GREEN, "\U0001f7e2"
-            state = (f"WORKING · supply-limited, {summary.viable_markets} "
-                     f"viable of {summary.slot_capacity} slots")
-        else:
-            color, icon = GREEN, "\U0001f7e2"
-            state = "WORKING"
     elif idle:
-        # No supply data. Say only what is known -- that slots are idle --
-        # and never infer "supply-limited" from a default of zero viable,
-        # which would call a genuinely stuck bot healthy.
+        # Lead with this. It is the one an operator can act on, and the count
+        # that answers "are the other slots working?".
         color, icon = ORANGE, "\U0001f7e0"
-        state = f"WORKING · {idle} slot(s) not quoting"
+        state = f"WORKING · {idle} slot(s) NOT WORKING"
+    elif unmet and summary.slot_capacity:
+        color, icon = ORANGE, "\U0001f7e0"
+        state = f"WORKING · {unmet} viable market(s) not quoted"
+    elif free and summary.slot_capacity:
+        color, icon = GREEN, "\U0001f7e2"
+        state = (f"WORKING · all {summary.resting_markets} viable market(s) "
+                 f"quoted, {free} slot(s) free")
     else:
         color, icon = GREEN, "\U0001f7e2"
         state = "WORKING"
@@ -292,8 +297,13 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # market -- truncating silently made them fail to sum to active - resting,
     # on the one field whose job is answering "are we at capacity".
     slots_text = (
-        _row("Markets resting",
-             f"{summary.resting_markets}/{summary.active_markets}")
+        _row("Quoting", f"{summary.resting_markets}/{summary.slot_capacity}"
+             if summary.slot_capacity
+             else f"{summary.resting_markets}/{summary.active_markets}")
+        # The headline answer to "are the other slots working?". A bound
+        # market resting nothing holds a slot no other market can use, so
+        # this is the number that costs reward.
+        + _row("SLOTS NOT WORKING", idle)
         + "".join(f"  {reason[:15]:<15}{count:>8}\n"
                   for reason, count in summary.idle_market_reasons[:3])
         + ("".join(f"  {'other':<15}"
@@ -304,10 +314,10 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     if summary.slot_capacity:
         # The funnel, so "why only three?" is answerable from the message
         # itself rather than needing `scripts/usable_markets.py` on the
-        # droplet. "Lost to errors" is the one line that means something is
-        # wrong; the rest are deliberate economic refusals.
+        # droplet. Of these, only "lost to errors" means something is wrong;
+        # the rest are deliberate economic refusals.
         slots_text += (
-            _row("Slot capacity", summary.slot_capacity)
+            _row("Free, none viable", free)
             + _row("Viable now", summary.viable_markets)
             + _row("Rewarded in window", summary.rewarded_markets)
             + _row("Refused, tight book", summary.spread_filtered_markets)

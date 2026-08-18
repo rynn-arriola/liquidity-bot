@@ -134,7 +134,12 @@ class DiscordTests(unittest.TestCase):
 
         # Shown as a ratio, because 9 alone does not say what it is 9 of.
         # Measured 2026-08-16: 20 managed against 9 actually holding an order.
+        # With no slot_capacity supplied it still ratios against the bound
+        # count, which is what this caller has.
         self.assertIn("9/20", rewards)
+        # And the eleven bound-but-silent slots are counted outright, because
+        # "how many slots are broken" is the question a slot count is asked.
+        self.assertIn("SLOTS NOT WORKING", rewards)
         # And the eleven that are not resting are broken down, because
         # "priced out" and "broken" need very different responses.
         self.assertIn("target_not_met", rewards)
@@ -160,53 +165,141 @@ class DiscordTests(unittest.TestCase):
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
 
-    def test_idle_slots_read_as_supply_not_as_a_fault(self):
-        """"Only 3 of 20 quoting" is the most-asked question about this bot,
-        and the summary could not answer it. A ratio against capacity makes
-        every quiet evening look broken.
+    def test_broken_slots_are_counted_outright(self):
+        """"Are the other slots working?" is the most-asked question about
+        this bot, and a slot count alone cannot answer it.
 
-        Measured 2026-08-18T20:32Z: 3 of 20 slots filled, and all three of
-        the three viable markets were quoted -- 88% of rewarded markets had
-        books tighter than 2c and were refused before a book was read. That
-        is the selector working, not failing, and it must not be orange.
+        Three different things get called an idle slot and only two are
+        faults. A slot BOUND to a market that rests no order is occupied and
+        earning nothing, and cannot be given to another market until it is
+        released -- that is the one that costs reward, and the one counted
+        here. Capacity with nothing viable to put in it is not a fault, and
+        on a quiet evening it is most of the board.
         """
 
-        quiet = LiquiditySummary(
+        # Tonight, measured 2026-08-18T20:32Z: 3 bound, 3 quoting, and 88% of
+        # rewarded markets refused for books tighter than 2c. Nothing broken.
+        healthy = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
-            active_markets=20, resting_markets=3,
+            active_markets=3, resting_markets=3,
             slot_capacity=20, viable_markets=3, rewarded_markets=26,
             spread_filtered_markets=23, selection_failures=0)
-        embed = build_liquidity_summary(quiet)["embeds"][0]
-        self.assertIn("supply-limited", embed["description"])
-        self.assertNotEqual(embed["color"], ORANGE)
+        embed = build_liquidity_summary(healthy)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
+        self.assertNotEqual(embed["color"], ORANGE)
+        self.assertIn("17 slot(s) free", embed["description"])
         # The funnel, so "why only three" is answerable from the message.
         self.assertIn("Viable now", slots)
         self.assertIn("Refused, tight book", slots)
         self.assertIn("Lost to errors", slots)
 
-        # Same 3 of 20, but now six viable markets are going unquoted. That
-        # is the real fault this wording exists to separate out.
-        broken = replace(quiet, viable_markets=9, selection_failures=4)
+        # Fourteen bound but only seven quoting: seven slots held and silent.
+        broken = replace(healthy, active_markets=14, resting_markets=7,
+                         viable_markets=7, spread_filtered_markets=12,
+                         idle_market_reasons=(("book_stale", 5),))
         embed = build_liquidity_summary(broken)["embeds"][0]
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{7:>10}", slots)
+        self.assertEqual(embed["color"], ORANGE)
+        self.assertIn("7 slot(s) NOT WORKING", embed["description"])
+        # ...and why, so it is actionable rather than just alarming.
+        self.assertIn("book_stale", slots)
+
+    def test_the_slot_numbers_partition_capacity_exactly(self):
+        """quoting + broken + free must equal capacity, always.
+
+        These three are the whole answer to "are we at full capacity or is
+        something stuck", and they are computed from two different inputs --
+        `resting_markets` counts bound slugs holding an order, while
+        `active_markets` counts bound slugs. If they ever fail to add up, one
+        of the three is being derived wrongly and the reader cannot tell
+        which. Checked across the shapes a real session moves through.
+        """
+
+        for active, resting, capacity in (
+                (3, 3, 20),      # quiet evening, nothing broken
+                (14, 7, 20),     # seven slots bound and silent
+                (20, 20, 20),    # genuinely full
+                (0, 0, 20),      # nothing bound yet
+                (20, 0, 20)):    # every slot bound and dead
+            summary = LiquiditySummary(
+                mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+                observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
+                active_markets=active, resting_markets=resting,
+                slot_capacity=capacity, viable_markets=resting)
+            slots = [f for f in build_liquidity_summary(summary)["embeds"][0]
+                     ["fields"] if "Slots" in f["name"]][0]["value"]
+
+            def value(label):
+                line = [row for row in slots.splitlines()
+                        if row.startswith(label)][0]
+                return int(line[len(label):].split()[0])
+
+            # Parsed from the rendered text, not from the inputs -- the
+            # point is to check what the reader actually sees.
+            quoting = int([row for row in slots.splitlines()
+                           if row.startswith("Quoting")][0]
+                          .split()[-1].split("/")[0])
+            broken = value("SLOTS NOT WORKING")
+            free = value("Free, none viable")
+            self.assertEqual(
+                quoting + broken + free, capacity,
+                f"{quoting}+{broken}+{free} != {capacity} "
+                f"for active={active} resting={resting}")
+
+    def test_the_broken_slot_reasons_account_for_every_broken_slot(self):
+        """The breakdown under the count must sum to the count.
+
+        Truncating silently made the reasons fail to add up to
+        active - resting, on the one field whose job is explaining why slots
+        are stuck. The tail is folded into `other` instead.
+        """
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
+            active_markets=20, resting_markets=5, slot_capacity=20,
+            viable_markets=5,
+            idle_market_reasons=(("target_not_met", 6), ("book_stale", 4),
+                                 ("no_book", 3), ("retired", 1),
+                                 ("quarantined", 1)))
+        slots = [f for f in build_liquidity_summary(summary)["embeds"][0]
+                 ["fields"] if "Slots" in f["name"]][0]["value"]
+        counted = sum(
+            int(row.split()[-1]) for row in slots.splitlines()
+            if row.startswith("  ") and row.split()[-1].isdigit())
+        self.assertEqual(counted, 15, "reasons must sum to active - resting")
+        self.assertIn("other", slots)
+
+    def test_viable_markets_going_unquoted_is_also_a_fault(self):
+        """Supply exists and is not being collected. Distinct from a bound
+        slot resting nothing -- here the market is not bound at all -- and it
+        must not be reported as healthy just because no slot is stuck."""
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
+            active_markets=3, resting_markets=3,
+            slot_capacity=20, viable_markets=9, rewarded_markets=26,
+            spread_filtered_markets=17, selection_failures=0)
+        embed = build_liquidity_summary(summary)["embeds"][0]
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("6 viable market(s) not quoted", embed["description"])
-        self.assertNotIn("supply-limited", embed["description"])
 
     def test_a_summary_without_supply_data_keeps_the_old_wording(self):
         """`slot_capacity` is the sentinel. Shadow runs and older callers
-        supply no funnel, and must not be described as supply-limited on the
-        strength of a default of zero -- that would report "0 viable" as
-        healthy on a bot that is genuinely idle."""
+        supply no funnel, and must not be told how many slots are free or
+        called healthy on the strength of a default of zero viable."""
 
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
             active_markets=20, resting_markets=3)
         embed = build_liquidity_summary(summary)["embeds"][0]
-        self.assertIn("17 slot(s) not quoting", embed["description"])
-        self.assertNotIn("supply-limited", embed["description"])
+        self.assertIn("17 slot(s) NOT WORKING", embed["description"])
+        self.assertNotIn("slot(s) free", embed["description"])
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
         self.assertNotIn("Viable now", slots)
 

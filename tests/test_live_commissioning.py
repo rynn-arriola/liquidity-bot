@@ -3506,7 +3506,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"{'Positions':<19}{1:>10}", rendered)
         # Reported as resting/managed now: managed alone said nothing about
         # whether those markets were earning.
-        self.assertIn(f"{'Markets resting':<19}{'0/2':>10}", rendered)
+        # Quoting is now reported against slot CAPACITY, not against the
+        # number of bound markets: "0/2 bound" hid the two dead slots that
+        # "0/8 of capacity" makes obvious.
+        self.assertIn(f"{'Quoting':<19}{'0/8':>10}", rendered)
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{2:>10}", rendered)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -3524,7 +3528,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # unreadable line and nobody was reading it.
         rewards = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
                    if "reward" in f["name"].lower()][0]["value"]
-        self.assertIn("Markets resting", rewards)
+        # A retired slot is a BROKEN slot: bound, resting nothing, and not
+        # releasable to another market. It is counted, and the reason is
+        # named underneath, so "are we at capacity or is something stuck?"
+        # is answerable from the message.
+        self.assertIn("SLOTS NOT WORKING", rewards)
         self.assertIn("retired", rewards)
         await runner.private_stream.close()
         await runner.market_stream.close()

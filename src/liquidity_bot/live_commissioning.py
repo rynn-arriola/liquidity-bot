@@ -2335,6 +2335,24 @@ class CommissioningRunner:
             session_realized_pnl_usd=(
                 self.risk_guard.realized_pnl if self.risk_guard is not None
                 else Decimal("0")),
+            # Supply, straight off the last selection scan. These counters
+            # already exist on the selection object and were never reported
+            # anywhere -- which is why "is it quoting 3 because 3 is all
+            # there is, or because it is broken?" needed a 50-call script on
+            # the droplet to answer.
+            slot_capacity=self.config.max_markets,
+            viable_markets=(
+                self._market_selection.viable_markets
+                if self._market_selection is not None else 0),
+            rewarded_markets=(
+                self._market_selection.rewarded_executable_markets
+                if self._market_selection is not None else 0),
+            spread_filtered_markets=(
+                self._market_selection.catalog_spread_filtered_markets
+                if self._market_selection is not None else 0),
+            selection_failures=(
+                len(self._market_selection.failures)
+                if self._market_selection is not None else 0),
             worst_market_realized_pnl_usd=(
                 min(self.risk_guard.realized_by_market.values(),
                     default=Decimal("0"))

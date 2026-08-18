@@ -92,6 +92,16 @@ class LiquiditySummary:
     # independently of the session one, so a meter for the session alone can
     # read comfortable while a market is one fill from stopping.
     worst_market_realized_pnl_usd: Decimal = Decimal("0")
+    # Supply, so the reader can tell "3 markets because 3 is all there is"
+    # from "3 markets because something is broken". Without these the slots
+    # field reports a ratio against capacity and every quiet evening reads
+    # as a fault. `slot_capacity` doubles as the sentinel: 0 means the caller
+    # supplied no supply data, and the wording falls back to the old form.
+    slot_capacity: int = 0
+    viable_markets: int = 0
+    rewarded_markets: int = 0
+    spread_filtered_markets: int = 0
+    selection_failures: int = 0
     pnl_label: str = "trading"
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
@@ -120,6 +130,11 @@ class LiquiditySummary:
                 ("working_orders", self.working_orders),
                 ("unresolved_intents", self.unresolved_intents),
                 ("unknown_orders", self.unknown_orders),
+                ("slot_capacity", self.slot_capacity),
+                ("viable_markets", self.viable_markets),
+                ("rewarded_markets", self.rewarded_markets),
+                ("spread_filtered_markets", self.spread_filtered_markets),
+                ("selection_failures", self.selection_failures),
                 ("ledger_bytes", self.ledger_bytes)):
             if value < 0:
                 raise ValueError(f"{name} cannot be negative")
@@ -201,10 +216,33 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # State reads from what the bot is doing, not only from readiness. A bot
     # that is "eligible" while holding no orders at all is not working, and
     # the old title said SCALE_ELIGIBLE either way.
+    # Idle slots are a fault only if there was something to put in them.
+    # `unmet` is the count that actually means "should be quoting and is not";
+    # any other idle slot is the universe being quiet, which is the normal
+    # evening state and must not read as a problem. Measured 2026-08-18:
+    # 3 of 20 slots filled, and all three of the three viable markets were
+    # quoted -- 88% of rewarded markets had books tighter than 2c and were
+    # refused before a book was ever read.
+    unmet = max(0, summary.viable_markets - summary.resting_markets)
     if not integrity_ok or summary.readiness_status == "DO_NOT_START_TRIAL":
         color, icon = RED, "\U0001f6d1"
         state = "NOT WORKING"
+    elif summary.slot_capacity:
+        # Supply is known, so idle slots can be judged rather than guessed at.
+        if unmet:
+            color, icon = ORANGE, "\U0001f7e0"
+            state = f"WORKING · {unmet} viable market(s) not quoted"
+        elif idle:
+            color, icon = GREEN, "\U0001f7e2"
+            state = (f"WORKING · supply-limited, {summary.viable_markets} "
+                     f"viable of {summary.slot_capacity} slots")
+        else:
+            color, icon = GREEN, "\U0001f7e2"
+            state = "WORKING"
     elif idle:
+        # No supply data. Say only what is known -- that slots are idle --
+        # and never infer "supply-limited" from a default of zero viable,
+        # which would call a genuinely stuck bot healthy.
         color, icon = ORANGE, "\U0001f7e0"
         state = f"WORKING · {idle} slot(s) not quoting"
     else:
@@ -263,6 +301,17 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
            if len(summary.idle_market_reasons) > 3 else "")
         + _row("Eligible sides", summary.reward_eligible_sides)
         + _row("Score-seconds", f"{summary.score_seconds:,.2f}"))
+    if summary.slot_capacity:
+        # The funnel, so "why only three?" is answerable from the message
+        # itself rather than needing `scripts/usable_markets.py` on the
+        # droplet. "Lost to errors" is the one line that means something is
+        # wrong; the rest are deliberate economic refusals.
+        slots_text += (
+            _row("Slot capacity", summary.slot_capacity)
+            + _row("Viable now", summary.viable_markets)
+            + _row("Rewarded in window", summary.rewarded_markets)
+            + _row("Refused, tight book", summary.spread_filtered_markets)
+            + _row("Lost to errors", summary.selection_failures))
 
     session_cap = _money(summary.session_loss_limit_usd)
     hard_cap = _money(summary.hard_stop_loss_usd)

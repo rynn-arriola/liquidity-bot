@@ -7,7 +7,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from dataclasses import replace
+
 from liquidity_bot.discord_summary import (
+    ORANGE,
     RED,
     LiquiditySummary,
     build_liquidity_summary,
@@ -156,6 +159,56 @@ class DiscordTests(unittest.TestCase):
             LiquiditySummary(
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
+
+    def test_idle_slots_read_as_supply_not_as_a_fault(self):
+        """"Only 3 of 20 quoting" is the most-asked question about this bot,
+        and the summary could not answer it. A ratio against capacity makes
+        every quiet evening look broken.
+
+        Measured 2026-08-18T20:32Z: 3 of 20 slots filled, and all three of
+        the three viable markets were quoted -- 88% of rewarded markets had
+        books tighter than 2c and were refused before a book was read. That
+        is the selector working, not failing, and it must not be orange.
+        """
+
+        quiet = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
+            active_markets=20, resting_markets=3,
+            slot_capacity=20, viable_markets=3, rewarded_markets=26,
+            spread_filtered_markets=23, selection_failures=0)
+        embed = build_liquidity_summary(quiet)["embeds"][0]
+        self.assertIn("supply-limited", embed["description"])
+        self.assertNotEqual(embed["color"], ORANGE)
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        # The funnel, so "why only three" is answerable from the message.
+        self.assertIn("Viable now", slots)
+        self.assertIn("Refused, tight book", slots)
+        self.assertIn("Lost to errors", slots)
+
+        # Same 3 of 20, but now six viable markets are going unquoted. That
+        # is the real fault this wording exists to separate out.
+        broken = replace(quiet, viable_markets=9, selection_failures=4)
+        embed = build_liquidity_summary(broken)["embeds"][0]
+        self.assertEqual(embed["color"], ORANGE)
+        self.assertIn("6 viable market(s) not quoted", embed["description"])
+        self.assertNotIn("supply-limited", embed["description"])
+
+    def test_a_summary_without_supply_data_keeps_the_old_wording(self):
+        """`slot_capacity` is the sentinel. Shadow runs and older callers
+        supply no funnel, and must not be described as supply-limited on the
+        strength of a default of zero -- that would report "0 viable" as
+        healthy on a bot that is genuinely idle."""
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
+            active_markets=20, resting_markets=3)
+        embed = build_liquidity_summary(summary)["embeds"][0]
+        self.assertIn("17 slot(s) not quoting", embed["description"])
+        self.assertNotIn("supply-limited", embed["description"])
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertNotIn("Viable now", slots)
 
     def test_stop_meter_draws_from_the_stop_input_not_marked_equity(self):
         """The bar has to measure the thing that actually fires.

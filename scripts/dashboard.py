@@ -682,6 +682,21 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                 book["sq"] += q
                 book["sc"] += q * p_
         conn.close()
+        # NET across every market, winners included. This summed only the
+        # losing markets and discarded the winning ones, which is a gross
+        # loss total and not what any stop reads: `runtime_safety.blockers`
+        # trips on `-realized_pnl >= max_session_loss`, a net figure.
+        #
+        # Measured 2026-08-18: the bar showed $36.34 of a $40 cap -- "$3.66
+        # left" -- on a day whose net realised was -$7.88, so roughly $32 was
+        # actually left. It overstated by 4.6x in the direction that makes a
+        # healthy bot look one fill from a hard stop, which is exactly the
+        # reading that gets a working bot shut off by hand.
+        #
+        # `worst_market` stays per-market and negative-only, because that IS
+        # the shape of its stop: `any(value <= -max_market_loss for value in
+        # realized_by_market.values())`.
+        net = 0.0
         for book in books.values():
             pairs = min(book["lq"], book["sq"])
             if pairs <= 0:
@@ -689,9 +704,11 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
             lc = book["lc"] / book["lq"] * pairs if book["lq"] else Decimal(0)
             sc = book["sc"] / book["sq"] * pairs if book["sq"] else Decimal(0)
             realised = float(pairs - lc - sc)
+            net += realised
             if realised < 0:
-                session_loss += -realised
                 worst_market = max(worst_market, -realised)
+        # A profitable day consumes none of the stop, never a negative bar.
+        session_loss = max(0.0, -net)
     except Exception:
         session_loss = worst_market = 0.0
     for label, used, cap in (("session loss", session_loss, session_cap),

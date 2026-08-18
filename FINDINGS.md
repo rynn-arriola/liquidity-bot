@@ -2679,3 +2679,37 @@ version of the regression test applied the order through a `ws` event, so the
 passed against the unfixed code. The collision has to be built by calling
 `_rest_reconcile` twice. (Two calls at one frozen clock reading also need
 distinct `tag`s, or the snapshot event id collides for an unrelated reason.)
+
+## The dashboard's loss bar summed only losing markets, overstating by 4.6x
+
+Measured 2026-08-18T20:32Z. The bar read `$36.34 / $40 -- $3.66 left` on a day
+whose net realised P&L was **-$7.88**. Roughly $32 was actually left.
+
+The accumulator kept only the negative markets:
+
+```python
+if realised < 0:
+    session_loss += -realised     # winners discarded
+```
+
+That is a gross loss total. No stop reads that number.
+`runtime_safety.blockers` trips on `-realized_pnl >= max_session_loss`, which
+is **net** -- winners included. Fixed to accumulate net and clamp at zero, so
+a profitable day consumes none of the stop.
+
+Two things worth carrying forward:
+
+- **It erred toward looking dangerous**, not safe. The 2026-08-16 lesson in
+  `CLAUDE.md` is about prose making the bot look ~20x safer than it was; this
+  is the mirror image, and it is not harmless either. A bar reading "$3.66
+  from a hard stop" is an instruction to shut a healthy bot off by hand, and
+  hand-closing while it runs debits the real stops with a phantom loss.
+- **The same screen already disagreed with itself.** The header read
+  `TODAY -7.88` from the trustworthy equity path while the bar read `$36.34`
+  from this one. Two numbers for one quantity on one screen, and neither was
+  labelled as a different quantity. When a dashboard shows the same thing
+  twice, make them the same computation or name them differently.
+
+`worst market` is deliberately left negative-only and per-market, because that
+is the shape of its own stop: `any(value <= -max_market_loss for value in
+realized_by_market.values())`.

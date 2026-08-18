@@ -2522,3 +2522,42 @@ Compare against a busy hour before concluding anything from one reading.
 thinner margins in exchange, against a measured -6.1c cost per crossed pair and
 95% of pairs completing by crossing. Not obviously a good trade, and not to be
 changed during a measurement week.
+
+## Reward-by-day reconciles to cash within $0.24 -- but the timezone is unverified
+
+Measured 2026-08-18T03:30Z, two independent venue sources:
+
+```
+sum of PAID rows by earning date (/v1/incentives/earnings)   140.94
+cash actually received (transfer history)                    140.70
+difference                                                    +0.24   (0.17%)
+```
+
+**Totals are trustworthy.** We read the venue's own `date` field rather than
+inferring one, and the incentives ledger agrees with the money that arrived.
+
+**Per-day figures are good to about +/-$0.25, not to the cent.** Observed
+directly: a $5.83 payout against a $6.02 earning row, and $42.77 against
+$42.58 -- each off by $0.19 in opposite directions, cancelling exactly. That is
+reward shifting across a day boundary.
+
+**What this test CANNOT detect: a uniform timezone shift.** If the venue dates
+reward in ET and it is bucketed as UTC, every row moves 4-5 hours while the
+total is unchanged, so this reconciliation still passes with every daily row
+misaligned. That matters precisely for subtracting a day's trading loss from
+the same day's reward -- the margins would take the wrong day's losses.
+
+**The test that settles it:** find a market whose kickoff sits near midnight
+UTC. Reward accrues in the hours before kickoff, so a game at 23:30Z on the
+16th landing on the 16th means UTC; landing on the 17th means a shifted zone.
+One query against the per-market breakdown plus the market's kickoff time.
+
+**Do not use the daily P&L table for decisions until that is answered.** Totals
+are fine now; the daily split is not yet proven.
+
+### Also settled 2026-08-18: pending reward does pay
+
+Every pending dollar cleared. `140.94 received / 0.00 pending`, up from
+`91.94 / 48.76` hours earlier. The earlier worry that pending might never
+convert was unfounded -- payouts arrive in bursts, days after the earning date,
+and one reading of the table says nothing about whether they have stalled.

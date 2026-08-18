@@ -503,7 +503,13 @@ async def main() -> int:
         absent = conn.execute("SELECT COUNT(*) FROM execution_orders "
                               "WHERE status='UNKNOWN_ABSENT'").fetchone()[0]
         unresolved = conn.execute("SELECT COUNT(*) FROM execution_intents "
-                                  "WHERE state NOT IN ('RECONCILED')").fetchone()[0]
+                                  # FAILED is resolved, not outstanding. A
+                                  # failed intent is a mutation we know did
+                                  # not happen; counting it as unresolved
+                                  # reported a permanent phantom that no
+                                  # action could ever clear.
+                                  "WHERE state NOT IN ('RECONCILED','FAILED')"
+                                  ).fetchone()[0]
         fills_all = conn.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0]
         fills_today = conn.execute(
             "SELECT COUNT(*) FROM execution_fills WHERE event_at LIKE ?",

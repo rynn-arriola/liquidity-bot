@@ -172,6 +172,18 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
         colour, icon = GREEN, "\U0001f7e2"
         state = "WORKING"
 
+    def signed(value):
+        # Discord renders ANSI only inside an ```ansi fence, so coloured
+        # numbers must live in a code block rather than the description. The
+        # sign is kept alongside the colour: colour gives direction at a
+        # glance, the sign keeps it unambiguous if the block is copied or read
+        # somewhere ANSI does not render.
+        if value is None:
+            return "n/a"
+        number = float(value)
+        code = "32" if number >= 0 else "31"
+        return "\u001b[0;{}m{:+,.2f}\u001b[0m".format(code, number)
+
     def money(value):
         return "n/a" if value is None else "${:+,.2f}".format(float(value))
 
@@ -190,8 +202,8 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
 
     description = (
         "## {} {}\n".format(icon, state)
-        + "**TODAY {}**   \u00b7   TOTAL {}\n".format(
-            money(today_pnl), money(total_pnl))
+        + "```ansi\nTODAY {}     TOTAL {}\n```".format(
+            signed(today_pnl), signed(total_pnl))
         + "_up {}_\n".format(uptime))
     if total_pnl is not None:
         description += ("> _TOTAL is account-wide since inception, so it "
@@ -220,8 +232,8 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
                      meter(headroom, session_cap), plain(headroom))
                  + "stop at   {}\n".format(plain(session_cap)))
 
-    reward_text = (row("paid", plain(reward_paid))
-                   + row("pending", plain(reward_pending)))
+    reward_text = (row("paid", signed(reward_paid))
+                   + row("pending", signed(reward_pending)))
 
     fence = "```text\n"
     fields = [

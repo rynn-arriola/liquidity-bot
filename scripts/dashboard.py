@@ -124,6 +124,61 @@ def _uptime() -> str:
     return "-"
 
 
+def _runner_started_at(now: datetime) -> datetime | None:
+    """When the CURRENT runner process started, or None if it is not running.
+
+    Everything in the log before this belongs to a process that is already
+    dead. `commissioning.log` is append-only across restarts, so a fixed
+    line window silently mixes the two.
+    """
+
+    try:
+        out = subprocess.run(["ps", "-eo", "etimes,args"], capture_output=True,
+                             text=True, timeout=20).stdout
+    except Exception:
+        return None
+    for row in out.splitlines():
+        if "liquidity_bot.live_commissioning" not in row or "grep" in row:
+            continue
+        try:
+            return now - timedelta(seconds=int(row.split(None, 1)[0]))
+        except Exception:
+            return None
+    return None
+
+
+def _this_session(lines: list[str], since: datetime | None) -> list[str]:
+    """The tail of `lines` written by the runner that is running now.
+
+    Fixed windows like `lines[-400:]` read the previous session as current,
+    and every health check built on one lied after the 2026-08-18 restart:
+    a crash three hours dead still showed `risk stops 1`, and the stalled
+    activity of the process that died showed as `STALLED` on a runner that
+    was six seconds old and perfectly healthy. A dashboard that cries wolf
+    about a fixed problem is worse than no dashboard.
+
+    Scans backwards for the first timestamp older than the process start and
+    cuts there, rather than filtering on timestamps directly -- the lines
+    that matter most here are the untimestamped ones (the JSON stop block
+    carries `stop_reason` and no `at=`), and filtering would drop them and
+    turn a false alarm into a permanently silent check.
+    """
+
+    if since is None:
+        return lines
+    for index in range(len(lines) - 1, -1, -1):
+        found = re.search(r"at=(\S+)", lines[index])
+        if not found:
+            continue
+        try:
+            stamp = datetime.fromisoformat(found.group(1))
+        except Exception:
+            continue
+        if stamp < since:
+            return lines[index + 1:]
+    return lines
+
+
 def _last_action_age(now: datetime, lines: list[str]) -> float | None:
     for row in reversed(lines):
         if "[action]" not in row:
@@ -418,8 +473,10 @@ async def main() -> int:
         health.append(("bad", "runner", paint("r", "NOT RUNNING")))
         failures.append("runner down")
 
-    age = _last_action_age(now, lines)
-    places = sum(1 for row in lines[-2000:] if "PLACE_POST_ONLY" in row)
+    # Scoped to the running process. See `_this_session`.
+    session = _this_session(lines, _runner_started_at(now))
+    age = _last_action_age(now, session)
+    places = sum(1 for row in session if "PLACE_POST_ONLY" in row)
     if age is None:
         health.append(("warn", "activity", "no [action] in the recent log"))
     elif age > STALE_ACTION_SECONDS:
@@ -445,7 +502,7 @@ async def main() -> int:
     except Exception as exc:
         health.append(("warn", "ledger", f"unreadable: {type(exc).__name__}"))
 
-    blocked = sum(1 for row in lines[-400:] if "rotation blocked" in row)
+    blocked = sum(1 for row in session if "rotation blocked" in row)
     if absent > 0:
         health.append(("bad", "rotation",
                        paint("r", f"{absent} orders UNKNOWN_ABSENT \u2014 BLOCKED")))
@@ -456,7 +513,7 @@ async def main() -> int:
         health.append(("ok", "rotation",
                        f"unblocked \u00b7 {absent} absent \u00b7 {unresolved} unresolved"))
 
-    stops = sum(1 for row in lines[-400:] if "risk_stop:" in row)
+    stops = sum(1 for row in session if "risk_stop:" in row)
     health.append(("warn" if stops else "ok", "risk stops",
                    f"{stops} in the recent log" if stops else "none"))
 

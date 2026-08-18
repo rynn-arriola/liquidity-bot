@@ -29,6 +29,85 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-18 (second incident)
+
+### A cancel that 500s is never re-issued, and the stuck intent then blocks the flatten
+
+**Symptom.** The bot stopped at 2026-08-18T15:33:01Z, ~3.5h after the morning
+restart, and did **not** come back:
+
+```
+"stop_reason": "risk_stop:critical failure: order mutation unresolved for more than 60 seconds"
+"flat": false
+[supervisor] process exited without proving flat; not restarting
+```
+
+Same stop reason as the morning outage, **different mechanism**. The morning
+fix (`ad58bc2`) does not address this one and was never going to.
+
+**Mechanism.** A cancel got an HTTP 500 from the venue:
+
+```
+intent   cancel-897243c8385746b49354482ba0637b80   operation=CANCEL
+order    BYRYM21VADK0   market aec-itfme-agubadaleleg-lorgagrocval-2026-08-18
+state    UNCERTAIN      at 15:16:52
+error    POST /v1/order/BYRYM21VADK0/cancel outcome uncertain:
+         InternalServerError: The server was unable to process your request.
+```
+
+`live_orders.cancel` catches the failure, moves the intent to `UNCERTAIN` and
+raises `OrderOutcomeUncertain`. `UNCERTAIN` is an unresolved state, and a
+CANCEL intent resolves **only** on a terminal order state -- correctly, since
+an accepted HTTP response is not cancellation confirmation:
+
+```sql
+UPDATE execution_intents SET state='RECONCILED' ... WHERE exchange_order_id=?
+  AND state IN ('SUBMITTING','ACKNOWLEDGED','UNCERTAIN')
+  AND (operation='PLACE' OR (operation IN ('CANCEL','MODIFY') AND ? IN
+       ('FILLED','CANCELED','CANCELLED','REJECTED','EXPIRED')))
+```
+
+The reconcile re-read the order every 2s and the venue kept answering
+`OPEN` -- the ledger row's `received_at` is 15:32:53, sixteen minutes after
+the 500, still `status=OPEN`. **The cancel genuinely did not take effect, and
+nothing ever re-issued it.** There is no retry path for an `UNCERTAIN` cancel;
+the only thing that resolves it is a terminal state that will never arrive on
+its own.
+
+So the intent stayed unresolved, the 60s critical stop fired, and then the
+same intent blocked its own market's flatten -- `live_orders` refuses to act
+while `market_has_unresolved_intent` is true -- so shutdown could not prove
+flat and exited 3, which the supervisor never restarts. The bot was down until
+the operator noticed.
+
+The position was real: `BYRYBVSGRDK5` had **FILLED 5/5 at 0.56** in the same
+market at 15:14:51, and the shutdown log shows it parked for four minutes
+(`decision=parked position=5.0000 seconds_to_kickoff=1014`) because the
+pre-kickoff window had not opened.
+
+**Cost.** ~3h of not quoting, and the operator closed the position by hand.
+Checked at the venue afterwards, both orders were terminal
+(`BYRYBVSGRDK5` FILLED, `BYRYM21VADK0` CANCELED) and the account was flat --
+0 open orders, 0 non-zero positions -- so a restart self-heals: the startup
+reconcile re-reads by exchange id and a terminal state resolves the intent.
+
+**NOT FIXED.** The restart clears this instance; the defect remains and will
+recur on the next 500 against a cancel, which is not rare -- three separate
+venue 500s are already recorded in this file for 2026-08-16/17.
+
+**Fix shape.** When a CANCEL intent is `UNCERTAIN` and the venue confirms the
+order is still in an active state, re-issue the cancel. Confirmed-active is
+positive evidence that the cancel did not land, so retrying assumes nothing --
+it is the opposite of reading absence as cancellation, and weakens no
+invariant. The awkward part is that `live_orders.cancel` refuses while
+`market_has_unresolved_intent` is true, which is exactly the state being
+repaired, so the retry has to supersede the stuck intent rather than open a
+second one alongside it. That is the ownership path, so it needs real tests --
+including one proving a cancel is **not** retried while the order's state is
+unknown, only while it is confirmed active.
+
+---
+
 ## 2026-08-18
 
 ### One unreadable order hid every order behind it, and killed the session

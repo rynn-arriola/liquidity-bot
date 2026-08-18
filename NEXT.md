@@ -1,5 +1,30 @@
 # Next session — outstanding fixes
 
+## 00. START HERE (2026-08-18, second incident): retry a cancel that 500s
+
+**Do this before the per-market item below.** It is a smaller change and it
+is the one that actually took the bot down twice in a day. Full write-up in
+`BUGFIXES.md` under "second incident".
+
+A cancel got an HTTP 500 at 15:16:52Z. `live_orders.cancel` moved the intent
+to `UNCERTAIN` and nothing ever re-issued it. A CANCEL intent resolves only on
+a terminal order state -- correctly -- so it sat unresolved while the venue
+kept answering `OPEN` for sixteen minutes. The 60s critical stop fired, and
+the same intent then blocked its own market's flatten, so shutdown could not
+prove flat and exited 3, which never restarts.
+
+**Fix shape.** When a CANCEL intent is `UNCERTAIN` and the venue confirms the
+order is still active, re-issue the cancel. Confirmed-active is positive
+evidence the cancel did not land, so this weakens no invariant -- it is the
+opposite of reading absence as cancellation. The awkward part: `cancel()`
+refuses while `market_has_unresolved_intent` is true, which is the state being
+repaired, so the retry must supersede the stuck intent rather than open a
+second one beside it.
+
+Needs a test proving a cancel is **not** retried while the order's state is
+unknown -- only while it is confirmed active -- and one proving the retry
+resolves the original intent rather than leaving two.
+
 ## 00. START HERE (2026-08-18): make the unresolved-mutation stop per-market
 
 **The bot is RUNNING.** The 2026-08-17 item that stood here -- stuck

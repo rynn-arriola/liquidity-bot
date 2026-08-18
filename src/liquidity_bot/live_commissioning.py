@@ -1857,13 +1857,30 @@ class CommissioningRunner:
         return start is not None and start <= self._now()
 
     def _awaiting_rotation(self) -> int:
-        """Idle slots held only because their market has already started."""
+        """Idle slots held only because their market has already started.
 
-        return sum(
-            1 for slug in self.active_slugs
-            if not self.ledger.working_orders(slug)
-            and not self._is_retired(slug)
-            and self._has_kicked_off(slug))
+        Never raises, for the same reason `_idle_market_reasons` does not:
+        this is reporting, and the summary is sent from the shutdown loop
+        where an exception reads as a failure to prove flat -- which exits 3,
+        which the supervisor never restarts. A reporting metric must not be
+        able to keep a flat process from stopping cleanly.
+
+        Counted per market rather than in one comprehension so that one
+        market that cannot be inspected costs only its own row. Undercounting
+        here is the safe direction: it moves a slot into `SLOTS NOT WORKING`,
+        which over-reports a fault rather than hiding one.
+        """
+
+        waiting = 0
+        for slug in self.active_slugs:
+            try:
+                if (not self.ledger.working_orders(slug)
+                        and not self._is_retired(slug)
+                        and self._has_kicked_off(slug)):
+                    waiting += 1
+            except Exception:
+                continue
+        return waiting
 
     def _idle_market_reasons(self) -> tuple[tuple[str, int], ...]:
         """Why each managed market is not resting an order, most common first.

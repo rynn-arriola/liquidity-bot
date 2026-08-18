@@ -3537,6 +3537,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_the_summary_survives_a_market_it_cannot_inspect(self):
+        """A reporting metric must never keep a flat process from stopping.
+
+        `_send_summary` is called from the shutdown loop, where an exception
+        reads as a failure to prove flat -- which exits 3, the one code the
+        supervisor never restarts. `_idle_market_reasons` has guarded each
+        market for this reason since it was written; `_awaiting_rotation` was
+        added on 2026-08-18 without the same guard, which would have made a
+        single unreadable market able to strand the bot.
+        """
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+
+        boom = RuntimeError("market state is unreadable")
+        original = runner._is_retired
+
+        def explode(slug):
+            if slug == "market-two":
+                raise boom
+            return original(slug)
+
+        runner._is_retired = explode
+
+        # Must not raise, and must still report the market it could read.
+        await runner._send_summary(runner._now())
+
+        self.assertTrue(notifier.payloads, "the summary must still be sent")
+        slots = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
+                 if "Slots" in f["name"]][0]["value"]
+        self.assertIn("SLOTS NOT WORKING", slots)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_recovery_spans_every_market_that_holds_state(self):
         """Observed 2026-08-14T23:03Z: down until an operator noticed.
 

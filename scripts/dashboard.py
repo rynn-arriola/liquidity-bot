@@ -146,16 +146,141 @@ def _money(value) -> Decimal:
         return Decimal(0)
 
 
+
+def _signed(value) -> str:
+    """Green above zero, red below. The only two colours that matter here."""
+    if value is None:
+        return paint("d", "       n/a")
+    number = float(value)
+    return paint("g" if number >= 0 else "r", f"{number:+10,.2f}")
+
+
+def _pnl_strip(today, total) -> str:
+    left = "TODAY  " + _signed(today)
+    right = "TOTAL  " + _signed(total)
+    return left + " " * max(2, W - 6 - 17 - 17) + right
+
+
+def _today_trading(now) -> float:
+    """Realised trading P&L for today, matched-pair priced.
+
+    One YES plus one NO settles at exactly 1.0000, so a completed pair
+    realises `1.00 - paid` with no direction or settlement data needed.
+    Returns a LOSS as a positive number, so the caller subtracts it.
+    """
+
+    total = 0.0
+    try:
+        conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        books = collections.defaultdict(
+            lambda: {"lq": Decimal(0), "lc": Decimal(0),
+                     "sq": Decimal(0), "sc": Decimal(0)})
+        for slug, intent, price, qty in conn.execute(
+                "SELECT market_slug,intent,price,qty FROM execution_fills "
+                "WHERE event_at LIKE ?", (now.strftime("%Y-%m-%d") + "%",)):
+            q, p_ = Decimal(str(qty)), Decimal(str(price))
+            book = books[slug]
+            if intent == "ORDER_INTENT_BUY_LONG":
+                book["lq"] += q
+                book["lc"] += q * p_
+            elif intent == "ORDER_INTENT_BUY_SHORT":
+                book["sq"] += q
+                book["sc"] += q * p_
+        conn.close()
+        for book in books.values():
+            pairs = min(book["lq"], book["sq"])
+            if pairs <= 0:
+                continue
+            lc = book["lc"] / book["lq"] * pairs if book["lq"] else Decimal(0)
+            sc = book["sc"] / book["sq"] * pairs if book["sq"] else Decimal(0)
+            total += -float(pairs - lc - sc)
+    except Exception:
+        return 0.0
+    return total
+
+
+FUNDING_CACHE = Path("data/funding_cache.json")
+
+
+async def _funding(gateway) -> tuple[Decimal, Decimal, bool]:
+    """Net funding in and reward cash out. Cached, because it barely changes.
+
+    A truncated walk is not an approximation, it is a wrong answer: eight pages
+    found $400 of $4,408 and produced a "net +41.45" for an account nowhere
+    near it. So a walk is used only when it reaches the end of history, and the
+    result is cached; otherwise the last good cached value is reused and the
+    caller is told whether it is trustworthy.
+    """
+
+    import json
+    cached = None
+    if FUNDING_CACHE.exists():
+        try:
+            raw = json.loads(FUNDING_CACHE.read_text())
+            cached = (Decimal(raw["funding"]), Decimal(raw["reward_cash"]))
+        except Exception:
+            cached = None
+
+    deposits = withdrawals = credits = reward_cash = Decimal(0)
+    cursor, complete = None, False
+    try:
+        for _ in range(40):
+            params = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            raw = await gateway._call(
+                "GET /v1/portfolio/activities",
+                lambda params=params: gateway.client.portfolio.activities(params))
+            for activity in (raw.get("activities") or []):
+                change = activity.get("accountBalanceChange")
+                if not isinstance(change, dict):
+                    continue
+                if "COMPLETED" not in str(change.get("status", "")):
+                    continue
+                amount = Decimal(str((change.get("amount") or {}).get("value") or 0))
+                text = str(change.get("description", "")).lower()
+                if "reward" in text:
+                    reward_cash += amount
+                elif "withdraw" in text:
+                    withdrawals += amount
+                elif "deposit" in text:
+                    deposits += amount
+                else:
+                    credits += amount
+            cursor = str(raw.get("nextCursor") or "").strip() or None
+            if not cursor or raw.get("eof"):
+                complete = True
+                break
+    except Exception:
+        complete = False
+
+    if complete:
+        funding = deposits - withdrawals + credits
+        try:
+            FUNDING_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            FUNDING_CACHE.write_text(json.dumps(
+                {"funding": str(funding), "reward_cash": str(reward_cash)}))
+        except Exception:
+            pass
+        return funding, reward_cash, True
+    if cached:
+        return cached[0], cached[1], True
+    return Decimal(0), Decimal(0), False
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--markets", action="store_true")
     parser.add_argument("--pnl", action="store_true")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--no-color", action="store_true")
+    # Discord renders ANSI inside an ```ansi fence, and piping to it
+    # is not a tty, so colour has to be forced rather than detected.
+    parser.add_argument("--color", action="store_true")
     args = parser.parse_args()
     if args.all:
         args.markets = args.pnl = True
-    if args.no_color or not sys.stdout.isatty():
+    if args.no_color or (not args.color and not sys.stdout.isatty()):
         for key in C:
             C[key] = ""
 
@@ -240,6 +365,20 @@ async def main() -> int:
     except Exception as exc:
         health.append(("warn", "venue", f"unreachable: {type(exc).__name__}"))
 
+    today_pnl = total_pnl = None
+    if venue_ok:
+        try:
+            reward_today = Decimal(0)
+            for row in await gateway.fetch_earnings():
+                if str(getattr(row, "date", ""))[:10] == now.strftime("%Y-%m-%d"):
+                    reward_today += Decimal(str(getattr(row, "reward", 0) or 0))
+            funding, _cash, trusted = await _funding(gateway)
+            if trusted:
+                total_pnl = equity - funding
+            today_pnl = reward_today - Decimal(str(_today_trading(now)))
+        except Exception:
+            pass
+
     state = ("\u2715 NOT WORKING \u00b7 " + ", ".join(failures)) if failures \
         else "\u25cf WORKING"
     colour = "r" if failures else "g"
@@ -249,6 +388,8 @@ async def main() -> int:
           + now.strftime("%Y-%m-%d %H:%MZ") + "  \u2551")
     print("\u2551  " + paint(colour, state).ljust(W - 6 + len(paint(colour, "")) )
           + "  \u2551")
+    print("╠" + "═" * (W - 2) + "╣")
+    print("║  " + _pnl_strip(today_pnl, total_pnl) + "  ║")
     print("\u255a" + "\u2550" * (W - 2) + "\u255d")
     print("")
     for level, name, detail in sorted(
@@ -382,16 +523,22 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
 
 
 async def _pnl(now, gateway, equity) -> None:
-    """Daily reward and trading, plus never-reset totals.
+    """Daily reward and trading, week subtotals, and never-reset totals.
 
     Reward per day comes from the venue by EARNING date, so it is recoverable
-    historically. Trading per day is not: it needs equity at each past
-    midnight, which cannot be queried retroactively, so days before the first
-    snapshot print `n/a` rather than a fabricated number. From the first
-    snapshot onward it is exact.
+    historically. Trading per day is not -- it needs equity at each past
+    midnight, which cannot be queried retroactively -- so days before the first
+    snapshot print `n/a` rather than a fabricated number.
+
+    Two caveats live in the footer rather than in a comment, because they change
+    how the rows should be read: daily figures are good to about +/-$0.25 (reward
+    drifts across day boundaries), and the venue's day boundary has not been
+    proven to be UTC. Week subtotals are immune to both.
     """
 
-    daily: dict[str, dict[str, Decimal]] = collections.defaultdict(
+    import json
+
+    daily = collections.defaultdict(
         lambda: {"paid": Decimal(0), "pending": Decimal(0)})
     try:
         for row in await gateway.fetch_earnings():
@@ -408,61 +555,94 @@ async def _pnl(now, gateway, equity) -> None:
         print(paint("y", f"  reward history unavailable: {type(exc).__name__}"))
         return
 
-    snaps: dict[str, Decimal] = {}
+    # Equity at each past midnight, from the appended snapshot series. Only
+    # days with BOTH ends present can be priced; the rest stay n/a.
+    equity_by_day: dict[str, Decimal] = {}
     path = Path("data/accounting_snapshots.json")
     if path.exists():
         try:
-            import json
             for entry in json.loads(path.read_text()):
-                snaps[str(entry.get("at", ""))[:10]] = Decimal(
-                    str(entry.get("equity", "0")))
+                day = str(entry.get("at", ""))[:10]
+                equity_by_day[day] = Decimal(str(entry.get("equity", "0")))
         except Exception:
-            snaps = {}
+            equity_by_day = {}
 
     days = sorted(d for d in daily if d >= "2026-08-10")
     if not days:
         return
-    print(box_top("DAILY P&L"))
-    print(line(paint("d", "day              paid   pending    trading      net")))
-    weeks: dict[str, list[str]] = collections.OrderedDict()
-    for day in days:
-        stamp = datetime.strptime(day, "%Y-%m-%d")
-        monday = (stamp - timedelta(days=stamp.weekday())).strftime("%Y-%m-%d")
-        weeks.setdefault(monday, []).append(day)
+    start = datetime.strptime(days[0], "%Y-%m-%d")
+    start -= timedelta(days=start.weekday())
+    span = [(start + timedelta(days=n)).strftime("%Y-%m-%d")
+            for n in range((now.date() - start.date()).days + 1)]
 
-    for monday, group in weeks.items():
-        print(rule("wk " + monday[5:]))
-        totals = {"paid": Decimal(0), "pending": Decimal(0)}
-        for day in group:
-            stamp = datetime.strptime(day, "%Y-%m-%d")
-            paid = daily[day]["paid"]
-            pending = daily[day]["pending"]
-            totals["paid"] += paid
-            totals["pending"] += pending
-            mark = dot("ok") if paid and not pending else (
-                dot("warn") if pending else dot("idle"))
-            note = ("pending" if pending else
-                    ("paid" if paid else "no activity"))
-            print(line(f"{stamp.strftime('%a %m-%d')}  "
-                       f"{float(paid):>8.2f}  {float(pending):>8.2f}  "
-                       f"{'n/a':>9}  {'n/a':>7}   {mark} {paint('d', note)}"))
-        print(rule())
-        print(line(f"{'week':<10}{float(totals['paid']):>10.2f}  "
-                   f"{float(totals['pending']):>8.2f}"))
-    print(box_bottom())
-    print("")
 
-    paid_total = sum(v["paid"] for v in daily.values())
-    pending_total = sum(v["pending"] for v in daily.values())
+    # Funding: the only term that needs a history walk, so it is confined to
+    # --pnl and bounded at eight pages (measured enough to reach every deposit).
+    # MUST reach eof. An eight-page walk found only the most recent deposit
+    # ($400 of $4,408) and produced a "net +41.45" for an account that is
+    # nowhere near it. A partial funding total does not make the derived P&L
+    # approximate, it makes it wrong, so an incomplete walk prints nothing
+    # derived at all.
+    deposits = withdrawals = credits = cash_reward = Decimal(0)
+    cursor = None
+    complete = False
+    try:
+        for _ in range(30):
+            params = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            raw = await gateway._call(
+                "GET /v1/portfolio/activities",
+                lambda params=params: gateway.client.portfolio.activities(params))
+            for activity in (raw.get("activities") or []):
+                change = activity.get("accountBalanceChange")
+                if not isinstance(change, dict):
+                    continue
+                if "COMPLETED" not in str(change.get("status", "")):
+                    continue
+                amount = Decimal(str((change.get("amount") or {}).get("value") or 0))
+                text = str(change.get("description", "")).lower()
+                if "reward" in text:
+                    cash_reward += amount
+                elif "withdraw" in text:
+                    withdrawals += amount
+                elif "deposit" in text:
+                    deposits += amount
+                else:
+                    credits += amount
+            cursor = str(raw.get("nextCursor") or "").strip() or None
+            if not cursor or raw.get("eof"):
+                complete = True
+                break
+    except Exception:
+        complete = False
+
+    funding = deposits - withdrawals + credits
+    trading_pnl = equity - funding - cash_reward
     print(box_top("TOTALS"))
-    print(line(f"{'equity now':<26}{float(equity):>12,.2f}"))
-    print(line(f"{'reward received (cash)':<26}{float(paid_total):>12,.2f}  "
+    print(line(f"{'equity now':<28}{float(equity):>12,.2f}"))
+    print(line(f"{'net funding in':<28}{float(funding):>12,.2f}  "
+               + paint("d", f"in {float(deposits):,.0f} · out "
+                            f"{float(withdrawals):,.0f}")))
+    print(line(f"{'reward received (cash)':<28}{float(grand['paid']):>12,.2f}  "
                + dot("ok")))
-    print(line(f"{'reward pending':<26}{float(pending_total):>12,.2f}  "
+    print(line(f"{'reward still pending':<28}{float(grand['pending']):>12,.2f}  "
                + dot("warn")))
-    print(line(paint("d", "  trading needs the funding history; "
-                          "run scripts/accounting.py")))
+    if complete:
+        print(line(f"{'trading':<28}{float(trading_pnl):>12,.2f}"))
+        print(rule())
+        on_cash = equity - funding
+        print(line(paint("b", f"{'net on cash received':<28}"
+                              f"{float(on_cash):>12,.2f}")))
+        print(line(paint("b", f"{'net if all pending pays':<28}"
+                              f"{float(on_cash + grand['pending']):>12,.2f}")))
+    else:
+        print(rule())
+        print(line(paint("y", "funding history incomplete — trading and net")))
+        print(line(paint("y", "suppressed rather than shown wrong")))
     print(box_bottom())
+    print(paint("d", "  daily rows +/-$0.25; venue day boundary unverified — "
+                     "week subtotals are immune to both"))
 
 
 if __name__ == "__main__":

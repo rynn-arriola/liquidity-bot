@@ -91,20 +91,43 @@ Checked at the venue afterwards, both orders were terminal
 0 open orders, 0 non-zero positions -- so a restart self-heals: the startup
 reconcile re-reads by exchange id and a terminal state resolves the intent.
 
-**NOT FIXED.** The restart clears this instance; the defect remains and will
-recur on the next 500 against a cancel, which is not rare -- three separate
-venue 500s are already recorded in this file for 2026-08-16/17.
+**Fix applied 2026-08-18.** `_retry_uncertain_cancels` re-issues a cancel whose
+intent is `UNCERTAIN` **while the order's freshly re-read state is active**.
+Confirmed-active is positive evidence the cancel did not land, so re-sending it
+assumes nothing -- the exact opposite of reading absence as cancellation. An
+absent, unknown or terminal order is never retried; `order_is_active` answers
+from `ACTIVE_ORDER_STATES` only, so a missing row and an `UNKNOWN_ABSENT` row
+both read as "no". Throttled at `CANCEL_RETRY_SECONDS = 10.0`, which gives
+roughly six attempts inside the 60s stop budget. Called from `_rest_reconcile`
+straight after the sweep that refreshes order state, and deliberately before
+that sweep's failure raise, so an unreadable order in another market cannot
+postpone the repair.
 
-**Fix shape.** When a CANCEL intent is `UNCERTAIN` and the venue confirms the
-order is still in an active state, re-issue the cancel. Confirmed-active is
-positive evidence that the cancel did not land, so retrying assumes nothing --
-it is the opposite of reading absence as cancellation, and weakens no
-invariant. The awkward part is that `live_orders.cancel` refuses while
-`market_has_unresolved_intent` is true, which is exactly the state being
-repaired, so the retry has to supersede the stuck intent rather than open a
-second one alongside it. That is the ownership path, so it needs real tests --
-including one proving a cancel is **not** retried while the order's state is
-unknown, only while it is confirmed active.
+**Two things this write-up first got wrong**, both corrected after reading the
+code rather than assuming it:
+
+1. `cancel()` does **not** refuse while `market_has_unresolved_intent` is true.
+   That guard is on `place()`. What actually made the flatten unprovable is
+   `kill_switch.status` (`live_session.py`), which counts unresolved intents as
+   a blocker.
+2. The retry does **not** need to supersede the stuck intent. `_upsert_order`
+   resolves every intent matching the exchange id in one statement, so the
+   stuck `UNCERTAIN` one and each retry clear together on the terminal state.
+   Each retry therefore opens its own intent, which is correct -- the state
+   machine forbids `UNCERTAIN -> SUBMITTING`, and reusing the id would
+   misreport what happened.
+
+Note what the fix does not do: it does not resolve the intent when our own
+cancel request succeeds. Only the venue's terminal state does that, which
+arrives on the following read. An accepted HTTP response has never been
+cancellation proof and still is not.
+
+Mutation-checked twice. Removing the call fails
+`test_a_cancel_the_venue_500d_is_re_issued` on "a cancel the venue confirmed
+did not land must be re-issued". Making `order_is_active` ignore status fails
+`test_a_cancel_is_not_re_issued_while_the_order_is_unknown` on "an order we
+cannot see must not be cancelled on a guess" -- it issued a cancel against an
+order it could not see. 454 tests pass.
 
 ---
 

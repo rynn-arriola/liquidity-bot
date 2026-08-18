@@ -194,6 +194,14 @@ class CommissioningRunner:
     # retry backoff on the critical path of every reconcile.
     ABSENT_RECHECK_SECONDS = 60.0
 
+    # How often to re-issue a cancel the venue has confirmed did not land.
+    # Well under `unresolved_mutation_timeout_seconds`, because the whole point
+    # is to resolve the intent before that stop fires: at 10s the reconcile
+    # gets roughly six attempts inside a 60s budget. Not faster, because each
+    # attempt is a venue mutation sharing one 4 req/s governor with quoting,
+    # and a cancel that keeps failing will not start working in 2s.
+    CANCEL_RETRY_SECONDS = 10.0
+
     def __init__(
         self,
         client: Any,
@@ -260,6 +268,9 @@ class CommissioningRunner:
         self._quiet_alarm_sent = False
         # exchange_order_id -> when we last asked the venue about an absence.
         self._absent_asked_at: dict[str, datetime] = {}
+        # exchange_order_id -> when we last re-issued a cancel the venue had
+        # confirmed did not land. See `_retry_uncertain_cancels`.
+        self._cancel_retried_at: dict[str, datetime] = {}
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -724,6 +735,70 @@ class CommissioningRunner:
         self._earnings_by_status = totals
         self._earnings_observed_at = now
 
+    async def _retry_uncertain_cancels(self, now: datetime) -> None:
+        """Re-issue a cancel the venue has just confirmed did not land.
+
+        `cancel` moves its intent to `UNCERTAIN` when the request fails, and a
+        CANCEL intent resolves only on a terminal order state -- correctly,
+        since an accepted HTTP response is not cancellation confirmation. But
+        nothing ever re-sent the request, so a cancel that failed stayed failed
+        and its intent stayed unresolved for the rest of the session.
+
+        Measured 2026-08-18T15:16:52Z: `POST /v1/order/BYRYM21VADK0/cancel`
+        returned InternalServerError, the venue answered `OPEN` for the next
+        sixteen minutes, the 60s critical stop fired, and the same intent then
+        made its own market's flatten unprovable -- `kill_switch.status` counts
+        unresolved intents as a blocker -- so shutdown exited 3, which the
+        supervisor never restarts. One 500 cost about three hours.
+
+        Retried **only** while the order's freshly re-read state is active.
+        That is positive evidence the cancel did not take effect, so re-sending
+        it assumes nothing -- the exact opposite of reading absence as
+        cancellation. An absent, unknown or terminal order is never retried.
+
+        Each attempt opens a new intent, because the state machine does not
+        allow `UNCERTAIN -> SUBMITTING` and reusing the id would misreport what
+        happened. That is harmless: `_upsert_order` resolves every intent
+        matching the exchange id in one statement, so the stuck one and its
+        retries all clear together on the terminal state.
+        """
+
+        seen: set[str] = set()
+        for row in self.ledger.unresolved_intents():
+            if str(row["operation"]).upper() != "CANCEL":
+                continue
+            if str(row["state"]).upper() != "UNCERTAIN":
+                continue
+            exchange_id = str(row["exchange_order_id"] or "")
+            if not exchange_id:
+                continue
+            seen.add(exchange_id)
+            if not self.ledger.order_is_active(exchange_id):
+                continue
+            last = self._cancel_retried_at.get(exchange_id)
+            if (last is not None
+                    and (now - last).total_seconds() < self.CANCEL_RETRY_SECONDS):
+                continue
+            self._cancel_retried_at[exchange_id] = now
+            try:
+                await self.executor.cancel(
+                    client_order_id=str(row["client_order_id"]),
+                    exchange_order_id=exchange_id,
+                    market_slug=str(row["market_slug"]),
+                    now=now)
+                self._runtime_error_counts.pop("uncertain_cancel_retry", None)
+            except Exception as exc:
+                # Best-effort, like the absent sweep. A cancel the venue keeps
+                # refusing is already the failure being repaired, and letting
+                # it abort the reconcile would take every other market down
+                # with it. The critical stop remains the backstop.
+                await self._report_runtime_error("uncertain_cancel_retry", exc)
+        # Forget orders that are no longer stuck, so the throttle cannot grow
+        # without bound across a long session.
+        self._cancel_retried_at = {
+            key: at for key, at in self._cancel_retried_at.items()
+            if key in seen}
+
     async def _rest_reconcile(self, now: datetime, *, tag: str = "") -> None:
         """Re-read the whole account from REST and apply it to the ledger.
 
@@ -773,6 +848,11 @@ class CommissioningRunner:
             except Exception as exc:
                 reconcile_failures.append(
                     f"{exchange_id}: {type(exc).__name__}: {exc}")
+        # Deliberately before the raise below. The sweep above has just written
+        # the venue's current word on every order, which is the only thing that
+        # licenses re-issuing a cancel -- and an unreadable order in some other
+        # market must not postpone repairing this one.
+        await self._retry_uncertain_cancels(now)
         if reconcile_failures:
             raise AdapterError(
                 f"could not re-read {len(reconcile_failures)} working "

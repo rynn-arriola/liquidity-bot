@@ -1714,6 +1714,119 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def _uncertain_cancel(self, runner, client, *, venue_state):
+        """A cancel that failed, over an order the venue still lists."""
+
+        client.orders.rows["exchange-stuck"] = {
+            "id": "exchange-stuck",
+            "clientOrderId": "liquidity-stuck",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.60", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": venue_state,
+            "createTime": NOW.isoformat(),
+        }
+        runner.ledger.apply_order_event(
+            "ws", "the-order-itself",
+            OrderState(
+                client_order_id="liquidity-stuck",
+                exchange_order_id="exchange-stuck",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.60"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.ledger.prepare_intent(
+            "cancel-stuck", "CANCEL", "market-one", "liquidity-stuck",
+            {"orderId": "exchange-stuck", "marketSlug": "market-one"},
+            created_at=runner._now())
+        runner.ledger.transition_intent(
+            "cancel-stuck", "SUBMITTING", updated_at=runner._now())
+        runner.ledger.transition_intent(
+            "cancel-stuck", "UNCERTAIN", updated_at=runner._now(),
+            exchange_order_id="exchange-stuck",
+            error=("AdapterError: POST /v1/order/exchange-stuck/cancel outcome "
+                   "uncertain: InternalServerError"))
+
+    async def test_a_cancel_the_venue_500d_is_re_issued(self):
+        """The 2026-08-18 second outage.
+
+        `POST /v1/order/BYRYM21VADK0/cancel` returned InternalServerError. The
+        intent went UNCERTAIN, and a CANCEL intent resolves only on a terminal
+        order state -- correctly, since an HTTP response is not cancellation
+        confirmation. But nothing re-sent the request, so the venue answered
+        OPEN for sixteen minutes, the 60s critical stop fired, and the same
+        intent then made its own market's flatten unprovable, so shutdown
+        exited 3 and the supervisor never restarted. One 500 cost ~3 hours.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._uncertain_cancel(
+            runner, client, venue_state="ORDER_STATE_NEW")
+        self.assertEqual(len(runner.ledger.unresolved_intents()), 1)
+        before = len(client.orders.cancel_calls)
+
+        await runner._rest_reconcile(runner._now())
+
+        # Re-sent, because the venue had just confirmed the order still live.
+        self.assertTrue(
+            any("exchange-stuck" in str(call)
+                for call in client.orders.cancel_calls[before:]),
+            "a cancel the venue confirmed did not land must be re-issued")
+        # Not resolved yet, and that is the invariant: our own cancel request
+        # succeeding is not cancellation proof. Only the venue's terminal
+        # state clears a CANCEL intent, and that arrives on the next read.
+        self.assertTrue(runner.ledger.unresolved_intents())
+
+        # On that next read it does clear -- which is the whole point. The
+        # stuck intent and the retry resolve together, because _upsert_order
+        # resolves every intent matching the exchange id at once, so the
+        # critical stop stands down and the flatten becomes provable.
+        await runner._rest_reconcile(runner._now())
+        self.assertEqual(
+            [dict(row) for row in runner.ledger.unresolved_intents()], [],
+            "the venue's terminal state must clear the stuck cancel")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_cancel_is_not_re_issued_while_the_order_is_unknown(self):
+        """Only positive evidence licenses re-sending it.
+
+        "The venue confirmed the order is still live" justifies a retry. "We
+        cannot see the order" does not, and must never be allowed to read as
+        the same thing -- that is how absence gets treated as fact.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._uncertain_cancel(
+            runner, client, venue_state="ORDER_STATE_NEW")
+        # We have lost sight of it: not terminal, not active, just unknown.
+        runner.ledger.apply_order_snapshot(
+            "snapshot-without-it", [], as_of=runner._now(),
+            observed_at=runner._now(), complete=True)
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+        before = len(client.orders.cancel_calls)
+
+        await runner._retry_uncertain_cancels(runner._now())
+
+        self.assertEqual(
+            client.orders.cancel_calls[before:], [],
+            "an order we cannot see must not be cancelled on a guess")
+        # Still unresolved -- correctly, we have no evidence either way.
+        self.assertEqual(len(runner.ledger.unresolved_intents()), 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.
 

@@ -498,6 +498,21 @@ class ExecutionLedger:
                     "WHERE client_order_id=?", (client_id, old_id))
         return client_id
 
+    def order_is_active(self, exchange_order_id: str) -> bool:
+        """Does the venue's latest word on this order say it is still live?
+
+        Positive evidence only. `UNKNOWN_ABSENT` is not active and neither is
+        a missing row -- both mean we do not know, and the one caller of this
+        re-issues a cancel on the strength of the answer, so "we do not know"
+        must never read as "still there".
+        """
+
+        placeholders = ",".join("?" for _ in ACTIVE_ORDER_STATES)
+        params = (exchange_order_id, *tuple(sorted(ACTIVE_ORDER_STATES)))
+        return self.connection.execute(
+            f"SELECT 1 FROM execution_orders WHERE exchange_order_id=? "
+            f"AND status IN ({placeholders}) LIMIT 1", params).fetchone() is not None
+
     def market_has_unresolved_intent(self, market_slug: str) -> bool:
         placeholders = ",".join("?" for _ in UNRESOLVED_INTENTS)
         params = (market_slug, *tuple(sorted(UNRESOLVED_INTENTS)))

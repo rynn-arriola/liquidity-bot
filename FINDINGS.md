@@ -2561,3 +2561,48 @@ Every pending dollar cleared. `140.94 received / 0.00 pending`, up from
 `91.94 / 48.76` hours earlier. The earlier worry that pending might never
 convert was unfounded -- payouts arrive in bursts, days after the earning date,
 and one reading of the table says nothing about whether they have stalled.
+
+## A just-placed order can be accepted, then unreadable for over two minutes
+
+Measured 2026-08-18, from the incident in `BUGFIXES.md`. Order
+`BYK0EWMPMDK1` on `aec-setkameua-mikole-hovser-2026-08-18`:
+
+| time (UTC) | what the venue did |
+|---|---|
+| 08:23:20.662 | accepted the place and **returned an exchange id** |
+| 08:23:2x | omitted it from a **complete** open-orders snapshot |
+| 08:23:23 → 08:25:34 | `GET /v1/order/{id}` failed on every attempt, ~65 tries at 2s |
+| 08:25:34.451 | answered, reporting `event_at` 08:23:20.909 — it had existed all along |
+
+**An exchange id in hand is not proof the venue will serve state for it.**
+Read-your-writes does not hold here, and the gap can be minutes rather than the
+seconds every timeout in this repo is sized against. `apply_order_snapshot`
+already guards the snapshot half of this (`snapshot_at < item["event_at"]`),
+but that compares against the venue's *claimed* `as_of`, which this incident
+shows is not a barrier either — the order was omitted from a snapshot whose
+`as_of` was after its own event time.
+
+Consequences to design against, not around:
+
+- An unresolved intent is **not** rare-and-transient. Anything armed by one —
+  `unresolved_mutation_timeout_seconds` above all — must survive a multi-minute
+  venue stall or it will fire on a healthy, flat account.
+- **Do not raise the timeout to cover it.** It was 10s and cost an outage on
+  2026-08-17; it was raised to 60s and cost another on 2026-08-18. The measured
+  stall was 131s, so 60 → 180 buys one incident and re-arms the same gun. The
+  timeout is not the variable that matters.
+
+### Confirm latency is bimodal; the percentile that gets quoted is meaningless
+
+Same session, 642 orders, `event_at` → `received_at`:
+
+```
+p50 = 7.58s    p95 = 521.87s    p99 = 839.96s    max = 1017.71s
+```
+
+The p95 is not "a slow confirm" — the tail is dominated by `CANCELED` rows,
+where `event_at` is the venue's cancel time and `received_at` is when we next
+looked. Two different quantities share one column. **Do not size a timeout off
+this distribution**; the 2026-08-17 fix did exactly that (10s ≈ the then-p95)
+and armed the guard at the middle of normal operation. Measure the specific
+transition you are bounding, on rows you have confirmed mean what you think.

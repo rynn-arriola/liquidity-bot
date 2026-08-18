@@ -743,9 +743,40 @@ class CommissioningRunner:
         exchange_ids.update(
             row["exchange_order_id"] for row in self.ledger.unresolved_intents()
             if row["exchange_order_id"])
+        # Ask about every one before failing, rather than raising on the first
+        # id the venue will not answer for. `sorted()` makes which id that is
+        # deterministic rather than harmless: measured 2026-08-18, the first in
+        # sort order was a just-placed order the venue served no state for over
+        # two minutes, so the second -- which would have resolved on the first
+        # try -- was never asked at all. Both intents stayed unresolved, and
+        # the 60s critical stop is armed by exactly that, so the account-wide
+        # terminal stop fired and the bot was down for four hours.
+        #
+        # Strictness is deliberately unchanged: any failure still fails the
+        # whole reconcile, because a working order we could not re-read is
+        # live risk and nothing below may proceed as if it were known. What
+        # changes is that one unreadable order no longer hides the state of
+        # every other order in the account -- including the ones whose answer
+        # would have cleared the countdown.
+        reconcile_failures: list[str] = []
         for exchange_id in sorted(exchange_ids):
-            await self.executor.reconcile_order(
-                exchange_id, observed_at=now)
+            try:
+                await self.executor.reconcile_order(
+                    exchange_id, observed_at=now)
+            except RuntimeInvariantViolation:
+                # Terminal by contract, and never absorbed by handling that
+                # exists to survive transport failures. Nothing reachable from
+                # `reconcile_order` raises this today -- only this module and
+                # `live_session` raise it at all -- and this is what keeps that
+                # true if anything below ever starts to.
+                raise
+            except Exception as exc:
+                reconcile_failures.append(
+                    f"{exchange_id}: {type(exc).__name__}: {exc}")
+        if reconcile_failures:
+            raise AdapterError(
+                f"could not re-read {len(reconcile_failures)} working "
+                "order(s): " + "; ".join(reconcile_failures))
         # Then the orders we have already lost sight of. These are in neither
         # set above -- `UNKNOWN_ABSENT` is not a working state and their
         # intents are long since RECONCILED -- so before this nothing ever
@@ -3889,11 +3920,25 @@ class CommissioningRunner:
                     if now >= next_reconcile:
                         try:
                             await self._rest_reconcile(now)
-                        except Exception:
+                        except Exception as exc:
                             # Ambiguous state remains quarantined. Equity and
                             # stream freshness independently force shutdown if
                             # this cannot be reconciled promptly.
-                            pass
+                            #
+                            # Reported, not silent. This was a bare `pass`, and
+                            # on 2026-08-18 that destroyed the only evidence of
+                            # why the bot died: for the two minutes before the
+                            # critical stop, every 2s reconcile raised here and
+                            # left no trace, so commissioning.log jumps from the
+                            # last placement straight to the shutdown and what
+                            # `retrieve` actually raised is simply gone. This
+                            # loop is counting down to a terminal, account-wide
+                            # stop; it must not count down in the dark.
+                            await self._report_runtime_error(
+                                "unresolved_mutation_reconcile", exc)
+                        else:
+                            self._runtime_error_counts.pop(
+                                "unresolved_mutation_reconcile", None)
                         next_reconcile = now + timedelta(seconds=2)
                     now = self._now()
                     unresolved_age = self._oldest_unresolved_age_seconds(now)
@@ -4087,6 +4132,36 @@ def main() -> int:
         return 5
     if result.stop_reason.startswith("critical:"):
         return 4
+    if (result.stop_reason.startswith(
+            "risk_stop:critical failure: order mutation unresolved")
+            and "," not in result.stop_reason):
+        # Narrow by construction, and deliberately so. This is the only risk
+        # stop that is a venue-latency artefact rather than a statement about
+        # the account: measured 2026-08-18, the venue accepted a place, handed
+        # back an exchange id, and then served no state for it for 131 seconds
+        # while also omitting it from a complete open-orders snapshot. The
+        # intent cannot resolve during that window -- absence is never read as
+        # cancellation -- so the guard fires on a healthy, flat account.
+        #
+        # Raising the timeout is not the answer and has already been tried
+        # twice: 10s cost an outage on 2026-08-17, 60s cost another the next
+        # day. See FINDINGS.md. What actually costs the hours is that this
+        # exits 0, which the supervisor reads as a clean operator stop and
+        # never restarts -- three hours down on 2026-08-18 for a stall that
+        # cleared on its own in two minutes.
+        #
+        # Safe to restart for the same reason exit 5 already is: the process
+        # proved flat before returning (`result.flat` is checked above and
+        # returns 3 otherwise), and a fresh one re-runs the entire flat and
+        # ownership preflight before it is allowed to place anything. The
+        # supervisor's fast-crash counter still gives up on a genuine loop.
+        #
+        # The comma test keeps this to the single-blocker case. `blockers()`
+        # are joined with "," by `_risk_stop_reason`, so a comma means
+        # something else tripped in the same breath -- a loss stop, the session
+        # duration limit -- and those must stay terminal. Any unexpected shape
+        # falls through to 0 and does not restart, which is the safe direction.
+        return 5
     if result.stop_reason == "startup_recovery_only":
         # A recovery run exists only to retire state a previous process left
         # behind. It proved flat and did exactly that, so the work is done and

@@ -1,37 +1,42 @@
 # Next session — outstanding fixes
 
-## 00. START HERE (2026-08-17): stuck UNKNOWN_ABSENT orders block all rotation
+## 00. START HERE (2026-08-18): make the unresolved-mutation stop per-market
 
-**The bot is STOPPED and flat, pending this.** Full write-up in `BUGFIXES.md`.
+**The bot is RUNNING.** The 2026-08-17 item that stood here -- stuck
+`UNKNOWN_ABSENT` orders blocking all rotation -- was fixed and deployed in
+`854c21a`; rotation cleared 20 absent rows to 0 and the bot went from 1-5
+markets to 10 concurrent. Do not re-derive it; it is in `BUGFIXES.md`.
 
-19 orders sit in `UNKNOWN_ABSENT`, oldest from 04:40Z. `risk_state_known()` is
-False while any exists, so `_rotation_blockers()` returns "whole-account
-execution state is not known" and market rotation raises. The bot cannot rebind
-to new markets and quotes almost nothing while slots sit free. This is the cause
-of every "bot is not trading" stall on 08-17, and restarts do not clear it --
-the state is durable in the ledger and survived four restarts that day.
+What is left is the account-wide blast radius of the stop that killed the
+session on 2026-08-18. Full write-up in `BUGFIXES.md`, measured facts in
+`FINDINGS.md`.
 
-**Fix shape.** The sweep already re-asks the venue once a minute, but these
-orders belong to markets that have **settled**, so no terminal state can ever
-come back. A settled market is affirmative evidence rather than absence -- if
-the market is closed, no order can be live in it -- so resolving the order does
-not violate "absence is never read as cancellation".
+`unresolved_mutation_timeout_seconds` is a **terminal, account-wide** critical
+stop armed by a single unresolved intent. The venue can accept a place, return
+an exchange id, and then serve no state for it for **131 seconds** (measured),
+during which the intent cannot resolve by design -- absence is never read as
+cancellation. So one market's venue-latency artefact stops all twenty.
 
-  1. In `live_orders.reconcile_order`, detect the venue not knowing the order.
-  2. Check the market with `retrieve_by_slug`; only `MARKET_STATUS_RESOLVED`
-     counts (`scripts/accounting.py` already reads this).
-  3. Only then write a terminal state. **Never on a not-found alone** -- that
-     can be transient; a settled market cannot un-settle.
+Three fixes shipped 2026-08-18 and none of them address that:
 
-Touches `live_orders`, the sweep in `live_commissioning`, and a terminal write
-in `execution_ledger`. It sits on the one account-wide invariant, so it needs
-real tests -- including one proving an absent order in an OPEN market is still
-never resolved.
+- the strict reconcile sweep no longer lets one unreadable order hide every
+  order behind it (it was aborting the loop in `sorted()` order),
+- the failure is reported instead of swallowed by a bare `except: pass`,
+- the stop now exits 5 instead of 0, so the supervisor restarts it.
 
-**Unblocking without the code fix:** verify at the venue that each of the 19
-markets is settled and the account is flat, then resolve those rows in the
-ledger by hand. Faster, but it is a data edit on the ownership path -- take a
-backup first (`scripts/backfill_executions.py` shows the online-backup call).
+That turns a three-hour outage into a restart, which is why it was done first.
+It does not stop the session dying in the first place.
+
+**Fix shape.** Quarantine the market whose intent is stuck rather than stopping
+the account, on the same argument the rotation fix used: the blast radius
+should match the evidence. An unresolved intent in one market says nothing
+about the other nineteen. It sits on an account-wide safety property, so it
+needs real tests -- including one proving that an unresolved intent still
+blocks *its own* market's quoting and its own shutdown cancel.
+
+**Do not "fix" this by raising the timeout.** It was 10s and cost an outage on
+2026-08-17; 60s cost another on 2026-08-18. The measured stall was 131s. The
+timeout is not the variable that matters.
 
 ## Also from 2026-08-17, smaller
 

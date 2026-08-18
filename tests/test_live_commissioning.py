@@ -1637,6 +1637,83 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_one_unreadable_order_does_not_hide_every_other_one(self):
+        """The 2026-08-18 outage, at its root.
+
+        The strict sweep asked about working orders in `sorted()` order and
+        raised on the first failure, so which id the venue could not answer
+        for stopped being harmless and started being decisive. A just-placed
+        order the venue served no state for two minutes sorted first; the
+        order behind it -- which would have resolved on the first try -- was
+        never asked at all. Both intents stayed unresolved, and an unresolved
+        intent is exactly what arms `unresolved_mutation_timeout_seconds`, a
+        terminal account-wide stop. It fired, and took twenty markets down for
+        four hours over one order.
+
+        The reconcile must still fail: a working order we could not re-read is
+        live risk. It must fail *after* asking about all of them.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+
+        # Two orders whose PLACE we have not yet proven. "exchange-aaa" sorts
+        # first and is the one the venue will not serve.
+        for cid, oid in (("liquidity-aaa", "exchange-aaa"),
+                         ("liquidity-zzz", "exchange-zzz")):
+            runner.ledger.prepare_intent(
+                f"intent-{oid}", "PLACE", "market-one", cid,
+                {"marketSlug": "market-one"}, created_at=runner._now())
+            runner.ledger.transition_intent(
+                f"intent-{oid}", "SUBMITTING", updated_at=runner._now())
+            runner.ledger.transition_intent(
+                f"intent-{oid}", "ACKNOWLEDGED", updated_at=runner._now(),
+                exchange_order_id=oid)
+        self.assertEqual(len(runner.ledger.unresolved_intents()), 2)
+
+        client.orders.rows["exchange-zzz"] = {
+            "id": "exchange-zzz",
+            "clientOrderId": "liquidity-zzz",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+
+        asked = []
+        original = client.orders.retrieve
+
+        async def flaky(order_id):
+            asked.append(order_id)
+            if order_id == "exchange-aaa":
+                raise AdapterError(
+                    f"GET /v1/order/{order_id} failed: NotFoundError")
+            return await original(order_id)
+
+        client.orders.retrieve = flaky
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        # Still fails -- one order remains unknown, which is live risk.
+        with self.assertRaises(AdapterError):
+            await runner._rest_reconcile(runner._now())
+
+        # ...but not before asking about the one behind it.
+        self.assertIn(
+            "exchange-zzz", asked,
+            "an unreadable order must not stop the sweep before the next one")
+        unresolved = {row["client_order_id"]
+                      for row in runner.ledger.unresolved_intents()}
+        self.assertEqual(
+            unresolved, {"liquidity-aaa"},
+            "the readable order's intent must be resolved by its own answer")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.
 
@@ -4375,6 +4452,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             self._exit_code_for("runner_failure:ValueError", flat=False), 3)
         self.assertEqual(
             self._exit_code_for("startup_recovery_only", flat=False), 3)
+
+    def test_an_unresolved_mutation_stop_restarts_but_nothing_else_does(self):
+        """2026-08-18: three hours down for a 131-second venue stall.
+
+        The venue accepted a place, returned an exchange id, then served no
+        state for it for over two minutes. The intent cannot resolve in that
+        window by design -- absence is never cancellation -- so the 60s
+        critical stop fired on a flat, healthy account. It exited 0, which the
+        supervisor reads as a clean operator stop, so nothing restarted it.
+
+        This one stop is a venue-latency artefact and restarts. Every other
+        risk stop is a statement about the account and must not.
+        """
+
+        unresolved = ("risk_stop:critical failure: order mutation unresolved "
+                      "for more than 60 seconds")
+        self.assertEqual(self._exit_code_for(unresolved), 5)
+
+        # Still never restarts while inventory is unproven.
+        self.assertEqual(self._exit_code_for(unresolved, flat=False), 3)
+
+        # A loss stop in the same breath makes it terminal again. `blockers()`
+        # are comma-joined, so a comma means something else tripped too, and
+        # restarting into a loss stop is the one thing this must never do.
+        self.assertEqual(
+            self._exit_code_for(unresolved + ",session loss limit reached"), 0)
+
+        # Neighbouring risk stops are untouched.
+        for reason in ("risk_stop:session loss limit reached",
+                       "risk_stop:market loss limit reached",
+                       "risk_stop:session duration limit reached",
+                       "risk_stop:critical failure: something else entirely"):
+            self.assertEqual(
+                self._exit_code_for(reason), 0,
+                f"{reason} must not restart")
 
     def test_cli_accepts_automatic_reward_selection(self):
         result = CommissioningResult(

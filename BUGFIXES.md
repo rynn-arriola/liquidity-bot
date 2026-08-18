@@ -29,6 +29,128 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-18
+
+### One unreadable order hid every order behind it, and killed the session
+
+**Symptom.** The bot stopped at 2026-08-18T08:26:06Z after running 4h11m, and
+stayed down about three hours until the operator noticed.
+
+```
+"stop_reason": "risk_stop:critical failure: order mutation unresolved for more than 60 seconds"
+"flat": true
+[supervisor] clean exit after 15077s; not restarting
+```
+
+`commissioning.log` shows nothing at all between the last placement at
+08:23:23 and the shutdown at 08:24:37. That silence is part of the bug.
+
+**Mechanism.** The strict half of `_rest_reconcile` asked the venue for
+terminal state on every bot-owned working order and every unresolved intent:
+
+```python
+for exchange_id in sorted(exchange_ids):
+    await self.executor.reconcile_order(exchange_id, observed_at=now)
+```
+
+It raised on the first id that failed, and `sorted()` made *which* id that is
+deterministic rather than harmless. The event log proves it exactly -- one
+sweep at 08:23:23.210 re-read eleven orders in ascending id order and stopped:
+
+```
+BYJZZ1244DKA … BYK0B4B0MDJV, BYK0EWMDPDK1    11 applied
+BYK0EWMPMDK1                                  12th: raised
+BYK0KVYDYDJR                                  13th: never asked
+```
+
+`BYK0EWMPMDK1` was a place from the 08:23:17-21 burst that the venue had
+accepted -- it returned an exchange id -- but then would not serve state for
+over two minutes, and had also gone missing from a complete open-orders
+snapshot (`unknown_reason=missing_from_complete_snapshot`). Its intent
+therefore stayed unresolved, which is correct and deliberate: absence is never
+read as cancellation.
+
+The caller runs that reconcile every 2s while any intent is unresolved, so the
+sweep ran roughly sixty-five times and aborted at the same order every time.
+`BYK0KVYDYDJR` sat behind it and was never asked once, even though it was
+readable and would have resolved immediately -- both intents finally reconciled
+in the same instant at 08:25:34, the first sweep that got past the blockage.
+
+Two intents unresolved is what arms `unresolved_mutation_timeout_seconds`, a
+**terminal, account-wide** critical stop. It fired at 60s and took all twenty
+markets down over one order.
+
+The second, unresolved intents also block their own market's cancel
+(`live_orders.py`), which is the five `[shutdown] decision=failed
+error=AdapterError` lines on `nikwal-timheg` during the flatten.
+
+**Why nothing was logged.** The call site swallowed it whole:
+
+```python
+try:
+    await self._rest_reconcile(now)
+except Exception:
+    pass
+```
+
+So the two minutes of failing re-reads that preceded a terminal stop left no
+trace, and **what `retrieve` actually raised is simply gone** -- it cannot be
+recovered from this incident. Only one `NotFoundError` was logged all day, for
+an unrelated order in a different component.
+
+**Fix applied 2026-08-18.**
+
+1. The strict sweep now asks about **every** id, collects failures, and raises
+   after the loop. Strictness is unchanged -- any failure still fails the whole
+   reconcile, because a working order we could not re-read is live risk -- but
+   one unreadable order no longer hides the state of every order behind it.
+2. The call site reports through `_report_runtime_error` instead of
+   discarding. Routine alerts fire at attempts 4/8/16, so a 2s cadence gives
+   three Discord messages in the 60s before the stop rather than none, and the
+   raised error is named in `commissioning.log` either way.
+
+Mutation-checked: reverting (1) fails
+`test_one_unreadable_order_does_not_hide_every_other_one` with
+`'exchange-zzz' not found in ['exchange-aaa']` -- the production mechanism.
+
+**Fixes 1 and 2 alone would not have prevented this, and that is the point.**
+Had they been in place, `BYK0KVYDYDJR` would have resolved at 08:23:23 and the
+shutdown cancels would not have failed -- but `BYK0EWMPMDK1`'s own intent was
+created at 08:23:20.662 and was still unresolvable, so the stop would have
+fired at 08:24:20 instead of 08:24:17. **Three seconds later.** Smaller blast
+radius, same outage. That is why the third fix exists.
+
+3. So the policy was fixed too, which is what actually recovers the hours. A
+   `risk_stop:` reason fell through every branch of the exit-code block and
+   returned **0** -- the supervisor reads that as a clean operator stop and
+   never restarts, which is the whole three hours. This one stop now returns
+   **5**, the existing recoverable code: the supervisor restarts with backoff,
+   and its fast-crash counter still gives up on a genuine loop.
+
+   Narrow by construction. It matches only
+   `risk_stop:critical failure: order mutation unresolved`, and only when no
+   comma appears in the reason -- `blockers()` are comma-joined, so a comma
+   means something else tripped in the same breath. A loss stop, the session
+   duration limit, ownership violations and every other risk stop keep their
+   current behaviour, and any unexpected shape falls through to 0 and does not
+   restart. `flat` is still checked first, so an unproven account still exits 3
+   and never restarts. Mutation-checked: neutering the branch fails
+   `test_an_unresolved_mutation_stop_restarts_but_nothing_else_does`
+   with `0 != 5`.
+
+The stop itself is unchanged: a genuinely stuck mutation still stops all twenty
+markets, and the runner still sends a critical Discord alert from `_shutdown`
+on the way out. What changed is that it no longer stays down afterwards. Making
+the guard per-market rather than account-wide is the real long-term fix and is
+deliberately not done here -- it weakens an account-wide safety property and
+wants its own change. See `NEXT.md`.
+
+**Cost.** ~3h of not quoting on a Monday session. No money lost: the account
+proved flat (`"flat": true`), all thirteen working orders cancelled, and no
+position was held.
+
+---
+
 ## 2026-08-17 (accounting)
 
 ### 60% of our fills were never recorded: the parser read a key the venue does not publish

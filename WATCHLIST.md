@@ -232,3 +232,17 @@ period with only this bot running, or per-market attribution via `marketSlug`.
 mutants survived, because `maximum_remaining_reward` is already a tiebreaker
 and tracks projected reward closely on small fixtures. A refactor could undo it
 silently. Live measurement is currently the only guard.
+
+## `_rest_reconcile` failures in the unresolved-mutation loop swallow everything
+
+Noted 2026-08-18 while fixing the outage in `BUGFIXES.md`. The call site now
+reports instead of discarding, but it still catches bare `Exception`, so a
+`RuntimeInvariantViolation` raised out of `_rest_reconcile` would be logged as
+a routine runtime error rather than ending the session. Pre-existing, not a
+regression, and not changed with the outage fix because narrowing it creates a
+new terminal path that wants its own mutation check.
+
+Nothing reachable from that call raises it today -- only `live_commissioning`
+and `live_session` raise it at all, and the strict sweep now re-raises it
+explicitly. Worth narrowing to the exception types that are actually expected
+(`AdapterError`, transport errors) next time this code is opened.

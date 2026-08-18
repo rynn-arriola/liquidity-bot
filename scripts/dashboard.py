@@ -174,15 +174,16 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
 
     def signed(value):
         # Discord renders ANSI only inside an ```ansi fence, so coloured
-        # numbers must live in a code block rather than the description. The
-        # sign is kept alongside the colour: colour gives direction at a
-        # glance, the sign keeps it unambiguous if the block is copied or read
-        # somewhere ANSI does not render.
+        # numbers live in a code block rather than the description. Sign AND
+        # currency are kept alongside the colour: colour gives direction at a
+        # glance, the sign and the $ survive anywhere ANSI does not render --
+        # a copied block, a search result, a client that strips it.
         if value is None:
             return "n/a"
         number = float(value)
         code = "32" if number >= 0 else "31"
-        return "\u001b[0;{}m{:+,.2f}\u001b[0m".format(code, number)
+        mark = "+" if number >= 0 else "-"
+        return "\u001b[0;{}m{}${:,.2f}\u001b[0m".format(code, mark, abs(number))
 
     def money(value):
         return "n/a" if value is None else "${:+,.2f}".format(float(value))
@@ -202,7 +203,7 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
 
     description = (
         "## {} {}\n".format(icon, state)
-        + "```ansi\nTODAY {}     TOTAL {}\n```".format(
+        + "```ansi\nTODAY {}     TOTAL {}\n```\n".format(
             signed(today_pnl), signed(total_pnl))
         + "_up {}_\n".format(uptime))
     if total_pnl is not None:

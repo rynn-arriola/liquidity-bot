@@ -102,6 +102,11 @@ class LiquiditySummary:
     rewarded_markets: int = 0
     spread_filtered_markets: int = 0
     selection_failures: int = 0
+    # Idle slots held only because their market has already started. Not
+    # faults -- a started market can never quote again and is just waiting
+    # for the next rotation sweep -- so they are reported apart from the
+    # count that means "something is wrong".
+    awaiting_rotation_markets: int = 0
     pnl_label: str = "trading"
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
@@ -135,6 +140,7 @@ class LiquiditySummary:
                 ("rewarded_markets", self.rewarded_markets),
                 ("spread_filtered_markets", self.spread_filtered_markets),
                 ("selection_failures", self.selection_failures),
+                ("awaiting_rotation_markets", self.awaiting_rotation_markets),
                 ("ledger_bytes", self.ledger_bytes)):
             if value < 0:
                 raise ValueError(f"{name} cannot be negative")
@@ -235,14 +241,19 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     #          a quiet evening it is most of the board.
     unmet = max(0, summary.viable_markets - summary.resting_markets)
     free = max(0, summary.slot_capacity - summary.active_markets)
+    # Only slots that are actually stuck. A market that has kicked off is
+    # idle for a known, harmless reason and is excluded, so this count keeps
+    # meaning "look at this".
+    waiting = min(idle, max(0, summary.awaiting_rotation_markets))
+    broken = max(0, idle - waiting)
     if not integrity_ok or summary.readiness_status == "DO_NOT_START_TRIAL":
         color, icon = RED, "\U0001f6d1"
         state = "NOT WORKING"
-    elif idle:
+    elif broken:
         # Lead with this. It is the one an operator can act on, and the count
         # that answers "are the other slots working?".
         color, icon = ORANGE, "\U0001f7e0"
-        state = f"WORKING · {idle} slot(s) NOT WORKING"
+        state = f"WORKING · {broken} slot(s) NOT WORKING"
     elif unmet and summary.slot_capacity:
         color, icon = ORANGE, "\U0001f7e0"
         state = f"WORKING · {unmet} viable market(s) not quoted"
@@ -303,7 +314,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         # The headline answer to "are the other slots working?". A bound
         # market resting nothing holds a slot no other market can use, so
         # this is the number that costs reward.
-        + _row("SLOTS NOT WORKING", idle)
+        + _row("SLOTS NOT WORKING", broken)
+        + (_row("awaiting rotation", waiting) if waiting else "")
         + "".join(f"  {reason[:15]:<15}{count:>8}\n"
                   for reason, count in summary.idle_market_reasons[:3])
         + ("".join(f"  {'other':<15}"

@@ -218,17 +218,20 @@ class DiscordTests(unittest.TestCase):
         which. Checked across the shapes a real session moves through.
         """
 
-        for active, resting, capacity in (
-                (3, 3, 20),      # quiet evening, nothing broken
-                (14, 7, 20),     # seven slots bound and silent
-                (20, 20, 20),    # genuinely full
-                (0, 0, 20),      # nothing bound yet
-                (20, 0, 20)):    # every slot bound and dead
+        for active, resting, capacity, waiting in (
+                (3, 3, 20, 0),    # quiet evening, nothing broken
+                (14, 7, 20, 0),   # seven slots bound and silent
+                (20, 20, 20, 0),  # genuinely full
+                (0, 0, 20, 0),    # nothing bound yet
+                (20, 0, 20, 0),   # every slot bound and dead
+                (9, 6, 20, 3),    # three kicked off, awaiting rotation
+                (9, 6, 20, 1)):   # one kicked off, two really stuck
             summary = LiquiditySummary(
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
                 active_markets=active, resting_markets=resting,
-                slot_capacity=capacity, viable_markets=resting)
+                slot_capacity=capacity, viable_markets=resting,
+                awaiting_rotation_markets=waiting)
             slots = [f for f in build_liquidity_summary(summary)["embeds"][0]
                      ["fields"] if "Slots" in f["name"]][0]["value"]
 
@@ -244,10 +247,11 @@ class DiscordTests(unittest.TestCase):
                           .split()[-1].split("/")[0])
             broken = value("SLOTS NOT WORKING")
             free = value("Free, none viable")
+            held = value("awaiting rotation") if waiting else 0
             self.assertEqual(
-                quoting + broken + free, capacity,
-                f"{quoting}+{broken}+{free} != {capacity} "
-                f"for active={active} resting={resting}")
+                quoting + broken + held + free, capacity,
+                f"{quoting}+{broken}+{held}+{free} != {capacity} "
+                f"for active={active} resting={resting} waiting={waiting}")
 
     def test_the_broken_slot_reasons_account_for_every_broken_slot(self):
         """The breakdown under the count must sum to the count.
@@ -272,6 +276,51 @@ class DiscordTests(unittest.TestCase):
             if row.startswith("  ") and row.split()[-1].isdigit())
         self.assertEqual(counted, 15, "reasons must sum to active - resting")
         self.assertIn("other", slots)
+
+    def test_a_kicked_off_market_is_not_counted_as_a_broken_slot(self):
+        """A started market cannot quote again and is only waiting for the
+        next rotation sweep. It is idle for a known, harmless reason.
+
+        Measured 2026-08-18: 96 markets did this in one day, each holding a
+        slot ~11 minutes, while free slots never dropped below 9 -- so none
+        of it cost anything. Counting them as broken made the alarm fire on
+        the ordinary case, and an alarm that cries wolf stops being read.
+        """
+
+        base = dict(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
+            active_markets=9, resting_markets=6, slot_capacity=20,
+            viable_markets=6, rewarded_markets=59)
+
+        # All three idle slots are simply post-kickoff. Nothing is broken.
+        quiet = LiquiditySummary(
+            **base, awaiting_rotation_markets=3,
+            idle_market_reasons=(("kicked_off", 3),))
+        embed = build_liquidity_summary(quiet)["embeds"][0]
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
+        self.assertIn(f"{'awaiting rotation':<19}{3:>10}", slots)
+        self.assertNotIn("slot(s) NOT WORKING", embed["description"])
+
+        # One kicked off, two genuinely stuck: the two must still be counted.
+        mixed = LiquiditySummary(
+            **base, awaiting_rotation_markets=1,
+            idle_market_reasons=(("kicked_off", 1), ("book_stale", 2)))
+        embed = build_liquidity_summary(mixed)["embeds"][0]
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{2:>10}", slots)
+        self.assertEqual(embed["color"], ORANGE)
+        self.assertIn("2 slot(s) NOT WORKING", embed["description"])
+        self.assertIn("book_stale", slots)
+
+        # Never negative, and never hides a stuck slot, if a caller reports
+        # more awaiting rotation than are idle at all.
+        absurd = LiquiditySummary(**base, awaiting_rotation_markets=99)
+        slots = [f for f in build_liquidity_summary(absurd)["embeds"][0]
+                 ["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
+        self.assertIn(f"{'awaiting rotation':<19}{3:>10}", slots)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound

@@ -1841,6 +1841,30 @@ class CommissioningRunner:
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
 
+    def _has_kicked_off(self, slug: str) -> bool:
+        """Has this market's event already started?
+
+        A started market cannot become pregame again, so it will never quote
+        and is only waiting to be rotated out. Fails closed: an unknown start
+        time is NOT treated as kicked off, because that would quietly excuse a
+        genuinely stuck slot as "waiting for rotation".
+        """
+
+        try:
+            start = self.state_for(slug).market.game_start
+        except Exception:
+            return False
+        return start is not None and start <= self._now()
+
+    def _awaiting_rotation(self) -> int:
+        """Idle slots held only because their market has already started."""
+
+        return sum(
+            1 for slug in self.active_slugs
+            if not self.ledger.working_orders(slug)
+            and not self._is_retired(slug)
+            and self._has_kicked_off(slug))
+
     def _idle_market_reasons(self) -> tuple[tuple[str, int], ...]:
         """Why each managed market is not resting an order, most common first.
 
@@ -1861,6 +1885,16 @@ class CommissioningRunner:
                     continue
                 if self._is_retired(slug):
                     reason = "retired"
+                elif self._has_kicked_off(slug):
+                    # Not a fault. The market started, so it can never be
+                    # quoted again and is simply waiting for the next rotation
+                    # sweep to release the slot. Counting it as broken made
+                    # `SLOTS NOT WORKING` fire on a normal, harmless condition
+                    # -- measured 2026-08-18, 96 markets did this in one day,
+                    # each holding a slot ~11 minutes, and free slots never
+                    # dropped below 9, so none of it cost anything. An alarm
+                    # that cries wolf on the ordinary case stops being read.
+                    reason = "kicked_off"
                 elif (state := self.state_for(slug)).book is None:
                     reason = "no_book"
                 elif blockers := sorted(set(
@@ -2341,6 +2375,7 @@ class CommissioningRunner:
             # there is, or because it is broken?" needed a 50-call script on
             # the droplet to answer.
             slot_capacity=self.config.max_markets,
+            awaiting_rotation_markets=self._awaiting_rotation(),
             viable_markets=(
                 self._market_selection.viable_markets
                 if self._market_selection is not None else 0),

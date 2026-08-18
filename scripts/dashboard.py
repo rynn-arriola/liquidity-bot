@@ -173,17 +173,20 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
         state = "WORKING"
 
     def signed(value):
-        # Discord renders ANSI only inside an ```ansi fence, so coloured
-        # numbers live in a code block rather than the description. Sign AND
-        # currency are kept alongside the colour: colour gives direction at a
-        # glance, the sign and the $ survive anywhere ANSI does not render --
-        # a copied block, a search result, a client that strips it.
+        # Discord does NOT render ANSI inside embeds -- it works in ordinary
+        # message content but embed descriptions and fields strip it. Verified
+        # 2026-08-18: the payload carried correct 0;32 / 0;31 escapes and still
+        # displayed plain, so the approach is wrong rather than the codes.
+        #
+        # A coloured circle is the reliable substitute: it renders in embeds,
+        # on mobile, and in clients that strip formatting. Sign and currency
+        # stay alongside it so the number reads correctly without the emoji.
         if value is None:
             return "n/a"
         number = float(value)
-        code = "32" if number >= 0 else "31"
-        mark = "+" if number >= 0 else "-"
-        return "\u001b[0;{}m{}${:,.2f}\u001b[0m".format(code, mark, abs(number))
+        mark = "\U0001f7e2" if number >= 0 else "\U0001f534"
+        sign = "+" if number >= 0 else "-"
+        return "{} {}${:,.2f}".format(mark, sign, abs(number))
 
     def money(value):
         return "n/a" if value is None else "${:+,.2f}".format(float(value))
@@ -203,7 +206,7 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
 
     description = (
         "## {} {}\n".format(icon, state)
-        + "```ansi\nTODAY {}     TOTAL {}\n```\n".format(
+        + "**TODAY** {}   \u00b7   **TOTAL** {}\n".format(
             signed(today_pnl), signed(total_pnl))
         + "_up {}_\n".format(uptime))
     if total_pnl is not None:
@@ -233,8 +236,8 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
                      meter(headroom, session_cap), plain(headroom))
                  + "stop at   {}\n".format(plain(session_cap)))
 
-    reward_text = (row("paid", signed(reward_paid))
-                   + row("pending", signed(reward_pending)))
+    reward_text = (row("paid", plain(reward_paid))
+                   + row("pending", plain(reward_pending)))
 
     fence = "```text\n"
     fields = [

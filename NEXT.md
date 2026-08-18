@@ -1,5 +1,50 @@
 # Next session — outstanding fixes
 
+## 00. START HERE (2026-08-18, third): resolve a PLACE that returned no id
+
+**This is what breaks the automatic recovery**, so it goes above the
+per-market work below. Measured tonight: the bot took two unattended
+supervisor restarts correctly, then a third bounce left it refused and needed
+a human.
+
+`POST /v1/orders` can return InternalServerError **without an exchange order
+id**. `LiveOrderExecutor.place` records the intent `UNCERTAIN`, and because
+there is no id, `exchange_order_id` stays NULL. Every resolution path keys on
+that id -- `_upsert_order` resolves intents `WHERE exchange_order_id=?` -- so
+nothing can ever resolve it. It arms the account-wide 60s stop, and then
+refuses the next startup with `execution ledger has unresolved intents`, which
+is exit 2 and the one code the supervisor never restarts.
+
+Seen three times on 2026-08-18: 15:16Z, 20:53Z, 21:08Z.
+
+**The fix cannot be a client-order-id lookup.** Retail order entry exposes no
+such field, so the id in the ledger is local and was never sent -- see the
+docstring on `ExecutionLedger.resolve_client_order_id`. The exchange id from
+create is the only ownership anchor, which is precisely why a create that
+returns none leaves nothing to ask about.
+
+**Fix shape.** Conclude it from the account, not the order. If the create had
+succeeded, the order would appear in the venue's open orders under an exchange
+id the ledger does not know, and the existing adoption path would record it as
+`venue:<id>` -- which already trips the terminal account-wide stop, correctly.
+So the only case left is "the create did not happen", and it is provable:
+
+  1. a **complete** open-orders snapshot, taken well after the failed create
+  2. no unowned (`venue:`) order in that market
+  3. no position in that market
+  4. no order row under the intent's client id
+
+That is exactly what `scripts/resolve_orphan_places.py` checks by hand today.
+Moving it into the runner is the work.
+
+**The one judgement call is how long to wait.** A just-placed order can take
+minutes to become visible -- measured 2026-08-18, `BYK0EWMPMDK1` was accepted
+and then unreadable for 131 seconds -- so concluding too early would call a
+live order dead. Require several consecutive complete snapshots, and keep the
+delay well clear of that 131s. If the wait is wrong the failure direction is
+still safe: the order shows up as `venue:` and stops the bot rather than
+trading blind.
+
 ## 00. START HERE (2026-08-18): make the unresolved-mutation stop per-market
 
 **Status 2026-08-18 17:00Z: stopped flat by the operator, then restarted once

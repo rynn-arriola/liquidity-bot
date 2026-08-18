@@ -11,10 +11,15 @@ the next startup with "execution ledger has unresolved intents".
 
 Observed twice on 2026-08-18 (15:16Z and 20:53Z). See FINDINGS.md.
 
-This is a stopgap for an operator, NOT the fix. The real fix is for the runner
-to resolve these itself by asking the venue about the client order id it
-generated; see NEXT.md. Until then this exists so the recovery is a reviewed
-script with guards rather than an ad-hoc SQL edit typed under pressure.
+This is a stopgap for an operator, NOT the fix. The runner should reach the
+same conclusion by itself; see NEXT.md.
+
+Note what the fix CANNOT be: looking the order up by our client order id.
+Polymarket retail order entry exposes no client-order-id field, so the id in
+this ledger is purely local and was never sent -- see
+`ExecutionLedger.resolve_client_order_id`. The exchange id returned by create
+is the only ownership anchor there is, which is exactly why a create that
+returns none leaves nothing to ask about.
 
 Safety. It refuses unless ALL of these hold, per intent:
 

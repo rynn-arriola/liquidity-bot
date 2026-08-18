@@ -2247,6 +2247,18 @@ class CommissioningRunner:
             open_marked_usd=Decimal("0"),
             session_loss_limit_usd=self.config.max_session_loss_usd,
             hard_stop_loss_usd=self.config.hard_stop_loss_usd,
+            # The stop's own input, so the meter measures the thing that
+            # actually fires. `trading_realized_usd` above is marked equity
+            # and swings with unrealised ticks -- 320 open contracts move $38
+            # on twelve cents -- so a bar drawn from it would show the bot
+            # walking into a limit nothing is walking into.
+            session_realized_pnl_usd=(
+                self.risk_guard.realized_pnl if self.risk_guard is not None
+                else Decimal("0")),
+            worst_market_realized_pnl_usd=(
+                min(self.risk_guard.realized_by_market.values(),
+                    default=Decimal("0"))
+                if self.risk_guard is not None else Decimal("0")),
             pnl_label="marked account equity Δ",
             rest_requests_per_second=float(self.config.rest_requests_per_second),
             market_stream_age_seconds=market_age,

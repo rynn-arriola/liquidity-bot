@@ -122,8 +122,12 @@ class DiscordTests(unittest.TestCase):
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
             active_markets=20, resting_markets=9,
             idle_market_reasons=(("target_not_met", 8), ("no_book", 3)))
+        # Matched on "Slots", not on "reward": the slots field is *named*
+        # "Slots and reward eligibility", so a substring match on "reward"
+        # also matches the separate rewards field and passed here only by
+        # ordering luck.
         rewards = [field for field in build_liquidity_summary(summary)["embeds"][0]
-                   ["fields"] if "reward" in field["name"].lower()][0]["value"]
+                   ["fields"] if "Slots" in field["name"]][0]["value"]
 
         # Shown as a ratio, because 9 alone does not say what it is 9 of.
         # Measured 2026-08-16: 20 managed against 9 actually holding an order.
@@ -141,7 +145,7 @@ class DiscordTests(unittest.TestCase):
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
             ledger_bytes=22_396_928 + 4_194_304)
         health = [field for field in build_liquidity_summary(summary)["embeds"][0]
-                  ["fields"] if "alive" in field["name"]][0]["value"]
+                  ["fields"] if "Health" in field["name"]][0]["value"]
 
         # Rendered in units a human can act on, not raw bytes.
         self.assertIn("Ledger on disk", health)
@@ -152,6 +156,51 @@ class DiscordTests(unittest.TestCase):
             LiquiditySummary(
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
+
+    def test_stop_meter_draws_from_the_stop_input_not_marked_equity(self):
+        """The bar has to measure the thing that actually fires.
+
+        `blockers()` trips on realised P&L, never on marked equity -- marked
+        equity swings with every unrealised tick (320 open contracts move $38
+        on twelve cents), so a bar drawn from it shows the bot walking into a
+        limit nothing is walking into. These two are deliberately opposite
+        here: equity is up $30, realised is down $20, and the meter must
+        follow the realised number.
+        """
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            active_markets=2, resting_markets=2,
+            trading_realized_usd=Decimal("30"),
+            session_realized_pnl_usd=Decimal("-20"),
+            worst_market_realized_pnl_usd=Decimal("-8"),
+            session_loss_limit_usd=Decimal("40"),
+            hard_stop_loss_usd=Decimal("45"))
+        risk = [field for field in build_liquidity_summary(summary)["embeds"][0]
+                ["fields"] if "stop loss" in field["name"]][0]["value"]
+
+        self.assertIn("$20.00 / $40.00", risk)
+        self.assertIn("$8.00", risk)
+        # Half the cap, so half the bar. Catches an off-by-one or an inverted
+        # meter, which a "does it contain a block character" check would not.
+        self.assertIn("██████░░░░░░", risk)
+        self.assertNotIn("$30.00", risk)
+
+    def test_a_profitable_session_shows_an_empty_stop_meter(self):
+        """Profit is not negative loss. Clamped, or the bar renders inverted."""
+
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            active_markets=2, resting_markets=2,
+            session_realized_pnl_usd=Decimal("12.50"),
+            session_loss_limit_usd=Decimal("40"))
+        risk = [field for field in build_liquidity_summary(summary)["embeds"][0]
+                ["fields"] if "stop loss" in field["name"]][0]["value"]
+
+        self.assertIn("$0.00 / $40.00", risk)
+        self.assertIn("░░░░░░░░░░░░", risk)
 
     def test_liquidity_summary_excludes_pending_reward_and_leads_with_risk(self):
         summary = LiquiditySummary(

@@ -3321,10 +3321,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             field["value"] for field in payload["embeds"][0]["fields"])
         # Reporting slot zero only showed no open position here, which is the
         # number an operator reads to decide whether to intervene.
-        self.assertIn(f"{'Positions open':<17}{1:>10}", rendered)
+        self.assertIn(f"{'Positions':<19}{1:>10}", rendered)
         # Reported as resting/managed now: managed alone said nothing about
         # whether those markets were earning.
-        self.assertIn(f"Markets resting  {'0/2':>10}", rendered)
+        self.assertIn(f"{'Markets resting':<19}{'0/2':>10}", rendered)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

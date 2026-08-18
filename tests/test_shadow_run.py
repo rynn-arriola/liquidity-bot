@@ -132,8 +132,8 @@ class IncentiveRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SHADOW", embed["title"])
         self.assertIn("DO_NOT_START_TRIAL", embed["title"])
         risk = next(field for field in embed["fields"]
-                    if "Risk" in field["name"])
-        self.assertIn("Working orders            0", risk["value"])
+                    if "stop loss" in field["name"])
+        self.assertIn(f"{'Working orders':<19}{0:>10}", risk["value"])
 
 
 if __name__ == "__main__":

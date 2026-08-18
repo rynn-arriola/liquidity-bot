@@ -82,6 +82,16 @@ class LiquiditySummary:
     pending_rewards_usd: Decimal = Decimal("0")
     session_loss_limit_usd: Decimal = Decimal("0")
     hard_stop_loss_usd: Decimal = Decimal("0")
+    # The number the session stop actually reads, not marked equity. Negative
+    # is a loss. `trading_realized_usd` above is the equity delta and moves
+    # with every unrealised tick -- drawing the stop meter from it would show
+    # the bot approaching a limit that nothing is approaching. See
+    # `runtime_safety.blockers`, which trips on `-realized_pnl`.
+    session_realized_pnl_usd: Decimal = Decimal("0")
+    # Worst single market, same sign convention. The per-market stop fires
+    # independently of the session one, so a meter for the session alone can
+    # read comfortable while a market is one fill from stopping.
+    worst_market_realized_pnl_usd: Decimal = Decimal("0")
     pnl_label: str = "trading"
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
@@ -121,12 +131,62 @@ class LiquiditySummary:
         for value in (
                 self.trading_realized_usd, self.open_marked_usd,
                 self.attributable_paid_rewards_usd, self.pending_rewards_usd,
-                self.session_loss_limit_usd, self.hard_stop_loss_usd):
+                self.session_loss_limit_usd, self.hard_stop_loss_usd,
+                self.session_realized_pnl_usd,
+                self.worst_market_realized_pnl_usd):
             _money(value)
 
 
+def _signed(value: Decimal) -> str:
+    """A signed dollar amount with a colour the client cannot strip.
+
+    Discord does **not** render ANSI inside an embed -- it works in ordinary
+    message content, but embed descriptions and field values strip it.
+    Verified 2026-08-18: the payload carried correct 0;32 / 0;31 escapes and
+    still displayed plain, so the approach was wrong rather than the codes.
+
+    A coloured circle survives everywhere the embed does, including mobile.
+    The sign and currency stay alongside it, so the number still reads
+    correctly to anyone who cannot see the emoji at all.
+    """
+
+    number = float(_money(value))
+    mark = "\U0001f7e2" if number >= 0 else "\U0001f534"
+    return f"{mark} {'+' if number >= 0 else '-'}${abs(number):,.2f}"
+
+
+def _meter(used: float, cap: float, width: int = 12) -> str:
+    """A progress bar in block characters, which a text fence does render."""
+
+    cap = max(float(cap), 1e-9)
+    filled = max(0, min(width, int(round(width * float(used) / cap))))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _row(label: str, value: Any, width: int = 10) -> str:
+    return f"{label:<19}{value:>{width}}\n"
+
+
 def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
-    """Build a Discord embed without claiming pending rewards as income."""
+    """Build a Discord embed without claiming pending rewards as income.
+
+    This is the runner's five-minute status message. Since 2026-08-18 it
+    carries the card layout that `scripts/dashboard.py --discord` introduced
+    -- state headline, health, slots, and a stop-loss meter -- so the message
+    that arrives on its own looks like the one an operator asks for.
+
+    They are not the same function and should not be merged into one. The
+    dashboard runs outside the process and can see things the runner cannot
+    (its own liveness, log history, account-wide P&L from `accounting.py`);
+    the runner can see things the dashboard would have to pay venue calls
+    for. Shared *style*, separate data.
+
+    What survived the redesign, because each cost something to learn:
+    ACCOUNTED NET excludes pending rewards; markets resting is a ratio, since
+    9 alone does not say what it is 9 of; the idle breakdown always accounts
+    for every market; and the ledger's size on disk is shown, because nothing
+    else warns before it fills.
+    """
 
     now = summary.observed_at
     uptime = max(0.0, (now - summary.session_started_at).total_seconds())
@@ -136,114 +196,122 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     pending = _money(summary.pending_rewards_usd)
     overall = trading + marked + paid
     integrity_ok = not summary.integrity_problems
-    ready = summary.readiness_status in {
-        "TRIAL_ELIGIBLE_NOT_SCALE", "SCALE_ELIGIBLE"}
+    idle = max(0, summary.active_markets - summary.resting_markets)
+
+    # State reads from what the bot is doing, not only from readiness. A bot
+    # that is "eligible" while holding no orders at all is not working, and
+    # the old title said SCALE_ELIGIBLE either way.
     if not integrity_ok or summary.readiness_status == "DO_NOT_START_TRIAL":
-        color, icon = RED, "🛑"
-    elif ready:
-        color, icon = GREEN, "🟢"
+        color, icon = RED, "\U0001f6d1"
+        state = "NOT WORKING"
+    elif idle:
+        color, icon = ORANGE, "\U0001f7e0"
+        state = f"WORKING · {idle} slot(s) not quoting"
     else:
-        color, icon = ORANGE, "🟠"
+        color, icon = GREEN, "\U0001f7e2"
+        state = "WORKING"
 
     warning = ""
     if not integrity_ok:
         problems = "\n".join(
             f"> • {item[:180]}" for item in summary.integrity_problems[:5])
-        warning = "> 🚨 **INTEGRITY FAILURE — new risk must remain halted**\n" + problems + "\n\n"
+        warning = ("> \U0001f6a8 **INTEGRITY FAILURE — new risk must remain "
+                   "halted**\n" + problems + "\n\n")
+
     if summary.mode == "SHADOW":
         headline = (
-            "## SHADOW MEASUREMENT — NO EXCHANGE ORDERS\n"
+            f"## {icon} SHADOW MEASUREMENT — NO EXCHANGE ORDERS\n"
             f"_eligible score-seconds {summary.score_seconds:,.2f} · no venue "
             "trading P&L is claimed_\n")
     else:
         headline = (
-            f"## ACCOUNTED NET  ${overall:+,.2f}\n"
-            f"_{summary.pnl_label} ${trading:+,.2f} · open mark ${marked:+,.2f} · "
-            f"attributable PAID rewards ${paid:+,.2f}_\n")
+            f"## {icon} {state}\n"
+            f"**ACCOUNTED NET  ${overall:+,.2f}**   ·   {_signed(overall)}\n"
+            f"_{summary.pnl_label} ${trading:+,.2f} · open mark "
+            f"${marked:+,.2f} · attributable PAID rewards ${paid:+,.2f} "
+            f"· up {uptime / 3600:,.1f}h_\n")
     description = (
         warning + headline
         + (f"> Pending rewards **${pending:,.2f}** are shown but not counted.\n"
            if pending else "")
         + f"`{summary.readiness_status}`")
+
     entry_label = "Fill signals" if summary.mode == "SHADOW" else "Entry fills"
-    position_label = "Replays open" if summary.mode == "SHADOW" else "Positions open"
+    position_label = "Replays open" if summary.mode == "SHADOW" else "Positions"
+
+    health_text = (
+        _row("Market stream", _age(summary.market_stream_age_seconds))
+        + _row("Private stream",
+               "N/A shadow" if summary.mode == "SHADOW"
+               else _age(summary.private_stream_age_seconds))
+        + _row("Unresolved", summary.unresolved_intents)
+        + _row("Unknown orders", summary.unknown_orders)
+        + _row("REST rate", f"{summary.rest_requests_per_second:.2f}/s")
+        + _row("Ledger on disk", _bytes(summary.ledger_bytes)))
+
+    # The ratio, and then why the rest are idle. Show the top three and fold
+    # the remainder into `other`, so the numbers always account for every idle
+    # market -- truncating silently made them fail to sum to active - resting,
+    # on the one field whose job is answering "are we at capacity".
+    slots_text = (
+        _row("Markets resting",
+             f"{summary.resting_markets}/{summary.active_markets}")
+        + "".join(f"  {reason[:15]:<15}{count:>8}\n"
+                  for reason, count in summary.idle_market_reasons[:3])
+        + ("".join(f"  {'other':<15}"
+                   f"{sum(c for _, c in summary.idle_market_reasons[3:]):>8}\n")
+           if len(summary.idle_market_reasons) > 3 else "")
+        + _row("Eligible sides", summary.reward_eligible_sides)
+        + _row("Score-seconds", f"{summary.score_seconds:,.2f}"))
+
+    session_cap = _money(summary.session_loss_limit_usd)
+    hard_cap = _money(summary.hard_stop_loss_usd)
+    session_loss = max(Decimal("0"), -_money(summary.session_realized_pnl_usd))
+    worst_loss = max(Decimal("0"), -_money(summary.worst_market_realized_pnl_usd))
+    risk_text = (
+        _row(position_label, summary.open_positions)
+        + _row("Working orders", summary.working_orders)
+        + _row(entry_label, summary.entry_fills)
+        + _row("Exit samples", summary.exit_samples)
+        + _row("Exit complete", f"{100 * summary.exit_completion_rate:.1f}%")
+        + _row("Oldest age", f"{summary.max_inventory_age_seconds:.1f}s"))
+    if session_cap > 0:
+        risk_text += (
+            "\nsession  " + _meter(float(session_loss), float(session_cap))
+            + f"  ${float(session_loss):,.2f} / ${float(session_cap):,.2f}\n")
+        if summary.worst_market_realized_pnl_usd:
+            risk_text += (
+                "worst    " + _meter(float(worst_loss), float(session_cap))
+                + f"  ${float(worst_loss):,.2f}\n")
+        if hard_cap > 0:
+            risk_text += (
+                "HARD     " + _meter(float(session_loss), float(hard_cap))
+                + f"  ${float(session_loss):,.2f} / ${float(hard_cap):,.2f}\n")
+
+    reward_text = (_row("PAID attributed", f"{float(paid):,.2f}")
+                   + _row("Pending", f"{float(pending):,.2f}"))
+
+    fence = "```text\n"
     fields = [
-        {
-            "name": "🎁 Liquidity rewards",
-            "value": (
-                "```text\n"
-                f"Markets resting  "
-                f"{f'{summary.resting_markets}/{summary.active_markets}':>10}\n"
-                # Show the top three and fold the rest into `other`, so the
-                # numbers always account for every idle market. Truncating
-                # silently made the counts fail to sum to
-                # active - resting, on the one field whose job is answering
-                # "are we at capacity".
-                + "".join(
-                    f"  {reason[:15]:<15}{count:>10}\n"
-                    for reason, count in summary.idle_market_reasons[:3])
-                + ("".join(
-                    f"  {'other':<15}"
-                    f"{sum(c for _, c in summary.idle_market_reasons[3:]):>10}\n")
-                   if len(summary.idle_market_reasons) > 3 else "")
-                + f"Eligible sides   {summary.reward_eligible_sides:>10}\n"
-                f"Score-seconds    {summary.score_seconds:>10,.2f}\n"
-                f"PAID attributed  {float(paid):>10,.2f}\n"
-                "```"),
-            "inline": True,
-        },
-        {
-            "name": "📦 Inventory and exits",
-            "value": (
-                "```text\n"
-                f"{entry_label:<17}{summary.entry_fills:>10}\n"
-                f"Exit samples     {summary.exit_samples:>10}\n"
-                f"Exit complete    {100 * summary.exit_completion_rate:>9.1f}%\n"
-                f"{position_label:<17}{summary.open_positions:>10}\n"
-                f"Oldest age       {summary.max_inventory_age_seconds:>9.1f}s\n"
-                "```"),
-            "inline": True,
-        },
-        {
-            "name": "🛡️ Risk and exchange truth",
-            "value": (
-                "```text\n"
-                f"Working orders   {summary.working_orders:>10}\n"
-                f"Unresolved       {summary.unresolved_intents:>10}\n"
-                f"Unknown orders   {summary.unknown_orders:>10}\n"
-                f"Session cap      {float(_money(summary.session_loss_limit_usd)):>10.2f}\n"
-                + (f"HARD STOP        {float(_money(summary.hard_stop_loss_usd)):>10.2f}\n"
-                   if _money(summary.hard_stop_loss_usd) > 0 else "")
-                + "```"),
-            "inline": False,
-        },
-        {
-            "name": "🏥 Still alive?",
-            "value": (
-                "```text\n"
-                f"Uptime           {uptime / 3600:>9.2f}h\n"
-                f"REST rate        {summary.rest_requests_per_second:>8.2f}/s\n"
-                f"Market stream    {_age(summary.market_stream_age_seconds):>10}\n"
-                f"Private stream   {_age(summary.private_stream_age_seconds):>10}\n"
-                f"Ledger on disk   {_bytes(summary.ledger_bytes):>10}\n"
-                "```"),
-            "inline": False,
-        },
+        {"name": "\U0001f6e0️ Health", "inline": True,
+         "value": fence + health_text + "```"},
+        {"name": "\U0001f4ca Slots and reward eligibility", "inline": True,
+         "value": fence + slots_text + "```"},
+        {"name": "⚠️ Position and stop loss", "inline": False,
+         "value": fence + risk_text + "```"},
+        {"name": "\U0001f381 Rewards", "inline": False,
+         "value": fence + reward_text + "```"},
     ]
-    if summary.mode == "SHADOW":
-        fields[-1]["value"] = fields[-1]["value"].replace(
-            f"Private stream   {_age(summary.private_stream_age_seconds):>10}",
-            f"Private stream   {'N/A shadow':>10}")
     return {"embeds": [{
-        "title": (f"{icon} Liquidity Bot — {summary.mode.replace('_', ' ')} — "
-                  f"{summary.readiness_status}"),
+        "title": (f"{icon} Liquidity Bot — {summary.mode.replace('_', ' ')} "
+                  f"— {summary.readiness_status}"),
         "description": description,
         "color": color,
         "fields": fields,
         # No footer. It had grown to a single unreadable line of twenty
-        # diagnostics -- catalog counts, scan timings, fill-risk drivers -- none
-        # of which are decisions. They are printed to the log as `[selection]`
-        # instead, where they can be read and grepped rather than skimmed.
+        # diagnostics -- catalog counts, scan timings, fill-risk drivers --
+        # none of which are decisions. They are printed to the log as
+        # `[selection]` instead, where they can be read and grepped.
         "timestamp": now.isoformat(),
     }]}
 

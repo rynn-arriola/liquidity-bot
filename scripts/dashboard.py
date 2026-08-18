@@ -157,26 +157,36 @@ def _this_session(lines: list[str], since: datetime | None) -> list[str]:
     was six seconds old and perfectly healthy. A dashboard that cries wolf
     about a fixed problem is worse than no dashboard.
 
-    Scans backwards for the first timestamp older than the process start and
-    cuts there, rather than filtering on timestamps directly -- the lines
-    that matter most here are the untimestamped ones (the JSON stop block
-    carries `stop_reason` and no `at=`), and filtering would drop them and
-    turn a false alarm into a permanently silent check.
+    Cuts FORWARDS to the first timestamped line at or after the process
+    start, rather than backwards to the last one before it. The difference
+    is not cosmetic and the backwards version shipped broken: a session's
+    final JSON block -- the one carrying `stop_reason` -- has no `at=` and
+    trails the last timestamped line of the dead session, so scanning
+    backwards kept it and `risk stops` still counted the old crash.
+    Everything before the first line of the live session is another
+    process's, timestamped or not.
+
+    The 2s grace absorbs `etimes` integer-second rounding, which would
+    otherwise clip the runner's own first lines.
     """
 
     if since is None:
         return lines
-    for index in range(len(lines) - 1, -1, -1):
-        found = re.search(r"at=(\S+)", lines[index])
+    cutoff = since - timedelta(seconds=2)
+    for index, row in enumerate(lines):
+        found = re.search(r"at=(\S+)", row)
         if not found:
             continue
         try:
             stamp = datetime.fromisoformat(found.group(1))
         except Exception:
             continue
-        if stamp < since:
-            return lines[index + 1:]
-    return lines
+        if stamp >= cutoff:
+            return lines[index:]
+    # A runner that has not logged a timestamped line yet has no session to
+    # report. Empty is the honest answer: the checks then read "no [action]
+    # in the recent log", not a stall inherited from a dead process.
+    return []
 
 
 def _last_action_age(now: datetime, lines: list[str]) -> float | None:

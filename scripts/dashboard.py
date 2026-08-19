@@ -863,14 +863,23 @@ async def _pnl(now, gateway, equity) -> None:
 
     funding = deposits - withdrawals + credits
     trading_pnl = equity - funding - cash_reward
+    # Summed here rather than referenced as an undefined `grand`, which is
+    # what this printed before -- the section raised NameError and no totals
+    # were ever shown. `daily` is built from the venue's earnings above.
+    pending_total = sum(
+        (value["pending"] for value in daily.values()), Decimal(0))
     print(box_top("TOTALS"))
     print(line(f"{'equity now':<28}{float(equity):>12,.2f}"))
     print(line(f"{'net funding in':<28}{float(funding):>12,.2f}  "
                + paint("d", f"in {float(deposits):,.0f} · out "
                             f"{float(withdrawals):,.0f}")))
-    print(line(f"{'reward received (cash)':<28}{float(grand['paid']):>12,.2f}  "
+    # Cash actually received, from the transfer history -- not the venue's
+    # PAID total. They agree to $0.24 (see FINDINGS), but this line says
+    # "cash", and `trading` below is derived from this same number, so using
+    # the other one would make the arithmetic on screen not add up.
+    print(line(f"{'reward received (cash)':<28}{float(cash_reward):>12,.2f}  "
                + dot("ok")))
-    print(line(f"{'reward still pending':<28}{float(grand['pending']):>12,.2f}  "
+    print(line(f"{'reward still pending':<28}{float(pending_total):>12,.2f}  "
                + dot("warn")))
     if complete:
         print(line(f"{'trading':<28}{float(trading_pnl):>12,.2f}"))
@@ -879,7 +888,7 @@ async def _pnl(now, gateway, equity) -> None:
         print(line(paint("b", f"{'net on cash received':<28}"
                               f"{float(on_cash):>12,.2f}")))
         print(line(paint("b", f"{'net if all pending pays':<28}"
-                              f"{float(on_cash + grand['pending']):>12,.2f}")))
+                              f"{float(on_cash + pending_total):>12,.2f}")))
     else:
         print(rule())
         print(line(paint("y", "funding history incomplete — trading and net")))

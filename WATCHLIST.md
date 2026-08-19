@@ -233,6 +233,57 @@ mutants survived, because `maximum_remaining_reward` is already a tiebreaker
 and tracks projected reward closely on small fixtures. A refactor could undo it
 silently. Live measurement is currently the only guard.
 
+## 9. Do the tight-book rejects cluster at 1c, or far below it?
+
+**Opened 2026-08-19T23:51Z**, after `usable_markets.py --rejects` was fixed
+(BUGFIXES). This is the first hour anyone has seen the real reject list, and it
+disagrees with the entry that closed the question.
+
+**What is settled and must not be re-argued:** the counts in the 03:25Z FINDINGS
+entry are fine. What is not supported is its *description* of the rejects, which
+came from a listing that had no horizon filter and was showing month-out MLB
+futures that were never candidates.
+
+**Baseline (2026-08-19T23:51Z, 40 markets in the 2h horizon):**
+
+```
+- no applicable period (live-only)   15
+- book too tight to enter (< 0.02)   25   <- 15 of 25 shown, ALL at 0.0100
+= eligible pregame                    0
+
+leagues in the tight group: setkameua, wta, valorant
+```
+
+Against the 03:25Z claim: *"2c -> 1c admits about 5 of 32, all at 1.0-1.4c ...
+nothing sits just under the threshold ... 3x to 20x tighter than 0.02."*
+
+At this hour they sit at **exactly half** the threshold, not 3-20x under it, so
+2c -> 1c would admit ~25 rather than ~5. And `setkameua` is the league FINDINGS
+6h measures as 93% of every reward dollar this account has earned.
+
+**Measure:** run `scripts/usable_markets.py --rejects` on the droplet between
+**13:00 and 17:00 UTC** (09:00-13:00 EDT), a busy slate. One run, ~50 venue
+calls, never in a loop. Read the spread distribution of the `book too tight`
+block. Midnight is not a sample: the same session had 98 executable markets at
+15:19Z and 43 with zero ranked at 23:47Z.
+
+**Change if:** rejects at a BUSY hour also cluster at 0.010-0.014, AND the
+count admitted by 2c -> 1c is more than 10. Then the filter is genuinely holding
+back real markets and the trade must be costed: extra reward from more resting
+slots against the measured **-6.1c per crossed pair**, with 95% of pairs
+completing by crossing. Costing it is a separate step -- clearing this rule
+authorizes the calculation, NOT the config change.
+
+**Do not change if:** busy-hour rejects scatter to 0.001-0.007. Then the 03:25Z
+conclusion was right about the shape even though it was measured on the wrong
+markets, there is no headroom, and this entry closes with the filter untouched.
+
+**Do not read a single quiet hour as evidence either way** -- that is how the
+original entry went wrong. Two busy-hour samples on different days before
+anything moves.
+
+---
+
 ## `_rest_reconcile` failures in the unresolved-mutation loop swallow everything
 
 Noted 2026-08-18 while fixing the outage in `BUGFIXES.md`. The call site now

@@ -2999,3 +2999,30 @@ resting quote, and dropping the explicit refusal emits the forbidden place.
 
 **Validate with `resting_fraction.py`, not with cause counts.** 57.3% is the
 number to beat; reward accrues only while an order rests.
+
+## What the 2026-08-18 outages cost: a full day's reward, measured
+
+Read from the venue 2026-08-19T20:45Z, by earning date (UTC -- dating confirmed
+above):
+
+```
+2026-08-16   PAID 20.49  PENDING  1.90    72 rows
+2026-08-17   PAID  0.00  PENDING 33.83   123 rows   <- best day so far
+2026-08-18   PAID  0.01  PENDING  0.00     1 row    <- the bad day
+```
+
+**2026-08-18 earned one cent.** That day the bot restarted ten times, spent
+hours with rotation blocked quoting 1-5 markets, and churned hard enough that
+only 2 orders rested at the venue against 141 of 143 cancelled.
+
+The day has **posted** -- it has a row -- so this is not payout lag. Compare
+against 08-17's 33.83 from 123 rows: the outages and the churn cost roughly a
+full day of reward, about **$30**.
+
+This is the number to weigh availability work against. An hour of downtime is
+not free and is not small: reward accrues only while an order rests, so a bot
+that is up but quoting nothing earns exactly as much as one that is down.
+
+Caveat kept deliberately: a day can post partially and convert PENDING later
+(08-16 still carries 1.90). 08-18 showing PAID 0.01 with no pending makes a
+late correction unlikely, but re-read before quoting this as final.

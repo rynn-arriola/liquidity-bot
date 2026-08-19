@@ -596,6 +596,16 @@ class DesiredStateReconciler:
             risk_halt = False
 
         # Require a stressed complete close before either side can build risk.
+        # Why a side was dropped, kept per side so the cancel can say which
+        # test failed. Measured 2026-08-19: markets cancelled and re-placed the
+        # same side at the same price every 2-3 minutes for hours -- 141 of 143
+        # orders cancelled, 2 resting -- and the single reason string
+        # `side_no_longer_desired` could not say whether the simulated exit had
+        # become incomplete or merely expensive. Those want opposite fixes: an
+        # incomplete exit is a genuinely thin book and the gate is right to
+        # fire, while a pnl flickering either side of the threshold is a case
+        # for hysteresis. Same lesson as the three faults split above.
+        drop_cause: dict[str, str] = {}
         for side in tuple(desired_sides):
             result = cross_exit(
                 frame.book, entry_side=side,
@@ -604,7 +614,11 @@ class DesiredStateReconciler:
                 depth_haircut=self.policy.exit_depth_haircut,
                 taker_theta=self.policy.taker_theta,
                 exclude_entry_level=True)
-            if not result.complete or result.pnl < -self.policy.max_exit_loss:
+            if not result.complete:
+                drop_cause[side] = "exit_incomplete"
+                desired_sides.remove(side)
+            elif result.pnl < -self.policy.max_exit_loss:
+                drop_cause[side] = "exit_loss"
                 desired_sides.remove(side)
 
         actions: list[PlanAction] = []
@@ -618,7 +632,9 @@ class DesiredStateReconciler:
             if order.side in kept_sides:
                 reason = "duplicate_order_on_side"
             elif order.side not in desired_sides:
-                reason = "side_no_longer_desired"
+                cause = drop_cause.get(order.side)
+                reason = ("side_no_longer_desired:" + cause if cause
+                          else "side_no_longer_desired")
             elif not self._matches(order, price=desired_price, qty=quote_size):
                 reason = "resting_price_left_the_touch"
             else:

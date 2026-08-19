@@ -702,6 +702,58 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].order_id, "exit-two")
 
 
+
+class SideDropCauseTests(unittest.TestCase):
+    """A cancelled side must say WHICH exit test failed.
+
+    Measured 2026-08-19: markets cancelled and re-placed the same side at the
+    same price every 2-3 minutes for hours -- 141 of 143 orders cancelled with
+    only 2 resting, 87 places against 80 cancels -- and the single reason
+    `side_no_longer_desired` could not say whether the simulated exit had gone
+    incomplete or merely expensive.
+
+    They want opposite fixes. An incomplete exit means the book is genuinely
+    too thin to get out of a fill, and the gate is right to fire. A pnl
+    flickering either side of the threshold on an unchanged price is a case
+    for hysteresis. Guessing between them is how a fix gets built on an
+    inferred mechanism, so the reason carries the cause.
+    """
+
+    def resting_bid(self):
+        return (WorkingOrder("order-1", "bid", .49, Decimal("2")),)
+
+    def test_an_impossible_exit_is_named_exit_incomplete(self):
+        # Depth of 1 cannot absorb a quote size of 2, so crossing out never
+        # completes however cheap it looks.
+        thin = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 1), BookLevel(.48, 1)),
+            (BookLevel(.51, 1), BookLevel(.52, 1)),
+            "MARKET_STATE_OPEN", T0)
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(orders=self.resting_bid(), snapshot=thin))
+        cancels = [a for a in actions if a.kind is ActionKind.CANCEL]
+        self.assertTrue(cancels, "a side that cannot be exited must cancel")
+        self.assertEqual(
+            cancels[0].reason, "side_no_longer_desired:exit_incomplete")
+
+    def test_an_affordable_book_that_breaches_the_loss_cap_is_named_exit_loss(self):
+        # Deep enough to complete, but the cap is set below what crossing a
+        # two-cent book costs, so it fails on price rather than feasibility.
+        actions = DesiredStateReconciler(
+            policy(max_exit_loss=0.001)).plan(frame(orders=self.resting_bid()))
+        cancels = [a for a in actions if a.kind is ActionKind.CANCEL]
+        self.assertTrue(cancels, "a side that cannot be exited cheaply cancels")
+        self.assertEqual(cancels[0].reason, "side_no_longer_desired:exit_loss")
+
+    def test_a_healthy_book_keeps_the_side_and_cancels_nothing(self):
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(orders=self.resting_bid()))
+        self.assertEqual(
+            [a for a in actions if a.kind is ActionKind.CANCEL], [],
+            "a side that can be exited must not be cancelled at all")
+
+
 if __name__ == "__main__":
     unittest.main()
 

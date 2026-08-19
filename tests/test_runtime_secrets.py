@@ -139,7 +139,7 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("9/20", rewards)
         # And the eleven bound-but-silent slots are counted outright, because
         # "how many slots are broken" is the question a slot count is asked.
-        self.assertIn("SLOTS NOT WORKING", rewards)
+        self.assertIn("stuck, look at it", rewards)
         # And the eleven that are not resting are broken down, because
         # "priced out" and "broken" need very different responses.
         self.assertIn("target_not_met", rewards)
@@ -187,7 +187,7 @@ class DiscordTests(unittest.TestCase):
             spread_filtered_markets=23, selection_failures=0)
         embed = build_liquidity_summary(healthy)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
+        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
         self.assertNotEqual(embed["color"], ORANGE)
         self.assertIn("17 slot(s) free", embed["description"])
         # The funnel, so "why only three" is answerable from the message.
@@ -201,9 +201,9 @@ class DiscordTests(unittest.TestCase):
                          idle_market_reasons=(("book_stale", 5),))
         embed = build_liquidity_summary(broken)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{7:>10}", slots)
+        self.assertIn(f"{'  stuck, look at it':<19}{7:>10}", slots)
         self.assertEqual(embed["color"], ORANGE)
-        self.assertIn("7 slot(s) NOT WORKING", embed["description"])
+        self.assertIn("7 slot(s) STUCK", embed["description"])
         # ...and why, so it is actionable rather than just alarming.
         self.assertIn("book_stale", slots)
 
@@ -245,9 +245,9 @@ class DiscordTests(unittest.TestCase):
             quoting = int([row for row in slots.splitlines()
                            if row.startswith("Quoting")][0]
                           .split()[-1].split("/")[0])
-            broken = value("SLOTS NOT WORKING")
-            free = value("Free, none viable")
-            held = value("awaiting rotation") if waiting else 0
+            broken = value("  stuck, look at it")
+            free = value("  free, no supply")
+            held = value("  awaiting rotation") if waiting else 0
             self.assertEqual(
                 quoting + broken + held + free, capacity,
                 f"{quoting}+{broken}+{held}+{free} != {capacity} "
@@ -271,9 +271,11 @@ class DiscordTests(unittest.TestCase):
                                  ("quarantined", 1)))
         slots = [f for f in build_liquidity_summary(summary)["embeds"][0]
                  ["fields"] if "Slots" in f["name"]][0]["value"]
+        # Only the reason rows, which are indented 6. The three slot states
+        # are indented 2, and counting those too double-counted the total.
         counted = sum(
             int(row.split()[-1]) for row in slots.splitlines()
-            if row.startswith("  ") and row.split()[-1].isdigit())
+            if row.startswith("      ") and row.split()[-1].isdigit())
         self.assertEqual(counted, 15, "reasons must sum to active - resting")
         self.assertIn("other", slots)
 
@@ -299,9 +301,9 @@ class DiscordTests(unittest.TestCase):
             idle_market_reasons=(("kicked_off", 3),))
         embed = build_liquidity_summary(quiet)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
-        self.assertIn(f"{'awaiting rotation':<19}{3:>10}", slots)
-        self.assertNotIn("slot(s) NOT WORKING", embed["description"])
+        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  awaiting rotation':<19}{3:>10}", slots)
+        self.assertNotIn("slot(s) STUCK", embed["description"])
 
         # One kicked off, two genuinely stuck: the two must still be counted.
         mixed = LiquiditySummary(
@@ -309,9 +311,9 @@ class DiscordTests(unittest.TestCase):
             idle_market_reasons=(("kicked_off", 1), ("book_stale", 2)))
         embed = build_liquidity_summary(mixed)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{2:>10}", slots)
+        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", slots)
         self.assertEqual(embed["color"], ORANGE)
-        self.assertIn("2 slot(s) NOT WORKING", embed["description"])
+        self.assertIn("2 slot(s) STUCK", embed["description"])
         self.assertIn("book_stale", slots)
 
         # Never negative, and never hides a stuck slot, if a caller reports
@@ -319,8 +321,8 @@ class DiscordTests(unittest.TestCase):
         absurd = LiquiditySummary(**base, awaiting_rotation_markets=99)
         slots = [f for f in build_liquidity_summary(absurd)["embeds"][0]
                  ["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{0:>10}", slots)
-        self.assertIn(f"{'awaiting rotation':<19}{3:>10}", slots)
+        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  awaiting rotation':<19}{3:>10}", slots)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound
@@ -347,7 +349,7 @@ class DiscordTests(unittest.TestCase):
             observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
             active_markets=20, resting_markets=3)
         embed = build_liquidity_summary(summary)["embeds"][0]
-        self.assertIn("17 slot(s) NOT WORKING", embed["description"])
+        self.assertIn("17 slot(s) STUCK", embed["description"])
         self.assertNotIn("slot(s) free", embed["description"])
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
         self.assertNotIn("Viable now", slots)

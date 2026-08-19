@@ -253,7 +253,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         # Lead with this. It is the one an operator can act on, and the count
         # that answers "are the other slots working?".
         color, icon = ORANGE, "\U0001f7e0"
-        state = f"WORKING · {broken} slot(s) NOT WORKING"
+        state = f"WORKING · {broken} slot(s) STUCK"
     elif unmet and summary.slot_capacity:
         color, icon = ORANGE, "\U0001f7e0"
         state = f"WORKING · {unmet} viable market(s) not quoted"
@@ -311,16 +311,22 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         _row("Quoting", f"{summary.resting_markets}/{summary.slot_capacity}"
              if summary.slot_capacity
              else f"{summary.resting_markets}/{summary.active_markets}")
-        # The headline answer to "are the other slots working?". A bound
-        # market resting nothing holds a slot no other market can use, so
-        # this is the number that costs reward.
-        + _row("SLOTS NOT WORKING", broken)
-        + (_row("awaiting rotation", waiting) if waiting else "")
-        + "".join(f"  {reason[:15]:<15}{count:>8}\n"
+        # Indented so the three read as a partition of the remaining slots,
+        # and no sub-count can be mistaken for the alarm. The flat list did
+        # exactly that: an operator read "Free, none viable 8" as "8 slots
+        # not working" while the stuck count directly above it said 0.
+        #
+        # `stuck` is the only one of the three that means act. A bound market
+        # resting nothing holds a slot no other market can use, so it is the
+        # one that costs reward.
+        + _row("  stuck, look at it", broken)
+        + (_row("  awaiting rotation", waiting) if waiting else "")
+        + "".join(f"      {reason[:15]:<15}{count:>4}\n"
                   for reason, count in summary.idle_market_reasons[:3])
-        + ("".join(f"  {'other':<15}"
-                   f"{sum(c for _, c in summary.idle_market_reasons[3:]):>8}\n")
+        + ("".join(f"      {'other':<15}"
+                   f"{sum(c for _, c in summary.idle_market_reasons[3:]):>4}\n")
            if len(summary.idle_market_reasons) > 3 else "")
+        + (_row("  free, no supply", free) if summary.slot_capacity else "")
         + _row("Eligible sides", summary.reward_eligible_sides)
         + _row("Score-seconds", f"{summary.score_seconds:,.2f}"))
     if summary.slot_capacity:
@@ -329,8 +335,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         # droplet. Of these, only "lost to errors" means something is wrong;
         # the rest are deliberate economic refusals.
         slots_text += (
-            _row("Free, none viable", free)
-            + _row("Viable now", summary.viable_markets)
+            _row("Viable now", summary.viable_markets)
             + _row("Rewarded in window", summary.rewarded_markets)
             + _row("Refused, tight book", summary.spread_filtered_markets)
             + _row("Lost to errors", summary.selection_failures))

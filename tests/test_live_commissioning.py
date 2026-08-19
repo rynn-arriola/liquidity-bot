@@ -3580,7 +3580,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # number of bound markets: "0/2 bound" hid the two dead slots that
         # "0/8 of capacity" makes obvious.
         self.assertIn(f"{'Quoting':<19}{'0/8':>10}", rendered)
-        self.assertIn(f"{'SLOTS NOT WORKING':<19}{2:>10}", rendered)
+        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", rendered)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -3602,7 +3602,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # releasable to another market. It is counted, and the reason is
         # named underneath, so "are we at capacity or is something stuck?"
         # is answerable from the message.
-        self.assertIn("SLOTS NOT WORKING", rewards)
+        self.assertIn("stuck, look at it", rewards)
         self.assertIn("retired", rewards)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -3638,7 +3638,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(notifier.payloads, "the summary must still be sent")
         slots = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
                  if "Slots" in f["name"]][0]["value"]
-        self.assertIn("SLOTS NOT WORKING", slots)
+        self.assertIn("stuck, look at it", slots)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

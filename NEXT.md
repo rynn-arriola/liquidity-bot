@@ -78,6 +78,94 @@ stretch. Do not make it fire on stale equity; the exposure is that a bad
 venue and a bad day can coincide, and the answer to that is the flatten
 deadline, not a stop firing on numbers it cannot trust.
 
+## 00b. The place/cancel churn: read the counts, then fix the dwell
+
+**Ranked below the loss-stop baseline above (that one loses money silently)
+and above everything below it.** This is the largest continuous drag on
+earnings: reward is paid for RESTING, and the bot spends most of its time not
+resting.
+
+### The symptom, measured
+
+2026-08-19 13:33Z, before any change:
+
+```
+19 markets bound, 2 orders resting at the venue
+143 orders since 12:30 -- 141 CANCELED, 2 OPEN
+87 PLACE_POST_ONLY reward_positive_candidate vs 80 CANCEL side_no_longer_desired
+13-17 placements per market per hour
+```
+
+One market, same side, same price, no blockers, for hours:
+
+```
+13:17:31 CANCEL bid       13:18:25 PLACE bid 0.45
+13:20:41 CANCEL bid       13:21:23 PLACE bid 0.45
+13:24:04 CANCEL bid       13:24:54 PLACE bid 0.45
+```
+
+Still running after the restart, 14 minutes: 28 places against 28 cancels.
+
+This is the same churn `BUGFIXES.md` records for 2026-08-14 and marks **"not
+diagnosed further"**. It has been costing reward for weeks.
+
+### It is now attributable -- that is what shipped
+
+`side_no_longer_desired` was one string covering seven distinct causes, which
+is why it was never diagnosed. Every removal point in `reconciler.plan_market`
+now names itself:
+
+`expected_net_not_positive`, `expected_net_not_finite`, `reward_ineligible`,
+`no_entry_price`, `worst_loss_budget`, `exit_incomplete`, `exit_loss`
+
+Read them with:
+
+```bash
+grep '\[action\]' logs/commissioning.log | grep -o 'reason=[a-z_:]*' \
+  | sort | uniq -c | sort -rn
+```
+
+### Three hypotheses, two already dead -- do not re-run them
+
+1. **Stressed-exit gate** (`cross_exit` incomplete or over `max_exit_loss`).
+   Looked obvious. **Wrong** -- once tagged, live cancels arrived bare, so the
+   drop was happening further up. Do not start here again.
+2. **`expected_net` floored on the wrong branch.** `live_commissioning` does
+   `if not economics.should_quote: expected = max(expected, 1e-9)` -- the floor
+   that exists to stop this flicker is applied when the gate says NOT to quote,
+   and skipped when it says quote, so a wanted side can carry a value <= 0 and
+   fail the reconciler's strict `> 0`. **Real inconsistency, reproduced in a
+   unit test, but not what is firing live.** Worth fixing on its own merits;
+   not the churn.
+3. **`reward_ineligible`** -- what the running bot actually reports, 10 of 10
+   attributed cancels so far. The side left the venue's reward band and the
+   `reward_eligibility_dwell_seconds` grace expired.
+
+### The work
+
+**Gate it on data, not on this note.** Let a full busy session accumulate, then
+read the counts.
+
+- If `reward_ineligible` dominates a high-volume window, the dwell is too short
+  and the fix is one constant, with a clean before/after: cancels per hour, and
+  orders resting at the venue. Pick the value from the observed flip interval,
+  not by feel.
+- If the mix shifts under load, the dwell is not the answer and hypothesis 2
+  becomes the candidate again -- but only with counts behind it.
+
+Whatever changes, measure **orders resting at the venue**, not placements.
+Placements went up while resting went down; that is the trap this whole
+investigation started in.
+
+### Do not
+
+- Do not floor `expected_net` on both branches to "fix" it. That makes the bot
+  quote sides with negative expected value, which is the EV-gate decision in
+  this file, not a bug fix.
+- Do not tune the dwell from a quiet window. The 14-minute sample after the
+  restart showed 11 resting where the busy window showed 2; a constant chosen
+  from the quiet regime will not hold.
+
 ## 00. START HERE (2026-08-18, third): resolve a PLACE that returned no id
 
 **This is what breaks the automatic recovery**, so it goes above the

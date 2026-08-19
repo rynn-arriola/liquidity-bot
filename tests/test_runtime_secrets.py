@@ -218,20 +218,22 @@ class DiscordTests(unittest.TestCase):
         which. Checked across the shapes a real session moves through.
         """
 
-        for active, resting, capacity, waiting in (
-                (3, 3, 20, 0),    # quiet evening, nothing broken
-                (14, 7, 20, 0),   # seven slots bound and silent
-                (20, 20, 20, 0),  # genuinely full
-                (0, 0, 20, 0),    # nothing bound yet
-                (20, 0, 20, 0),   # every slot bound and dead
-                (9, 6, 20, 3),    # three kicked off, awaiting rotation
-                (9, 6, 20, 1)):   # one kicked off, two really stuck
+        for active, resting, capacity, waiting, cycling in (
+                (3, 3, 20, 0, 0),    # quiet evening, nothing broken
+                (14, 7, 20, 0, 0),   # seven slots bound and silent
+                (20, 20, 20, 0, 0),  # genuinely full
+                (0, 0, 20, 0, 0),    # nothing bound yet
+                (20, 0, 20, 0, 0),   # every slot bound and dead
+                (9, 6, 20, 3, 0),    # three kicked off, awaiting rotation
+                (9, 6, 20, 1, 0),    # one kicked off, two really stuck
+                (14, 7, 20, 0, 7),   # all seven mid-cycle, nothing stuck
+                (14, 7, 20, 2, 3)):  # two kicked off, three cycling, two stuck
             summary = LiquiditySummary(
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
                 active_markets=active, resting_markets=resting,
                 slot_capacity=capacity, viable_markets=resting,
-                awaiting_rotation_markets=waiting)
+                awaiting_rotation_markets=waiting, cycling_markets=cycling)
             slots = [f for f in build_liquidity_summary(summary)["embeds"][0]
                      ["fields"] if "Slots" in f["name"]][0]["value"]
 
@@ -248,10 +250,12 @@ class DiscordTests(unittest.TestCase):
             broken = value("  stuck, look at it")
             free = value("  free, no supply")
             held = value("  awaiting rotation") if waiting else 0
+            spin = value("  re-quoting") if cycling else 0
             self.assertEqual(
-                quoting + broken + held + free, capacity,
-                f"{quoting}+{broken}+{held}+{free} != {capacity} "
-                f"for active={active} resting={resting} waiting={waiting}")
+                quoting + broken + spin + held + free, capacity,
+                f"{quoting}+{broken}+{spin}+{held}+{free} != {capacity} "
+                f"for active={active} resting={resting} "
+                f"waiting={waiting} cycling={cycling}")
 
     def test_the_broken_slot_reasons_account_for_every_broken_slot(self):
         """The breakdown under the count must sum to the count.
@@ -323,6 +327,45 @@ class DiscordTests(unittest.TestCase):
                  ["fields"] if "Slots" in f["name"]][0]["value"]
         self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
         self.assertIn(f"{'  awaiting rotation':<19}{3:>10}", slots)
+
+    def test_a_market_between_a_cancel_and_its_replace_is_not_stuck(self):
+        """Churn is not breakage, and counting it as breakage cried wolf.
+
+        Measured 2026-08-19: markets cycled every 17-40 seconds -- 50 places
+        against 51 cancels in 23 minutes -- so a sample taken at any instant
+        catches several holding no order between a cancel and its re-place.
+        Those were counted as stuck, and the operator was sent to investigate
+        a healthy bot three times over it.
+        """
+
+        base = dict(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=1),
+            active_markets=14, resting_markets=7, slot_capacity=20,
+            viable_markets=7, rewarded_markets=40)
+
+        spinning = LiquiditySummary(**base, cycling_markets=7)
+        embed = build_liquidity_summary(spinning)["embeds"][0]
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  re-quoting':<19}{7:>10}", slots)
+        self.assertNotEqual(embed["color"], ORANGE)
+
+        # A genuinely stuck slot still surfaces alongside the cycling ones.
+        mixed = LiquiditySummary(
+            **base, cycling_markets=5,
+            idle_market_reasons=(("book_stale", 2),))
+        embed = build_liquidity_summary(mixed)["embeds"][0]
+        slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", slots)
+        self.assertEqual(embed["color"], ORANGE)
+        self.assertIn("2 slot(s) STUCK", embed["description"])
+
+        # Cycling can never exceed the idle slots and hide a stuck one.
+        absurd = LiquiditySummary(**base, cycling_markets=99)
+        slots = [f for f in build_liquidity_summary(absurd)["embeds"][0]
+                 ["fields"] if "Slots" in f["name"]][0]["value"]
+        self.assertIn(f"{'  re-quoting':<19}{7:>10}", slots)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound

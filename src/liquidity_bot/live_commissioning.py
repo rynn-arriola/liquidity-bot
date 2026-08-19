@@ -271,6 +271,11 @@ class CommissioningRunner:
         # exchange_order_id -> when we last re-issued a cancel the venue had
         # confirmed did not land. See `_retry_uncertain_cancels`.
         self._cancel_retried_at: dict[str, datetime] = {}
+        # market -> when it last placed or cancelled. A market between a
+        # cancel and its re-place holds no order for a few seconds and is not
+        # stuck; without this it was counted as stuck and the alarm fired on
+        # ordinary churn. See `_cycling_markets`.
+        self._last_action_at: dict[str, datetime] = {}
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -1860,6 +1865,38 @@ class CommissioningRunner:
             return False
         return start is not None and start <= self._now()
 
+    # A market that placed or cancelled this recently is mid-cycle, not stuck.
+    # Measured 2026-08-19: markets cycled every 17-40s under the churn, so a
+    # sample taken at any instant catches several between a cancel and its
+    # re-place. Counting those as stuck is what made the alarm fire on
+    # ordinary operation. Comfortably above the observed cycle time.
+    CYCLING_WINDOW_SECONDS = 60.0
+
+    def _cycling_markets(self) -> int:
+        """Bound markets holding no order that acted within the window.
+
+        Never raises, for the same reason `_idle_market_reasons` does not: it
+        is reporting, and the summary is sent from the shutdown loop where an
+        exception reads as a failure to prove flat.
+        """
+
+        now = self._now()
+        cycling = 0
+        for slug in self.active_slugs:
+            try:
+                if self.ledger.working_orders(slug) or self._is_retired(slug):
+                    continue
+                if self._has_kicked_off(slug):
+                    continue
+                last = self._last_action_at.get(slug)
+                if (last is not None
+                        and (now - last).total_seconds()
+                        <= self.CYCLING_WINDOW_SECONDS):
+                    cycling += 1
+            except Exception:
+                continue
+        return cycling
+
     def _awaiting_rotation(self) -> int:
         """Idle slots held only because their market has already started.
 
@@ -2137,6 +2174,7 @@ class CommissioningRunner:
                          state.expected_net_by_side.items()} }",
                 flush=True,
             )
+        self._last_action_at[slug] = now
         try:
             await self.driver.apply_one(
                 actions, market=state.market,
@@ -2397,6 +2435,7 @@ class CommissioningRunner:
             # the droplet to answer.
             slot_capacity=self.config.max_markets,
             awaiting_rotation_markets=self._awaiting_rotation(),
+            cycling_markets=self._cycling_markets(),
             viable_markets=(
                 self._market_selection.viable_markets
                 if self._market_selection is not None else 0),

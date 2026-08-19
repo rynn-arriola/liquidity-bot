@@ -107,6 +107,10 @@ class LiquiditySummary:
     # for the next rotation sweep -- so they are reported apart from the
     # count that means "something is wrong".
     awaiting_rotation_markets: int = 0
+    # Bound, holding no order, but placed or cancelled seconds ago -- between
+    # a cancel and its re-place. Not a fault, and counting it as one made the
+    # alarm fire on ordinary churn.
+    cycling_markets: int = 0
     pnl_label: str = "trading"
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
@@ -141,6 +145,7 @@ class LiquiditySummary:
                 ("spread_filtered_markets", self.spread_filtered_markets),
                 ("selection_failures", self.selection_failures),
                 ("awaiting_rotation_markets", self.awaiting_rotation_markets),
+                ("cycling_markets", self.cycling_markets),
                 ("ledger_bytes", self.ledger_bytes)):
             if value < 0:
                 raise ValueError(f"{name} cannot be negative")
@@ -245,7 +250,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # idle for a known, harmless reason and is excluded, so this count keeps
     # meaning "look at this".
     waiting = min(idle, max(0, summary.awaiting_rotation_markets))
-    broken = max(0, idle - waiting)
+    cycling = min(idle - waiting, max(0, summary.cycling_markets))
+    broken = max(0, idle - waiting - cycling)
     if not integrity_ok or summary.readiness_status == "DO_NOT_START_TRIAL":
         color, icon = RED, "\U0001f6d1"
         state = "NOT WORKING"
@@ -320,6 +326,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         # resting nothing holds a slot no other market can use, so it is the
         # one that costs reward.
         + _row("  stuck, look at it", broken)
+        + (_row("  re-quoting", cycling) if cycling else "")
         + (_row("  awaiting rotation", waiting) if waiting else "")
         + "".join(f"      {reason[:15]:<15}{count:>4}\n"
                   for reason, count in summary.idle_market_reasons[:3])

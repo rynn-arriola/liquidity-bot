@@ -97,6 +97,38 @@ places : cancels   ~1:1               ->  18:7
 bound, not quoting 7-18               ->  0-1
 ```
 
+### CONFIRMED 2026-08-19T20:43Z over a full session
+
+```
+resting fraction   84.7%  (5h29m, 43 sides)   vs 57.3% baseline
+expected_net_not_positive   absent from the cause counts
+bound, not quoting          0
+uptime                      5h29m, no supervisor bounce since 15:14
+```
+
+The 3h41m reading was not a fluke. Reward posting is still the outcome to
+check -- see WATCHLIST.
+
+### Loose end: 23 cancels still come back untagged
+
+`side_no_longer_desired` with **no cause suffix**, 23 of them this session. The
+claim that "every removal point names itself" is not yet true. Two paths in
+`plan_market` clear `desired_sides` without recording a cause:
+
+```python
+desired_sides = ({"bid", "offer"} if market_open else set())
+if not frame.market.is_supported_moneyline:
+    desired_sides.clear()
+```
+
+Both are legitimate -- a market that closed or is not a supported moneyline
+should drop every side -- and they are almost certainly what these 23 are. But
+a bare `side_no_longer_desired` is precisely the opaque string that made this
+churn undiagnosable for weeks, so tag them (`market_not_open`,
+`unsupported_market`) the next time this file is open. Reporting only, no
+behaviour change, but it needs a restart to take effect and was not worth
+breaking a clean 5h run for.
+
 ### What still needs confirming
 
 - **Re-run `resting_fraction.py` over a full day.** 3h41m and 36 sides is a

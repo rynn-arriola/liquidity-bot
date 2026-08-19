@@ -746,6 +746,31 @@ class SideDropCauseTests(unittest.TestCase):
         self.assertTrue(cancels, "a side that cannot be exited cheaply cancels")
         self.assertEqual(cancels[0].reason, "side_no_longer_desired:exit_loss")
 
+    def test_a_zero_expected_net_names_itself_as_the_cause(self):
+        """The churn driver, reproduced.
+
+        `expected_net_by_side` is floored to 1e-9 only when the gate says NOT
+        to quote (`live_commissioning`, "floored the same way the selector
+        already floors it"). When the gate says quote, the raw value is used
+        and can sit at or below zero -- and the reconciler wants a side only
+        when it is strictly positive. So a side the gate wants gets cancelled,
+        re-placed at the same price, and cancelled again.
+
+        Measured 2026-08-19: 141 of 143 orders cancelled with 2 resting, the
+        same side re-placed at 0.45 every 2-3 minutes, `blockers={}` and
+        `net={'bid': 0.0}` throughout -- 0.0 because round(1e-9, 6) is 0.0.
+        """
+
+        f = frame(orders=(WorkingOrder("order-1", "bid", .49, Decimal("2")),))
+        f.expected_net_by_side["bid"] = 0.0
+        actions = DesiredStateReconciler(policy()).plan(f)
+        cancels = [a for a in actions if a.kind is ActionKind.CANCEL]
+        self.assertTrue(cancels)
+        self.assertEqual(
+            cancels[0].reason,
+            "side_no_longer_desired:expected_net_not_positive",
+            "the churn must be attributable from the log alone")
+
     def test_a_healthy_book_keeps_the_side_and_cancels_nothing(self):
         actions = DesiredStateReconciler(policy()).plan(
             frame(orders=self.resting_bid()))

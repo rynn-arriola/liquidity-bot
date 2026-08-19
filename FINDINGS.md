@@ -2865,3 +2865,60 @@ they are not strictly comparable.
 
 If the spread regime ever needs re-testing on this bot, the prerequisite is
 recording the book spread at fill time. Nothing stores it today.
+
+## The place/cancel churn: expected net is floored on the wrong branch
+
+Traced 2026-08-19 from the symptom the operator kept seeing as "N slots not
+working". It is not a slot-accounting problem.
+
+**Symptom.** 19 markets bound, **2 orders resting at the venue**. Of 143 orders
+since 12:30, 141 cancelled and 2 open. Actions ran 87 `PLACE_POST_ONLY
+reward_positive_candidate` against 80 `CANCEL side_no_longer_desired`, 13-17
+placements per market per hour. One market, unchanged price, no blockers:
+
+```
+13:17:31 CANCEL bid       13:18:25 PLACE bid 0.45
+13:20:41 CANCEL bid       13:21:23 PLACE bid 0.45
+13:24:04 CANCEL bid       13:24:54 PLACE bid 0.45
+```
+
+Reward pays for **resting**, so this earns almost nothing while holding slots.
+
+**The chain.** `live_commissioning` sets the value the reconciler gates on:
+
+```python
+expected = economics.expected_net_value
+if not economics.should_quote:
+    expected = max(expected, 1e-9)      # floored ONLY on the "do not quote" branch
+state.expected_net_by_side[side] = expected
+```
+
+and `reconciler.plan_market` wants a side only when
+`expected_net_by_side[side] > 0`.
+
+The floor exists precisely to stop this flicker -- the comment beside it
+records an earlier round of it ("zero orders resting at the venue across
+repeated samples, while 27 markets were quoted in 15 minutes"). But it is
+applied when the gate says **not** to quote. When the gate says quote, the raw
+value passes through, and it can sit at or below zero. So a side the gate wants
+fails the reconciler's strict `> 0`, gets cancelled, and is re-placed at the
+same price on the next pass.
+
+`net={'bid': 0.0}` in the log is not zero data: `round(1e-9, 6)` is `0.0`.
+
+**Reproduced**, not just read: setting `expected_net_by_side['bid'] = 0.0` on a
+resting side yields exactly the bare `side_no_longer_desired` production shows.
+
+**First hypothesis was wrong**, which is why the reason string now carries a
+cause. The stressed-exit gate (`cross_exit` incomplete or over
+`max_exit_loss`) looked like the obvious driver; tagging it showed the live
+cancels arriving **bare**, meaning the side was dropped further up. Every
+removal point now names itself: `expected_net_not_positive`,
+`expected_net_not_finite`, `reward_ineligible`, `no_entry_price`,
+`worst_loss_budget`, `exit_incomplete`, `exit_loss`.
+
+**Not fixed here, deliberately.** The obvious change -- floor on both branches
+-- would quote sides with a negative expected value, which is an economic
+decision and not a bug fix. The two are inconsistent and which one is right is
+the EV-gate question in `NEXT.md`. Do not "fix" this by flooring without
+deciding that first.

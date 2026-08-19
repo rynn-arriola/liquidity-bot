@@ -546,6 +546,13 @@ class DesiredStateReconciler:
                        and seconds_to_event is not None
                        and seconds_to_event
                        > self.policy.force_exit_before_start_seconds)
+        # Why each side stopped being wanted, so the cancel can name it. A
+        # single `side_no_longer_desired` could not be attributed from the
+        # logs -- the 2026-08-14 churn was never diagnosed for exactly this
+        # reason, and on 2026-08-19 the first guess (the stressed-exit gate)
+        # was wrong: the reason arrived bare, meaning the side had already
+        # been dropped further up. Every removal now records its cause.
+        drop_cause: dict[str, str] = {}
         desired_sides = ({"bid", "offer"} if market_open else set())
         if not frame.market.is_supported_moneyline:
             desired_sides.clear()
@@ -561,11 +568,21 @@ class DesiredStateReconciler:
             since = self._ineligible_since.setdefault((slug, side), frame.now)
             if (frame.now - since).total_seconds() >= (
                     self.policy.reward_eligibility_dwell_seconds):
+                drop_cause[side] = "reward_ineligible"
                 desired_sides.discard(side)
-        desired_sides = {
-            side for side in desired_sides
-            if math.isfinite(frame.expected_net_by_side.get(side, 0.0))
-            and frame.expected_net_by_side.get(side, 0.0) > 0}
+        # A strict `> 0` on an estimate that sits near zero flips with book
+        # noise, and flipping cancels a resting quote and re-places it at the
+        # same price minutes later. Reward pays for resting, so that costs
+        # real money. Tagged so the churn can be attributed before anything
+        # is changed about the threshold itself.
+        for side in tuple(desired_sides):
+            value = frame.expected_net_by_side.get(side, 0.0)
+            if not math.isfinite(value):
+                drop_cause[side] = "expected_net_not_finite"
+                desired_sides.discard(side)
+            elif value <= 0:
+                drop_cause[side] = "expected_net_not_positive"
+                desired_sides.discard(side)
 
         # A tight book is priced, not refused: _entry_price backs the quote off
         # until two cents sit in the middle. Only an overlapping book -- the
@@ -579,6 +596,7 @@ class DesiredStateReconciler:
             for side in tuple(desired_sides)}
         for side, price in entry_prices.items():
             if price is None:
+                drop_cause[side] = "no_entry_price"
                 desired_sides.remove(side)
 
         quote_size = self.policy.quote_size
@@ -590,22 +608,14 @@ class DesiredStateReconciler:
         if (candidate_loss > self.policy.max_market_worst_loss + 1e-9
                 or frame.existing_portfolio_worst_loss + candidate_loss
                 > self.policy.max_portfolio_worst_loss + 1e-9):
+            for side in desired_sides:
+                drop_cause[side] = "worst_loss_budget"
             desired_sides.clear()
             risk_halt = True
         else:
             risk_halt = False
 
         # Require a stressed complete close before either side can build risk.
-        # Why a side was dropped, kept per side so the cancel can say which
-        # test failed. Measured 2026-08-19: markets cancelled and re-placed the
-        # same side at the same price every 2-3 minutes for hours -- 141 of 143
-        # orders cancelled, 2 resting -- and the single reason string
-        # `side_no_longer_desired` could not say whether the simulated exit had
-        # become incomplete or merely expensive. Those want opposite fixes: an
-        # incomplete exit is a genuinely thin book and the gate is right to
-        # fire, while a pnl flickering either side of the threshold is a case
-        # for hysteresis. Same lesson as the three faults split above.
-        drop_cause: dict[str, str] = {}
         for side in tuple(desired_sides):
             result = cross_exit(
                 frame.book, entry_side=side,

@@ -354,6 +354,24 @@ blocks *its own* market's quoting and its own shutdown cancel.
 2026-08-17; 60s cost another on 2026-08-18. The measured stall was 131s. The
 timeout is not the variable that matters.
 
+## Also from 2026-08-19: two things for the next restart batch
+
+Both are runner changes, both are reporting-only, and neither is worth
+restarting a healthy session on its own. Batch them with the next deploy.
+
+- **Give the period drop a real counter.** `_applicable_period` returning None
+  is a bare `continue` in `market_selector.py` with no increment, so a third of
+  the funnel drained invisibly on 2026-08-19 (15 of 43) and the diagnostic
+  blamed the spread filter instead. `usable_markets.py` now derives it by
+  subtraction, which is exact but only available when someone runs the script.
+  A `period_filtered_markets` field on `RewardMarketSelection` would put it in
+  the object the `[selection]` line reads. See FINDINGS.
+- **Reconcile the two `minimum_trade_qty` gates.** `_applicable_period` hardcodes
+  `> 1`; `_catalog_market_is_executable` scales to `policy.quote_size`. The
+  static method cannot see the policy, which is why it was missed when size went
+  1 -> 5. Latent today -- every in-horizon market reports 0.01 -- but it is the
+  "gate in two places" pattern that has already cost two deploy cycles.
+
 ## Also from 2026-08-17, smaller
 
 - **`reject_reason` is never captured.** All 16 rejections that day recorded

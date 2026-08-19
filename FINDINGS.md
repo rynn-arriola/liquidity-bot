@@ -2792,6 +2792,12 @@ flatten deadline is for.
 
 ## The 2c spread filter is a much weaker lever than "94% refused" suggests
 
+> **PARTLY CORRECTED 2026-08-19T23:31Z -- do not read this alone.** The
+> counts below stand; the claim that the rejects are long-dated MLB futures
+> came from the `--rejects` listing, which was not filtering by horizon at
+> all and printed markets that were never candidates. See "A third of the
+> funnel drains through a counter that does not exist" below, and BUGFIXES.
+
 Measured 2026-08-19T03:25Z with `scripts/usable_markets.py --rejects`.
 
 The funnel reads alarmingly: 34 rewarded markets in the horizon, 32 refused for
@@ -2999,6 +3005,105 @@ resting quote, and dropping the explicit refusal emits the forbidden place.
 
 **Validate with `resting_fraction.py`, not with cause counts.** 57.3% is the
 number to beat; reward accrues only while an order rests.
+
+## A third of the funnel drains through a counter that does not exist
+
+Measured 2026-08-19T23:31Z, by reproducing the selector loop with the missing
+counter added. The arithmetic closes exactly, so this is not an estimate:
+
+```
+in horizon (executable)        43
+carrying rewards               43
+- unsupported program           0   COUNTED
+- no applicable period         15   *** UNCOUNTED ***
+- book too tight to enter (2c) 27   COUNTED
+= candidates for a book read    1        43 - 0 - 15 - 27 = 1
+```
+
+`_applicable_period` returning `None` hits a bare `continue` in
+`market_selector.py` with no counter increment. `eligible_pregame_markets` is
+`len(candidates)`, so those 15 markets vanish between "carrying rewards" and
+"eligible pregame" with nothing reported. The funnel `usable_markets.py` prints
+therefore does not sum, and it was printed as though it did.
+
+**Every one of the 15 had only `live` periods.** 45 period rows across the 15,
+all named `live`. These are markets whose reward window has rolled into the live
+phase, which the pregame executor may not quote -- invariant 39, and section 4:
+only `day_of` has a provable per-market clock. **The drop is correct.** What was
+wrong is that it was invisible.
+
+### It removes the WIDE books preferentially
+
+Measured in the same window: 11 of the 43 in-horizon markets had a catalog
+spread >= 2c and would have passed the spread filter. The selector ranked
+**one**. So ten of the eleven wide books were in the period-dropped group.
+
+That is mechanically coherent rather than coincidental. Near kickoff the book
+widens *and* the reward period flips to live, so "wide enough to quote" and
+"too late to quote" arrive together. The markets the spread filter would have
+admitted are exactly the ones the period gate has already taken.
+
+### Why the miscount matters more than the count
+
+The verdict blamed the spread filter, because that is the counter that exists:
+
+> `64% of rewarded markets have books tighter than 0.02 ... This is the dominant
+> filter ... It is also the lever if you want more markets`
+
+Two different facts with two different levers, and the wrong one was named:
+
+- **tight book** -- the market is unattractive; `minimum_entry_spread` is the
+  lever, and this file already measures that as weak (the rejects sit 3-20x
+  under the threshold, not just under it).
+- **live-only period** -- the market is fine and this executor cannot address
+  it at all. The lever is the lifecycle, not a spread constant. Section 4
+  measures the live pool at **$1,600 against day_of's $200**, and section 6d
+  attributes 40% of paid reward to live-associated markets against 5-11%
+  clearly pregame.
+
+So the uncounted drain points straight at the largest open strategic question in
+the project, and the diagnostic was hiding it behind a filter that is not the
+binding one at that hour.
+
+**Fixed in the tool, not in the runner.** `usable_markets.py` now derives the
+count by subtraction and names whichever drain dominates. Adding a real counter
+to `RewardMarketSelection` is a runner change and wants a restart, so it is
+queued rather than done -- see NEXT.
+
+**Do not read this as "the bot is losing markets".** It is refusing markets it
+is not authorized to quote, correctly. The finding is about what the operator
+can see, and about which lever the evidence actually points at.
+
+### Correction to "The 2c spread filter is a much weaker lever" (2026-08-19T03:25Z)
+
+That entry's **counts** came from the selector and stand. Its **characterisation
+of the rejects** -- "nearly all were `tec-mlb-*champ-2026-09-27-*` ... a
+different kind of market that the strategy does not want" -- came from the
+`--rejects` listing, which walked the whole catalog with no horizon filter and
+printed markets that were never candidates (BUGFIXES, same date). At 23:29Z the
+in-horizon set contained **zero** `tec-mlb-*` rows; it was that evening's real
+games.
+
+The entry's conclusion may still hold -- the rejected in-horizon spreads that
+night were genuinely far under the threshold, not near-misses -- but the reason
+given for it was measured wrong, and "the rejects are futures we do not want" is
+not supported. Re-measure with the fixed tool before relying on it.
+
+### A latent bug found while reading this path
+
+`_applicable_period` hardcodes `market.minimum_trade_qty > 1` while
+`_catalog_market_is_executable` uses `minimum_trade_qty <= self.policy.quote_size`,
+with a comment saying it "scales with quote size rather than assuming a single
+contract". `_applicable_period` is a `@staticmethod` and cannot see the policy,
+so it was never updated when quote size went 1 -> 5. A market whose venue
+minimum is between 2 and 5 would pass the first gate and be silently dropped by
+the second.
+
+**Not firing today**: every one of the 43 in-horizon markets reports
+`minimum_trade_qty` 0.01. Recorded because it is the "gate in two places"
+pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
+the drop would be invisible for the same reason the live-period drop was.
+
 
 ## What the 2026-08-18 outages cost: a full day's reward, measured
 

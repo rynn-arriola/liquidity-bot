@@ -29,6 +29,72 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-19 (diagnostics)
+
+### The tool that answers "is this normal?" listed rejects it had never filtered
+
+**Not a runner bug -- no bad order, no exposure.** It is in `usable_markets.py`,
+which `CLAUDE.md` names as the answer to "why is it quoting 3 markets and not
+20". It produced two wrong diagnoses in one session, one of them the operator's
+question and one of them mine.
+
+**Symptom.** `--rejects` prints a block headed `MARKETS DROPPED FOR A TIGHT BOOK
+(catalog BBO)` and fills it with month-out MLB championship futures:
+
+```
+tec-mlb-nlchamp-2026-09-27-nym                 spread 0.0010
+tec-mlb-champ-2026-09-27-atl                   spread 0.0060
+... (truncated at 30)
+```
+
+Read literally, that says the bot is passing on a pile of long-dated futures --
+which is reassuring, because it is not the kind of market this strategy wants.
+
+**Mechanism.** The listing had no connection to the funnel above it:
+
+```python
+catalog = await gateway.list_sports_markets()   # all 21,285 rows
+for market in catalog:
+    ...
+    if spread + 1e-9 < policy.minimum_entry_spread:
+        print(...)
+```
+
+No horizon filter, no moneyline filter, no active/open filter, and no reference
+to `catalog_spread_filtered_markets` -- the counter it claimed to explain. Every
+row it printed had been discarded by the **horizon** gate long before the spread
+gate ran. Truncation at 30 in catalog order then guaranteed `tec-*` filled the
+screen, because it sorts ahead of `aec-*`.
+
+Measured against the real gate at 2026-08-19T23:29Z: of 21,285 catalog rows, 43
+were in the 2h horizon and **zero** were `tec-mlb-*` futures. The in-horizon set
+was that evening's actual games -- WNBA, MLB, valorant, ATP, ITF, setka.
+
+**Cost.** Two wrong conclusions on 2026-08-19. The operator asked why the market
+count was falling; this output said "month-out futures, nothing real is being
+refused" and both of us believed it. The truth was the opposite -- the refused
+markets were that night's games (see FINDINGS, the live-period drain). It also
+means the FINDINGS entry from 2026-08-19T03:25Z that characterised the rejects
+as `tec-mlb-*champ-*` rests on this same output; its **counts** came from the
+selector and are fine, its **description of what the rejects are** is not
+supported and is corrected there.
+
+**Fix.** `_print_rejects` now builds its list from the selector's own methods
+(`_catalog_market_is_executable`, `_catalog_spread_can_enter`,
+`select_applicable_period`) in the selector's own order, so the listing cannot
+disagree with the funnel. It classifies every in-horizon market into the gate
+that actually dropped it, and sorts the tight group widest-first so near-misses
+are visible -- the only rows that speak to whether the 2c minimum holds anything
+back.
+
+**The general shape, worth carrying.** A diagnostic that re-derives its own
+filter instead of calling the one it is explaining will drift from it silently,
+and it drifts in the worst direction: it stays confident. This is the same
+"a gate that lives in two places" failure this file already records twice for
+production code -- it applies to the tools as well.
+
+---
+
 ## 2026-08-19
 
 ### An absence whose terminal state was already on file could never be repaired

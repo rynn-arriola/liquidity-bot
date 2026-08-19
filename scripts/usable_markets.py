@@ -13,11 +13,12 @@ This runs the real selector read-only, prints the whole funnel, and says which
 of the two it is.
 
     python3 scripts/usable_markets.py            # funnel + verdict
-    python3 scripts/usable_markets.py --rejects  # also list tight-book markets
+    python3 scripts/usable_markets.py --rejects  # also list why each dropped
 
 **It costs venue calls** -- one catalog read, batched incentives, and one book
-per detailed candidate (~50 total). That shares the 4 req/s governor with the
-live runner, so do not put it in a loop.
+per detailed candidate (~50 total), plus a second catalog and incentive read
+with `--rejects`. That shares the 4 req/s governor with the live runner, so do
+not put it in a loop.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import argparse
 import asyncio
 import collections
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
@@ -34,8 +35,9 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.market_selector import (  # noqa: E402
-    RewardMarketSelector, RewardSelectionPolicy)
+    SUPPORTED_EVENT_PERIODS, RewardMarketSelector, RewardSelectionPolicy)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
+from liquidity_bot.rewards import select_applicable_period  # noqa: E402
 
 MAX_MARKETS = 20          # pinned by assert_authorized; see commissioning.py
 
@@ -43,7 +45,7 @@ MAX_MARKETS = 20          # pinned by assert_authorized; see commissioning.py
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rejects", action="store_true",
-                        help="list markets dropped by the spread filter")
+                        help="list every in-horizon market and why it dropped")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -53,6 +55,18 @@ async def main() -> int:
 
     horizon_h = policy.selection_horizon_seconds / 3600.0
     viable = [o for o in selection.opportunities if o.viable_sides]
+
+    # Derived, not reported by the selector. `_applicable_period` returning
+    # None hits a bare `continue` with no counter, so a third of the funnel can
+    # drain with nothing to show for it -- measured 2026-08-19T23:31Z, 15 of 43
+    # markets, every one live-period-only. The verdict then blamed the spread
+    # filter, because that is the counter that does exist. Subtraction is exact:
+    # these four are the only paths out of that loop.
+    period_dropped = max(0, (
+        selection.rewarded_executable_markets
+        - selection.unsupported_programs
+        - selection.catalog_spread_filtered_markets
+        - selection.eligible_pregame_markets))
 
     print(f"at {now.isoformat()[:19]}Z   horizon {horizon_h:.1f}h   "
           f"min entry spread {policy.minimum_entry_spread}")
@@ -65,9 +79,10 @@ async def main() -> int:
           f"{selection.rewarded_executable_markets:6d}")
     print(f"  - unsupported program      "
           f"{selection.unsupported_programs:6d}")
+    print(f"  - no applicable period     {period_dropped:6d}"
+          "    <- live-only; derived, see --rejects")
     print(f"  - book too tight to enter  "
-          f"{selection.catalog_spread_filtered_markets:6d}"
-          "    <- usually the big one")
+          f"{selection.catalog_spread_filtered_markets:6d}")
     print(f"  = eligible pregame         "
           f"{selection.eligible_pregame_markets:6d}")
     print(f"  books actually read        {selection.books_evaluated:6d}")
@@ -123,14 +138,25 @@ async def main() -> int:
         print("  unsupported programs -- every market that dropped out did so")
         print("  on a deliberate economic rule.")
 
+    rewarded = max(1, selection.rewarded_executable_markets)
     if selection.executable_catalog_markets == 0:
         print("  Nothing is inside the horizon at all: a schedule trough.")
         print("  Normal at quiet hours. Compare against a busy hour before")
         print("  concluding anything.")
-    elif selection.catalog_spread_filtered_markets > (
-            0.5 * max(1, selection.rewarded_executable_markets)):
-        share = (100.0 * selection.catalog_spread_filtered_markets
-                 / max(1, selection.rewarded_executable_markets))
+    elif period_dropped > selection.catalog_spread_filtered_markets:
+        # These two have different levers and conflating them sends the work to
+        # the wrong place: a tight book is a market we do not want, a live-only
+        # period is a market we cannot address at all. The live pool is ~8x
+        # day_of (FINDINGS section 4), so this is the more interesting of them.
+        share = 100.0 * period_dropped / rewarded
+        print(f"  {share:.0f}% of rewarded markets have NO APPLICABLE PREGAME "
+              "PERIOD -- their")
+        print("  reward window has rolled into `live`, which this executor may")
+        print("  not quote (invariant 39: only day_of has a projectable clock).")
+        print("  This is the dominant drain and it is NOT the spread filter.")
+        print("  The lever is the lifecycle, not minimum_entry_spread.")
+    elif selection.catalog_spread_filtered_markets > 0.5 * rewarded:
+        share = 100.0 * selection.catalog_spread_filtered_markets / rewarded
         print(f"  {share:.0f}% of rewarded markets have books tighter than "
               f"{policy.minimum_entry_spread}, so they are refused before any")
         print("  book is read. This is the dominant filter and it is WORKING")
@@ -143,23 +169,98 @@ async def main() -> int:
         print("  qualifies -- not because the bot is stuck.")
 
     if args.rejects:
-        print("")
-        print("MARKETS DROPPED FOR A TIGHT BOOK (catalog BBO)")
-        catalog = await gateway.list_sports_markets()
-        shown = 0
-        for market in catalog:
-            bid = market.catalog_best_bid
-            offer = market.catalog_best_offer
-            if bid is None or offer is None:
-                continue
-            spread = offer - bid
-            if spread + 1e-9 < policy.minimum_entry_spread:
-                print(f"    {market.slug[:46]:<46} spread {spread:.4f}")
-                shown += 1
-                if shown >= 30:
-                    print("    ... (truncated at 30)")
-                    break
+        await _print_rejects(gateway, policy, now)
     return 0
+
+
+async def _print_rejects(
+    gateway: AsyncReadOnlyGateway,
+    policy: RewardSelectionPolicy,
+    now: datetime,
+) -> None:
+    """List every in-horizon market and the gate that dropped it.
+
+    This used to walk the WHOLE catalog and print anything whose catalog BBO
+    was tighter than the minimum -- no horizon, moneyline, active or open
+    filter, and no connection to `catalog_spread_filtered_markets`. The header
+    claimed "markets dropped for a tight book" while the rows were markets the
+    horizon gate had discarded long before the spread gate saw them, and
+    truncating at 30 in catalog order filled the screen with month-out
+    `tec-mlb-*champ-*` futures. It produced two wrong diagnoses on 2026-08-19,
+    and the FINDINGS entry from 03:25Z characterising the rejects as long-dated
+    futures rests on this output. See BUGFIXES.
+
+    It now reuses the selector's own gates, in the selector's own order, so the
+    listing cannot disagree with the funnel printed above it.
+    """
+
+    selector = RewardMarketSelector(gateway, policy=policy)
+    window_end = now + timedelta(seconds=policy.selection_horizon_seconds)
+    catalog = await gateway.list_sports_markets()
+    in_horizon = {
+        market.slug: market
+        for market in catalog
+        if selector._catalog_market_is_executable(
+            market, now=now, window_end=window_end)
+    }
+    incentives = await gateway.fetch_incentives(sorted(in_horizon))
+
+    unsupported: list[str] = []
+    live_only: list[tuple[str, str]] = []
+    tight: list[tuple[float, str]] = []
+    candidates: list[tuple[float, str]] = []
+    for slug in sorted(incentives):
+        incentive = incentives[slug]
+        market = in_horizon[slug]
+        if not any(str(period.period).strip().lower() in SUPPORTED_EVENT_PERIODS
+                   for period in incentive.periods):
+            unsupported.append(slug)
+            continue
+        period = select_applicable_period(
+            incentive.periods, market.game_start, now)
+        if period is None or str(period.period) == "live":
+            names = ",".join(sorted({str(p.period) for p in incentive.periods}))
+            live_only.append((slug, names))
+            continue
+        bid, offer = market.catalog_best_bid, market.catalog_best_offer
+        spread = -1.0 if bid is None or offer is None else offer - bid
+        if selector._catalog_spread_can_enter(market):
+            candidates.append((spread, slug))
+        else:
+            tight.append((spread, slug))
+
+    print("")
+    print("IN-HORIZON MARKETS AND WHY EACH DROPPED   "
+          f"({len(in_horizon)} markets)")
+
+    def _show(title: str, rows: list, render) -> None:
+        print("")
+        print(f"  {title}  {len(rows)}")
+        for row in rows[:15]:
+            print(f"    {render(row)}")
+        if len(rows) > 15:
+            print(f"    ... ({len(rows) - 15} more)")
+
+    def _spread(value: float) -> str:
+        return "n/a" if value < 0 else format(value, ".4f")
+
+    if unsupported:
+        _show("reward program not implemented", unsupported,
+              lambda slug: f"{slug[:46]:<46}")
+    if live_only:
+        _show("no applicable pregame period (live-only)", live_only,
+              lambda row: f"{row[0][:46]:<46} periods: {row[1]}")
+    if tight:
+        # Widest first: near-misses are the only rows that speak to whether the
+        # 2c minimum is holding back anything real. FINDINGS measured the
+        # rejects at 3-20x tighter than the threshold, i.e. no headroom.
+        tight.sort(reverse=True)
+        _show(f"book too tight to enter (< {policy.minimum_entry_spread})",
+              tight, lambda row: f"{row[1][:46]:<46} spread {_spread(row[0])}")
+    if candidates:
+        candidates.sort(reverse=True)
+        _show("candidate for a book read", candidates,
+              lambda row: f"{row[1][:46]:<46} spread {_spread(row[0])}")
 
 
 if __name__ == "__main__":

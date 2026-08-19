@@ -309,6 +309,39 @@ class LiveOrderExecutor:
             exchange_order_id=exchange_order_id)
         return intent_id
 
+    async def reconcile_absent_order(self, exchange_order_id: str, *,
+                                     observed_at: datetime) -> None:
+        """Re-read an order we have lost sight of, and always apply the answer.
+
+        `reconcile_order` keys its event on the venue's own event time and
+        status, which is right for the normal sweep -- the same venue event
+        must not be applied twice. It is wrong here.
+
+        `UNKNOWN_ABSENT` is a status **we invented locally**, from an order
+        missing out of a complete snapshot. The venue never emits a new event
+        for it, so once its terminal state has been recorded the re-ask
+        produces an identical (id, event_at, status) triple, `_accept_event`
+        rejects it as a replay, `_upsert_order` never runs, and the row is
+        stuck absent forever. Measured 2026-08-19: `BZ9PPEV4RDK0` sat absent
+        while the venue plainly said CANCELED at a timestamp already on file,
+        and `risk_state_known()` counts absences account-wide, so rotation was
+        blocked for hours with fifteen slots bound and two quoting.
+
+        Keying on the OBSERVATION time instead means this always writes. That
+        is safe: `_upsert_order` is an upsert with its own ordering and
+        terminal guards -- including `resolves_absence`, which exists so a
+        terminal state can outrank an absence and was unreachable from here.
+        """
+
+        response = await self.gateway.retrieve(exchange_order_id)
+        order = normalize_order(
+            response["order"], observed_at=observed_at,
+            resolve_client_id=self.ledger.resolve_client_order_id)
+        self.ledger.apply_order_event(
+            "absent_repair",
+            f"absent:{exchange_order_id}:{observed_at.isoformat()}",
+            order, received_at=observed_at)
+
     async def reconcile_order(self, exchange_order_id: str, *,
                               observed_at: datetime) -> None:
         response = await self.gateway.retrieve(exchange_order_id)

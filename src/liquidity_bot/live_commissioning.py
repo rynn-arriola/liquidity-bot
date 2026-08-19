@@ -910,7 +910,11 @@ class CommissioningRunner:
                 self._runtime_error_counts.pop("absent_order", None)
                 continue
             try:
-                await self.executor.reconcile_order(
+                # Not `reconcile_order`: its event id is the venue's own event
+                # time and status, so a re-ask after the terminal state is
+                # already on file is a replay and repairs nothing. See
+                # `reconcile_absent_order`.
+                await self.executor.reconcile_absent_order(
                     exchange_id, observed_at=now)
                 self._runtime_error_counts.pop("absent_order", None)
             except Exception as exc:

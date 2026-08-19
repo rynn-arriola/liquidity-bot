@@ -1896,6 +1896,76 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_an_absence_is_repaired_when_its_terminal_state_is_already_on_file(self):
+        """2026-08-19: rotation blocked for hours by one unrepairable row.
+
+        `UNKNOWN_ABSENT` is a status we invent locally, from an order missing
+        out of a complete snapshot. The venue emits no new event for it, so
+        once its terminal state has been recorded, every re-ask through
+        `reconcile_order` rebuilds the same (id, event_at, status) event id,
+        `_accept_event` rejects it as a replay, and `_upsert_order` never runs
+        -- including `resolves_absence`, the guard that exists precisely so a
+        terminal state can outrank an absence.
+
+        Measured: BZ9PPEV4RDK0 sat absent while the venue plainly reported
+        CANCELED at a timestamp already on file. `risk_state_known()` counts
+        absences account-wide, so rotation stopped for every market: fifteen
+        slots bound, two quoting.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        client.orders.rows["exchange-stuck2"] = {
+            "id": "exchange-stuck2",
+            "clientOrderId": "liquidity-stuck2",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.56", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+        runner.ledger.apply_order_event(
+            "ws", "seed-open",
+            OrderState(
+                client_order_id="liquidity-stuck2",
+                exchange_order_id="exchange-stuck2",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.56"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        # The venue cancels it, and that terminal event is recorded through the
+        # normal reconcile path -- consuming the event id for that (time,status).
+        client.orders.rows["exchange-stuck2"]["state"] = "ORDER_STATE_CANCELED"
+        await runner.executor.reconcile_order(
+            "exchange-stuck2", observed_at=runner._now())
+
+        # Then the row is marked absent, which is the state production was in.
+        runner.ledger.connection.execute(
+            "UPDATE execution_orders SET status='UNKNOWN_ABSENT',"
+            "unknown_reason='missing_from_complete_snapshot' "
+            "WHERE exchange_order_id=?", ("exchange-stuck2",))
+        runner.ledger.connection.commit()
+        self.assertEqual(len(runner.ledger.absent_orders()), 1)
+
+        # The venue's answer is unchanged, so the normal path is a pure replay.
+        await runner._rest_reconcile(runner._now(), tag="repair")
+
+        self.assertEqual(
+            runner.ledger.absent_orders(), [],
+            "an absence must be repaired from the venue's terminal state even "
+            "when that exact event has already been applied")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_an_unresolvable_absence_does_not_break_the_reconcile(self):
         """Best-effort, or the cure is the disease.
 

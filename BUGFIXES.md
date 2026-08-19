@@ -29,6 +29,69 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-19
+
+### An absence whose terminal state was already on file could never be repaired
+
+**Symptom.** Rotation blocked for hours. 2 markets quoting, **15 bound and
+silent**, 3 free, on a bot that had been up 13h53m with no risk stops.
+
+```
+rotation     1 orders UNKNOWN_ABSENT -- BLOCKED
+quoting              2
+bound, not quoting   15   wasted slots
+```
+
+**Mechanism.** `BZ9PPEV4RDK0` on `aec-itfwo-mardro-ilisag-2026-08-19` was
+marked `UNKNOWN_ABSENT` with `missing_from_complete_snapshot`. The venue's own
+view of it never changed after that:
+
+```
+state = ORDER_STATE_CANCELED   cumQuantity 3/5
+lastTransactTime = 2026-08-19T10:53:44.728316Z
+```
+
+and that exact event had already been applied:
+
+```
+10:48:06  applied=1  order:BZ9PPEV4RDK0:...10:48:02:OPEN
+10:53:49  applied=1  order:BZ9PPEV4RDK0:...10:53:44:CANCELED
+```
+
+`UNKNOWN_ABSENT` is not a working state and the order's intent was already
+RECONCILED, so it fell out of the strict sweep -- correct, that is what the
+absent sweep is for. But the absent sweep re-asked through `reconcile_order`,
+whose event id is `order:{id}:{event_at}:{status}`. The venue kept answering
+CANCELED at the same timestamp, so every re-ask rebuilt an identical id,
+`_accept_event` rejected it as a replay, and `_upsert_order` never ran.
+
+That last part is what makes it unrecoverable rather than slow: `_upsert_order`
+holds `resolves_absence`, the guard written so a terminal state can outrank an
+`UNKNOWN_ABSENT` row -- and it was unreachable from the one code path whose job
+is repairing absences. `risk_state_known()` counts absences **account-wide**, so
+one row stopped rotation for all twenty markets.
+
+This is the same family as the 2026-08-18 fix that added `status` to the event
+id. That fix was right and is still needed -- it handles a venue that changes
+state without moving its clock. It does not help here, because the status is
+unchanged too.
+
+**Fix applied 2026-08-19.** The absent sweep now calls
+`reconcile_absent_order`, which keys its event on the **observation** time
+(`absent:{id}:{observed_at}`) rather than the venue's event time, so it always
+writes. Safe because nothing is being inferred: it applies the venue's own
+reported state, and `_upsert_order` keeps its ordering and terminal guards.
+Absence is still never read as cancellation.
+
+Mutation-checked: pointing the sweep back at `reconcile_order` leaves the row
+absent and fails the new test. 463 tests pass.
+
+**Cost.** ~14 hours of degraded quoting -- 2 markets instead of up to 20 -- on
+a bot that otherwise looked healthy. No money lost directly; the loss is reward
+not earned, and it was invisible because every other health signal was green.
+
+---
+
 ## 2026-08-18 (second incident)
 
 ### A cancel that 500s is never re-issued, and the stuck intent then blocks the flatten

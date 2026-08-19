@@ -137,9 +137,37 @@ grep '\[action\]' logs/commissioning.log | grep -o 'reason=[a-z_:]*' \
    fail the reconciler's strict `> 0`. **Real inconsistency, reproduced in a
    unit test, but not what is firing live.** Worth fixing on its own merits;
    not the churn.
-3. **`reward_ineligible`** -- what the running bot actually reports, 10 of 10
-   attributed cancels so far. The side left the venue's reward band and the
+3. **`reward_ineligible`** -- what the bot reported in the first window, 24
+   cancels. The side left the venue's reward band and the 90s
    `reward_eligibility_dwell_seconds` grace expired.
+
+**The mix moves with the regime -- do not fixate on any one of these.** Two
+hours later the same bot reported 10 `resting_price_left_the_touch`, 3
+`expected_net_not_positive`, and **zero** `reward_ineligible`. Hypothesis 2,
+which the previous window said was not firing, was firing. One window is not
+evidence; that is the whole reason the counts exist.
+
+### What each fix would actually cost
+
+- **`resting_price_left_the_touch`** is the bot chasing the touch, which is
+  ordinary market-making. Chasing less means quoting off the touch, and
+  `discountFactor` is 0.5 per tick, so one tick back halves the reward score.
+  Declined twice already on measurement; see section 3 and the 900s entries.
+- **`reward_ineligible`** already has a 90s dwell, so it only fires when the
+  side is genuinely outside the band for a minute and a half. Cancelling is
+  **correct** there -- an order outside the band earns nothing by resting.
+  Lengthening the dwell means paying fill risk for reward we are not earning.
+- **`expected_net_not_positive`** is the inconsistency in hypothesis 2. Fixing
+  it by flooring both branches makes the bot quote negative-EV sides, which is
+  the EV-gate decision, not a bug fix.
+
+### The structural fact that may make this irreducible
+
+`quote_size` is **5** against a `targetSize` of **5,000** -- we are 0.1% of the
+band we compete in, so whether we sit inside it is decided almost entirely by
+other participants' depth. A meaningful share of this churn may not be ours to
+remove at this size. Before tuning any constant, check whether the flip rate
+tracks other makers' depth rather than anything we control.
 
 ### The work
 

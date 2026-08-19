@@ -2789,3 +2789,35 @@ hard stop is **not evaluating at all** -- and on 2026-08-18 plain reads failed
 4 of 6 probes for a stretch. Do not "fix" this by letting it fire on stale
 data; the coincidence of a bad venue and a bad day is what the pre-kickoff
 flatten deadline is for.
+
+## The 2c spread filter is a much weaker lever than "94% refused" suggests
+
+Measured 2026-08-19T03:25Z with `scripts/usable_markets.py --rejects`.
+
+The funnel reads alarmingly: 34 rewarded markets in the horizon, 32 refused for
+a tight book, 1 viable. That invites the conclusion that relaxing the 2c
+minimum would unlock 32 markets. **It would not.** The rejected spreads:
+
+```
+0.001 - 0.007    25 of the 30 sampled
+0.009 - 0.014     5
+>= 0.015          0
+```
+
+Nothing sits just under the threshold. These books are **3x to 20x tighter**
+than 0.02, so:
+
+- 2c -> 1c admits about **5 of 32**, all at 1.0-1.4c
+- 2c -> 0.5c admits most of them, at spreads with essentially no room between
+  entry and exit
+
+**What the rejects actually are matters too.** Nearly all were
+`tec-mlb-*champ-2026-09-27-*` -- MLB championship futures a month out, not the
+pregame sports moneylines this strategy is built around. Long-dated futures are
+tightly quoted by design. At 03:25Z the live sports universe has dried up and
+this is the residue.
+
+So "94% refused" is not a backlog of near-misses being held back by a
+conservative setting; it is a different kind of market that the strategy does
+not want. Do not read the percentage as headroom. If more markets are wanted,
+the horizon and the hours the bot runs are the levers, not the spread minimum.

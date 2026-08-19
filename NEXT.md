@@ -78,7 +78,51 @@ stretch. Do not make it fire on stale equity; the exposure is that a bad
 venue and a bad day can coincide, and the answer to that is the flatten
 deadline, not a stop firing on numbers it cannot trust.
 
-## 00b. The place/cancel churn: read the counts, then fix the dwell
+## 00b. The place/cancel churn -- FIXED 2026-08-19, verify it holds
+
+**Landed.** The defect was `.get(side, 0.0)` in `reconciler.plan_market`: a
+side the runner had not evaluated that pass has no `expected_net_by_side`
+entry, and the default turned "we did not look" into "this is worthless",
+cancelling the resting order and overriding the 90s eligibility dwell built to
+prevent exactly that. Absence is now skipped and left to the dwell; an enforced
+gate refusal records `min(expected_net_value, 0.0)` explicitly so a missing key
+means one thing only. See FINDINGS and BUGFIXES.
+
+**Measured effect, 3h41m of live data:**
+
+```
+resting fraction   57.3% (179 sides)  ->  85.6% (36 sides)
+expected_net_not_positive             ->  0 in the cause counts
+places : cancels   ~1:1               ->  18:7
+bound, not quoting 7-18               ->  0-1
+```
+
+### What still needs confirming
+
+- **Re-run `resting_fraction.py` over a full day.** 3h41m and 36 sides is a
+  real signal but not a season. Baseline to beat is 57.3%.
+- **Check the reward posting for 2026-08-19 and after.** Resting fraction is
+  the input; paid reward is the outcome, and it lags by days. Bot-era reward
+  was +90.16 at ~57% resting -- if the ratio holds, ~86% should show up as
+  materially more.
+- **Watch the trading side.** More resting means more fills, and fills cost
+  about 5c/contract (see the leg-to-leg movement entry). Reward runs about 2x
+  the trading loss, so the trade should be favourable, but it is an estimate
+  until the numbers arrive.
+
+### If it does not hold
+
+The cause counts are still tagged and still the right tool -- seven named
+causes, readable with:
+
+```bash
+grep '\[action\]' logs/commissioning.log | grep -o 'reason=[a-z_:]*'   | sort | uniq -c | sort -rn
+```
+
+Three hypotheses died before the real one; they are recorded below so nobody
+re-runs them.
+
+## 00b-history. The three dead hypotheses (do not re-run)
 
 **Ranked below the loss-stop baseline above (that one loses money silently)
 and above everything below it.** This is the largest continuous drag on

@@ -2547,6 +2547,35 @@ total is unchanged, so this reconciliation still passes with every daily row
 misaligned. That matters precisely for subtracting a day's trading loss from
 the same day's reward -- the margins would take the wrong day's losses.
 
+### RESOLVED 2026-08-19: the venue dates reward in UTC
+
+Tested by joining venue earnings against our own order timestamps and keeping
+only the markets whose **entire** order history fell inside 00:00-04:00 UTC.
+Those are the discriminating cases: under ET dating (UTC-4) they belong to the
+previous evening and would reward on D-1.
+
+```
+reward 2026-08-17   orders 2026-08-17 02:57-03:02Z   $1.32   UTC
+reward 2026-08-17   orders 2026-08-17 00:27-02:04Z   $0.12   UTC
+reward 2026-08-16   orders 2026-08-16 00:21-03:31Z   $0.68   UTC
+    ... 15 of 15 discriminating markets, all UTC
+```
+
+**15 of 15 landed on the UTC date; none shifted back.** So a row dated
+2026-08-17 is reward earned on 2026-08-17 UTC, and subtracting the same UTC
+day's trading loss from it is sound.
+
+Of 288 rewarded markets with order history, 278 matched the UTC date of their
+first order and 10 did not -- and all ten straddled midnight, e.g. orders from
+`2026-08-16T21:51` to `2026-08-17T01:55` rewarded on 08-17. Reward accrues
+where the resting time was, so a market quoted either side of midnight
+attributes to both days. That is the same boundary effect as the +/-$0.25
+per-day drift above, not a dating error.
+
+The test needs the bot to have quoted between 00:00 and 04:00 UTC. It had, on
+2026-08-16/17. If a future run has no orders in that window the test is simply
+inconclusive rather than wrong.
+
 **The test that settles it:** find a market whose kickoff sits near midnight
 UTC. Reward accrues in the hours before kickoff, so a game at 23:30Z on the
 16th landing on the 16th means UTC; landing on the 17th means a shifted zone.

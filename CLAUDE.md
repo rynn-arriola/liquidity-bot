@@ -3,6 +3,28 @@
 A live Polymarket US liquidity-reward market maker. **It trades real money on a
 real account.** Every change can lose it.
 
+## Where things stand — 2026-08-19
+
+Update this block when it stops being true. It is here so a new session starts
+from fact rather than from the last thing someone remembers.
+
+- **Bot is RUNNING** and healthy: rotation unblocked, no risk stops, resting
+  fraction **85.6%** (was 57.3% before the 2026-08-19 churn fix).
+- **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
+  against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
+  dashboard is account-wide since inception and is dominated by pre-bot
+  maker-lab trading — it is **not** this bot's result.
+- **$67.38 of cost across 29 markets is unpriced** (one leg bought, exit
+  invisible). That is the honest uncertainty on the number above, and it is
+  what the settlements table would close.
+- **Two failure modes from 2026-08-19 can still recur and need a human:**
+  a `POST /v1/orders` 500 that returns no exchange id leaves an intent nothing
+  can resolve (`scripts/resolve_orphan_places.py` is the stopgap), and the
+  unresolved-mutation stop is still account-wide, so one stuck intent stops all
+  twenty markets. Both are `NEXT.md` item 00.
+- **Both loss stops re-baseline on every restart.** 2026-08-19 saw ten
+  sessions, so the $40 budget was handed back ten times. Top of `NEXT.md`.
+
 ## Before you touch anything
 
 1. **`grep FINDINGS.md` before theorising.** It holds measured facts precisely
@@ -53,7 +75,7 @@ two wrong calls:
 | what code is actually running | `DEPLOYED_COMMIT` + the runner's command line on the droplet |
 | what limits are in effect | `commissioning.py` defaults, **and** the runner's command line, which would override them |
 | do we hold a position or an order | **the venue**, queried live — never the ledger |
-| trading history and P&L | the ledger on the droplet (currently wrong by about -$22.41; see `NEXT.md`) |
+| trading history and P&L | the ledger on the droplet — settled exits are invisible, so it understates losses; see the P&L note below |
 
 The repo records intent. The droplet is the fact of what executes. The venue is
 the fact of what is owned. They drift apart silently — `DEPLOYED_COMMIT` is
@@ -151,10 +173,23 @@ periodically; that is still a manual step.
 - **A bot that is up and placing nothing may be correct.** The economic gate
   declines markets that cannot earn. `target_not_met` is the venue's reward
   threshold, not a fault.
-- **P&L is currently untrustworthy** by about -$22.41. Positions that settle,
-  or that an operator closes by hand, have their entry recorded and their exit
-  invisible — there is no settlements table. See `NEXT.md` TOP PRIORITY. Do not
-  weigh any optimisation against reported P&L until that is fixed.
+- **P&L is untrustworthy, and by a moving amount.** Positions that settle, or
+  that an operator closes by hand, have their entry recorded and their exit
+  invisible — there is no settlements table. Measured 2026-08-19: **$67.38
+  across 29 markets** sits unpriced, against a bot-era matched-pair result of
+  -44.66. So the sign of the trading line is not certain, only its rough size.
+  Do not weigh any optimisation against reported P&L until that is fixed, and
+  do not quote a single figure without its date. See `NEXT.md`.
+- **`scripts/accounting.py` and `--pnl` are account-wide, not bot-era.** The
+  bot's first order was 2026-08-14; reward before that date was earned by
+  maker-lab. Attributing it to this bot overstates its performance by about
+  $87, which has already happened once in analysis.
+- **An absent count, a slot count, or any instant sample can lie.** A market
+  between a cancel and its re-place holds no order and is not stuck; a
+  dashboard "bound, not quoting" figure is inferred from log mentions and has
+  exceeded slot capacity. Judge quoting health by `scripts/resting_fraction.py`
+  (share of time a side actually holds an order — the quantity reward is paid
+  for), not by a count taken at one moment.
 - **Closing a position by hand while the bot runs** is safe for the account but
   debits the loss stops with a phantom loss. Stop the bot first. Manually
   *placing* an order is worse: it appears as a `venue:` order and trips a

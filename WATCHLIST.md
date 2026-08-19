@@ -246,3 +246,25 @@ Nothing reachable from that call raises it today -- only `live_commissioning`
 and `live_session` raise it at all, and the strict sweep now re-raises it
 explicitly. Worth narrowing to the exception types that are actually expected
 (`AdapterError`, transport errors) next time this code is opened.
+
+## Does the 85.6% resting fraction convert to reward?
+
+Opened 2026-08-19. The churn fix moved resting fraction 57.3% -> 85.6% over
+3h41m. Resting is the **input**; paid reward is the outcome and lags by days,
+so the win is not banked yet.
+
+Watch for:
+
+- **2026-08-19 and 2026-08-20 reward postings.** Bot-era reward was +90.16 at
+  ~57% resting. If the ratio holds, ~86% should show materially more. Re-run
+  `scripts/rewards_report.py`; a missing day means "not posted yet" OR "earned
+  nothing" and one reading cannot separate them.
+- **A full day of `scripts/resting_fraction.py`.** 3h41m and 36 sides is a
+  signal, not a season. Baseline to beat is 57.3%.
+- **The trading side, which should get worse.** More resting means more fills,
+  and fills cost about 5c/contract. Reward runs about 2x the trading loss so
+  the trade should still be favourable, but confirm rather than assume --
+  `scripts/accounting.py` carries both numbers.
+
+Close this out either way: if reward does not move, the resting gain was
+measured on the wrong quantity and the churn work needs revisiting.

@@ -285,9 +285,8 @@ trading blind.
 
 ## 00. START HERE (2026-08-18): make the unresolved-mutation stop per-market
 
-**Status 2026-08-18 17:00Z: stopped flat by the operator, then restarted once
-the cancel-retry fix was verified and deployed.** The 2026-08-17 item that
-stood here -- stuck
+**Status 2026-08-19: running, healthy, resting fraction 85.6%.** The 2026-08-17
+item that stood here -- stuck
 `UNKNOWN_ABSENT` orders blocking all rotation -- was fixed and deployed in
 `854c21a`; rotation cleared 20 absent rows to 0 and the bot went from 1-5
 markets to 10 concurrent. Do not re-derive it; it is in `BUGFIXES.md`.

@@ -180,10 +180,15 @@ periodically; that is still a manual step.
   -44.66. So the sign of the trading line is not certain, only its rough size.
   Do not weigh any optimisation against reported P&L until that is fixed, and
   do not quote a single figure without its date. See `NEXT.md`.
-- **`scripts/accounting.py` and `--pnl` are account-wide, not bot-era.** The
-  bot's first order was 2026-08-14; reward before that date was earned by
-  maker-lab. Attributing it to this bot overstates its performance by about
-  $87, which has already happened once in analysis.
+- **Scope every money figure to the bot, and say which one it is.** The
+  account is older than the bot: maker-lab earned **$86.90** on it before the
+  bot's first order on **2026-08-14**. `scripts/_bot_era.py` holds that
+  boundary; `rewards_report.py` and the dashboard now default to bot-era and
+  print which scope they used, with `--account-wide` to opt back in.
+  **Equity and funding cannot be scoped** -- they are account-level facts with
+  no per-system attribution -- so any `equity - funding - reward` figure is
+  account-wide however the reward term is filtered, and must be labelled that
+  way. Conflating the two overstated this bot by about 2x, twice.
 - **An absent count, a slot count, or any instant sample can lie.** A market
   between a cancel and its re-place holds no order and is not stuck; a
   dashboard "bound, not quoting" figure is inferred from log mentions and has

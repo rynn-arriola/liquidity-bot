@@ -40,6 +40,9 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
 
 MAX_MARKETS = 20
 LOG = Path("logs/commissioning.log")
@@ -811,7 +814,9 @@ async def _pnl(now, gateway, equity) -> None:
         except Exception:
             equity_by_day = {}
 
-    days = sorted(d for d in daily if d >= "2026-08-10")
+    # From the bot's first order, not from the account's first reward. This
+    # read 2026-08-10 and so folded in maker-lab's three pre-bot days.
+    days = sorted(d for d in daily if d >= BOT_ERA_START)
     if not days:
         return
     start = datetime.strptime(days[0], "%Y-%m-%d")
@@ -869,6 +874,7 @@ async def _pnl(now, gateway, equity) -> None:
     pending_total = sum(
         (value["pending"] for value in daily.values()), Decimal(0))
     print(box_top("TOTALS"))
+    print(line(paint("d", ACCOUNT_WIDE_NOTE)))
     print(line(f"{'equity now':<28}{float(equity):>12,.2f}"))
     print(line(f"{'net funding in':<28}{float(funding):>12,.2f}  "
                + paint("d", f"in {float(deposits):,.0f} · out "

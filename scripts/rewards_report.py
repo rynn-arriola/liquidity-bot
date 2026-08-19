@@ -36,6 +36,9 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 
+from _bot_era import (  # noqa: E402
+    ACCOUNT_WIDE_NOTE, BOT_ERA_NOTE, BOT_ERA_START, in_bot_era)
+
 
 def _league(slug: str) -> str:
     """`aec-setkamemd-a-b-2026-08-17` -> `setkamemd`."""
@@ -50,6 +53,9 @@ async def main() -> int:
     parser.add_argument("--top", type=int, default=15)
     parser.add_argument("--gap-days", type=int, default=10,
                         help="how far back to report missing days")
+    parser.add_argument(
+        "--account-wide", action="store_true",
+        help="include pre-bot maker-lab reward (default: this bot only)")
     args = parser.parse_args()
 
     gateway = AsyncReadOnlyGateway(client_from_environment())
@@ -70,9 +76,19 @@ async def main() -> int:
     per_day_rows: dict[str, int] = defaultdict(int)
     status_total: dict[str, float] = defaultdict(float)
 
+    # This bot only, unless asked otherwise. The account is older than the
+    # bot: maker-lab earned $86.90 on it before 2026-08-14, and counting that
+    # here has twice made this bot look about twice as good as it is. See
+    # `_bot_era`.
+    excluded = 0
+    excluded_total = 0.0
     for row in rows:
         date = str(getattr(row, "date", "?"))[:10]
         if cutoff and date < cutoff:
+            continue
+        if not args.account_wide and not in_bot_era(date):
+            excluded += 1
+            excluded_total += float(getattr(row, "reward", 0) or 0)
             continue
         status = str(getattr(row, "status", "?"))
         reward = float(getattr(row, "reward", 0) or 0)
@@ -85,6 +101,7 @@ async def main() -> int:
             market_status[slug].add(status)
             by_league[_league(slug)] += reward
 
+    print(ACCOUNT_WIDE_NOTE if args.account_wide else BOT_ERA_NOTE)
     print(f"{'date':<12} {'PAID':>9} {'PENDING':>9} {'SKIPPED':>9} "
           f"{'total':>9} {'rows':>5}")
     for date in sorted(by_date):
@@ -97,6 +114,10 @@ async def main() -> int:
           f"{status_total.get('PENDING', 0):9.2f} "
           f"{status_total.get('SKIPPED', 0):9.2f} {grand:9.2f} "
           f"{sum(per_day_rows.values()):5d}")
+    if excluded:
+        print(f"\nexcluded {excluded} row(s) worth {excluded_total:,.2f} "
+              f"earned before {BOT_ERA_START} -- that is maker-lab's, not this "
+              f"bot's. Pass --account-wide to include it.")
 
     # Gaps are the point of the daily view, so name them rather than leaving a
     # hole in the table for the reader to notice. Bounded to a recent window:

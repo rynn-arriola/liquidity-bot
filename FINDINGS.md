@@ -2922,3 +2922,32 @@ removal point now names itself: `expected_net_not_positive`,
 decision and not a bug fix. The two are inconsistent and which one is right is
 the EV-gate question in `NEXT.md`. Do not "fix" this by flooring without
 deciding that first.
+
+### CORRECTION, same day: the live cause is `reward_ineligible`, not this
+
+The heading above is what the code review implied and what a unit test
+reproduces. It is **not** what the running bot reports. First window after the
+tagging deployed:
+
+```
+9  reward_positive_candidate                    (places)
+8  resting_price_left_the_touch                 (cancels, touch moved)
+4  side_no_longer_desired:reward_ineligible     (cancels)
+0  side_no_longer_desired:expected_net_not_positive
+```
+
+So the side is being dropped because it stopped being **reward-eligible** --
+`frame.reward_eligible` no longer contains it and the
+`reward_eligibility_dwell_seconds` grace has expired. That is an economically
+sound cancel: a side outside the reward band earns nothing by resting.
+
+Two caveats on this sample. It is ~8 minutes and 4 cancels, against the 80
+cancels in 30 minutes that prompted the investigation, so it may simply be a
+quieter regime rather than a different cause. And 8 orders were resting at the
+venue during it, versus 2 before -- the churn was much milder in this window.
+
+**The expected-net inconsistency above is real and worth fixing regardless**;
+it is just not proven to be what was firing. Re-read the cause counts over a
+full busy session before acting on either. That is what the tagging is for --
+this is the third hypothesis in this investigation that the data has moved, and
+the first two were mine.

@@ -2821,3 +2821,47 @@ So "94% refused" is not a backlog of near-misses being held back by a
 conservative setting; it is a different kind of market that the strategy does
 not want. Do not read the percentage as headroom. If more markets are wanted,
 the horizon and the hours the bot runs are the levers, not the spread minimum.
+
+## Matched-pair P&L is leg-to-leg market movement, not spread capture
+
+Measured 2026-08-19 from the liquidity bot's own fills, 949 contract-pairs
+across 161 markets.
+
+`1 - (p_long + p_short)` looks like the spread we quoted, because buying NO at
+`q` is offering YES at `1-q`. **That identity only holds if both legs fill
+against an unmoved book.** They do not, and the data says so plainly:
+
+```
+edge/contract    markets   pairs      P&L    mean
+worse than -2c        76     487   -203.08   -0.41742
+0 to +2c               3      12     +0.02   +0.00156
++2c to +4c             3      15     +0.30   +0.02000
+over +7c              73     395   +153.19   +0.38757
+                            ────   ───────   ────────
+                             949    -48.12   -0.05073
+```
+
+A +/-40c "spread" on a 0-1 contract is impossible. The distribution is bimodal
+at roughly +/-0.4, which is **market movement between the legs**. The bot
+rests, one side is hit, it re-quotes as the book moves, and the other side
+fills at a different level -- sometimes hours later. Consistent with 6i:
+crossing an *unmoved* book lands at exactly 1.00, so any deviation is movement.
+
+**Mean cost -0.0507/contract.** maker-lab's *losing* sub-2c bucket was
+-0.0087/contract, so this is ~6x worse on the markets we do trade -- with the
+caveat that maker-lab measured 900s markout and this is settled pair cost, so
+they are not strictly comparable.
+
+### Two things this rules out
+
+- **The spread regime cannot be measured from this bot's data.** No spread is
+  recorded anywhere -- not in `execution_fills`, not in `execution_orders`, not
+  in the log -- and the 2c filter means there are zero sub-2c samples. You
+  cannot measure the regime you refuse to enter. maker-lab's table in section 3
+  remains the only evidence for the 2c rule.
+- **Entry spread is second-order.** Whatever 1c versus 2c is worth, it does not
+  touch a 5c/contract loss arising between the legs. Tuning the entry filter is
+  not the lever on this; whatever governs re-quoting into a moving book is.
+
+If the spread regime ever needs re-testing on this bot, the prerequisite is
+recording the book spread at fill time. Nothing stores it today.

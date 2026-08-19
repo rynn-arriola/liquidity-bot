@@ -1,5 +1,83 @@
 # Next session — outstanding fixes
 
+## 00. START HERE (2026-08-18, fourth): a restart forgives the day's drawdown
+
+**Above the orphan-PLACE item below.** An availability bug costs quoting time;
+a stop that forgives losses costs money. Raised by the operator, who was down
+on the account while both stop meters read near zero.
+
+### What is wrong
+
+Both loss stops baseline **per session**, and a session is one process. Ten
+sessions started on 2026-08-18, so the day's budget was effectively handed
+back ten times.
+
+`SessionRiskGuard` is constructed once, in preflight:
+
+```python
+self.risk_guard = SessionRiskGuard(
+    starting_equity=self.balance.marked_equity,   # stamped at process start
+    max_session_loss=..., hard_stop_loss=...)
+```
+
+- **`max_session_loss` ($40)** trips on `-realized_pnl`, which is
+  matched-pair only. `_rebaseline` *does* carry day-aware logic for it
+  (`_baseline_day`), but that state lives on the instance, so a new process
+  re-baselines regardless of what the day already lost.
+- **`hard_stop_loss` ($45)** trips on `starting_equity - current_equity`.
+
+Measured 2026-08-18:
+
+```
+window                fills   matched-pair   unmatched cost (unpriced)
+THIS SESSION            37        -5.51        4.59 across  1 market
+TODAY                  162       -12.47        9.35 across  3 markets
+ALL TIME               529       -46.55       67.38 across 29 markets
+```
+
+The stop was reading -$5.51 of a $40 budget -- 14% -- on a day that had lost
+$12.47 by that measure and $46.55 lifetime.
+
+**The ratchet is the dangerous part.** Lose $30 of equity, crash, restart:
+the hard stop's baseline re-stamps at the *lower* equity, that $30 is
+forgiven, and it takes another $45 from the new floor to fire. A bad day can
+step down indefinitely with every individual step under the limit. That is
+the shape that matches "account is down, stops show nothing".
+
+### Correct one thing first
+
+An earlier note in this file said settled positions are invisible to "the
+stop". That is true of the **$40 session stop** and false of the **$45 hard
+stop**: the hard stop is equity-based, and a position settling worthless
+moves marked equity, so it does see it. The settlements gap and this item are
+therefore separate problems -- fixing the baseline does not need the
+settlements table first.
+
+### Fix shape
+
+Baseline both stops on the **UTC day**, not the process:
+
+1. Persist the day's opening equity and realised baseline (the ledger is the
+   natural home -- it already survives restarts) instead of stamping
+   `starting_equity` from whatever the balance happens to be at preflight.
+2. On startup, adopt the stored baseline when it belongs to the current UTC
+   day, and only stamp a fresh one at the day boundary.
+3. Keep the existing per-day re-baseline for a process that runs past
+   midnight; that half already works.
+
+Needs a test that a restart mid-day inherits the day's drawdown rather than
+resetting it, and one proving the day boundary still grants a fresh budget.
+
+### Also note, do not "fix" by accident
+
+`hard_stop_reached` deliberately returns False when equity is unknown or
+older than `max_equity_age_seconds` (15s). That is correct -- it refuses to
+fire on stale data -- but it means the hard stop is **not evaluating at all**
+during a venue outage. On 2026-08-18 plain reads failed 4 of 6 probes for a
+stretch. Do not make it fire on stale equity; the exposure is that a bad
+venue and a bad day can coincide, and the answer to that is the flatten
+deadline, not a stop firing on numbers it cannot trust.
+
 ## 00. START HERE (2026-08-18, third): resolve a PLACE that returned no id
 
 **This is what breaks the automatic recovery**, so it goes above the

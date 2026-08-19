@@ -2713,3 +2713,50 @@ Two things worth carrying forward:
 `worst market` is deliberately left negative-only and per-market, because that
 is the shape of its own stop: `any(value <= -max_market_loss for value in
 realized_by_market.values())`.
+
+## Both loss stops baseline per session, so a restart forgives the drawdown
+
+Measured 2026-08-18, after the operator reported being down on the account
+while both stop meters read near zero.
+
+`SessionRiskGuard` is built once in preflight and `starting_equity` is stamped
+from the balance at that instant. **Ten sessions started that day**, so the
+budget was handed back ten times.
+
+```
+window                fills   matched-pair   unmatched cost (unpriced)
+THIS SESSION            37        -5.51        4.59 across  1 market
+TODAY                  162       -12.47        9.35 across  3 markets
+ALL TIME               529       -46.55       67.38 across 29 markets
+```
+
+The $40 stop was reading **-$5.51, 14% consumed**, on a day already down
+$12.47 by the same measure.
+
+**The ratchet is the real hazard, not the reset.** Lose $30 of equity, crash,
+restart: the hard stop re-stamps its baseline at the *lower* equity, so that
+$30 is forgiven and it takes another $45 from the new floor to fire. Each step
+stays under the limit while the account walks down. That is the shape to look
+for when the account is down and the stops look calm.
+
+### The two stops do NOT have the same blind spot
+
+Worth separating, because conflating them sends the fix to the wrong place:
+
+| stop | trips on | sees a settled position? |
+|---|---|---|
+| `max_session_loss` $40 | `-realized_pnl`, matched pairs only | **no** |
+| `hard_stop_loss` $45 | `starting_equity - current_equity` | **yes** |
+
+A position that settles worthless moves marked equity, so the hard stop does
+see it; only the matched-pair stop is blind. So the settlements table and the
+baseline fix are independent -- the baseline can be fixed without it.
+
+### `hard_stop_reached` does not evaluate on stale equity, by design
+
+It returns False when equity is unknown or older than 15s. Correct: it refuses
+to fire on numbers it cannot trust. But it means that during a venue outage the
+hard stop is **not evaluating at all** -- and on 2026-08-18 plain reads failed
+4 of 6 probes for a stretch. Do not "fix" this by letting it fire on stale
+data; the coincidence of a bad venue and a bad day is what the pre-kickoff
+flatten deadline is for.

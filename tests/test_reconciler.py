@@ -771,6 +771,41 @@ class SideDropCauseTests(unittest.TestCase):
             "side_no_longer_desired:expected_net_not_positive",
             "the churn must be attributable from the log alone")
 
+    def test_a_side_not_evaluated_this_pass_is_not_treated_as_uneconomic(self):
+        """The dwell was being defeated by a dictionary default.
+
+        `clear_economics()` wipes `expected_net_by_side` before every pass, so
+        a side the runner skipped -- an overlapping book, or an early return
+        out of `_evaluate_rewards` -- has no entry at all. Reading that through
+        `.get(side, 0.0)` turned "we did not look" into "this is worthless" and
+        cancelled the resting order, inside the 90s reward-eligibility grace
+        that exists to stop exactly that flapping.
+
+        Measured 2026-08-19: mean resting fraction 57.3% across 179 sides, the
+        same side re-placed at the same price every 2-3 minutes.
+        """
+
+        f = frame(orders=(WorkingOrder("order-1", "bid", .49, Decimal("2")),))
+        f.expected_net_by_side.clear()          # nothing evaluated this pass
+        actions = DesiredStateReconciler(policy()).plan(f)
+        self.assertEqual(
+            [a for a in actions if a.kind is ActionKind.CANCEL], [],
+            "a side that was not evaluated must keep its resting quote")
+
+    def test_a_side_evaluated_at_zero_is_still_dropped(self):
+        """The fix must not swallow a real refusal. Absence is skipped;
+        a value that was actually computed and came out at or below zero
+        still cancels, and still names itself."""
+
+        f = frame(orders=(WorkingOrder("order-1", "bid", .49, Decimal("2")),))
+        f.expected_net_by_side["bid"] = 0.0     # evaluated, and worthless
+        cancels = [a for a in DesiredStateReconciler(policy()).plan(f)
+                   if a.kind is ActionKind.CANCEL]
+        self.assertTrue(cancels)
+        self.assertEqual(
+            cancels[0].reason,
+            "side_no_longer_desired:expected_net_not_positive")
+
     def test_a_healthy_book_keeps_the_side_and_cancels_nothing(self):
         actions = DesiredStateReconciler(policy()).plan(
             frame(orders=self.resting_bid()))

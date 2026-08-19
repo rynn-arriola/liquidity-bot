@@ -570,13 +570,29 @@ class DesiredStateReconciler:
                     self.policy.reward_eligibility_dwell_seconds):
                 drop_cause[side] = "reward_ineligible"
                 desired_sides.discard(side)
-        # A strict `> 0` on an estimate that sits near zero flips with book
-        # noise, and flipping cancels a resting quote and re-places it at the
-        # same price minutes later. Reward pays for resting, so that costs
-        # real money. Tagged so the churn can be attributed before anything
-        # is changed about the threshold itself.
+        # "Not evaluated" is not "uneconomic". `clear_economics()` wipes
+        # `expected_net_by_side` before every pass, so a side the runner
+        # skipped this pass -- an overlapping book, or any early return out of
+        # `_evaluate_rewards` -- simply has no entry. Reading that absence
+        # through `.get(side, 0.0)` turned it into a hard zero and cancelled
+        # the resting order.
+        #
+        # That defeated the dwell. `reward_eligibility_dwell_seconds` (90s)
+        # exists so a side that momentarily stops qualifying keeps its quote
+        # rather than flapping; a side inside that grace was killed here
+        # instead, by a dictionary default. Measured 2026-08-19: mean resting
+        # fraction 57.3% across 179 sides, with the same side re-placed at the
+        # same price every 2-3 minutes.
+        #
+        # Absence is safe to skip because the two real reasons are caught
+        # elsewhere and by their own names: an overlapping book fails
+        # `_entry_price` below and drops as `no_entry_price`, and a side that
+        # stays unqualified is dropped by the eligibility dwell above. A side
+        # that WAS evaluated and priced at or below zero still drops here.
         for side in tuple(desired_sides):
-            value = frame.expected_net_by_side.get(side, 0.0)
+            if side not in frame.expected_net_by_side:
+                continue
+            value = frame.expected_net_by_side[side]
             if not math.isfinite(value):
                 drop_cause[side] = "expected_net_not_finite"
                 desired_sides.discard(side)

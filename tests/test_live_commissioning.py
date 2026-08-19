@@ -1412,7 +1412,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         actions = runner.reconciler.plan(runner._frame(NOW))
 
         self.assertEqual(actions, [])
-        self.assertEqual(runner._expected_net_by_side, {})
+        # The refusal is RECORDED, not represented by an absent key. The
+        # reconciler reads a missing entry as "not evaluated this pass" and
+        # defers to the eligibility dwell, so an enforced refusal has to say
+        # so explicitly or it would place the order the gate forbade.
+        self.assertEqual(
+            set(runner._expected_net_by_side), {"bid", "offer"})
+        self.assertTrue(
+            all(value <= 0 for value in runner._expected_net_by_side.values()),
+            "a refused side must record a non-positive expected net")
         self.assertEqual(
             {item.reason for item in runner._reward_projection_by_side.values()},
             {"projected"})

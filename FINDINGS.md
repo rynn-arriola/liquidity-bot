@@ -2951,3 +2951,51 @@ it is just not proven to be what was firing. Re-read the cause counts over a
 full busy session before acting on either. That is what the tagging is for --
 this is the third hypothesis in this investigation that the data has moved, and
 the first two were mine.
+
+## The churn's real defect: a missing dict key read as "uneconomic"
+
+Traced 2026-08-19, after three wrong hypotheses. Baseline: **mean resting
+fraction 57.3%** across 179 sides (`scripts/resting_fraction.py`) -- 43% of
+bound time earning nothing, with the same side re-placed at the same price
+every 2-3 minutes.
+
+`clear_economics()` wipes `expected_net_by_side` before every pass. A side the
+runner skipped that pass -- an overlapping book, or any early return out of
+`_evaluate_rewards` -- therefore has **no entry**. The reconciler read it as
+`.get(side, 0.0)`, turning "we did not look" into "this is worthless", and
+cancelled the resting order.
+
+That defeated the dwell. `reward_eligibility_dwell_seconds` is 90s and exists
+so a side that momentarily stops qualifying keeps its quote instead of
+flapping. A side inside that grace was killed anyway, by a dictionary default.
+
+**Fixed:** absence is skipped and left to the dwell; a value that was actually
+computed and came out at or below zero still drops the side.
+
+### The trap in fixing it, and why the first attempt was a safety hole
+
+Absence meant two different things. With `enforce_reward_cost_gate` **False**
+(the live default -- the gate is advisory) the value is written for every
+evaluated side, so absence means "not evaluated". With the gate **enforced**, a
+refused side got no entry at all, so absence meant "the gate refused". Skipping
+absence therefore placed an order the gate had forbidden -- caught by
+`test_sub_dollar_reward_is_evaluated_but_risk_can_block_order`.
+
+The fix is to stop overloading absence: an enforced refusal now records
+`min(expected_net_value, 0.0)` explicitly, so a missing key means exactly one
+thing. Mutation-checked both ways -- restoring `.get(side, 0.0)` cancels the
+resting quote, and dropping the explicit refusal emits the forbidden place.
+
+### Three hypotheses died first; do not re-run them
+
+1. **Stressed-exit gate.** Disproved by tagging -- live cancels arrived bare.
+2. **`expected_net` floored on the wrong branch.** The floor sits on the
+   `not should_quote` branch, which looked like two components disagreeing.
+   They cannot disagree: `OpportunityEconomics.should_quote` **is**
+   `expected_net_value > 0`, the same expression. "Flooring both branches" is a
+   no-op -- it changed nothing and moved no test.
+3. **`reward_ineligible` as the dominant cause.** True in one window, zero in
+   the next. The mix moves with the regime.
+
+**Validate with `resting_fraction.py`, not with cause counts.** 57.3% is the
+number to beat; reward accrues only while an order rests.

@@ -1523,6 +1523,16 @@ class CommissioningRunner:
                 state.economic_blocker_by_side[side] = (
                     "projected_reward_does_not_cover_probability_"
                     "weighted_exit_cost")
+                # Record the refusal as a value, not as an absent key.
+                #
+                # The reconciler treats a MISSING entry as "not evaluated this
+                # pass" and leaves the eligibility dwell to decide, so absence
+                # must not also mean "refused" -- that would let an enforced
+                # refusal place the order it forbade. `should_quote` is
+                # `expected_net_value > 0`, so this is at or below zero and the
+                # reconciler drops the side naming `expected_net_not_positive`.
+                state.expected_net_by_side[side] = min(
+                    economics.expected_net_value, 0.0)
         if not self.config.enforce_reward_cost_gate:
             # Keep the measurement, drop the veto: the blocker above is still
             # computed and logged so the gate can be re-armed from evidence.

@@ -3105,6 +3105,66 @@ pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
 the drop would be invisible for the same reason the live-period drop was.
 
 
+## Tight books are tight BECAUSE they are deep. That is what the 2c filter catches
+
+Measured 2026-08-20T22:0xZ, testing an operator proposal: rather than skipping
+1c-spread markets, quote one tick behind on both sides. That makes our own two
+quotes 3c apart, so a matched pair pays 3c rather than 2c, and being behind the
+touch makes a fill less likely. The reasoning is sound and the arithmetic is
+right -- on a market currently earning nothing it is better on two axes.
+
+**It fails on a third, and the third is decisive.** Reward score accumulates
+outward from the touch and stops once cumulative depth reaches `targetSize`;
+orders past that point score nothing. Depth on the 1c rejects:
+
+```
+market                    spread   targetSize   depth at BEST BID   inside cutoff?
+atp-alamag-colwon         0.0100       15,000            34,364          no
+atp-camcar-moeech         0.0100       15,000            36,163          no
+atp-zizber-andpel         0.0100       15,000           166,752          no
+lol-dog-mvu               0.0100       15,000            93,541          no
+itfwo-monbarsohpar        0.0100        7,500            18,068          no
+mlb-laa-hou               0.0050       25,000           914,201          no
+```
+
+**The depth at the single best price already exceeds targetSize** -- 2x on the
+ATP markets, 37x on the MLB one. The cutoff is consumed inside the touch level
+itself, so one tick back scores exactly zero. Ten of ten sampled were over.
+
+Even AT the touch these are worthless: 5 contracts against 34,364 is a 0.015%
+share, against 914,201 it is 0.0005%.
+
+### The mechanism worth remembering
+
+A book is 1c wide **because** it is heavily quoted. Spread and depth are the
+same fact seen from two sides, so `minimum_entry_spread` is a better proxy than
+its name suggests: it is not really refusing "no room to trade", it is refusing
+"our size is a rounding error here". That is exactly section 6h -- thin books
+make one contract a real fraction, deep books make it nothing, and `atp` and
+`mlb` paid one cent each.
+
+### What would make the proposal work, and it is worth watching for
+
+A market that is tight **and thin** -- cumulative depth at the touch BELOW
+`targetSize`. Then one tick back stays inside the cutoff, earns ~30% of touch
+score (discount 0.30 typical) on a slot earning zero today, and the 3c pair
+economics hold. The proposal is not wrong; it needs a book that does not exist
+in this sample.
+
+**The cheap test if it comes up again:** for each tight reject, compare
+cumulative bid depth at the touch against the period's `targetSize`. Inside
+means the idea is live for that market; outside means quoting it earns nothing
+wherever it rests. Do not re-argue this from spreads alone -- the spread does
+not carry the information that decides it.
+
+### This also closes WATCHLIST 9
+
+The question was whether the 1c rejects are near-misses worth admitting. They
+cluster at exactly 0.0100, which looked like a near-miss on price, and are
+2x-37x over target on depth, which is not near anything. Lowering
+`minimum_entry_spread` would admit markets that cannot pay at any price we
+would rest at.
+
 ## The live-only period mix is TIME-VARYING, not a program change
 
 > **CORRECTED 2026-08-20T21:49Z, six hours after it was written.** The heading

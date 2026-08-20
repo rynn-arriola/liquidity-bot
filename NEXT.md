@@ -378,6 +378,45 @@ blocks *its own* market's quoting and its own shutdown cancel.
 2026-08-17; 60s cost another on 2026-08-18. The measured stall was 131s. The
 timeout is not the variable that matters.
 
+## A retired, flat, permanently-dead market refreshes its book forever
+
+Measured 2026-08-20T10:55Z. Two markets whose games had finished:
+
+```
+quiet_book_rest_refresh:aec-setkamecz-radada-vysmar-2026-08-20  attempt=72
+quiet_book_rest_refresh:aec-setkamecz-talfil-schfra-2026-08-20  attempt=70
+error = AdapterError: book is empty on both sides
+144 refresh calls in 10 minutes  (~0.24 req/s, 6% of the 4 req/s governor)
+```
+
+**Both halves are working as designed, which is why this is not a bug in
+either of them.** The market retires correctly at `MAX_RECOVERY_ATTEMPTS`.
+Invariant 62 then keeps its book refresh alive on purpose, so a retired market
+holding inventory can still be exited. And `_release_retired_if_flat`
+deliberately refuses to release a BOOK-fault retirement on flatness alone,
+because releasing on flatness is what produced the ~45s retire/release churn
+recorded in `BUGFIXES.md`.
+
+Compose them and a market that is retired, flat, past kickoff and permanently
+unparseable refreshes forever. Nothing releases it: not flatness (refused by
+the churn guard), not the top-up (it releases from the ACTIVE set, and this
+market is retired out of it).
+
+**Cost is a slow leak, not an outage.** 6% of the REST budget per stuck
+market, accumulating as games finish through a session, plus unbounded log
+growth -- 3,701 `unrecoverable_book` lines so far. Nothing is blocked and no
+slot is denied.
+
+**Fix shape.** The exit argument for keeping the refresh does not apply to a
+market with no position and no working order -- there is nothing to exit. Stop
+refreshing when a retired market is flat AND order-free AND past kickoff. That
+is strictly narrower than the flatness release the churn guard refuses: it
+stops the REST call without releasing the retirement, so the market stays
+barred and cannot churn back in.
+
+Needs a test that a retired market **holding a position** still refreshes, or
+the fix strands the exit it exists to protect.
+
 ## Also from 2026-08-19: two things for the next restart batch
 
 Both are runner changes, both are reporting-only, and neither is worth

@@ -2635,28 +2635,69 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_losses_from_earlier_sessions_do_not_spend_this_budget(self):
+    async def test_a_new_utc_day_absorbs_every_earlier_loss(self):
         """The stop is a guardrail for today, not a lifetime tally.
 
         Measured 2026-08-15: once the fill back-fill let the stop see real
-        closed round trips, it totalled several days of test losses and the
-        runner halted 73 seconds after every start. A stop that can never be
-        satisfied is not a safety measure, it is an outage.
+        closed round trips, it totalled several days of losses and the runner
+        halted 73 seconds after every start. A stop that can never be
+        satisfied is not a safety measure, it is an outage. A NEW UTC day must
+        therefore open with a fresh budget however bad the history is.
         """
         runner, _client, _ = self.build_runner()
         await runner.preflight()
-        # Far past the $40 session limit, all of it from before this session.
-        runner.ledger.realized_pnl = (
-            lambda slug=None: Decimal("-500")
-            if slug is None else Decimal("-500"))
+        # Far past the $40 limit, all of it from before today.
+        runner.ledger.realized_pnl = lambda slug=None: Decimal("-500")
         runner.ledger.realized_by_market = lambda: {"market-one": Decimal("-500")}
-        runner._baseline_day = None
 
+        # Tomorrow: a date with no stored row, so a new baseline is taken.
+        tomorrow = NOW + timedelta(days=1)
+        runner._now = lambda: tomorrow
         runner._roll_realized_baseline()
         runner.risk_guard.observe_realized(
             runner.ledger.realized_pnl() - runner._realized_baseline)
 
+        self.assertIsNone(runner._stop_reason(tomorrow))
+
+    async def test_a_restart_inside_the_same_day_inherits_its_drawdown(self):
+        """A restart must not hand the day's budget back.
+
+        Both stops used to baseline per PROCESS. Ten sessions ran on
+        2026-08-18, so the $40 budget was returned ten times -- and the $45
+        hard stop was worse, because re-stamping `starting_equity` at the
+        lower equity ratchets the floor down and every individual step stays
+        inside the limit while the account walks away.
+        """
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        opening = runner.risk_guard.starting_equity
+
+        # Lose $30 -- inside both the $40 session stop and the $45 ceiling --
+        # then die. This is the step that gets forgiven by a per-process
+        # baseline, and it is what makes the ratchet possible.
+        client.account.current_balance -= Decimal("30")
+        await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+        # Restart: same ledger, same venue, same UTC day.
+        restarted, _client2, _ = self.build_runner(
+            ledger=runner.ledger, client=client)
+        await restarted.preflight()
+
+        # The day's opening equity, NOT the depressed equity it just read.
+        self.assertEqual(restarted.risk_guard.starting_equity, opening)
+
+        # $20 more. Measured from the DAY's open that is $50 and past the $45
+        # ceiling; measured from this process's own start it is $20 and trips
+        # nothing at all, which is exactly the bug.
+        client.account.current_balance -= Decimal("20")
+        await restarted._refresh_balance(NOW)
+        self.assertEqual(
+            restarted._stop_reason(NOW), "EMERGENCY_EQUITY_HARD_STOP")
+        await restarted.private_stream.close()
+        await restarted.market_stream.close()
 
     async def test_a_loss_taken_this_session_still_stops(self):
         """Re-baselining must not blind the stop to real losses."""

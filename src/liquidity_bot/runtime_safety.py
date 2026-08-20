@@ -115,6 +115,25 @@ class SessionRiskGuard:
         if self.max_duration_seconds <= 0 or self.max_equity_age_seconds <= 0:
             raise ValueError("duration and equity freshness must be positive")
 
+    def adopt_day_baseline(
+        self, equity: Decimal | str | int | float,
+    ) -> None:
+        """Re-point the hard stop at the UTC day's opening equity.
+
+        `starting_equity` is stamped at preflight, which makes the emergency
+        stop measure THIS PROCESS rather than the day. That is the ratchet
+        recorded in FINDINGS: lose $30, crash, restart, and the baseline
+        re-stamps at the lower equity so the $30 is forgiven and it takes
+        another full $45 from the new floor to fire. The account can walk down
+        indefinitely with every step inside the limit.
+
+        The caller supplies the day's opening equity from the ledger, which
+        survives a restart. Validated here rather than assigned directly so a
+        non-finite value cannot silently disable the stop.
+        """
+
+        self.starting_equity = _decimal(equity, "starting_equity")
+
     def observe_equity(self, equity: Decimal | str | int | float, *,
                        observed_at: datetime) -> None:
         if observed_at.tzinfo is None or observed_at.utcoffset() is None:

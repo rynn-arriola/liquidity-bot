@@ -92,6 +92,17 @@ class LiquiditySummary:
     # independently of the session one, so a meter for the session alone can
     # read comfortable while a market is one fill from stopping.
     worst_market_realized_pnl_usd: Decimal = Decimal("0")
+    # Marked equity against the UTC day's OPENING equity. Negative is a loss.
+    # This is the quantity `hard_stop_reached` fires on, so it is the only one
+    # the HARD meter may be drawn from, and it is also the honest answer to
+    # "how is today going" -- it picks up reward the moment it lands.
+    # Account-wide by nature: equity cannot be scoped to one bot (CLAUDE.md),
+    # so it must never be labelled as this bot's own result.
+    today_pnl_usd: Decimal = Decimal("0")
+    # Lifetime result for THIS bot: ledger trading, which is bot-scoped by
+    # construction because the ledger holds only this bot's fills. Settled
+    # positions are invisible to it, so it understates losses -- see FINDINGS.
+    overall_pnl_usd: Decimal = Decimal("0")
     # Supply, so the reader can tell "3 markets because 3 is all there is"
     # from "3 markets because something is broken". Without these the slots
     # field reports a ratio against capacity and every quiet evening reads
@@ -221,6 +232,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     paid = _money(summary.attributable_paid_rewards_usd)
     pending = _money(summary.pending_rewards_usd)
     overall = trading + marked + paid
+    today_pnl = _money(summary.today_pnl_usd)
+    bot_pnl = _money(summary.overall_pnl_usd)
     integrity_ok = not summary.integrity_problems
     idle = max(0, summary.active_markets - summary.resting_markets)
 
@@ -286,10 +299,30 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     else:
         headline = (
             f"## {icon} {state}\n"
+            f"# {_signed(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
+            f"**BOT OVERALL  ${bot_pnl:+,.2f}**  {_signed(bot_pnl)}\n"
+            f"_today = marked account equity since 00:00 UTC, "
+            f"ACCOUNT-WIDE; bot overall = this ledger trading only_\n"
             f"**ACCOUNTED NET  ${overall:+,.2f}**   ·   {_signed(overall)}\n"
             f"_{summary.pnl_label} ${trading:+,.2f} · open mark "
             f"${marked:+,.2f} · attributable PAID rewards ${paid:+,.2f} "
             f"· up {uptime / 3600:,.1f}h_\n")
+    # The embed's left strip, which is the first thing read on a phone. It
+    # carried operational state alone, so "am I making money today" was not
+    # answerable at a glance.
+    #
+    # P&L takes the strip ONLY when the state chose green -- i.e. nothing
+    # operational wants attention. A stuck slot or an unquoted viable market
+    # keeps its orange, and an integrity failure keeps its red, because those
+    # cost reward and a green strip on a profitable day would hide them. That
+    # is the same defect as a stop meter reading safe while the stop is about
+    # to fire: the colour must never be more reassuring than the state.
+    #
+    # So: red = losing today OR broken; orange = look at the slots; green =
+    # healthy and up. The state icon in the title disambiguates red.
+    if color == GREEN:
+        color = GREEN if today_pnl >= 0 else RED
+
     description = (
         warning + headline
         + (f"> Pending rewards **${pending:,.2f}** are shown but not counted.\n"
@@ -351,6 +384,14 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     hard_cap = _money(summary.hard_stop_loss_usd)
     session_loss = max(Decimal("0"), -_money(summary.session_realized_pnl_usd))
     worst_loss = max(Decimal("0"), -_money(summary.worst_market_realized_pnl_usd))
+    # The HARD meter must read what its own stop fires on. `hard_stop_reached`
+    # compares marked equity against the day's opening equity; the session stop
+    # trips on `-realized_pnl`, which is matched-pair only. They diverge in the
+    # DANGEROUS direction: a position that settles worthless moves equity and
+    # is invisible to realized_pnl, so this bar read near zero while the stop
+    # it is labelled for was about to fire. Same defect the dashboard carried
+    # on 2026-08-18 -- two numbers for one quantity on one screen.
+    hard_loss = max(Decimal("0"), -_money(summary.today_pnl_usd))
     risk_text = (
         _row(position_label, summary.open_positions)
         + _row("Working orders", summary.working_orders)
@@ -368,8 +409,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
                 + f"  ${float(worst_loss):,.2f}\n")
         if hard_cap > 0:
             risk_text += (
-                "HARD     " + _meter(float(session_loss), float(hard_cap))
-                + f"  ${float(session_loss):,.2f} / ${float(hard_cap):,.2f}\n")
+                "HARD     " + _meter(float(hard_loss), float(hard_cap))
+                + f"  ${float(hard_loss):,.2f} / ${float(hard_cap):,.2f}\n")
 
     reward_text = (_row("PAID attributed", f"{float(paid):,.2f}")
                    + _row("Pending", f"{float(pending):,.2f}"))

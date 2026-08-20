@@ -327,6 +327,7 @@ class CommissioningRunner:
         # rejected (320 contracts move $38 on a twelve-cent mark) does not
         # apply -- cash does not move on paper price changes.
         self._cash_baseline: Decimal | None = None
+        self._day_opening_equity: Decimal | None = None
         # Footer identity, so an alert says which box and which build produced
         # it without the operator having to ask.
         self._host_name = socket.gethostname()
@@ -1230,6 +1231,11 @@ class CommissioningRunner:
         )
         self.risk_guard.observe_equity(
             self.balance.marked_equity, observed_at=now)
+        # Before any order can be placed. `SessionRiskGuard` stamped
+        # `starting_equity` from this instant, which measures the process; this
+        # re-points it at the UTC day's opening equity from the ledger, so a
+        # restart inherits the day's drawdown instead of resetting it.
+        self._roll_realized_baseline()
         self.driver = ControlledActionDriver(
             self.executor, self.ledger, self.risk_guard)
         self._orders_before = self.ledger.query(
@@ -1741,22 +1747,48 @@ class CommissioningRunner:
             return ledger_value
 
     def _roll_realized_baseline(self) -> None:
-        """Re-baseline at session start and again at each UTC midnight.
+        """Adopt the UTC day's opening marks, from the ledger, not this process.
 
-        Per session so a restart does not inherit an earlier run's losses, and
-        per day so a process that runs for days gets a fresh budget rather than
-        spending one day's allowance on its first afternoon.
+        Both stops used to baseline per PROCESS, which is what "a restart
+        forgives the day's drawdown" means. Ten sessions ran on 2026-08-18, so
+        the $40 budget was handed back ten times; the $45 hard stop was worse,
+        because re-stamping `starting_equity` at a lower equity ratchets the
+        floor down and every step stays inside the limit while the account
+        walks away.
+
+        The marks now live in the ledger, which survives a restart. The first
+        process of a UTC day writes them and every later one reads them back,
+        so a mid-day restart inherits the day's loss. A new UTC date has no row
+        and gets a genuinely fresh budget, which is the only reset intended.
         """
 
-        today = self._now().date()
+        now = self._now()
+        today = now.date()
         if self._baseline_day == today:
             return
+        equity = (
+            self.balance.marked_equity if self.balance is not None
+            else Decimal("0"))
+        realized, cash = self.ledger.realized_pnl(), (
+            self.balance.current_balance if self.balance is not None else None)
+        opening_equity, opening_realized, opening_cash = (
+            self.ledger.day_baseline(
+                today.isoformat(),
+                opening_equity=equity,
+                opening_realized=realized,
+                opening_cash=cash,
+                created_at=now))
         self._baseline_day = today
-        self._realized_baseline = self.ledger.realized_pnl()
+        self._realized_baseline = opening_realized
         self._realized_baseline_by_market = dict(
             self.ledger.realized_by_market())
-        self._cash_baseline = (
-            self.balance.current_balance if self.balance is not None else None)
+        self._cash_baseline = opening_cash
+        self._day_opening_equity = opening_equity
+        # The hard stop measures against this. Without it the emergency
+        # ceiling stays pinned to whatever equity this process happened to
+        # start at, which is the ratchet above.
+        if self.risk_guard is not None:
+            self.risk_guard.adopt_day_baseline(opening_equity)
 
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:
@@ -2458,6 +2490,20 @@ class CommissioningRunner:
             selection_failures=(
                 len(self._market_selection.failures)
                 if self._market_selection is not None else 0),
+            # Marked equity against the DAY's opening equity, from the
+            # ledger so a restart cannot reset it. This is what
+            # `hard_stop_reached` fires on, so the HARD meter and the headline
+            # now read the same number the stop does. Account-wide by nature:
+            # equity carries no per-system attribution (CLAUDE.md).
+            today_pnl_usd=(
+                self.balance.marked_equity - self._day_opening_equity
+                if self.balance is not None
+                and self._day_opening_equity is not None else Decimal("0")),
+            # Lifetime, and genuinely this bot's: the ledger holds only this
+            # bot's fills, so no date filter is needed. Understates losses,
+            # because a settled position has its entry recorded and its exit
+            # invisible -- $67.38 across 29 markets as of 2026-08-19.
+            overall_pnl_usd=self.ledger.realized_pnl(),
             worst_market_realized_pnl_usd=(
                 min(self.risk_guard.realized_by_market.values(),
                     default=Decimal("0"))

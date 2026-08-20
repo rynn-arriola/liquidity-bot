@@ -1,6 +1,30 @@
 # Next session — outstanding fixes
 
-## 00. START HERE (2026-08-18, fourth): a restart forgives the day's drawdown
+## 00. FIXED 2026-08-20: a restart forgives the day's drawdown
+
+**Landed.** Both stops now baseline on the UTC day, from a durable ledger row
+(`execution_day_baselines`), so a mid-day restart inherits the drawdown and
+only a new UTC date grants a fresh budget. The hard stop's ratchet is closed
+with it. Full write-up and the two mutation checks in `BUGFIXES.md`.
+
+**Needs a deploy and a restart to take effect** -- it is runner code.
+
+### Still open, found while fixing it
+
+- **The summary's reward line is dead, twice over.** `paid_observed` is
+  computed in `_send_summary` and only ever reaches the `[selection]` log line,
+  so `attributable_paid_rewards_usd` sits at its `Decimal("0")` default and
+  `ACCOUNTED NET` is really `equity delta + open mark + 0`. And even if it were
+  passed, `_refresh_earnings` queries `fetch_earnings(market_slug=slug)` **per
+  slug**, which FINDINGS records as returning $0 even for markets that plainly
+  earned -- it must be account-wide. Fixing it also needs the bot-era boundary
+  in `src/`; `_bot_era.py` lives in `scripts/` and the runner cannot see it.
+- **`hard_stop_reached` does not evaluate on stale equity** (>15s). Deliberate,
+  and unchanged. Do not "fix" it to fire on numbers it cannot trust.
+
+### The original write-up, kept for the mechanism
+
+
 
 **Above the orphan-PLACE item below.** An availability bug costs quoting time;
 a stop that forgives losses costs money. Raised by the operator, who was down

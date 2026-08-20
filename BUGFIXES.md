@@ -29,6 +29,126 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-20
+
+### The HARD meter drew the session stop's number against the hard stop's cap
+
+**Found by the operator, who said the calculation looked wrong.** It was.
+
+**Symptom.** The stop-loss block in the five-minute Discord summary:
+
+```
+session  |||||-------  $12.00 / $40.00
+HARD     |||||-------  $12.00 / $45.00      <- same number, different cap
+```
+
+Both bars move together, always, because they were the same figure.
+
+**Mechanism.** The HARD bar was drawn from `session_loss`, which is
+`-session_realized_pnl_usd`:
+
+```python
+session_loss = max(Decimal("0"), -_money(summary.session_realized_pnl_usd))
+...
+"HARD     " + _meter(float(session_loss), float(hard_cap))
+```
+
+Those are two different stops reading two different quantities:
+
+| stop | fires on | sees a settled position? |
+|---|---|---|
+| session $40 | `-realized_pnl`, matched pairs only | **no** |
+| hard $45 | `starting_equity - current_equity` | **yes** |
+
+So the bar labelled HARD could sit at zero while the stop it names was about
+to fire -- a position that settles worthless moves marked equity and is
+invisible to `realized_pnl`. That is the reassuring direction, which is the
+dangerous one. The mutation test prints it exactly:
+`HARD |||| $0.00 / $45.00` on an account $44 into a $45 ceiling.
+
+`equity_change` was already computed two lines away and passed to the summary
+as `trading_realized_usd`; the meter simply never used it.
+
+**Fix.** A `today_pnl_usd` field carries marked equity against the UTC day's
+opening equity -- the exact input to `hard_stop_reached` -- and the HARD meter
+reads it. The session and worst-market bars are unchanged.
+
+Mutation-checked: pointing the meter back at `session_loss` fails
+`test_the_hard_meter_reads_equity_not_the_session_number`.
+
+**This is the third instance of one pattern**, and it is worth naming. 
+2026-08-18: the dashboard's loss bar summed only losing markets and read 4.6x
+high, on a screen whose header already showed the right number from a
+different path. Same day, the lesson written down was *"when a dashboard shows
+the same thing twice, make them the same computation or name them
+differently."* This is that again -- one number under two labels -- and it
+survived because the fix was applied to `scripts/dashboard.py` and never to
+`discord_summary.py`.
+
+---
+
+### Both loss stops baselined per PROCESS, so a restart forgave the day
+
+Queued as `NEXT.md` item 00 since 2026-08-18 and fixed here.
+
+**Symptom.** The operator was down on the account while both stop meters read
+near zero. Measured 2026-08-18:
+
+```
+window                fills   matched-pair
+THIS SESSION            37        -5.51     <- what the stop showed: 14% of $40
+TODAY                  162       -12.47
+ALL TIME               529       -46.55
+```
+
+**Mechanism.** `SessionRiskGuard` is constructed once in preflight with
+`starting_equity` stamped from the balance at that instant, and
+`_roll_realized_baseline` kept `_baseline_day` on the instance. Both therefore
+reset with the process. Ten sessions started on 2026-08-18, so the $40 budget
+was handed back ten times.
+
+**The ratchet is the dangerous half, and it is the hard stop.** Lose $30 of
+equity, crash, restart: `starting_equity` re-stamps at the *lower* equity, the
+$30 is forgiven, and it takes another full $45 from the new floor to fire. The
+account can walk down indefinitely with every individual step inside the
+limit. That is the shape that matches "account is down, stops look calm".
+
+**Fix.** The day's opening marks now live in the ledger, which survives a
+restart:
+
+```sql
+CREATE TABLE execution_day_baselines (
+    utc_date TEXT PRIMARY KEY, opening_equity TEXT NOT NULL,
+    opening_realized TEXT NOT NULL, opening_cash TEXT, created_at TEXT NOT NULL)
+```
+
+`INSERT OR IGNORE` is the whole mechanism: the first process of a UTC day
+writes the marks and every later one reads them back. A new UTC date has no
+row and does get a fresh budget, which is the only reset intended.
+`SessionRiskGuard.adopt_day_baseline` re-points the hard stop at the stored
+opening equity, and preflight calls it before any order can be placed.
+
+**A test was deleted on purpose.**
+`test_losses_from_earlier_sessions_do_not_spend_this_budget` asserted the old
+behaviour by name. Its underlying concern is real -- a LIFETIME tally halted
+the runner 73 seconds after every start on 2026-08-15 -- so it was split
+rather than dropped: `test_a_new_utc_day_absorbs_every_earlier_loss` keeps it,
+and `test_a_restart_inside_the_same_day_inherits_its_drawdown` covers the
+ratchet.
+
+Mutation-checked twice, both reproducing the production shape exactly
+(`Decimal('70') != Decimal('100')` -- the depressed equity adopted as the
+baseline): removing the `adopt_day_baseline` call, and relaxing
+`INSERT OR IGNORE` to `INSERT OR REPLACE`. 475 tests pass.
+
+**Not fixed here:** `hard_stop_reached` still returns False on equity older
+than 15s, so during a venue outage the hard stop is not evaluating at all.
+That is deliberate -- it refuses to fire on numbers it cannot trust -- and the
+answer to a bad venue coinciding with a bad day remains the pre-kickoff
+flatten, not a stop firing on stale data. See FINDINGS.
+
+---
+
 ## 2026-08-19 (diagnostics)
 
 ### The tool that answers "is this normal?" listed rejects it had never filtered

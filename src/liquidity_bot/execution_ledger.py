@@ -115,6 +115,13 @@ CREATE TABLE IF NOT EXISTS execution_reward_earnings (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_reward_market_observed
     ON execution_reward_earnings(market_slug, observed_at);
+CREATE TABLE IF NOT EXISTS execution_day_baselines (
+    utc_date TEXT PRIMARY KEY,
+    opening_equity TEXT NOT NULL,
+    opening_realized TEXT NOT NULL,
+    opening_cash TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -289,6 +296,55 @@ class ExecutionLedger:
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return list(self.connection.execute(sql, params).fetchall())
+
+    def day_baseline(
+        self,
+        utc_date: str,
+        *,
+        opening_equity: Decimal,
+        opening_realized: Decimal,
+        opening_cash: Decimal | None,
+        created_at: datetime,
+    ) -> tuple[Decimal, Decimal, Decimal | None]:
+        """Return the UTC day's opening marks, writing them only if absent.
+
+        The loss stops used to baseline per PROCESS. Ten sessions started on
+        2026-08-18, so the day's $40 budget was handed back ten times, and the
+        $45 hard stop was worse: it re-stamped `starting_equity` at whatever
+        equity happened to be, so a $30 loss followed by a crash was forgiven
+        and it took another $45 from the LOWER floor to fire. A bad day could
+        step down indefinitely with every individual step inside the limit.
+
+        `INSERT OR IGNORE` is the whole mechanism: the first process of the
+        day writes the marks and every later one reads them back, so a restart
+        inherits the day's drawdown instead of being handed a fresh budget. A
+        new UTC date has no row and therefore does get a fresh one, which is
+        the intended reset.
+
+        Returns the stored values, which are the caller's baseline whether or
+        not this call is the one that wrote them.
+        """
+
+        date_key = str(utc_date)
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO execution_day_baselines"
+                "(utc_date,opening_equity,opening_realized,opening_cash,"
+                "created_at) VALUES (?,?,?,?,?)",
+                (date_key, str(opening_equity), str(opening_realized),
+                 None if opening_cash is None else str(opening_cash),
+                 _time(created_at, "created_at")))
+        row = self.connection.execute(
+            "SELECT opening_equity,opening_realized,opening_cash "
+            "FROM execution_day_baselines WHERE utc_date=?",
+            (date_key,)).fetchone()
+        if row is None:  # pragma: no cover - the insert above guarantees it
+            return opening_equity, opening_realized, opening_cash
+        stored_cash = row["opening_cash"]
+        return (
+            Decimal(str(row["opening_equity"])),
+            Decimal(str(row["opening_realized"])),
+            None if stored_cash is None else Decimal(str(stored_cash)))
 
     def record_reward_earnings(
         self, earnings: Iterable[Any], *, observed_at: datetime,

@@ -10,6 +10,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from liquidity_bot.discord_summary import (
+    GREEN,
     ORANGE,
     RED,
     LiquiditySummary,
@@ -366,6 +367,77 @@ class DiscordTests(unittest.TestCase):
         slots = [f for f in build_liquidity_summary(absurd)["embeds"][0]
                  ["fields"] if "Slots" in f["name"]][0]["value"]
         self.assertIn(f"{'  re-quoting':<19}{7:>10}", slots)
+
+    def _stop_summary(self, **overrides):
+        base = dict(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
+            active_markets=3, resting_markets=3, slot_capacity=20,
+            viable_markets=3, rewarded_markets=26, spread_filtered_markets=23,
+            selection_failures=0,
+            session_loss_limit_usd=Decimal("40"),
+            hard_stop_loss_usd=Decimal("45"))
+        base.update(overrides)
+        return LiquiditySummary(**base)
+
+    def test_the_hard_meter_reads_equity_not_the_session_number(self):
+        """The HARD bar drew the SESSION stop's number against the hard cap.
+
+        They are different quantities and they diverge in the DANGEROUS
+        direction. `runtime_safety.blockers` trips the session stop on
+        `-realized_pnl`, which is matched-pair only and cannot see a position
+        that settles worthless; `hard_stop_reached` compares marked equity
+        against the day's opening equity and does see it. So the bar could sit
+        near zero while the stop it is labelled for was one tick from firing.
+        """
+        summary = self._stop_summary(
+            session_realized_pnl_usd=Decimal("0"),   # matched pairs: flat
+            today_pnl_usd=Decimal("-44"))            # equity: nearly stopped
+        risk = [f for f in build_liquidity_summary(summary)["embeds"][0]["fields"]
+                if "stop loss" in f["name"]][0]["value"]
+        self.assertIn("$44.00 / $45.00", risk)
+        # ...and the session bar still reads its own, unchanged, number.
+        self.assertIn("$0.00 / $40.00", risk)
+
+    def test_the_strip_is_red_on_a_losing_day_and_green_on_a_winning_one(self):
+        """The strip is the first thing read on a phone, so it answers the
+        first question. Operational state keeps the title icon."""
+
+        losing = self._stop_summary(today_pnl_usd=Decimal("-12.34"))
+        embed = build_liquidity_summary(losing)["embeds"][0]
+        self.assertEqual(embed["color"], RED)
+        self.assertIn("TODAY  $-12.34", embed["description"])
+
+        winning = self._stop_summary(today_pnl_usd=Decimal("8.90"))
+        embed = build_liquidity_summary(winning)["embeds"][0]
+        self.assertEqual(embed["color"], GREEN)
+        self.assertIn("TODAY  $+8.90", embed["description"])
+
+    def test_a_profitable_day_never_paints_over_a_stuck_slot(self):
+        """P&L may only take the strip when nothing operational wants
+        attention. A green strip on a profitable day with seven slots held and
+        silent would hide the thing that is costing reward -- the same defect
+        as a stop meter reading safe while its stop is about to fire."""
+
+        stuck = self._stop_summary(
+            active_markets=14, resting_markets=7, viable_markets=7,
+            spread_filtered_markets=12, today_pnl_usd=Decimal("50"),
+            idle_market_reasons=(("book_stale", 5),))
+        embed = build_liquidity_summary(stuck)["embeds"][0]
+        self.assertEqual(embed["color"], ORANGE)
+        self.assertIn("7 slot(s) STUCK", embed["description"])
+
+    def test_the_bot_overall_line_is_separate_from_today(self):
+        """A good day inside a bad week must not read as success, so both are
+        shown. They are different scopes and the message says so: today is
+        account-wide marked equity, overall is this ledger's own trading."""
+
+        summary = self._stop_summary(
+            today_pnl_usd=Decimal("3.00"), overall_pnl_usd=Decimal("-91.20"))
+        description = build_liquidity_summary(summary)["embeds"][0]["description"]
+        self.assertIn("TODAY  $+3.00", description)
+        self.assertIn("BOT OVERALL  $-91.20", description)
+        self.assertIn("ACCOUNT-WIDE", description)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound

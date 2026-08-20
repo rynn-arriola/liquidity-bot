@@ -325,6 +325,71 @@ anything moves.
 
 ---
 
+## 10. Is the live-only period mix a daily cycle, or did something change?
+
+**Opened 2026-08-20T21:5xZ**, immediately after a snapshot-based conclusion had
+to be withdrawn six hours after it was written. A daily probe now feeds this.
+
+### Why this exists
+
+Order flow fell and I explained it as "the venue moved the leagues we earn in
+to live-only". Two readings agreed. A third, nine hours later, said the
+opposite:
+
+```
+10:55Z   81% of rewarded markets live-only
+14:12Z   73% live-only; setkameua [live] x22, 0 markets quotable
+21:49Z   setkameua [day_of,live] x16; 31 of 31 markets quotable
+```
+
+`day_of` returned on its own. **Two samples agreeing is not evidence when both
+are drawn from the same unmeasured cycle** -- both of mine were the same day,
+hours apart, and I read agreement as confirmation. Third time this session a
+snapshot produced a confident wrong answer.
+
+### What is measured
+
+`scripts/scheduled_probe.sh`, from the droplet crontab at **14:00 UTC daily**,
+into `logs/probe-<stamp>.log`. Two sections:
+
+**A. `period_mix.py` -- reward periods by league.** The number that matters is
+the last line, `markets offering day_of (quotable by this executor): N of M`.
+A pregame executor may only quote `day_of` (invariant 39), so `N` is literally
+the size of its addressable universe at that moment. The per-league breakdown
+carries each league's share of lifetime earnings beside it, so a league going
+live-only is read with its earning history attached.
+
+**B. `usable_markets.py --rejects` -- the funnel and why each market dropped.**
+Feeds item 9 above: the spread distribution of the `book too tight` block, and
+which leagues those rejects belong to.
+
+### Decision rule, written before the data
+
+**After five consecutive 14:00Z readings:**
+
+- **day_of present on >= 50% of in-horizon markets on 4 of 5 days** -> the
+  14:12Z reading was an outlier, the addressable universe is normally fine, and
+  the order-flow decline has a DIFFERENT cause that is still unexplained. Close
+  this and reopen the decline as its own question.
+- **day_of below 50% on 4 of 5 days** -> the mid-day trough is real and
+  systematic. The lever is then the selection horizon (2h) or the hours the bot
+  runs, NOT `minimum_entry_spread`. Do not implement live-period support off
+  this alone: that is a much larger change and wants its own evidence.
+- **Anything in between** -> keep collecting. Do not split the difference.
+
+**Do not conclude from fewer than five readings**, whatever they show. That
+constraint is the entire reason this entry exists.
+
+### Also still unexplained, and do not lose it
+
+The decline itself is measured and real -- rewarded->ranked fell 33.6% to 1.1%
+across 08-16..08-20, and same-hour comparison rules out time of day (09:00 gave
+21 ranked on 08-19 and 0 on 08-20). Withdrawing the explanation does not
+withdraw the observation. If the period mix turns out to be normal, this is
+still open.
+
+---
+
 ## `_rest_reconcile` failures in the unresolved-mutation loop swallow everything
 
 Noted 2026-08-18 while fixing the outage in `BUGFIXES.md`. The call site now

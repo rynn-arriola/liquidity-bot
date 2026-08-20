@@ -2659,6 +2659,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(runner._stop_reason(tomorrow))
 
+    async def test_a_baseline_is_never_written_without_a_balance(self):
+        """A zero opening equity would disable the hard stop until midnight.
+
+        `INSERT OR IGNORE` makes the first write of a UTC date permanent, so a
+        zero stored here could not be corrected for the rest of the day -- and
+        `starting_equity - current_equity` would then be negative, so the
+        emergency ceiling could never fire. Skipping is safe because both
+        callers fetch the balance immediately beforehand.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        opening = runner.risk_guard.starting_equity
+
+        # A new day, but nothing to measure it with.
+        runner.balance = None
+        runner._baseline_day = None
+        tomorrow = NOW + timedelta(days=1)
+        runner._now = lambda: tomorrow
+        runner._roll_realized_baseline()
+
+        stored = runner.ledger.query(
+            "SELECT utc_date FROM execution_day_baselines")
+        self.assertEqual([r["utc_date"] for r in stored], [NOW.date().isoformat()])
+        self.assertEqual(runner.risk_guard.starting_equity, opening)
+
     async def test_a_restart_inside_the_same_day_inherits_its_drawdown(self):
         """A restart must not hand the day's budget back.
 

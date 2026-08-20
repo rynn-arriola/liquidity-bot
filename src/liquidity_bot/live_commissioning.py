@@ -1766,11 +1766,17 @@ class CommissioningRunner:
         today = now.date()
         if self._baseline_day == today:
             return
-        equity = (
-            self.balance.marked_equity if self.balance is not None
-            else Decimal("0"))
-        realized, cash = self.ledger.realized_pnl(), (
-            self.balance.current_balance if self.balance is not None else None)
+        if self.balance is None:
+            # Never write a baseline we cannot measure. `INSERT OR IGNORE`
+            # makes the first write of a UTC date permanent, so a zero stored
+            # here could not be corrected for the rest of that day -- and a
+            # zero opening equity makes `starting_equity - current_equity`
+            # negative, which disables the emergency stop silently until
+            # midnight. Both call sites fetch the balance immediately before
+            # this, so skipping simply defers to the next pass.
+            return
+        equity = self.balance.marked_equity
+        realized, cash = self.ledger.realized_pnl(), self.balance.current_balance
         opening_equity, opening_realized, opening_cash = (
             self.ledger.day_baseline(
                 today.isoformat(),

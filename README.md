@@ -38,14 +38,14 @@ config overrides, so the dataclass defaults are what execute):
 
 | limit | value |
 |---|---|
-| quote size | 5 contracts |
+| quote size | 10 contracts |
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
 | session loss stop | $40 |
 | emergency hard stop | $45 marked equity |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
-| early-exit cross cap | $4 |
+| early-exit cross cap | $8 |
 | REST budget | 4 requests/second |
 
 Plus an operator-controlled graceful stop. **These numbers have moved several

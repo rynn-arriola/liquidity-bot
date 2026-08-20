@@ -12,9 +12,9 @@ strategy is profitable and not permission to scale.
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 5 contracts per quote across at most 20 concurrently bound markets (one bid
-  and one offer may rest per market while flat) -- corrected 2026-08-16, this
-  read "one contract per quote"; `commissioning.py` is the authority;
+- 10 contracts per quote across at most 20 concurrently bound markets (one bid
+  and one offer may rest per market while flat) -- 5 -> 10 on 2026-08-20;
+  `commissioning.py` is the authority;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
@@ -31,7 +31,7 @@ strategy is profitable and not permission to scale.
   comes first, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
-  An early cross costing more than $4 is refused and the position keeps resting
+  An early cross costing more than $8 is refused and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
 - end maker quoting after the first taker exit in a session, with a separate

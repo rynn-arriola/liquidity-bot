@@ -1,5 +1,67 @@
 # Next session — outstanding fixes
 
+## ROLLING BACK THE SIZE CHANGE -- read this first if things look wrong
+
+**Quote size was doubled 5 -> 10 on 2026-08-20 by operator decision.** If the
+account starts losing faster than it earns, or anything about the change looks
+wrong, go back here. Do not debug first -- roll back, then debug.
+
+**The known-good point is tagged:** `size-5-known-good` (commit `b69293b`),
+pushed to origin. It carries the full state in its message.
+
+```bash
+git fetch --tags
+git checkout size-5-known-good -- src/liquidity_bot/commissioning.py
+# then deploy just that file, run the suite ON the droplet, and cycle the bot:
+scp -i ~/.ssh/makerlab_droplet src/liquidity_bot/commissioning.py     root@<host>:/root/liquidity-bot/src/liquidity_bot/commissioning.py
+ssh ... 'cd /root/liquidity-bot && PYTHONPATH=src .venv/bin/python -B -m unittest discover -s tests'
+ssh ... 'cd /root/liquidity-bot && ./scripts/stop_commissioning.sh && ./scripts/start_commissioning.sh'
+# and write DEPLOYED_COMMIT by hand -- nothing does it for you
+```
+
+The revert is **one file**. Everything else in the change is tests and prose,
+so `commissioning.py` alone restores the running behaviour.
+
+### What the state was at the tag, so "is it worse?" is answerable
+
+```
+quote_size                5          reward PAID (bot era)   120.52, none pending
+max_early_exit_loss_usd   4          matched-pair trading    -47.24 / 234 pairs
+max_market_exposure_usd   45         unpriced uncertainty     44.45 / 20 markets
+loss stops         40 / 40 / 45      marked equity           467.46
+```
+
+Seven days of bot era, about **-6.75/day** of trading against reward that ran
+$14.60-$34.60/day. At size 10 expect roughly double both.
+
+### What moved, and the one thing that deliberately did not
+
+```
+quote_size                5 -> 10    mechanical
+max_early_exit_loss_usd   4 ->  8    MUST move -- see below
+max_market_exposure_usd  45 -> 90    mechanical
+loss stops         40 / 40 / 45      UNCHANGED, deliberately
+```
+
+`max_early_exit_loss_usd` is the one that would have bitten silently. The $4
+was calibrated on size-5 crossed losses (median $2.32, p75 $3.23). At size 10
+those become median $4.64 and p75 $6.46, so a $4 cap sits BELOW the median and
+would refuse almost every early cross -- converting the exit policy into "ride
+to the kickoff flatten" without anyone deciding to. FINDINGS measures P&L
+degrading monotonically with holding time, so that is a real cost.
+
+The **loss stops did not move** because they protect the account, not the
+position, and equity did not double. $40 is ~9% of ~$467; $80 would be ~18%.
+They keep about 3x headroom over a typical day at the new size, against 6x
+before -- so they start being a guardrail rather than a formality.
+
+### Judge it on a clean day, not on today
+
+2026-08-20 is contaminated: the bot was stopped and started several times
+deploying fixes, so its reward will understate. **2026-08-21 is the first clean
+comparison**, and the 14:00Z probe is already collecting the supply series that
+says whether any change in earnings is the size or the slate.
+
 ## 00. FIXED 2026-08-20: a restart forgives the day's drawdown
 
 **Landed.** Both stops now baseline on the UTC day, from a durable ledger row

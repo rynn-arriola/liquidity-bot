@@ -20,9 +20,12 @@ These are implementation requirements, not suggestions.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
-    maker-lab stopped. Size and breadth are **5 contracts per quote across at
-    most 20 concurrently bound markets** (corrected 2026-08-16; this read one
-    contract and eight markets). Both are enforced by `CommissioningConfig`,
+    maker-lab stopped. Size and breadth are **10 contracts per quote across at
+    most 20 concurrently bound markets** (5 -> 10 on 2026-08-20 by operator
+    decision; earlier text read one contract and eight markets).
+    `max_early_exit_loss_usd` doubled 4 -> 8 alongside it so the early-cross
+    cap keeps its meaning in contract terms, and the loss stops deliberately
+    did NOT move -- they bound the account, not the position. Both are enforced by `CommissioningConfig`,
     which refuses to arm if they are changed, so raising either remains a
     deliberate authorization rather than a config edit.
 
@@ -193,7 +196,7 @@ These are implementation requirements, not suggestions.
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
 57. **Superseded 2026-08-16 — kept because it was used as grounds not to
-    investigate.** The live limits are 20 markets and 5 contracts per quote
+    investigate.** The live limits are 20 markets and 10 contracts per quote
     (invariant 13). The per-connection reasoning below is still correct; what
     was wrong is treating one connection's cap as the account's. Connections
     are independent and each carries its own quota, and 29 subscriptions were

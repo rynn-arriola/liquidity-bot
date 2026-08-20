@@ -411,7 +411,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(client.orders.create_calls), 1)
         payload = client.orders.create_calls[0]
-        self.assertEqual(payload["quantity"], 5)
+        # Asserted against the config, not a literal, so the payload can
+        # never silently disagree with the authorized envelope -- which is the
+        # thing this test exists to prove.
+        self.assertEqual(payload["quantity"], int(runner.config.quote_size))
         self.assertTrue(payload["participateDontInitiate"])
         await runner.private_stream.close()
         await runner.market_stream.close()

@@ -36,15 +36,27 @@ class CommissioningTests(unittest.TestCase):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
         self.assertIsNone(self.authorized().assert_authorized(now=now))
         self.assertTrue(self.authorized().manual_stop_only)
-        self.assertEqual(str(self.authorized().quote_size), "5")
+        # Ten from 2026-08-20. What this test guards is that the envelope is
+        # LOCKED, not any particular value: `assert_authorized` refuses to arm
+        # if these move, so a size change is a deliberate authorization rather
+        # than a config edit.
+        self.assertEqual(str(self.authorized().quote_size), "10")
+        # Doubled with size so it keeps its meaning -- a $4 cap at ten
+        # contracts sits below the median crossed loss and would refuse almost
+        # every early exit. See commissioning.py.
+        self.assertEqual(str(self.authorized().max_early_exit_loss_usd), "8")
         self.assertEqual(str(self.authorized().hard_stop_loss_usd), "45")
         self.assertEqual(str(self.authorized().max_session_loss_usd), "40")
         self.assertEqual(str(self.authorized().max_market_loss_usd), "40")
+        # Deliberately NOT doubled with size. The stops protect the account and
+        # equity did not double: $40 is ~9% of ~$467, $80 would be ~18%. They
+        # still have room to work -- matched-pair trading ran -47.24 over seven
+        # days, ~-6.75/day at size 5, so ~-13.50/day here against a $40 stop.
         # Exposure budgets are separate from the loss stops above: "stop after
         # losing $40" and "never hold more than $40 of worst case" are
         # different statements and cannot share a number once size grows.
         self.assertEqual(
-            str(self.authorized().max_market_exposure_usd), "45")
+            str(self.authorized().max_market_exposure_usd), "90")
         self.assertEqual(
             str(self.authorized().max_portfolio_exposure_usd), "340")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
@@ -119,7 +131,7 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(config.max_markets, 20)
         # Size per quote is unchanged. Breadth expands, exposure per market
         # does not.
-        self.assertEqual(config.quote_size, Decimal("5"))
+        self.assertEqual(config.quote_size, Decimal("10"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
         # Only ~33 markets survive the day_of and catalog-spread filters, so
         # 25 left a blind spot for no reason. 100 covers the whole pool.

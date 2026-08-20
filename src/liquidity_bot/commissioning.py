@@ -75,7 +75,22 @@ class CommissioningConfig:
     # share is size-linear, so size 1 earns a rounding error. Worst case is
     # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
     # stop below is set to.
-    quote_size: Decimal = Decimal("5")
+    # Raised 5 -> 10 on 2026-08-20, by operator decision. Size is leverage,
+    # not edge: FINDINGS measured reward and unwind BOTH scaling linearly
+    # (25x size -> 24.4x reward, gate_ratio 0.0310 -> 0.0305), so doubling
+    # doubles what a qualifying book pays and doubles what a bad fill costs,
+    # leaving the ratio untouched. It was taken deliberately on that basis.
+    #
+    # Everything derived from contract count moves with it or the config stops
+    # being coherent -- the exposure budget below, and `max_early_exit_loss_usd`
+    # above all, whose $4 was calibrated on size-5 crossed losses.
+    #
+    # The LOSS STOPS deliberately do NOT move. They protect the account, not
+    # the position, and equity did not double: $40 is 9% of ~$467, $80 would be
+    # 18%. Measured headroom says they still work -- matched-pair trading is
+    # -47.24 over seven days, about -6.75/day at size 5, so ~-13.50/day here
+    # against a $40 stop. Three times the typical day rather than six.
+    quote_size: Decimal = Decimal("10")
     # Eight is the measured ceiling, not a preference. The private
     # WebSocket accepts 10 subscriptions per connection; positions must be
     # scoped one market per subscription because positionSubscription
@@ -137,7 +152,16 @@ class CommissioningConfig:
     # and a cap defers a loss rather than avoiding it, so buying that trade
     # needs mean-reversion evidence between the inventory clock and kickoff
     # that we do not have yet. See FINDINGS.
-    max_early_exit_loss_usd: Decimal = Decimal("4")
+    # Doubled with quote_size on 2026-08-20 so it keeps its MEANING. The $4
+    # was chosen from 17 crossed losses at size 5 (median $2.32, p75 $3.23,
+    # p90 $6.15) to block the three worst while leaving the median exit alone.
+    # At size 10 those same trades are median $4.64 and p75 $6.46, so a $4 cap
+    # would sit BELOW the median and refuse almost every early cross --
+    # silently converting the exit policy into "ride to the kickoff flatten".
+    # FINDINGS measures P&L degrading monotonically with holding time
+    # (+23.8c under 300s, -23.5c past an hour), so that would have been a real
+    # cost taken by accident rather than by decision.
+    max_early_exit_loss_usd: Decimal = Decimal("8")
     # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
     # one pair of numbers served as both, which is incoherent once size grows:
     # "stop after losing $40" and "never hold more than $40 of worst case" are
@@ -145,7 +169,14 @@ class CommissioningConfig:
     # value. The stops stay at $40 of *realised* loss; these bound *open*
     # worst-case exposure and are sized to the $385.88 balance with a ~10%
     # buffer, following maker-lab's CAPITAL_BUFFER_PCT.
-    max_market_exposure_usd: Decimal = Decimal("45")
+    #
+    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20: worst case on
+    # one market is `size x p + size x (1 - p)` = $10 at ten contracts, and the
+    # budget keeps the same multiple of it. The PORTFOLIO budget stays at $340
+    # -- it is sized to the account, not to the position, and 20 markets at $10
+    # is $200, still comfortably inside it. Raising it too would have loosened
+    # the one cap that bounds total open risk, which nothing here argues for.
+    max_market_exposure_usd: Decimal = Decimal("90")
     max_portfolio_exposure_usd: Decimal = Decimal("340")
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3
@@ -250,14 +281,14 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 5 or self.max_markets != 20:
+        if self.quote_size != 10 or self.max_markets != 20:
             problems.append(
-                "commissioning is hard-locked to five contracts per quote "
+                "commissioning is hard-locked to ten contracts per quote "
                 "across at most twenty markets")
-        if (self.max_market_exposure_usd != 45
+        if (self.max_market_exposure_usd != 90
                 or self.max_portfolio_exposure_usd != 340):
             problems.append(
-                "commissioning exposure budgets must remain $45 per market "
+                "commissioning exposure budgets must remain $90 per market "
                 "and $340 across the portfolio")
         if self.max_portfolio_exposure_usd < self.max_market_exposure_usd:
             problems.append(

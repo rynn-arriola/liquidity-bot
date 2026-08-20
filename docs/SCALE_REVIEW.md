@@ -81,7 +81,7 @@ letting inventory ride to settlement.
 
 The operator-authorized commissioning exception is, **as configured and
 running** (corrected 2026-08-16; this read one market, one contract, a
-30-second timeout and $2/$5/$15 caps): up to 20 concurrently bound markets, 5
+30-second timeout and $2/$5/$15 caps): up to 20 concurrently bound markets, 10
 contracts per quote, a 900-second inventory timeout with a 300-second
 pre-kickoff flatten, a $40 per-market soft cap, a $40 session soft cap, a $45
 emergency hard stop, and graceful operator stop. Do

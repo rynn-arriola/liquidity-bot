@@ -434,6 +434,30 @@ The kickoff mutant survived the first attempt: there are two call sites of
 remembering -- a mutation that silently patches the wrong occurrence looks
 exactly like a clause that is not load-bearing.
 
+## A daily probe is scheduled. Remove it when its two questions close
+
+Added 2026-08-20. `scripts/scheduled_probe.sh` runs at **14:00 UTC daily** from
+the droplet crontab and writes `logs/probe-<stamp>.log` -- the reward-period mix
+by league, then the selection funnel and its rejects.
+
+It exists for two questions that a single reading cannot answer:
+
+1. **WATCHLIST 9** -- do the tight-book rejects cluster at 1c on a busy slate?
+   Sample 1 taken 08-20T14:12Z; the rule wants a second on a different day.
+2. **Is the live-only period mix a program change or a daily cycle?** Readings
+   at 10:55Z and 14:12Z said setka and itf carried only `live`; a reading at
+   21:49Z said 31 of 31 in-horizon markets carried `day_of`. It varies through
+   the day, and that withdrew a FINDINGS conclusion six hours after it was
+   written. A series answers it; snapshots have now been wrong twice.
+
+**It is TEMPORARY and nothing expires it.** ~50 venue calls a day through the
+same 4 req/s governor the runner uses -- harmless, but it is not free and it
+should not outlive its purpose:
+
+```bash
+crontab -e     # delete the probe line; the nightly ledger backup stays
+```
+
 ## Also from 2026-08-19: two things for the next restart batch
 
 Both are runner changes, both are reporting-only, and neither is worth

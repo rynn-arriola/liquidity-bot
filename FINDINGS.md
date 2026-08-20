@@ -3105,7 +3105,36 @@ pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
 the drop would be invisible for the same reason the live-period drop was.
 
 
-## The venue moved the leagues that pay us to live-only. That is the decline
+## The live-only period mix is TIME-VARYING, not a program change
+
+> **CORRECTED 2026-08-20T21:49Z, six hours after it was written.** The heading
+> below read "The venue moved the leagues that pay us to live-only. That is the
+> decline", and that conclusion is **withdrawn**. It was drawn from two
+> readings taken nine hours apart on the same day, both of which happened to
+> fall in the same regime.
+>
+> A third reading at 21:49Z shows the opposite:
+>
+> ```
+> at 14:12Z   setkameua [live] x22          0 day_of
+> at 21:49Z   setkameua [day_of,live] x16   31 of 31 in-horizon markets quotable
+> ```
+>
+> `day_of` came back on its own. So the leagues were never "moved"; the period
+> mix varies through the day, and a pregame executor's addressable universe
+> varies with it. **The cause of the order-flow decline is therefore NOT
+> established** -- what is established is that the decline is real (the
+> measurements below stand) and that this explanation for it does not.
+>
+> The failure mode is worth naming because it is the third time this session:
+> two samples agreeing is not evidence when both are drawn from the same
+> unmeasured cycle. `scripts/period_mix.py` and a daily probe exist now so the
+> next answer comes from a series rather than a snapshot.
+>
+> Everything below is kept because the MEASUREMENTS are sound and still need
+> explaining. Only the interpretation was wrong.
+
+## (withdrawn interpretation) The venue moved the leagues that pay us to live-only
 
 Measured 2026-08-20T14:2xZ after the operator asked why order flow had dropped.
 This is the largest single change to this bot's addressable universe since it

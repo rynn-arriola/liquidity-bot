@@ -3089,6 +3089,101 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                          "a retired market still holding inventory must keep "
                          "its book, or the exit it exists to work is stranded")
 
+    async def test_one_stuck_mutation_retires_its_market_not_the_account(self):
+        """The blast radius must match the evidence.
+
+        This stop was terminal and ACCOUNT-WIDE: one overdue intent anywhere
+        took all twenty markets down, and because shutdown then could not prove
+        flat it exited 3, which the supervisor never restarts. It cost outages
+        on 2026-08-17, 2026-08-18 and twice on 2026-08-20 -- the last one with
+        nineteen healthy markets and a venue that was already flat.
+
+        An unresolved intent in one market says nothing about the other
+        nineteen. Ownership faults stay account-wide; this one does not.
+        """
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        limit = runner.config.unresolved_mutation_timeout_seconds
+        runner.ledger.prepare_intent(
+            "stuck", "CANCEL", "market-one", "stuck-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+
+        later = NOW + timedelta(seconds=limit + 30)
+        stuck, unattributable = runner._stuck_mutations(later)
+
+        self.assertEqual(sorted(stuck), ["market-one"])
+        self.assertIsNone(unattributable)
+        # And nothing account-wide has been armed by it.
+        self.assertIsNone(runner.risk_guard.critical_reason)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_mutation_inside_the_timeout_retires_nothing(self):
+        """Ordinary in-flight mutations must not be mistaken for stuck ones.
+
+        Every cancel is briefly unresolved -- FINDINGS measured the account
+        spending 35% of wall-clock time with one outstanding -- so a guard that
+        ignored the age would retire a market on every routine mutation and
+        walk the whole slate out of the session within minutes.
+        """
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        limit = runner.config.unresolved_mutation_timeout_seconds
+        runner.ledger.prepare_intent(
+            "fresh", "CANCEL", "market-one", "fresh-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+
+        # One second short of the limit: still in flight, not stuck.
+        stuck, unattributable = runner._stuck_mutations(
+            NOW + timedelta(seconds=limit - 1))
+
+        self.assertEqual(stuck, {})
+        self.assertIsNone(unattributable)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_stuck_mutation_still_blocks_its_own_market(self):
+        """Scoping the stop must not license quoting the market it belongs to.
+
+        The whole point of the guard is that we do not know what happened to
+        that mutation. Narrowing its blast radius is only safe while the
+        market it names is still barred from building more risk.
+        """
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+
+        await runner._retire_market(
+            slug, "unresolved_mutation_timeout", reset_exit_budget=False)
+
+        self.assertTrue(runner._is_retired(slug))
+        self.assertTrue(runner._is_barred_from_quoting(slug))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_unattributable_stuck_mutation_stays_terminal(self):
+        """An intent with no market to blame cannot be scoped: fail closed.
+
+        `prepare_intent` refuses an empty slug outright ("intent identity is
+        incomplete"), so this branch is defensive against a guard that lives in
+        another class. It is driven directly rather than through the ledger for
+        exactly that reason -- the alternative is shipping a fail-closed path
+        nothing has ever executed.
+        """
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        limit = runner.config.unresolved_mutation_timeout_seconds
+        stale = (NOW - timedelta(seconds=limit + 30)).isoformat()
+        runner.ledger.unresolved_intents = lambda slug=None: [
+            {"updated_at": stale, "market_slug": ""}]
+
+        stuck, unattributable = runner._stuck_mutations(NOW)
+
+        self.assertEqual(stuck, {})
+        self.assertIsNotNone(unattributable)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_unresolved_mutation_timeout_clears_the_measured_range(self):
         """The terminal stop must not fire inside normal venue latency.
 

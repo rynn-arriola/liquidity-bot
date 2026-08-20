@@ -29,6 +29,64 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-20 (evening)
+
+### The unresolved-mutation stop took twenty markets down over one intent
+
+**Fourth outage from the same guard**, and the one that finally got it fixed.
+2026-08-17 (10s timeout), 2026-08-18 (60s), and twice on 2026-08-20.
+
+**Symptom.** The bot stopped at 21:16:56Z after 9h41m and did not come back:
+
+```
+"stop_reason": "risk_stop:critical failure: order mutation unresolved for more than 60 seconds"
+"flat": false
+[supervisor] process exited without proving flat; not restarting
+```
+
+**Mechanism.** `_oldest_unresolved_age_seconds` reads the ledger
+**account-wide**. One intent past the timeout armed a terminal critical stop
+for every bound market. Shutdown then tried to flatten a -5 position, could not
+prove flat while its own intent was still unresolved, and returned exit 3 --
+which the supervisor never restarts.
+
+Nineteen markets were healthy. The venue, checked directly afterwards, was
+already flat: 0 open orders, 0 positions. The three intents left unresolved all
+carried exchange ids, so a restart resolved them from terminal venue states in
+under a minute.
+
+**Cost.** ~20 minutes of not quoting, found by the operator rather than by the
+bot. No money lost -- the account was flat throughout, which is exactly the
+point: the stop fired on an account that was safe.
+
+**Fix applied 2026-08-20.** `_stuck_mutations` splits overdue intents into
+per-market and unattributable. A market that owns one is **retired** rather
+than the account being stopped: it keeps its exit path (invariant 62), and
+`place()` already refuses while its own market has an unresolved intent, so it
+stops building risk without the other nineteen paying for it.
+
+Retirement carries its own systemic bound, so a fault that really is
+account-wide still ends the session through `market_retirement_limit_exceeded`.
+An intent with no market to blame keeps the terminal behaviour -- fail closed.
+
+**What deliberately did NOT change.** Ownership stays account-wide: a `venue:`
+order or an unexplained absence still stops everything, because those are
+statements about the account rather than about one market. And the timeout is
+untouched -- it was 10s and cost an outage, 60s and cost another, and the
+measured venue stall is 131s. The timeout was never the variable that mattered.
+
+Four mutation checks. The one that nearly shipped unverified: removing the
+`age <= limit` guard survived the first three tests, because all of them used
+an intent that was already overdue. Without it every routine in-flight cancel
+would retire its market -- and FINDINGS measures the account spending 35% of
+wall-clock time with one outstanding, so the whole slate would leave the
+session within minutes. `test_a_mutation_inside_the_timeout_retires_nothing`
+covers it now.
+
+484 tests pass.
+
+---
+
 ## 2026-08-20
 
 ### The HARD meter drew the session stop's number against the hard stop's cap

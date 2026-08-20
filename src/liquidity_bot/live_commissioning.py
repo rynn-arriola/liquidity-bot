@@ -1872,6 +1872,43 @@ class CommissioningRunner:
             return "risk_stop:" + ",".join(terminal)
         return None
 
+    def _stuck_mutations(
+        self, now: datetime,
+    ) -> tuple[dict[str, float], float | None]:
+        """Split overdue unresolved intents into per-market and unattributable.
+
+        Returns ``({slug: worst age}, unattributable_age_or_None)``.
+
+        The timeout used to be read account-wide: one overdue intent anywhere
+        tripped a terminal stop that took all twenty markets down, and because
+        shutdown then could not prove flat it exited 3, which the supervisor
+        never restarts. That cost outages on 2026-08-17, 2026-08-18 and twice
+        on 2026-08-20.
+
+        An unresolved intent in one market says nothing about the other
+        nineteen -- the same argument that scoped the rotation fix. So the
+        blast radius now matches the evidence. What stays account-wide is
+        ownership: a `venue:` order or an unexplained absence still stops
+        everything, because those really are statements about the account.
+
+        An intent with no market to blame cannot be scoped and keeps the old
+        terminal behaviour, which is the fail-closed direction.
+        """
+
+        limit = float(self.config.unresolved_mutation_timeout_seconds)
+        per_market: dict[str, float] = {}
+        unattributable: float | None = None
+        for row in self.ledger.unresolved_intents():
+            age = (now - datetime.fromisoformat(row["updated_at"])).total_seconds()
+            if age <= limit:
+                continue
+            slug = str(row["market_slug"] or "").strip()
+            if not slug:
+                unattributable = max(unattributable or 0.0, age)
+                continue
+            per_market[slug] = max(per_market.get(slug, 0.0), age)
+        return per_market, unattributable
+
     def _oldest_unresolved_age_seconds(self, now: datetime) -> float | None:
         rows = self.ledger.unresolved_intents()
         if not rows:
@@ -4298,7 +4335,27 @@ class CommissioningRunner:
                     unresolved_age = self._oldest_unresolved_age_seconds(now)
                     if unresolved_age is not None:
                         limit = self.config.unresolved_mutation_timeout_seconds
-                        if (unresolved_age > limit
+                        stuck, unattributable = self._stuck_mutations(now)
+                        # Retire the market that owns the stuck intent. It
+                        # keeps its exit path (invariant 62) and `place()`
+                        # already refuses while its own intent is unresolved,
+                        # so the market stops building risk without the other
+                        # nineteen paying for it. Retirement carries its own
+                        # systemic bound, so a fault that really is
+                        # account-wide still ends the session through
+                        # `market_retirement_limit_exceeded`.
+                        for slug in sorted(stuck):
+                            if self._is_retired(slug):
+                                continue
+                            stop = await self._retire_market(
+                                slug, "unresolved_mutation_timeout",
+                                reset_exit_budget=False)
+                            if stop:
+                                raise RuntimeInvariantViolation(
+                                    "market_retirement_limit_exceeded", stop)
+                        # No market to blame: cannot be scoped, so it keeps the
+                        # terminal behaviour. Fail closed.
+                        if (unattributable is not None
                                 and self.risk_guard is not None):
                             self.risk_guard.trip_critical(
                                 "order mutation unresolved for more than "

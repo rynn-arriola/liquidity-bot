@@ -176,30 +176,18 @@ class LiquiditySummary:
             _money(value)
 
 
-def _signed(value: Decimal) -> str:
-    """A signed dollar amount with a colour the client cannot strip.
+def _mark(value: Decimal) -> str:
+    """A colour for a figure that is written out beside it.
 
     Discord does **not** render ANSI inside an embed -- it works in ordinary
     message content, but embed descriptions and field values strip it.
     Verified 2026-08-18: the payload carried correct 0;32 / 0;31 escapes and
-    still displayed plain, so the approach was wrong rather than the codes.
+    still displayed plain, so the approach was wrong rather than the codes. A
+    coloured circle survives everywhere the embed does, including mobile.
 
-    A coloured circle survives everywhere the embed does, including mobile.
-    The sign and currency stay alongside it, so the number still reads
-    correctly to anyone who cannot see the emoji at all.
-    """
-
-    number = float(_money(value))
-    mark = "\U0001f7e2" if number >= 0 else "\U0001f534"
-    return f"{mark} {'+' if number >= 0 else '-'}${abs(number):,.2f}"
-
-
-def _mark(value: Decimal) -> str:
-    """Just the colour, for a figure that is already written out beside it.
-
-    `_signed` renders the mark AND the amount, which is right where it stands
-    alone. Pairing it with a formatted number prints every figure twice, which
-    is how the header came to read `# RED -$28.40 TODAY $-28.40`.
+    This returns the mark ALONE. Its predecessor returned the mark and the
+    amount, and pairing that with a formatted number printed every figure
+    twice -- the header read `# RED -$28.40 TODAY $-28.40`.
     """
 
     return "🟢" if float(_money(value)) >= 0 else "🔴"
@@ -241,10 +229,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     now = summary.observed_at
     uptime = max(0.0, (now - summary.session_started_at).total_seconds())
     trading = _money(summary.trading_realized_usd)
-    marked = _money(summary.open_marked_usd)
     paid = _money(summary.attributable_paid_rewards_usd)
     pending = _money(summary.pending_rewards_usd)
-    overall = trading + marked + paid
     today_pnl = _money(summary.today_pnl_usd)
     bot_pnl = _money(summary.overall_pnl_usd)
     # The trading half, derived so the subtext always reconciles to the

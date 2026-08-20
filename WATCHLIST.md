@@ -267,6 +267,47 @@ calls, never in a loop. Read the spread distribution of the `book too tight`
 block. Midnight is not a sample: the same session had 98 executable markets at
 15:19Z and 43 with zero ranked at 23:47Z.
 
+### SAMPLE 1 of 2 taken 2026-08-20T14:12Z (10:12 EDT) -- a busy slate
+
+```
+in the 2h horizon             92
+- no applicable period        67    <- 73% live-only
+- book too tight to enter     20
+= eligible pregame             5
+= VIABLE                       4    of 20 slots
+```
+
+**The rejects cluster at exactly 0.0100 again** -- 15 of 15 shown, identical to
+the midnight sample. So the numeric half of the rule below clears: busy hour,
+clustered at 1c, and 2c -> 1c would admit all 20, well past the "more than 10"
+bar.
+
+**And it should still not be acted on, for a reason the rule did not
+anticipate.** Look at WHICH markets are at 1c:
+
+```
+wta, modus (darts), lol, cs2, atp
+```
+
+FINDINGS 6h measures where reward actually comes from: setka table tennis is
+**93% of every dollar this account has earned**, while `atp` and `mlb` -- deep,
+liquid, heavily quoted books -- paid **one cent each**. The markets a 1c
+threshold would admit are esports, darts and top-tier tennis: the deep-book
+leagues already measured as paying essentially nothing. A tight book and a
+worthless book are the same fact seen twice, which is why the 2c filter refuses
+them.
+
+So the rule as written is necessary but not sufficient. **Amended: also require
+that the 1c rejects include the leagues that actually pay** (setka*, itf*).
+Neither sample so far does.
+
+**The finding that keeps growing instead** is the live-period drain: 81% at
+10:55Z, 73% here. It is the dominant constraint at every hour measured, it is
+larger than the spread filter in both samples, and unlike the spread minimum it
+is not a tuning knob -- it is a whole lifecycle this executor does not
+implement, carrying ~8x the pool (FINDINGS section 4). That is where the
+earning lever is, if there is one.
+
 **Change if:** rejects at a BUSY hour also cluster at 0.010-0.014, AND the
 count admitted by 2c -> 1c is more than 10. Then the filter is genuinely holding
 back real markets and the trade must be costed: extra reward from more resting

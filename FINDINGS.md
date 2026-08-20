@@ -3105,6 +3105,109 @@ pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
 the drop would be invisible for the same reason the live-period drop was.
 
 
+## The venue moved the leagues that pay us to live-only. That is the decline
+
+Measured 2026-08-20T14:2xZ after the operator asked why order flow had dropped.
+This is the largest single change to this bot's addressable universe since it
+started, and it is not ours.
+
+### What the bot places in, by league and UTC day
+
+```
+             itfme   itfwo   setkameua   setkamemd
+08-17          999     933         385         197
+08-18          594     376         349         174
+08-19          526     489         312           -
+08-20            0       0         278          22
+```
+
+ITF was the number one and two league by volume for three days and is now zero.
+
+### Why: the reward programs changed underneath us
+
+Periods offered by the 91 in-horizon moneylines, read live:
+
+```
+ONLY [live]                    [day_of, live]
+  setkameua   x22                lol       x10
+  itfwo       x10                modus      x6
+  setkawoua    x8                atp        x5
+  wtt          x7                cs2        x4
+  itfme        x6                valorant   x1
+  setkamecz    x6                wta        x1
+  setkamemd    x5
+```
+
+Now put that against section 6h, which measured where every reward dollar this
+account has earned actually came from:
+
+```
+setkameua  $20.59  29.0%     <- live-only now
+setkamemd  $15.11  21.3%     <- live-only now
+itfme      $12.94  18.2%     <- live-only now
+itfwo       $8.63  12.2%     <- live-only now
+wtt         $5.27   7.4%     <- live-only now
+                   ------
+                   93% of all reward earned
+
+atp         $0.01            <- still carries day_of
+mlb         $0.01            <- still carries day_of
+```
+
+**The venue has left `day_of` on the deep, liquid books that pay this bot
+essentially nothing, and moved the thin books it actually earns in to `live`**
+-- the one period a pregame executor may not quote (invariant 39: only `day_of`
+has a provable per-market clock).
+
+### The measured consequence
+
+Median per selection scan, by UTC day:
+
+```
+day        rewarded  ranked  ranked/rewarded
+08-16          113      38       33.6%
+08-17           83      17       20.5%
+08-18           54       7       13.0%
+08-19           53       6       11.3%
+08-20           93       1        1.1%
+```
+
+Conversion collapsed 33.6% -> 1.1% **while supply nearly doubled** on the last
+day, so this is not a quiet slate. Same-hour comparison removes time of day as
+an explanation entirely:
+
+```
+hour     08-17      08-19      08-20
+09:00   135->23    142->21    108->0
+10:00   104->19    134->21    104->0
+13:00    98->18    126->24     94->3
+14:00    95->14    111->17     96->4
+```
+
+At 09:00 with 108 rewarded markets available the bot ranked **zero**.
+
+The gradual shape of the decline -- 38, 17, 7, 6, 1 -- suggests leagues
+converting one at a time rather than a single switch being thrown.
+
+### What this does and does not mean
+
+**Not a bug.** Every filter behaved correctly; the bot is refusing markets it
+is not authorized to quote. Nothing here is fixable by tuning
+`minimum_entry_spread`, and this is the second measurement in two days pointing
+at the lifecycle rather than the spread.
+
+**It reframes the strategic question in NEXT.** "Should we implement the live
+period?" was an optimisation about an 8x pool. It is now closer to an
+existential question about whether a pregame-only executor has an addressable
+universe at all: the leagues left to it are the ones already measured as paying
+one cent.
+
+**Unknown, and it matters: whether this is permanent.** One reading cannot tell
+a program change from a transient. Re-measure the period mix on 08-21 and
+08-22 with the script pattern above before concluding anything irreversible.
+If `day_of` returns to setka and itf, this was a blip and the bot recovers on
+its own.
+
 ## What the 2026-08-18 outages cost: a full day's reward, measured
 
 Read from the venue 2026-08-19T20:45Z, by earning date (UTC -- dating confirmed

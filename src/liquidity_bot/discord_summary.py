@@ -192,6 +192,17 @@ def _signed(value: Decimal) -> str:
     return f"{mark} {'+' if number >= 0 else '-'}${abs(number):,.2f}"
 
 
+def _mark(value: Decimal) -> str:
+    """Just the colour, for a figure that is already written out beside it.
+
+    `_signed` renders the mark AND the amount, which is right where it stands
+    alone. Pairing it with a formatted number prints every figure twice, which
+    is how the header came to read `# RED -$28.40 TODAY $-28.40`.
+    """
+
+    return "🟢" if float(_money(value)) >= 0 else "🔴"
+
+
 def _meter(used: float, cap: float, width: int = 12) -> str:
     """A progress bar in block characters, which a text fence does render."""
 
@@ -299,14 +310,13 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     else:
         headline = (
             f"## {icon} {state}\n"
-            f"# {_signed(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
-            f"**BOT OVERALL  ${bot_pnl:+,.2f}**  {_signed(bot_pnl)}\n"
-            f"_today = marked account equity since 00:00 UTC, "
-            f"ACCOUNT-WIDE; bot overall = this ledger trading only_\n"
-            f"**ACCOUNTED NET  ${overall:+,.2f}**   ·   {_signed(overall)}\n"
-            f"_{summary.pnl_label} ${trading:+,.2f} · open mark "
-            f"${marked:+,.2f} · attributable PAID rewards ${paid:+,.2f} "
-            f"· up {uptime / 3600:,.1f}h_\n")
+            f"# {_mark(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
+            f"**BOT OVERALL  ${bot_pnl:+,.2f}**   ·   "
+            f"**ACCOUNTED NET  ${overall:+,.2f}**\n"
+            f"-# trading ${trading:+,.2f} · open mark ${marked:+,.2f} · "
+            f"PAID rewards ${paid:+,.2f} · up {uptime / 3600:,.1f}h\n"
+            f"-# today = marked account equity since 00:00 UTC, ACCOUNT-WIDE "
+            f"· bot overall = this ledger trading only\n")
     # The embed's left strip, which is the first thing read on a phone. It
     # carried operational state alone, so "am I making money today" was not
     # answerable at a glance.
@@ -326,8 +336,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     description = (
         warning + headline
         + (f"> Pending rewards **${pending:,.2f}** are shown but not counted.\n"
-           if pending else "")
-        + f"`{summary.readiness_status}`")
+           if pending else ""))
 
     entry_label = "Fill signals" if summary.mode == "SHADOW" else "Entry fills"
     position_label = "Replays open" if summary.mode == "SHADOW" else "Positions"

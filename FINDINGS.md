@@ -3297,7 +3297,54 @@ a program change from a transient. Re-measure the period mix on 08-21 and
 If `day_of` returns to setka and itf, this was a blip and the bot recovers on
 its own.
 
-## What the 2026-08-18 outages cost: a full day's reward, measured
+## Reward by day, and a correction to "the outages cost a full day"
+
+> **CORRECTED 2026-08-20T22:2xZ.** The entry below concluded 2026-08-18 earned
+> **one cent** and that the outages therefore cost about $30. It has since
+> settled at **$14.60**. The reasoning was explicitly wrong in a way worth
+> keeping: it argued "the day has posted -- it has a row -- so this is not
+> payout lag." A row is not a settled total. PENDING converts days later, and
+> the same read that showed 08-18 at $0.01 showed 08-17 at $0.00 PAID with
+> $33.83 PENDING; 08-17 has since settled at $34.60.
+>
+> **Rule: never read a recent day's reward as final.** Two readings days apart,
+> or none. This is the second time a single reward reading has produced a wrong
+> conclusion here -- the first was reading PAID's `date` as a payment date.
+
+### Settled reward by day, read 2026-08-20T22:2xZ
+
+```
+08-14   $5.48
+08-15  $28.46
+08-16  $22.39
+08-17  $34.60    <- peak
+08-18  $14.60
+08-19  $14.99
+                  bot-era PAID total $120.52, PENDING $0
+```
+
+**Reward tracks quotable breadth, not effort.** Against the selection medians
+and placement counts measured the same day:
+
+```
+day     markets quoted   median ranked   reward
+08-17        193              17         $34.60
+08-18        148               7         $14.60
+08-19        128               6         $14.99
+08-20         32 (partial)      1         not posted
+```
+
+Reward is paid per second an order rests, so it follows the number of markets
+the bot can actually quote almost linearly. The halving since 08-17 is the same
+decline recorded above as an order-flow collapse -- and its cause is still NOT
+established, since the live-only explanation was withdrawn. See WATCHLIST 10.
+
+**What this does settle:** the outage cost on 08-18 was much smaller than the
+~$30 claimed. That day earned $14.60 against $14.99 the next day, on a day with
+ten restarts. So availability mattered less than breadth, which points the
+"what is worth fixing" question away from uptime and towards supply.
+
+## (superseded) What the 2026-08-18 outages cost: a full day's reward, measured
 
 Read from the venue 2026-08-19T20:45Z, by earning date (UTC -- dating confirmed
 above):

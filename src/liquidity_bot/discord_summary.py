@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+
+from .bot_era import BOT_ERA_START_DATE
 from typing import Any
 
 
@@ -245,6 +247,9 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     overall = trading + marked + paid
     today_pnl = _money(summary.today_pnl_usd)
     bot_pnl = _money(summary.overall_pnl_usd)
+    # The trading half, derived so the subtext always reconciles to the
+    # headline rather than being sourced separately and drifting from it.
+    trading_pnl = bot_pnl - paid
     integrity_ok = not summary.integrity_problems
     idle = max(0, summary.active_markets - summary.resting_markets)
 
@@ -311,12 +316,9 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         headline = (
             f"## {icon} {state}\n"
             f"# {_mark(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
-            f"**BOT OVERALL  ${bot_pnl:+,.2f}**   ·   "
-            f"**ACCOUNTED NET  ${overall:+,.2f}**\n"
-            f"-# trading ${trading:+,.2f} · open mark ${marked:+,.2f} · "
-            f"PAID rewards ${paid:+,.2f} · up {uptime / 3600:,.1f}h\n"
-            f"-# today = marked account equity since 00:00 UTC, ACCOUNT-WIDE "
-            f"· bot overall = this ledger trading only\n")
+            f"**BOT OVERALL  ${bot_pnl:+,.2f}**\n"
+            f"-# bot overall = this ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}\n"
+            f"-# today = marked account equity since 00:00 UTC, ACCOUNT-WIDE · up {uptime / 3600:,.1f}h\n")
     # The embed's left strip, which is the first thing read on a phone. It
     # carried operational state alone, so "am I making money today" was not
     # answerable at a glance.

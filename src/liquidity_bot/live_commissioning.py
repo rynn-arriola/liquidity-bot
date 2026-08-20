@@ -27,6 +27,7 @@ from typing import Any, Callable
 from polymarket_us import AsyncPolymarketUS
 
 from .account_snapshots import AsyncAccountSnapshotGateway
+from .bot_era import bot_era_rewards_by_status
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
 from .commissioning import (
     AUTO_REWARD_MARKET,
@@ -376,6 +377,8 @@ class CommissioningRunner:
         self._score_observed_at: datetime | None = None
         self._earnings_observed_at: datetime | None = None
         self._earnings_by_status: dict[str, Decimal] = {}
+        # Account-wide but date-scoped to this bot; see `bot_era.py`.
+        self._bot_era_rewards: dict[str, Decimal] = {}
         self._orders_before = 0
         self._runtime_error_counts: dict[str, int] = {}
         self._selection_scan_seconds_last: float | None = None
@@ -719,32 +722,40 @@ class CommissioningRunner:
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
 
+        # ONE account-wide read, not one per bound market. The per-slug loop
+        # cost up to twenty calls through the same 4 req/s governor the quoting
+        # loop uses, and returned strictly less: the venue answers a slug
+        # filter correctly (verified 2026-08-20 -- a probe slug returned its
+        # exact $2.88), but asking only about markets bound RIGHT NOW can never
+        # see this bot's lifetime, because reward posts days after the market
+        # it was earned in has closed.
+        fetched = await self.gateway.fetch_earnings(
+            program_type="liquidityProgram")
+        rows_all = tuple(
+            row for row in fetched
+            if row.program_type == "liquidityProgram")
+
+        # Scoped view, unchanged semantics: only markets in the authorized set
+        # may be persisted or reported as THIS SESSION'S earnings. A venue
+        # deployment that silently ignored a query filter must not be able to
+        # import a shared-account reward as ours -- pinned by
+        # `test_ignored_earnings_query_cannot_import_other_market_rewards`.
         authorized = set(self.active_slugs)
-        if not authorized:
-            self._earnings_by_status = {}
-            self._earnings_observed_at = now
-            return
+        scoped = tuple(row for row in rows_all if row.market_slug in authorized)
+        self.ledger.record_reward_earnings(scoped, observed_at=now)
         totals: dict[str, Decimal] = {}
-        collected: list[Any] = []
-        for slug in sorted(authorized):
-            fetched = await self.gateway.fetch_earnings(
-                market_slug=slug,
-                program_type="liquidityProgram",
-            )
-            # Keep an exact local boundary even if a venue deployment silently
-            # ignores query filters. Shared-account historical rewards must
-            # never be presented or persisted as this session's earnings.
-            collected.extend(
-                row for row in fetched
-                if row.market_slug == slug
-                and row.program_type == "liquidityProgram")
-        rows = tuple(collected)
-        self.ledger.record_reward_earnings(rows, observed_at=now)
-        for row in rows:
+        for row in scoped:
             status = str(row.status).upper()
             totals[status] = totals.get(status, Decimal("0")) + Decimal(
                 str(row.reward))
         self._earnings_by_status = totals
+
+        # Lifetime view, for the bot's own bottom line. Account-wide by
+        # necessity -- the markets it earned in are long closed -- and scoped
+        # by DATE to this bot's era, because the account carries $86.51 of
+        # maker-lab reward predating it. Counting that here overstates the bot
+        # by about 2x, which has happened twice. See `bot_era.py`.
+        self._bot_era_rewards = bot_era_rewards_by_status(rows_all)
         self._earnings_observed_at = now
 
     async def _retry_uncertain_cancels(self, now: datetime) -> None:
@@ -1752,6 +1763,27 @@ class CommissioningRunner:
         except Exception:
             return ledger_value
 
+    def _bot_overall_pnl(self) -> Decimal:
+        """This bot's own bottom line, and only this bot's.
+
+        Two terms, each scoped deliberately:
+
+        * ledger trading -- bot-scoped by construction, because the ledger
+          holds only this bot's fills and no date filter is needed.
+        * PAID reward in this bot's era. **PAID only**: invariant 22 allows
+          pending as context and forbids it in accounted net, because an
+          unsettled reward is not income. And era-scoped, because the account
+          carries $86.51 of maker-lab reward from before this bot's first
+          order -- counting it here roughly doubles the apparent result.
+
+        Understates losses, and says so where it is displayed: a settled
+        position has its entry recorded and its exit invisible, $67.38 across
+        29 markets as of 2026-08-19.
+        """
+
+        return (self.ledger.realized_pnl()
+                + self._bot_era_rewards.get("PAID", Decimal("0")))
+
     def _roll_realized_baseline(self) -> None:
         """Adopt the UTC day's opening marks, from the ledger, not this process.
 
@@ -2520,7 +2552,17 @@ class CommissioningRunner:
             # bot's fills, so no date filter is needed. Understates losses,
             # because a settled position has its entry recorded and its exit
             # invisible -- $67.38 across 29 markets as of 2026-08-19.
-            overall_pnl_usd=self.ledger.realized_pnl(),
+            # This bot's own bottom line: its ledger trading (the ledger holds
+            # only this bot's fills) plus the reward it actually earned, dated
+            # from its first order. PAID only -- invariant 22 keeps pending out
+            # of accounted net -- and pending is carried separately as context.
+            # Understates losses: a settled position has its entry recorded and
+            # its exit invisible, $67.38 across 29 markets as of 2026-08-19.
+            overall_pnl_usd=self._bot_overall_pnl(),
+            attributable_paid_rewards_usd=self._bot_era_rewards.get(
+                "PAID", Decimal("0")),
+            pending_rewards_usd=self._bot_era_rewards.get(
+                "PENDING", Decimal("0")),
             worst_market_realized_pnl_usd=(
                 min(self.risk_guard.realized_by_market.values(),
                     default=Decimal("0"))

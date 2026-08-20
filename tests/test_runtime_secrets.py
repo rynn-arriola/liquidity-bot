@@ -521,6 +521,10 @@ class DiscordTests(unittest.TestCase):
             active_markets=1, reward_eligible_sides=2, score_seconds=100,
             attributable_paid_rewards_usd=Decimal("2"),
             pending_rewards_usd=Decimal("9"),
+            # Trading -1 plus PAID 2. The nine PENDING must stay out of it:
+            # invariant 22 allows pending as context and forbids it in
+            # accounted net, because an unsettled reward is not income.
+            overall_pnl_usd=Decimal("1"),
             trading_realized_usd=Decimal("-1"),
             open_marked_usd=Decimal("-0.5"),
             session_loss_limit_usd=Decimal("5"),
@@ -529,9 +533,12 @@ class DiscordTests(unittest.TestCase):
         embed = payload["embeds"][0]
         self.assertEqual(embed["color"], RED)
         self.assertIn("INTEGRITY FAILURE", embed["description"])
-        self.assertIn("ACCOUNTED NET  $+0.50", embed["description"])
+        self.assertIn("BOT OVERALL  $+1.00", embed["description"])
         self.assertIn("Pending rewards **$9.00**", embed["description"])
-        self.assertNotIn("$+9.50", embed["description"])
+        # The number pending would produce if it were counted as income.
+        self.assertNotIn("$+10.00", embed["description"])
+        # And the subtext reconciles to the headline rather than drifting.
+        self.assertIn("trading $-1.00 + PAID reward $+2.00", embed["description"])
 
         calls = []
         result = DiscordNotifier(

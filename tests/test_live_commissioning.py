@@ -2451,6 +2451,48 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_bot_overall_counts_only_this_bots_era_of_reward(self):
+        """The account is older than the bot and carries maker-lab's reward.
+
+        Measured against the venue 2026-08-20: $86.51 PAID predates this bot's
+        first order, against $54.44 PAID after it. Counting the earlier figure
+        here roughly doubles the bot's apparent result, which has happened
+        twice in analysis -- once reporting a reward-to-loss ratio of 3.5x that
+        was really about 2x.
+
+        Pending is carried as context and kept OUT of the bottom line, per
+        invariant 22: an unsettled reward is not income.
+        """
+        runner, client, _ = self.build_runner()
+        client.earnings_rows = [
+            {"date": "2026-08-10", "marketSlug": "market-one",
+             "programType": "liquidityProgram", "reward": "86.51",
+             "status": "PAID"},                      # maker-lab's, before us
+            {"date": "2026-08-14", "marketSlug": "market-one",
+             "programType": "liquidityProgram", "reward": "54.44",
+             "status": "PAID"},                      # ours, on the boundary
+            {"date": "2026-08-18", "marketSlug": "market-one",
+             "programType": "liquidityProgram", "reward": "35.73",
+             "status": "PENDING"},                   # ours, but not income
+        ]
+
+        await runner.preflight()
+        await runner._refresh_earnings(NOW)
+
+        self.assertEqual(
+            runner._bot_era_rewards.get("PAID"), Decimal("54.44"),
+            "reward dated before the bot's first order belongs to maker-lab")
+        self.assertEqual(
+            runner._bot_era_rewards.get("PENDING"), Decimal("35.73"))
+
+        # And the bottom line takes PAID only. Folding the $35.73 pending in
+        # would report an unsettled reward as income, which invariant 22
+        # forbids -- pending may be shown as context and never counted.
+        runner.ledger.realized_pnl = lambda slug=None: Decimal("-31.96")
+        self.assertEqual(runner._bot_overall_pnl(), Decimal("22.48"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_ignored_earnings_query_cannot_import_other_market_rewards(self):
         runner, client, _ = self.build_runner()
         client.earnings_rows = [{

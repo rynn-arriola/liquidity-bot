@@ -2963,6 +2963,90 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "accumulated failures -- doing so is what let a permanently dead "
             "market hold a slot for two hours")
 
+    async def _dead_retired_market(self, runner, slug):
+        """Retire `slug` for a book fault and put its kickoff in the past."""
+        state = runner.state_for(slug)
+        state.market = await runner.gateway.fetch_market(slug)
+        state.market = replace(
+            state.market, game_start=NOW - timedelta(hours=2))
+        await runner._retire_market(slug, "unrecoverable_book_stale")
+        return state
+
+    async def test_a_settled_flat_retired_market_stops_burning_rest_budget(self):
+        """A finished game with an unparseable book refreshed forever.
+
+        Invariant 62 keeps a retired market's book refresh so a retirement
+        still holding inventory can be exited, and `_release_retired_if_flat`
+        refuses to release a BOOK-fault retirement on flatness because that
+        caused the ~45s retire/release churn on chevic-scovla. Both are right;
+        composed, a settled flat market fetched a book that could never parse.
+
+        Measured 2026-08-20T10:55Z: two setkamecz markets at attempt=72 and 70,
+        144 REST calls in ten minutes, ~6% of the 4 req/s governor each, and
+        growing as more games finished.
+        """
+        runner, client, _ = self.build_runner()
+        slug = runner.market_slug
+        state = await self._dead_retired_market(runner, slug)
+        before = client.markets.book_calls
+
+        state.book_observed_at = None          # maximally "quiet"
+        due = NOW - timedelta(seconds=1)       # and overdue
+        nxt = await runner._refresh_quiet_book_if_due(due, slug)
+
+        self.assertEqual(client.markets.book_calls, before,
+                         "a retired, flat, order-free, past-kickoff market has "
+                         "nothing to quote and nothing to exit -- fetching its "
+                         "book can only produce another failure")
+        self.assertGreaterEqual(
+            (nxt - NOW).total_seconds(), runner.DEAD_MARKET_REFRESH_SECONDS - 1)
+
+    async def test_a_market_retired_before_kickoff_keeps_its_book(self):
+        """Only a market whose game is OVER is safely dead.
+
+        A book fault before kickoff can be transient -- about one market in
+        four publishes a one-sided book, and `RETIREMENT_COOLDOWN_SECONDS`
+        exists precisely so such a market can come back rather than being
+        barred for the session. Backing its refresh off to five minutes would
+        hand it a stale book at the moment it is released.
+        """
+        runner, client, _ = self.build_runner()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.market = await runner.gateway.fetch_market(slug)
+        # Retired, flat and order-free -- but the game has NOT started.
+        state.market = replace(
+            state.market, game_start=NOW + timedelta(hours=1))
+        await runner._retire_market(slug, "unrecoverable_book_stale")
+        before = client.markets.book_calls
+
+        state.book_observed_at = None
+        await runner._refresh_quiet_book_if_due(NOW - timedelta(seconds=1), slug)
+
+        self.assertEqual(client.markets.book_calls, before + 1,
+                         "a pre-kickoff retirement may still recover and be "
+                         "released by its cooldown, so it keeps its book")
+
+    async def test_a_retired_market_holding_a_position_still_refreshes(self):
+        """The guard must never strand the exit invariant 62 protects.
+
+        A retirement holding inventory is precisely the case the refresh was
+        kept alive for: the position has to be priced against a current book
+        before it can be exited.
+        """
+        runner, client, _ = self.build_runner()
+        slug = runner.market_slug
+        state = await self._dead_retired_market(runner, slug)
+        runner.ledger.position = lambda s=None: Decimal("5")
+        before = client.markets.book_calls
+
+        state.book_observed_at = None
+        await runner._refresh_quiet_book_if_due(NOW - timedelta(seconds=1), slug)
+
+        self.assertEqual(client.markets.book_calls, before + 1,
+                         "a retired market still holding inventory must keep "
+                         "its book, or the exit it exists to work is stranded")
+
     async def test_unresolved_mutation_timeout_clears_the_measured_range(self):
         """The terminal stop must not fire inside normal venue latency.
 

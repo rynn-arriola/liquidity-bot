@@ -202,6 +202,12 @@ class CommissioningRunner:
     # and a cancel that keeps failing will not start working in 2s.
     CANCEL_RETRY_SECONDS = 10.0
 
+    # How long to wait before even re-checking a market that is retired, flat,
+    # order-free and past kickoff. Nothing about it can change in a way this
+    # process cares about, so the only cost of a long interval is bookkeeping
+    # latency on a slot that is already barred.
+    DEAD_MARKET_REFRESH_SECONDS = 300.0
+
     def __init__(
         self,
         client: Any,
@@ -1872,6 +1878,11 @@ class CommissioningRunner:
         self._refreshed_book_this_call = False
         if now < next_refresh:
             return next_refresh
+        if self._book_refresh_would_be_pointless(state.slug, now):
+            # Nothing to quote and nothing to exit. Backing the schedule well
+            # off keeps the slot's bookkeeping intact without spending the
+            # governor on a book that will never parse again.
+            return now + timedelta(seconds=self.DEAD_MARKET_REFRESH_SECONDS)
         if state.book_is_quiet(now, max_age_seconds=3):
             await self._refresh_book(now, state.slug)
             self._refreshed_book_this_call = True
@@ -3494,6 +3505,40 @@ class CommissioningRunner:
     # ~45 seconds.
     PERMANENT_RETIREMENT_PREFIXES = ("unrecoverable_book", "plan_failed",
                                      "action_failed")
+
+    def _book_refresh_would_be_pointless(self, slug: str, now: datetime) -> bool:
+        """Is there anything left that a fresh book for this market could serve?
+
+        Invariant 62 keeps a retired market's book refresh alive on purpose, so
+        a retirement that still holds inventory can be priced and exited. That
+        reasoning does not reach a market with **no position and no working
+        order**: there is nothing to exit, and a retired market may never quote
+        again, so the fetch can only produce another failure.
+
+        Composed with the churn guard in `_release_retired_if_flat` -- which
+        deliberately refuses to release a BOOK-fault retirement on flatness,
+        because releasing on flatness alone let the same fault re-retire the
+        market every ~45 seconds -- a finished game with an unparseable book
+        refreshed forever. Measured 2026-08-20T10:55Z: two settled setkamecz
+        markets at attempt=72 and 70, 144 REST calls in ten minutes, about 6%
+        of the 4 req/s governor each, accumulating as more games finish.
+
+        This is strictly narrower than that release: it stops the fetch without
+        clearing the retirement, so the market stays barred and cannot churn
+        back in. Past kickoff is required as well, so a market retired before
+        its game -- which may still recover and be released by its cooldown --
+        keeps its refresh.
+        """
+
+        if slug not in self._retired:
+            return False
+        if not self._retired_past_kickoff(slug, now):
+            return False
+        # The exit test, and the reason this stays safe. A retirement holding
+        # anything at all keeps its book.
+        if self.ledger.position(slug) != 0:
+            return False
+        return not self.ledger.working_orders(slug)
 
     def _release_retired_if_flat(self, slug: str) -> None:
         """Free a retired market's slot once the venue proves it flat.

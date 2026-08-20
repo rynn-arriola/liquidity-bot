@@ -378,7 +378,7 @@ blocks *its own* market's quoting and its own shutdown cancel.
 2026-08-17; 60s cost another on 2026-08-18. The measured stall was 131s. The
 timeout is not the variable that matters.
 
-## A retired, flat, permanently-dead market refreshes its book forever
+## FIXED 2026-08-20: a retired, flat, dead market refreshed its book forever
 
 Measured 2026-08-20T10:55Z. Two markets whose games had finished:
 
@@ -414,8 +414,25 @@ is strictly narrower than the flatness release the churn guard refuses: it
 stops the REST call without releasing the retirement, so the market stays
 barred and cannot churn back in.
 
-Needs a test that a retired market **holding a position** still refreshes, or
-the fix strands the exit it exists to protect.
+**Landed.** `_book_refresh_would_be_pointless` skips the fetch when a market
+is retired AND past kickoff AND flat AND order-free, backing its next check off
+to `DEAD_MARKET_REFRESH_SECONDS` (300). It does not clear the retirement, so
+the market stays barred and cannot churn back in.
+
+Three tests, each mutation-checked, because all three clauses had to be shown
+load-bearing:
+
+- removing the guard -> the settled market burns the REST call again
+- dropping the position check -> a retirement holding inventory loses its book,
+  stranding the exit invariant 62 keeps it for
+- dropping the kickoff check -> a market retired BEFORE its game stops being
+  watched, and a book fault before kickoff can be transient (one market in four
+  publishes a one-sided book) so its cooldown release would hand it a stale book
+
+The kickoff mutant survived the first attempt: there are two call sites of
+`_retired_past_kickoff` and the mutation landed on the other one. Worth
+remembering -- a mutation that silently patches the wrong occurrence looks
+exactly like a clause that is not load-bearing.
 
 ## Also from 2026-08-19: two things for the next restart batch
 

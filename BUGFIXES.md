@@ -29,6 +29,99 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-21
+
+### A live match sat in the pregame universe, and cost $9.29 at 7 cents
+
+**Symptom.** One position settled without ever being closed --
+`aec-cs2-ter-yl-2026-08-21`, short 10, opened 17:20:09 and gone by the time
+anything looked. The venue confirmed no exposure afterwards; the money was
+already lost.
+
+```
+market       aec-cs2-ter-yl-2026-08-21
+status       MARKET_STATUS_RESOLVED
+outcomes     ["TrafficPills Esports", "Younglings"]
+prices       ["0", "1"]            <- Younglings won
+our fill     17:20:09  BUY_SHORT  10 @ 0.07  MAKER   outcome=Younglings
+ledger cost  9.29                            -> total loss
+```
+
+**Mechanism.** The venue reports `gameStartTime` **15:30**. The bot bound the
+market at **16:33** -- an hour after that -- which the selector only permits
+when kickoff is in the future, so the catalog was still advertising a later
+start. `gameStartTime` is corrected after the fact, and until it is, a live
+match sits in the pregame universe looking perfectly quotable.
+
+What followed is the ordinary quoting loop doing its job on a market it should
+never have seen:
+
+```
+17:03  SELL 10 @ 0.19
+17:06  SELL 10 @ 0.11     <- chasing the touch down
+17:12  SELL 10 @ 0.11
+17:16  SELL 10 @ 0.08
+17:20  SELL 10 @ 0.07  FILLED
+17:22  book empty on both sides
+       market resolves
+```
+
+That collapse from 0.19 to 0.07 was one side winning in real time.
+`resting_price_left_the_touch` followed it all the way down and got filled on
+the loser at 7 cents.
+
+**Scope.** 2 of 53 markets with fills that day were filled after their
+(corrected) kickoff -- this one 110 minutes late, `aec-itfwo-gioped-liszaa`
+71 minutes late. The other 51 were correct. So ~4%.
+
+**What does NOT fix it.** Trusting the clock harder. The clock is the thing
+that is wrong, and it is wrong in a direction no local check can detect: the
+bot cannot know that a start time will later be corrected backwards. Comparing
+the bulk catalog against `retrieve_by_slug` was tested and they agree exactly
+(25 of 25 in-horizon markets, zero disagreement), so there is no second venue
+opinion to consult either.
+
+**Fix applied 2026-08-21.** Refuse to OPEN within 10 cents of either end.
+Measured across 321 markets, bucketed by the most extreme price each traded at,
+in the frame we actually paid in:
+
+```
+0.00-0.05     8 markets   -13.65   -1.71 each
+0.05-0.10    28 markets   -41.05   -1.47 each
+0.10-0.15    26 markets   -21.41   -0.82 each
+0.15-0.25    45 markets   -20.61   -0.46 each
+0.25-0.50   214 markets   -38.28   -0.18 each
+```
+
+Loss per market rises about **9x** toward the ends, monotonically across all
+five buckets -- so this is a gradient, not a curve fitted to one trade.
+Everything under 0.10 is **11% of markets and 40% of all losses**. Section 1
+says the same thing from the fee side: the maker rebate is
+`0.0125 x qty x p x (1-p)`, so it peaks at 0.50 and pays about a quarter of
+that at 0.07 -- the least reward available exactly where adverse selection is
+worst.
+
+The gate would have refused this fill on its own economics, without knowing
+anything about the clock. That is why it is the right shape: it does not depend
+on the broken signal.
+
+**Entry only, and structurally so.** The gate sits inside `_flat_plan`, which
+is reached only through `if frame.position == 0`. It cannot run while inventory
+is held, so it can never strand an exit -- invariant 42, which keeps reduction
+and the bounded hard exit available at every price. Proved twice: a test that a
+held position still produces exit work on a 0.05/0.07 book, and by the call
+graph.
+
+Three tests, mutation-checked. Removing the gate fails both end tests; guarding
+only the low end (`price < floor` instead of `min(price, 1 - price) < floor`)
+fails the far-end test, which matters because the opposite side pays
+`1 - price` and one comparison has to cover both.
+
+**Not deployed with this commit.** The runner was mid-session at the time and
+the change is queued for the next deliberate restart.
+
+---
+
 ## 2026-08-20 (evening)
 
 ### The unresolved-mutation stop took twenty markets down over one intent

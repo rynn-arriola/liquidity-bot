@@ -85,6 +85,9 @@ class ReconcilerPolicy:
     # offer. See entry_quote_price -- a tighter book is priced back to exactly
     # this, not refused.
     minimum_entry_spread: float = 0.02
+    # How close to 0.00 or 1.00 a BUILDING quote may rest. Entry only; exits
+    # are unaffected (invariant 42). See the measurement at the use site.
+    minimum_entry_price: float = 0.10
     # How long a *resting* side must stay reward-ineligible before it is
     # pulled. evaluate_order_score and project_order_reward are separate calls
     # that can disagree for a single pass, and the score call is depth-based,
@@ -613,6 +616,42 @@ class DesiredStateReconciler:
         for side, price in entry_prices.items():
             if price is None:
                 drop_cause[side] = "no_entry_price"
+                desired_sides.remove(side)
+
+        # Refuse to OPEN near either end of the book. Nothing here touches
+        # exits -- invariant 42 keeps reduction and the bounded hard exit
+        # available at every price, so this gate can never strand inventory.
+        #
+        # Measured 2026-08-21 across 321 markets, bucketed by the most extreme
+        # price each one traded at, in the frame we actually paid in:
+        #
+        #     0.00-0.05    8 markets   -13.65   -1.71 each
+        #     0.05-0.10   28 markets   -41.05   -1.47 each
+        #     0.10-0.15   26 markets   -21.41   -0.82 each
+        #     0.15-0.25   45 markets   -20.61   -0.46 each
+        #     0.25-0.50  214 markets   -38.28   -0.18 each
+        #
+        # Loss per market rises about 9x toward the ends, monotonically across
+        # all five buckets. Everything below 0.10 is 11% of markets and 40% of
+        # all losses. Section 1 says the same thing from the fee side: the
+        # maker rebate is 0.0125 x qty x p x (1-p), so it peaks at 0.50 and at
+        # p=0.07 pays about a quarter of that -- least reward exactly where the
+        # adverse selection is worst.
+        #
+        # The trade that prompted this: 2026-08-21, a CS2 match whose venue
+        # `gameStartTime` had not yet been corrected, so a LIVE game sat in the
+        # pregame universe. The bot chased the touch down 0.19 -> 0.07 as one
+        # side collapsed, filled 10 at 0.07 on the side that lost, and the
+        # market resolved minutes later for -$9.29. The clock could not have
+        # saved it -- the clock was the thing that was wrong -- but this gate
+        # would have refused the fill on its own economics.
+        floor = self.policy.minimum_entry_price
+        for side in tuple(desired_sides):
+            price = entry_prices[side]
+            # `price` is quoted in this side's own frame, and the opposite side
+            # pays 1 - price, so one comparison covers both ends.
+            if min(price, 1.0 - price) < floor - 1e-9:
+                drop_cause[side] = "price_too_extreme"
                 desired_sides.remove(side)
 
         quote_size = self.policy.quote_size

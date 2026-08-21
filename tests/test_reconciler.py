@@ -256,6 +256,68 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
         self.assertEqual(actions[0].reason, "hard_inventory_timeout")
 
+    def test_a_book_near_zero_is_never_opened(self):
+        """Refuse to BUILD near either end of the book.
+
+        Measured 2026-08-21 across 321 markets, bucketed by the most extreme
+        price each traded at: loss per market runs -1.71 below 0.05 and -1.47
+        from 0.05-0.10, against -0.18 in the 0.25-0.50 bucket. Monotonic across
+        all five buckets, and everything under 0.10 is 11% of markets and 40%
+        of all losses. Section 1 agrees from the fee side -- the maker rebate
+        is 0.0125 x qty x p x (1-p), so it pays least exactly where adverse
+        selection is worst.
+
+        The trade that prompted it: a CS2 match whose venue gameStartTime had
+        not been corrected, so a LIVE game sat in the pregame universe. The bot
+        chased the touch 0.19 -> 0.07 and filled 10 on the side that lost, for
+        -$9.29. The clock could not have saved it; the economics can.
+        """
+        collapsing = book(T0 + timedelta(seconds=1), bid=0.06, offer=0.08)
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), snapshot=collapsing))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [],
+            "a quote resting at 7 cents earns the least rebate available and "
+            "carries the whole asymmetry of selling a near-certainty")
+
+    def test_a_book_near_one_is_never_opened(self):
+        """The far end is the same trade seen from the other side.
+
+        One comparison covers both, because the opposite side pays 1 - price.
+        """
+        collapsing = book(T0 + timedelta(seconds=1), bid=0.92, offer=0.94)
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), snapshot=collapsing))
+
+        self.assertEqual(
+            [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY], [])
+
+    def test_an_extreme_book_still_lets_a_position_exit(self):
+        """The gate must never strand inventory.
+
+        Invariant 42: spread and structure gates apply only to BUILDING risk.
+        Once a position exists, passive reduction and the bounded hard exit
+        stay available at every price -- otherwise a market that collapsed
+        after filling us would trap the position it created.
+        """
+        collapsing = book(T0 + timedelta(seconds=1), bid=0.05, offer=0.07)
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            now=T0 + timedelta(seconds=1), snapshot=collapsing,
+            position="2", entry=0.40, opened=T0))
+
+        self.assertTrue(actions, "a held position must still be worked")
+        # The reason names the exit path; nothing here may be a BUILDING quote.
+        self.assertTrue(
+            all("reducing" in a.reason or "exit" in a.reason
+                or "hard" in a.reason or a.kind != ActionKind.PLACE_POST_ONLY
+                for a in actions),
+            f"a held position must only produce exit work, got "
+            f"{[(a.kind.name, a.reason) for a in actions]}")
+
     def test_a_one_sided_book_is_never_quoted(self):
         """Quoting needs both touches -- the 2c rule is defined between them."""
         bids_only = BookSnapshot(

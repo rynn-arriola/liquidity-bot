@@ -3113,6 +3113,78 @@ pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
 the drop would be invisible for the same reason the live-period drop was.
 
 
+## The loss is in FAST pairs, not slow ones. Two of my own claims withdrawn
+
+Measured 2026-08-22 on clean data only -- fills from 2026-08-18 onward, after
+the `isAggressor` fix reached production at 2026-08-17T13:20Z -- and restricted
+to markets whose legs BALANCE, so `paid` really is the pair cost and the
+allocation error described below cannot arise.
+
+```
+bucket        markets   pairs   total P&L   per pair
+0-300s             67     481      -27.68    -0.0575   <- 40% of all loss
+300-900s           61     362      -13.01    -0.0359
+900-1800s          40     289       -7.47    -0.0258   <- best
+1800-3600s         25     291       -9.08    -0.0312
+3600s+              9     140      -11.11    -0.0793
+                                   ------
+                                   -68.34
+```
+
+The U-shape survives clean data: 900-1800s is the floor, both tails are worse.
+So `max_inventory_age_seconds` at 900 remains right, and shortening it is still
+withdrawn.
+
+**But the actionable bucket is the FAST one, not the slow one.** 481 pairs
+completing inside five minutes account for 40% of the loss at -5.75c each. Both
+legs filling that quickly means the book ran through both quotes -- being run
+over in a moving market, twice, not failing to capture a spread.
+
+### Two claims of mine from the same session, withdrawn
+
+**1. "41% of losses sit in the 3600s+ bucket."** That ran over all history from
+2026-08-14. Before the `isAggressor` fix roughly 60% of fills were never
+recorded and the missing ones were overwhelmingly the passive CLOSING leg, so
+pairs *appeared* to take hours because their completion was absent from the
+ledger. On clean data the bucket is 140 pairs and **16%**. The share by day
+shows the artefact plainly:
+
+```
+day        >1h share
+08-16          66.7%      broken fill recording
+08-17          50.7%      fix lands mid-day
+08-18           1.9%      <- collapses here
+08-19           6.1%
+08-20           7.7%
+08-21           5.4%
+```
+
+**2. "`max_early_exit_loss_usd` 4 -> 8 is independently the highest-value change
+available."** It is not. The cap went live 2026-08-20T22:39Z and 08-21 shows
+5.4% against 7.7% and 6.1% before it -- no measurable effect, because the
+problem it targets had already been solved on 08-18 by the fill-recording fix.
+The change is still correct for coherence with quote size (a $4 cap sits below
+the median crossed loss at ten contracts) but it is not a lever on P&L.
+
+**The method error worth keeping:** the first version of this analysis
+allocated every fill's cost to the matched pairs, so any market with unbalanced
+legs inflated the loss -- it summed to -135.92 against `accounting.py`'s -47.24
+for the same period. Restricting to balanced-leg markets removes the bias
+rather than papering over it. Do not bucket P&L without checking that the legs
+balance.
+
+### Where this points instead
+
+Fast pairs are a book-stability problem, which is NEXT item 2 -- previously a
+hypothesis from two markets and a resting-fraction argument. It now has a P&L
+argument too: the markets whose touch moves fastest are both the ones we cannot
+rest in AND the ones that run through us. Ranking selection on stability
+alongside projected reward is the untried lever with the most support.
+
+It still needs the touch-move rate correlated against per-market pair P&L
+across a full slate before any code changes. Two measurements agreeing on a
+mechanism is not the same as having measured the mechanism.
+
 ## Holding time is NOT monotonic on our own data. It is a U
 
 Measured 2026-08-22 across **2,200 completed pairs** of this bot's own fills,

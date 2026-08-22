@@ -36,11 +36,40 @@ from fact rather than from the last thing someone remembers.
    it back. Several tests in this repo once passed against the unfixed code.
 3. **Write it down when you find it, not at the end.** Production bug →
    `BUGFIXES.md`. Measured fact → `FINDINGS.md`. Both are standing rules.
-4. **The ledger is not the venue.** `data/commissioning.db` stops updating the
+4. **Decide from THIS bot's data, not maker-lab's.** Operator rule, set
+   2026-08-22. maker-lab is a different system: quote size 10-25 against our
+   10, thirty markets, the **live** period included, and
+   `FLATTEN_NEVER_AT_A_LOSS` on. Its outcome splits measure the configuration
+   it ran, not the better policy -- its 60-to-1 passive-exit win rate is that
+   basis floor, which it documented itself as *"79% losers BY CONSTRUCTION"*.
+   Numbers carried across silently import that configuration as if it were
+   physics.
+
+   When only maker-lab data exists, it may be used as a **provisional prior**
+   -- say so explicitly, and treat replacing it with our own measurement as
+   work, not as optional. Never let it settle a question our own ledger could
+   answer.
+
+   Currently resting on maker-lab evidence, so a reader knows what is
+   provisional:
+
+   | what | maker-lab basis | our own data? |
+   |---|---|---|
+   | `max_inventory_age_seconds` 900 | 112 exit episodes, 26% by 30s / 46% by 900s | pair-completion buckets exist; the A/B has never run |
+   | `minimum_entry_spread` 0.02 | markout by spread bucket, sub-2c the only loser | none -- we refuse sub-2c, so we cannot sample it |
+   | `fill_hazard.py` entirely | 301 order lifetimes, 114 first fills | never recalibrated on our fills |
+   | league reward priors | 168 maker-lab market-days | our own reward history now exists |
+   | exposure buffer | `CAPITAL_BUFFER_PCT` | account-specific, fine |
+
+   Our own trading is measurably worse than maker-lab's buckets predict --
+   -5.07c/contract against their worst bucket at -0.87c, roughly 6x -- which
+   is itself the argument: their numbers do not describe this bot.
+
+5. **The ledger is not the venue.** `data/commissioning.db` stops updating the
    instant the runner dies, so after a crash it describes the account *as it
    was*. Query the venue directly before concluding anything about exposure —
    this has produced a wrong call before.
-5. **`git pull` first, push before you stop.** This repo is worked from more
+6. **`git pull` first, push before you stop.** This repo is worked from more
    than one machine, and `FINDINGS.md`, `BUGFIXES.md` and `NEXT.md` are all
    append-heavy, so two machines editing a stale copy conflict in the file that
    exists to stop work being repeated. Pull at the start of every session, and

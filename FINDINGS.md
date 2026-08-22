@@ -2303,7 +2303,15 @@ which is precisely why `accounting.py` writes dated snapshots -- from now on
 this question is a subtraction, not an inference. Take a snapshot before any
 change whose effect you will want to measure.
 
-## Before relaxing the 900s clock, read this: P&L degrades monotonically with holding time
+## (SUPERSEDED 2026-08-22) Before relaxing the 900s clock: P&L degrades
+## monotonically with holding time
+
+> **Its table is withdrawn.** Measured on 2026-08-17 fills only, n=11 in the
+> 0-300s bucket. Across 2,200 pairs of our own data the relationship is a U
+> with its floor at 900-1800s, and the 0-300s bucket is -5.26c rather than
+> +23.8c. See "Holding time is NOT monotonic on our own data" above. The
+> DECISION it supported -- leave the clock at 900 -- happens to survive, for
+> a different reason: 900 is where the U bottoms out.
 
 Measured 2026-08-17T15:2xZ on **2026-08-17 fills only** -- the first day the
 ledger recorded fills correctly, so the only day this can be asked of. Written
@@ -3104,6 +3112,63 @@ the second.
 pattern `BUGFIXES.md` says has already cost a deploy cycle twice, and because
 the drop would be invisible for the same reason the live-period drop was.
 
+
+## Holding time is NOT monotonic on our own data. It is a U
+
+Measured 2026-08-22 across **2,200 completed pairs** of this bot's own fills,
+after the operator ruled that maker-lab evidence may not settle questions our
+own ledger can answer (CLAUDE.md rule 4).
+
+```
+bucket        markets   pairs   total P&L   per pair
+0-300s             91     591      -31.12    -0.0526
+300-900s           77     420      -16.21    -0.0386
+900-1800s          50     329      -10.34    -0.0315   <- BEST
+1800-3600s         31     360      -22.50    -0.0625
+3600s+             58     500      -55.75    -0.1115   <- worst
+```
+
+**This contradicts the entry "Before relaxing the 900s clock, read this: P&L
+degrades monotonically with holding time."** That table reported +23.8c per
+pair under 300s and a clean monotonic decline. It was measured on **2026-08-17
+fills only**, with **n=11** in the top bucket. Across 591 pairs the same bucket
+is **-5.26c**. The monotonicity was small-sample noise.
+
+The real shape is a U with its floor around 900-1800s, and it has a mechanism:
+
+* **Very fast pairs are bad** because both legs filling quickly means the book
+  was moving through us -- we were run over on both sides rather than capturing
+  anything.
+* **Very slow pairs are worst** because the market drifts far between the legs.
+  Section "Matched-pair P&L is leg-to-leg market movement" already measured
+  that distribution as bimodal at roughly +/-0.4, which is drift, not spread.
+
+### Two decisions follow, and they point opposite ways
+
+**Do NOT shorten `max_inventory_age_seconds`.** It sits at 900, right at the
+floor of the U. Shortening it moves pairs from the best bucket into worse ones.
+This was proposed in session on the strength of the superseded entry above and
+is withdrawn.
+
+**The lever is the 3600s+ bucket: 500 pairs, -$55.75, 41% of all losses.**
+Those are pairs that SURVIVED the 900s clock -- the clock fires, the cross is
+refused as too expensive, and the position rides to the kickoff flatten. So the
+thing to attack is not the clock but what happens when it fires.
+
+`max_early_exit_loss_usd` was doubled 4 -> 8 on 2026-08-20 to keep pace with
+quote size. On this data that change is independently the highest-value one
+available: it lets crosses clear that previously rode. Worth measuring
+specifically -- if the 3600s+ bucket shrinks over the next week, that is the
+mechanism confirmed.
+
+### Why the maker-lab numbers were wrong here
+
+They ran a different system: 10-25 contracts, thirty markets, the live period
+included, and `FLATTEN_NEVER_AT_A_LOSS` on. A basis floor changes which
+positions complete at all -- they documented it themselves as "79% losers BY
+CONSTRUCTION" -- so their completion-time distribution measures that floor, not
+the physics of holding inventory. Our per-contract cost is about 6x their worst
+bucket, which is the same warning from a different angle.
 
 ## Tight books are tight BECAUSE they are deep. That is what the 2c filter catches
 

@@ -10,6 +10,11 @@
 #   FINDINGS     -- the venue moved every league we earn in to live-only. Is
 #                   that permanent? One reading cannot tell a program change
 #                   from a transient.
+#   FINDINGS     -- is trading loss concentrated in FAST pairs or slow ones?
+#                   Fast means a book-stability problem and points at
+#                   selection; slow would point at the inventory clock. The
+#                   answer moved once already when a ledger defect was
+#                   mistaken for a trading one, so it wants a series.
 #
 # Costs ~50 venue calls through the same 4 req/s governor the runner uses, so
 # it is scheduled once a day and never looped. Safe while the bot quotes: both
@@ -33,6 +38,12 @@ mkdir -p logs
     echo
     echo "===== selection funnel and rejects ====="
     PYTHONPATH=src .venv/bin/python -B scripts/usable_markets.py --rejects 2>&1
+    echo
+    echo "===== pair P&L by completion time ====="
+    # Ledger only, no venue calls. Tracks whether the loss sits in fast pairs
+    # (a book-stability problem) or slow ones (a clock or exit-cap problem).
+    # On 2026-08-22 it was 40% in the 0-300s bucket, which points at selection.
+    PYTHONPATH=src .venv/bin/python -B scripts/pair_pnl.py 2>&1
 } > "${OUT}" 2>&1
 
 echo "wrote ${OUT}"

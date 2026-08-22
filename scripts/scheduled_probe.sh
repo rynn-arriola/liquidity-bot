@@ -17,7 +17,8 @@
 #                   mistaken for a trading one, so it wants a series.
 #
 # Costs ~50 venue calls through the same 4 req/s governor the runner uses, so
-# it is scheduled once a day and never looped. Safe while the bot quotes: both
+# it is scheduled once a day and never looped. Four sections: what the bot may
+# quote, why markets drop out, the daily bottom line, and where loss lands. Safe while the bot quotes: both
 # probes are read-only and place no orders.
 #
 # TEMPORARY. Remove the crontab entry once both questions are closed -- see
@@ -38,6 +39,13 @@ mkdir -p logs
     echo
     echo "===== selection funnel and rejects ====="
     PYTHONPATH=src .venv/bin/python -B scripts/usable_markets.py --rejects 2>&1
+    echo
+    echo "===== daily P&L: trading, reward, net ====="
+    # The bottom line, 14 days. Reward posts 1-2 days late, so the newest rows
+    # read `pending` and their net is withheld -- 14 rather than 7 days keeps
+    # settled rows visible even when the whole recent week is still pending.
+    # One venue call.
+    PYTHONPATH=src .venv/bin/python -B scripts/daily_pnl.py 2>&1
     echo
     echo "===== pair P&L by completion time ====="
     # Ledger only, no venue calls. Tracks whether the loss sits in fast pairs

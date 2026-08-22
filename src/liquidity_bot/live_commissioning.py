@@ -201,6 +201,15 @@ class CommissioningRunner:
     # gets roughly six attempts inside a 60s budget. Not faster, because each
     # attempt is a venue mutation sharing one 4 req/s governor with quoting,
     # and a cancel that keeps failing will not start working in 2s.
+    # The two blockers that mean "this day lost too much", as opposed to
+    # something being wrong with the account. Only these pause; ownership
+    # violations, clock failures and named criticals stay terminal, and the
+    # $45 emergency equity ceiling is checked earlier and never reaches here.
+    LOSS_STOP_BLOCKERS = frozenset({
+        "session loss limit reached",
+        "market loss limit reached",
+    })
+
     CANCEL_RETRY_SECONDS = 10.0
 
     # How long to wait before even re-checking a market that is retired, flat,
@@ -335,6 +344,10 @@ class CommissioningRunner:
         # apply -- cash does not move on paper price changes.
         self._cash_baseline: Decimal | None = None
         self._day_opening_equity: Decimal | None = None
+        # (utc_date, blockers, streak) set by `_stop_reason` when a loss stop
+        # pauses, consumed once by `_announce_loss_stop_pause`.
+        self._loss_pause_pending: tuple[str, list[str], int] | None = None
+        self._loss_pause_announced_day: str | None = None
         # Footer identity, so an alert says which box and which build produced
         # it without the operator having to ask.
         self._host_name = socket.gethostname()
@@ -1861,16 +1874,80 @@ class CommissioningRunner:
                 return "commissioning_execution_fee_limit"
         blockers = self.risk_guard.blockers(now=now)
         # Missing/stale equity is recoverable only by staying alive with new
-        # risk disabled. A confirmed loss, clock failure, or explicit critical
-        # condition still enters terminal flatten-and-stop handling.
+        # risk disabled. A clock failure or explicit critical condition still
+        # enters terminal flatten-and-stop handling.
         transient = {
             "marked account equity is unknown",
             "marked account equity is stale",
         }
+        # A loss stop PAUSES rather than ending the session -- operator
+        # decision 2026-08-22. It used to flatten, prove flat and exit 0, which
+        # the supervisor never restarts, so one bad day cost every hour after
+        # it until a human noticed.
+        #
+        # Pausing works only because the stops now baseline on the UTC day. New
+        # risk is blocked while the blocker stands, exits and the pre-kickoff
+        # flatten keep working so nothing rides to settlement, and at midnight
+        # `_roll_realized_baseline` writes a fresh day and the blocker clears
+        # by itself. Nothing has to be restarted.
+        #
+        # Bounded, because on its own it is not: the budget resets every
+        # midnight, so a strategy that is systematically wrong rather than
+        # unlucky would lose its full allowance daily forever, and the
+        # emergency ceiling cannot catch that either since it re-baselines each
+        # morning too. After `max_consecutive_loss_stop_days` the pause becomes
+        # terminal and a human is required.
+        loss_hit = self.LOSS_STOP_BLOCKERS.intersection(blockers)
+        if loss_hit:
+            today = now.date().isoformat()
+            self.ledger.record_loss_stop(today, at=now)
+            streak = self.ledger.consecutive_loss_stop_days(today)
+            if streak < self.config.max_consecutive_loss_stop_days:
+                transient = transient | self.LOSS_STOP_BLOCKERS
+                print(f"[loss-stop-pause] at={now.isoformat()} "
+                      f"blockers={sorted(loss_hit)} day={today} "
+                      f"consecutive={streak} "
+                      f"resumes=next UTC day", flush=True)
+                # Announced from an async caller: this method is sync, and a
+                # pause that nobody is told about is the failure mode the
+                # whole change risks -- the bot sits flat and silent instead
+                # of stopping loudly.
+                self._loss_pause_pending = (today, sorted(loss_hit), streak)
         terminal = tuple(item for item in blockers if item not in transient)
         if terminal:
             return "risk_stop:" + ",".join(terminal)
         return None
+
+    async def _announce_loss_stop_pause(self) -> None:
+        """Tell Discord once per day that a loss stop paused trading.
+
+        The old behaviour ended the process, which was at least loud. A pause
+        is silent by construction -- the bot stays up, stays flat and simply
+        stops quoting -- so without this the first anyone would know is a
+        day of missing reward. Sent critical: it is money, and it means the
+        day's budget is spent.
+
+        Once per UTC day. The blocker stands for the rest of the day by
+        design, and `_stop_reason` runs every pass, so an unguarded send would
+        be thousands of messages.
+        """
+
+        pending, self._loss_pause_pending = self._loss_pause_pending, None
+        if pending is None:
+            return
+        day, blockers, streak = pending
+        if self._loss_pause_announced_day == day:
+            return
+        self._loss_pause_announced_day = day
+        remaining = self.config.max_consecutive_loss_stop_days - streak
+        await self.notifier.send_async(
+            f"🛑 Liquidity Bot hit a loss stop and has PAUSED trading "
+            f"for {day} ({', '.join(blockers)}). New risk is blocked; exits "
+            f"and the pre-kickoff flatten still run, so nothing rides to "
+            f"settlement. It resumes on its own at the next UTC midnight. "
+            f"Consecutive loss-stop days: {streak} -- "
+            f"{remaining} more and it stops for good and needs a human.",
+            critical=True)
 
     def _stuck_mutations(
         self, now: datetime,
@@ -4148,6 +4225,7 @@ class CommissioningRunner:
             while True:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
+                await self._announce_loss_stop_pause()
                 if stop_reason:
                     break
                 if self._streams_need_rebind:
@@ -4231,6 +4309,7 @@ class CommissioningRunner:
                     break
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
+                await self._announce_loss_stop_pause()
                 if stop_reason:
                     break
                 # A full rotation needs a whole-account flat state, which with

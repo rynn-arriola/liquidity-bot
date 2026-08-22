@@ -11,7 +11,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -115,6 +115,10 @@ CREATE TABLE IF NOT EXISTS execution_reward_earnings (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_reward_market_observed
     ON execution_reward_earnings(market_slug, observed_at);
+CREATE TABLE IF NOT EXISTS execution_loss_stop_days (
+    utc_date TEXT PRIMARY KEY,
+    first_tripped_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_day_baselines (
     utc_date TEXT PRIMARY KEY,
     opening_equity TEXT NOT NULL,
@@ -296,6 +300,47 @@ class ExecutionLedger:
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return list(self.connection.execute(sql, params).fetchall())
+
+    def record_loss_stop(self, utc_date: str, *, at: datetime) -> None:
+        """Note that a loss stop tripped on this UTC day. Idempotent.
+
+        Kept in its own table rather than a column on `execution_day_baselines`
+        so a loss stop can never disturb the equity marks the stops themselves
+        read. Only the FIRST trip of a day is stored: the guard re-evaluates
+        every pass while tripped, and what matters is the day, not the count.
+        """
+
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO execution_loss_stop_days"
+                "(utc_date,first_tripped_at) VALUES (?,?)",
+                (str(utc_date), _time(at, "at")))
+
+    def consecutive_loss_stop_days(self, utc_date: str) -> int:
+        """How many days in a row, ending at ``utc_date``, hit a loss stop.
+
+        A loss stop that pauses until the next day is convenient and, on its
+        own, unbounded: the day baseline resets at midnight, so a strategy that
+        is systematically wrong rather than merely unlucky would lose its full
+        budget every day forever with nothing forcing anyone to look. The
+        emergency equity ceiling does not catch it either, because that
+        re-baselines each morning too.
+
+        One bad day is variance. Several in a row is a broken model, and the
+        caller escalates to a terminal stop at that point.
+        """
+
+        rows = {str(row["utc_date"]) for row in self.connection.execute(
+            "SELECT utc_date FROM execution_loss_stop_days")}
+        try:
+            day = date.fromisoformat(str(utc_date))
+        except ValueError:
+            return 0
+        streak = 0
+        while day.isoformat() in rows:
+            streak += 1
+            day -= timedelta(days=1)
+        return streak
 
     def day_baseline(
         self,

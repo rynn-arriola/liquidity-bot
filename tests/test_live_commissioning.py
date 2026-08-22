@@ -2770,7 +2770,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await restarted.market_stream.close()
 
     async def test_a_loss_taken_this_session_still_stops(self):
-        """Re-baselining must not blind the stop to real losses."""
+        """Re-baselining must not blind the stop to real losses.
+
+        Since 2026-08-22 the loss stop PAUSES rather than ending the session --
+        it blocks new risk and clears itself at the next UTC day. What this
+        test guards is unchanged: the loss must still be SEEN. A re-baseline
+        that hid it would leave the bot quoting straight through the budget.
+        """
         runner, _client, _ = self.build_runner()
         await runner.preflight()
         runner.ledger.realized_pnl = lambda slug=None: Decimal("0")
@@ -2784,7 +2790,94 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.risk_guard.observe_realized(
             runner.ledger.realized_pnl() - runner._realized_baseline)
 
-        self.assertIn("loss limit", str(runner._stop_reason(NOW)))
+        # Seen, and recorded against the day, but not terminal on day one.
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
+        self.assertIn("loss limit",
+                      " ".join(runner.risk_guard.blockers(now=NOW)))
+        self.assertEqual(
+            runner.ledger.consecutive_loss_stop_days(NOW.date().isoformat()), 1)
+
+    async def test_a_paused_loss_stop_announces_itself_once(self):
+        """A pause is silent by construction, so it has to say so.
+
+        The old behaviour ended the process, which was at least loud. Pausing
+        leaves the bot up, flat and quiet -- without an alert the first anyone
+        would know is a day of missing reward. Once per UTC day, because the
+        blocker stands all day and `_stop_reason` runs every pass.
+        """
+        runner, _client, notifier = self.build_runner()
+        await runner.preflight()
+        loss = -runner.config.max_session_loss_usd
+        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.ledger.realized_by_market = lambda: {}
+        runner.risk_guard.observe_realized(loss)
+
+        before = len(notifier.messages)
+        runner._stop_reason(NOW)
+        await runner._announce_loss_stop_pause()
+        sent = notifier.messages[before:]
+
+        self.assertEqual(len(sent), 1, "exactly one alert on the first trip")
+        body = str(sent[0])
+        self.assertIn("PAUSED", body)
+        self.assertIn("loss limit", body)
+
+        # Every later pass on the same day is silent.
+        runner._stop_reason(NOW + timedelta(seconds=5))
+        await runner._announce_loss_stop_pause()
+        self.assertEqual(len(notifier.messages[before:]), 1,
+                         "the blocker stands all day; do not repeat it")
+
+    async def test_a_loss_stop_becomes_terminal_after_three_days(self):
+        """Pausing is convenient and, alone, unbounded.
+
+        The day baseline resets at midnight, so a strategy that is
+        systematically wrong rather than unlucky would lose its full budget
+        every day forever with nothing forcing anyone to look -- and the $45
+        emergency ceiling cannot catch it either, because that re-baselines
+        each morning too. One bad day is variance; three in a row is a broken
+        model.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        loss = -runner.config.max_session_loss_usd
+        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.ledger.realized_by_market = lambda: {}
+        runner.risk_guard.observe_realized(loss)
+
+        # Two prior days already tripped; today is the third.
+        today = NOW.date()
+        for back in (2, 1):
+            runner.ledger.record_loss_stop(
+                (today - timedelta(days=back)).isoformat(),
+                at=NOW - timedelta(days=back))
+
+        reason = runner._stop_reason(NOW)
+
+        self.assertEqual(
+            runner.ledger.consecutive_loss_stop_days(today.isoformat()), 3)
+        self.assertIsNotNone(
+            reason, "three consecutive loss-stop days must stop the session")
+        self.assertIn("loss limit", str(reason))
+
+    async def test_a_gap_day_resets_the_loss_stop_streak(self):
+        """Three days in a row, not three days ever.
+
+        Counting cumulatively would turn three unrelated bad days across a
+        month into a terminal stop, which is the same 'lifetime counter on a
+        churning system' error FINDINGS records for retirement bounds.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        today = NOW.date()
+        # Yesterday clean, the two days before it tripped.
+        for back in (3, 2):
+            runner.ledger.record_loss_stop(
+                (today - timedelta(days=back)).isoformat(), at=NOW)
+
+        self.assertEqual(
+            runner.ledger.consecutive_loss_stop_days(today.isoformat()), 0)
 
     async def test_single_stop_fires_at_forty_then_the_ceiling(self):
         runner, client, _ = self.build_runner()
@@ -2807,7 +2900,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         client.account.current_balance = (
             start - runner.config.max_session_loss_usd)
         await runner._refresh_balance(NOW)
-        self.assertTrue(runner._stop_reason(NOW).startswith("risk_stop:"))
+        # Since 2026-08-22 a first-day loss stop PAUSES: it blocks new risk and
+        # clears at the next UTC day rather than ending the session. What must
+        # still hold is that the loss is seen and quoting stops.
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
+        self.assertIn("loss limit",
+                      " ".join(runner.risk_guard.blockers(now=NOW)))
         client.account.current_balance = start
 
         # The ceiling is the one thing that still reads marked equity, because

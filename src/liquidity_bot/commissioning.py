@@ -162,6 +162,23 @@ class CommissioningConfig:
     # (+23.8c under 300s, -23.5c past an hour), so that would have been a real
     # cost taken by accident rather than by decision.
     max_early_exit_loss_usd: Decimal = Decimal("8")
+    # How many CONSECUTIVE UTC days may hit a loss stop before it stops being
+    # a pause and becomes terminal.
+    #
+    # A loss stop used to flatten, prove flat and exit 0 -- which the
+    # supervisor never restarts, so a bad day cost every subsequent hour until
+    # a human noticed. Operator decision 2026-08-22: the loss stops now PAUSE
+    # instead. New risk is blocked, exits and the pre-kickoff flatten keep
+    # working, and the day baseline reset at midnight clears the blocker on its
+    # own, so the bot resumes without anyone touching it.
+    #
+    # That is unbounded on its own, and this is the bound. The budget resets
+    # every midnight, so a systematically wrong strategy would lose its full
+    # $40 daily forever with nothing forcing attention -- and the $45 emergency
+    # ceiling cannot catch it either, because that re-baselines each morning
+    # too. One bad day is variance; three in a row is a broken model. Worst
+    # case before it demands a human is about $120.
+    max_consecutive_loss_stop_days: int = 3
     # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
     # one pair of numbers served as both, which is incoherent once size grows:
     # "stop after losing $40" and "never hold more than $40 of worst case" are
@@ -300,6 +317,10 @@ class CommissioningConfig:
             problems.append(
                 "commissioning must keep a single $40 stop with a $45 "
                 "emergency equity ceiling above it")
+        if self.max_consecutive_loss_stop_days != 3:
+            problems.append(
+                "a paused loss stop must become terminal after three "
+                "consecutive days")
         if self.hard_stop_loss_usd <= self.max_session_loss_usd:
             problems.append("hard stop must exceed the normal session stop")
         if self.rest_requests_per_second > 4:

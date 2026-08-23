@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: 20-slot scheduler repair is local, tested, and awaiting deployment
+## CURRENT: 20-slot scheduler repair is deployed and awaiting live restart
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,
@@ -9,15 +9,16 @@ and backoff isolation, decision-time equity freshness, truthful stream receipt
 times/book coalescing/private draining, selector gate parity, strict shutdown
 flat proof, and corrected slot reporting.
 
-Local suite after the change: **506 passing**. Before restarting:
+Local suite after the change: **506 passing**. The droplet's own virtual
+environment also passed **506 tests in 42.065 seconds** after the files were
+deployed. The bot remains stopped. Before restarting:
 
-1. review the final diff and run `git diff --check`;
-2. deploy the complete source/test/doc set to the droplet;
-3. run the full suite on the droplet;
-4. start once and verify all selected eligible slots receive decision/action
+1. start once and verify all selected eligible slots receive decision/action
    opportunities rather than placements concentrating in the first few;
-5. verify unresolved mutations and recovery delays leave unaffected markets
-   active; write `DEPLOYED_COMMIT` only after the deployed tree is identified.
+2. verify unresolved mutations and recovery delays leave unaffected markets
+   active;
+3. keep the first post-restart order/resting distribution as the live
+   acceptance evidence for commit `3fed909`.
 
 Do not combine the restart with a reward-eligibility dwell change. That policy
 remains under the explicit measurement rule in `WATCHLIST.md`.

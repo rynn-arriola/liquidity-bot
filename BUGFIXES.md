@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
-### FIXED LOCALLY — the 20-slot scheduler let shared freshness and one market's state starve the slate
+### FIXED AND DEPLOYED — the 20-slot scheduler let shared freshness and one market's state starve the slate
 
 **Symptom.** Restoring the six-hour selection horizon produced abundant supply
 but almost no resting orders: 98 viable markets, 20 bound slots, 40 eligible
@@ -76,9 +76,10 @@ reported separately.
 **Proof.** New tests exercise each regression, including a simulated twenty
 slot sweep in which every slot is planned and equity refreshes halfway through,
 an unresolved intent that skips only its owner, and a 30-second delay that does
-not stop the unaffected slot. Full local suite: **506 tests passing**. The bot
-was stopped flat at 2026-08-23T04:10:48Z before editing. **Not deployed or
-restarted yet.**
+not stop the unaffected slot. Full local suite: **506 tests passing**. The same
+**506 tests passed on the droplet in 42.065 seconds** after deployment. The bot
+was stopped flat at 2026-08-23T04:10:48Z before editing and remains stopped;
+the repaired live scheduling behavior has not yet been observed after restart.
 
 **Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
 quote size, exposure limits, and 90-second reward-eligibility dwell. The last

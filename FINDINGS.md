@@ -3737,3 +3737,86 @@ numerator per market; the span data above gives the denominator.
 run at. Nothing broke tonight. The 0-2 resting orders after the 00:00Z
 rotation is an overnight slate plus a rotation trough, and 08-23 is 2.5
 side-hours of data -- too little to read at all.
+
+---
+
+## The size doubling DID work: 1.89x per resting hour against a predicted 2.00x
+
+Measured 2026-08-23T01:25Z. Corrects the reading given earlier the same night
+("doubling the contracts did not double the reward"), which was true of the
+daily total and wrong about the mechanism.
+
+### The rule, re-checked at the source
+
+`https://docs.polymarket.us/incentives/liquidity`, read 2026-08-23, agrees with
+what `docs/API_CONTRACTS.md` already recorded and with `rewards.py`:
+
+- `Score = discountFactor ^ (ticks from best) x order size` -- **linear in size**
+- the exchange walks from the best price outward accumulating orders until
+  `targetSize` is reached; **orders beyond that range score zero**, however
+  close to the touch
+- payout is **purely proportional to your share of total score**, with each
+  snapshot normalising bid and ask independently, per second
+- **no per-account cap** ("no ceiling on how much size you can have scored")
+- rewards under **$1.00 are not paid out**
+
+Nothing has changed, and nothing in the rule penalises size. Linear score with
+no cap predicts that doubling quote size doubles reward per unit of resting
+time, as long as our score stays small against the total -- which it does, with
+7,500-15,000 contracts sitting at these touches against our 10.
+
+### What actually happened
+
+```
+UTC day        size  rest hrs   reward   $/rest-hr
+2026-08-15        5     240.4    28.46       0.118
+2026-08-16        5     163.7    22.39       0.137
+2026-08-17        5     207.5    34.60       0.167
+2026-08-18        5     172.3    14.60       0.085
+2026-08-19        5     151.4    15.13       0.100
+2026-08-20    5->10     100.2    22.21       0.222   excluded, size changed mid-day
+2026-08-21       10     128.6    29.54       0.230
+2026-08-22       10     142.3       --   not posted
+
+size 5   mean 0.121 $/rest-hr   (5 clean days)
+size 10       0.230 $/rest-hr   (1 clean day)
+ratio         1.89x              rule predicts 2.00x
+```
+
+**The rate nearly doubled, exactly as the rule says it should.** The daily
+total looked flat only because resting hours fell over the same period:
+
+```
+08-15..08-19   187 order-hours/day
+08-21..08-22   135 order-hours/day     -28%
+```
+
+08-21 still out-earned the size-5 daily mean (29.54 against 23.04, +28%). The
+missing part of the 2x is entirely the lost resting time, not the size change.
+
+**So the rollback question in `NEXT.md` has an answer:** the doubling is doing
+what it was supposed to. Judge it on `$/rest-hr`, not on the daily total, and
+do not roll it back on a flat daily figure.
+
+### The question this opens, and a hypothesis with a name
+
+Bound time roughly halved over the same window (side-hours bound: 08-17 442.9,
+08-21 215.4, 08-22 264.5) on only ~20% fewer markets, so spans got shorter too.
+
+**Candidate, untested:** `minimum_entry_price` (0.10) was added to the
+reconciler on **2026-08-21** -- the same day the drop appears. It refuses sides
+at extreme prices, and because the selector does not model it (see `BUGFIXES.md`
+2026-08-23) those markets are still bound but never place. A market that never
+places contributes nothing to resting hours while still consuming a slot, which
+is the exact shape of this drop.
+
+**This is a coincidence of dates, not a result.** It is written down so it gets
+tested rather than assumed -- three hypotheses died by measurement earlier this
+same night. **The measurement that would settle it:** count bound markets that
+placed zero orders per day, 08-19 through 08-23. If that count jumps on 08-21,
+the price floor is eating the slate and the selector fix pays for itself twice.
+
+**Caveat on the headline, kept deliberately.** One clean day at size 10 against
+five at size 5, and daily reward swings $14-$35 at constant size. 1.89x is
+consistent with the rule; it is not yet independently established. 08-22 and
+08-23 posting will make it three days.

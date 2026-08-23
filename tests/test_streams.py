@@ -123,6 +123,25 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(queued, 1)
         self.assertEqual(event.best_bid.price, .51)
 
+    def test_market_stream_drains_latest_books_for_all_pending_slugs(self):
+        async def scenario():
+            client = FakeClient()
+            stream = MarketReadOnlyStream(client)
+            await stream.start(["market-one", "market-two"])
+            first = fixture("book.json")
+            second = copy.deepcopy(first)
+            second["marketData"]["marketSlug"] = "market-two"
+            client.market_socket.emit("market_data", first)
+            client.market_socket.emit("market_data", second)
+            try:
+                return stream.drain_books()
+            finally:
+                await stream.close()
+
+        books = self.run_async(scenario())
+        self.assertEqual([book.slug for book in books],
+                         ["market-one", "market-two"])
+
     def test_market_stream_rejects_a_book_outside_its_subscription(self):
         """A scope violation is our bug, not the venue's, so it stays fatal."""
         async def scenario(payload):

@@ -543,6 +543,44 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._observe_private(event, NOW + timedelta(seconds=20))
 
+    async def test_events_arriving_during_rest_service_are_applied_before_decisions(self):
+        runner, _, _ = self.build_runner(clock=lambda: NOW + timedelta(seconds=20))
+        runner._bind_markets(("market-one",))
+        book = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 10),),
+            (BookLevel(.51, 10),),
+            received_at=NOW + timedelta(seconds=2),
+        )
+        private = PrivateEvent(
+            PrivateEventKind.HEARTBEAT, {},
+            received_at=NOW + timedelta(seconds=3),
+        )
+
+        async def completed(value):
+            return value
+
+        market_task = asyncio.create_task(completed(book))
+        private_task = asyncio.create_task(completed(private))
+        await asyncio.sleep(0)
+        market_task, private_task, stop = (
+            await runner._consume_ready_stream_tasks(
+                market_task, private_task))
+
+        self.assertIsNone(stop)
+        self.assertEqual(
+            runner.state_for("market-one").book_observed_at,
+            NOW + timedelta(seconds=2),
+        )
+        self.assertEqual(
+            runner.gate.last_message_at,
+            NOW + timedelta(seconds=3),
+        )
+        market_task.cancel()
+        private_task.cancel()
+        await asyncio.gather(
+            market_task, private_task, return_exceptions=True)
+
     async def test_preflight_then_first_fake_order_is_exactly_the_quote_size(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()

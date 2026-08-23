@@ -77,9 +77,19 @@ reported separately.
 slot sweep in which every slot is planned and equity refreshes halfway through,
 an unresolved intent that skips only its owner, and a 30-second delay that does
 not stop the unaffected slot. Full local suite: **506 tests passing**. The same
-**506 tests passed on the droplet in 42.065 seconds** after deployment. The bot
-was stopped flat at 2026-08-23T04:10:48Z before editing and remains stopped;
-the repaired live scheduling behavior has not yet been observed after restart.
+**506 tests passed on the droplet in 42.065 seconds** after the first deployment.
+The final edge review then found one remaining timing window: a stream task can
+consume the first event while serial REST service is running, leaving it held
+outside the adapter queue. Draining only the queue after service would process
+newer private mutations before that held event, while waiting for the next loop
+could make the decision gate stale. `_consume_ready_stream_tasks` now applies
+the held result first, drains the complete finite backlog in order, and runs
+both when the loop wakes and immediately after REST service. Market books drain
+as latest-per-slug snapshots; private mutations retain wire order. Two new
+regressions bring the full local suite to **508 passing**. The bot was stopped
+flat at 2026-08-23T04:10:48Z before editing; a brief pre-review restart sent no
+orders and was also stopped flat. It is currently stopped, and the final
+repaired scheduling behavior has not yet been observed after restart.
 
 **Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
 quote size, exposure limits, and 90-second reward-eligibility dwell. The last

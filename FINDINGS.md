@@ -4361,7 +4361,7 @@ is cross-slot scheduling around otherwise successful work.
 | Serial service can expire 15-second equity before later decisions | Refresh at response receipt and within a five-second pre-expiry decision margin |
 | One unresolved mutation pauses all twenty | Skip only its owning slug; unattributable state remains account-wide fail-closed |
 | One market's backoff sleeps the runner | Per-slug next-decision deadlines; no sweep sleep |
-| Queued books/private events are stamped fresh on dequeue | Socket receipt timestamps retained; full books coalesced per slug; private backlog drained in order |
+| Queued books/private events are stamped fresh on dequeue | Socket receipt timestamps retained; full books coalesced per slug; the task-held event is applied first and both backlogs drain immediately after REST service |
 | Shutdown ignores ambiguous creates | Unresolved and absent orders now defeat venue-flat proof |
 | Selector omits 0.10 entry floor | One configured floor passed to selector and reconciler |
 | Selector hardcodes minimum quantity 1 | Compare venue minimum with configured quote size 10 |
@@ -4370,8 +4370,10 @@ is cross-slot scheduling around otherwise successful work.
 
 The local regression suite contains a twenty-slot timing test: all twenty are
 planned, and the account equity observation refreshes at slot eleven rather
-than silently starving the tail. Full suite after implementation: **506 tests
-passing**.
+than silently starving the tail. A separate boundary test proves events that
+arrive while REST service is running are applied before decisions, preserving
+private-event order and receipt time. Full suite after the final edge review:
+**508 tests passing**.
 
 ### Still open, deliberately not folded into this fix
 

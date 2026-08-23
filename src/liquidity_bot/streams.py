@@ -116,6 +116,21 @@ class MarketReadOnlyStream:
             raise item
         return self._pending_books.pop(item)
 
+    def drain_books(self, *, limit: int | None = None) -> tuple[BookSnapshot, ...]:
+        """Return all currently pending latest-per-market snapshots."""
+
+        books: list[BookSnapshot] = []
+        count = self._queue.qsize() if limit is None else max(0, limit)
+        for _ in range(count):
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, Exception):
+                raise item
+            books.append(self._pending_books.pop(item))
+        return tuple(books)
+
     async def close(self) -> None:
         try:
             await self._socket.close()
@@ -236,11 +251,12 @@ class PrivateReadOnlyStream:
             raise item
         return item
 
-    def drain_events(self, *, limit: int = 1000) -> tuple[PrivateEvent, ...]:
+    def drain_events(self, *, limit: int | None = None) -> tuple[PrivateEvent, ...]:
         """Return queued events in wire order without waiting for new data."""
 
         events: list[PrivateEvent] = []
-        for _ in range(max(0, limit)):
+        count = self._queue.qsize() if limit is None else max(0, limit)
+        for _ in range(count):
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
@@ -423,11 +439,12 @@ class PrivateStreamPool:
             raise item
         return item
 
-    def drain_events(self, *, limit: int = 1000) -> tuple[PrivateEvent, ...]:
+    def drain_events(self, *, limit: int | None = None) -> tuple[PrivateEvent, ...]:
         """Drain the merged shard backlog while preserving its queue order."""
 
         events: list[PrivateEvent] = []
-        for _ in range(max(0, limit)):
+        count = self._queue.qsize() if limit is None else max(0, limit)
+        for _ in range(count):
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:

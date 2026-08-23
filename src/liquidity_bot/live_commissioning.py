@@ -2546,6 +2546,50 @@ class CommissioningRunner:
                 self._next_decision_at.pop(slug, None)
         return None
 
+    async def _consume_ready_stream_tasks(
+        self,
+        market_task: asyncio.Task[Any],
+        private_task: asyncio.Task[Any],
+    ) -> tuple[asyncio.Task[Any], asyncio.Task[Any], str | None]:
+        """Apply completed stream work and drain data queued behind it.
+
+        Called both when the loop wakes and after serial REST service. A task
+        can consume the first event while service is in progress; draining the
+        adapter without applying that held result first would reorder private
+        mutations. This method preserves that order, then catches up fully
+        before the decision gate is evaluated.
+        """
+
+        if market_task.done():
+            try:
+                self._accept_book(market_task.result())
+                drain_books = getattr(self.market_stream, "drain_books", None)
+                if callable(drain_books):
+                    for book in drain_books():
+                        self._accept_book(book)
+            except Exception as exc:
+                stop = await self._recover_market_stream(exc)
+                if stop:
+                    return market_task, private_task, stop
+            market_task = asyncio.create_task(self.market_stream.next_book())
+
+        if private_task.done():
+            try:
+                await self._observe_private(private_task.result(), self._now())
+                # Private updates cannot be coalesced safely (fills and order
+                # transitions are ordered), so drain in wire order.
+                drain_events = getattr(self.private_stream, "drain_events", None)
+                if callable(drain_events):
+                    for event in drain_events():
+                        await self._observe_private(event, self._now())
+            except Exception as exc:
+                stop = await self._recover_private_stream(exc)
+                if stop:
+                    return market_task, private_task, stop
+            private_task = asyncio.create_task(self.private_stream.next_event())
+
+        return market_task, private_task, None
+
     async def _refresh_bound_books(self, now: datetime) -> None:
         """Prove a book for every bound market, dropping the ones that fail.
 
@@ -4405,35 +4449,15 @@ class CommissioningRunner:
                     private_task = asyncio.create_task(
                         self.private_stream.next_event())
                     continue
-                done, _ = await asyncio.wait(
+                await asyncio.wait(
                     {market_task, private_task}, timeout=.5,
                     return_when=asyncio.FIRST_COMPLETED)
-                if market_task in done:
-                    try:
-                        self._accept_book(market_task.result())
-                    except Exception as exc:
-                        stop_reason = await self._recover_market_stream(exc) or ""
-                        if stop_reason:
-                            break
-                    market_task = asyncio.create_task(
-                        self.market_stream.next_book())
-                if private_task in done:
-                    try:
-                        await self._observe_private(
-                            private_task.result(), self._now())
-                        # Private updates cannot be coalesced safely (fills and
-                        # order transitions are ordered), so drain the current
-                        # backlog in wire order before beginning REST work.
-                        drain = getattr(self.private_stream, "drain_events", None)
-                        if callable(drain):
-                            for event in drain(limit=1000):
-                                await self._observe_private(event, self._now())
-                    except Exception as exc:
-                        stop_reason = await self._recover_private_stream(exc) or ""
-                        if stop_reason:
-                            break
-                    private_task = asyncio.create_task(
-                        self.private_stream.next_event())
+                market_task, private_task, stream_stop = (
+                    await self._consume_ready_stream_tasks(
+                        market_task, private_task))
+                if stream_stop:
+                    stop_reason = stream_stop
+                    break
                 now = self._now()
                 if now >= next_balance:
                     try:
@@ -4470,6 +4494,17 @@ class CommissioningRunner:
                 # book before the decisions below.
                 stop_reason = await self._service_bound_markets()
                 if stop_reason:
+                    break
+                # REST service yields to the event loop for every request. In
+                # a twenty-slot pass, stream tasks can complete early and hold
+                # one event while newer events queue behind them. Consume the
+                # held event first, then drain the backlog before freshness and
+                # private-state gates authorize any order.
+                market_task, private_task, stream_stop = (
+                    await self._consume_ready_stream_tasks(
+                        market_task, private_task))
+                if stream_stop:
+                    stop_reason = stream_stop
                     break
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""

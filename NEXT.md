@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: 20-slot scheduler repair is deployed and awaiting live restart
+## CURRENT: final 20-slot scheduler edge fix is local and awaiting redeploy
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,
@@ -9,16 +9,25 @@ and backoff isolation, decision-time equity freshness, truthful stream receipt
 times/book coalescing/private draining, selector gate parity, strict shutdown
 flat proof, and corrected slot reporting.
 
-Local suite after the change: **506 passing**. The droplet's own virtual
-environment also passed **506 tests in 42.065 seconds** after the files were
-deployed. The bot remains stopped. Before restarting:
+The first implementation passed **506 tests locally and on the droplet**. A
+brief restart was stopped again at the operator's request before acceptance;
+it sent no orders and stopped flat. The final edge review then found and fixed
+the task-held stream-event window described in `BUGFIXES.md`. The expanded
+local suite now passes **508 tests**. The bot remains stopped.
 
-1. start once and verify all selected eligible slots receive decision/action
+The droplet's own virtual
+environment also passed **506 tests in 42.065 seconds** after the files were
+first deployed. Before restarting:
+
+1. deploy the final stream-boundary source and its two regressions;
+2. run all 508 tests in the droplet virtual environment;
+3. update `DEPLOYED_COMMIT` to the final source commit;
+4. start once and verify all selected eligible slots receive decision/action
    opportunities rather than placements concentrating in the first few;
-2. verify unresolved mutations and recovery delays leave unaffected markets
+5. verify unresolved mutations and recovery delays leave unaffected markets
    active;
-3. keep the first post-restart order/resting distribution as the live
-   acceptance evidence for commit `3fed909`.
+6. keep the first post-restart order/resting distribution as the live
+   acceptance evidence for the final commit.
 
 Do not combine the restart with a reward-eligibility dwell change. That policy
 remains under the explicit measurement rule in `WATCHLIST.md`.

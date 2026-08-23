@@ -4695,6 +4695,28 @@ The new live marker is:
 [priority-replan] at=... elapsed=... markets=slug[,slug]
 ```
 
+### Production acceptance
+
+Commit `abbbd7379728e3184ac73247dc5cc713214d1005` was deployed and the
+runner restarted at about 23:11:57Z. The first three independent priority
+batches were observed at 23:13:29Z, 23:14:08Z and 23:14:59Z. They covered
+seven owner occurrences (six distinct markets) and completed the scoped pass
+in 2.6s, 6.6s and 2.8s respectively. The first six same-side replacements
+arrived 19.3-33.7s after their original touch cancel, below both the prior
+40.60s median and 120.09s p90 cancel-to-place gaps. A later owner correctly
+cancelled its other side instead of blindly recreating the cancelled bid when
+the refreshed normal plan no longer called for that order.
+
+At the 23:15Z safety sample the runner and supervisor were both live, there
+were zero positions, zero `UNKNOWN_ABSENT` orders and no runner failures. One
+five-second-old acknowledged CANCEL was still unresolved and then belonged to
+the next normal priority cycle; it was not an old or unattributed ambiguity.
+The account had recently shown 21 working orders across 11 markets. Selection
+immediately before deployment reported 11 viable markets, so the sample was
+bounded by current viable supply rather than a reduced slot cap. The live
+command still had no max-market override and the configured capacity remained
+20.
+
 To recognize this exact issue next time, compare each touch CANCEL with the
 next `PLACE_POST_ONLY` for the same market and side, then split the elapsed time
 at the CANCEL intent's `updated_at`. A short cancel-confirm interval and a long

@@ -149,7 +149,19 @@ elapsed fast-path time and owners for production verification.
 proof, one-owner decision scope, released-market cleanup, stream draining and
 both twenty-slot freshness boundaries. Mutation-checking removal of the queue
 write makes the terminal-private regression fail. Full local suite: **522 tests
-passing** before deployment.
+passing** before deployment. Source commit
+`abbbd7379728e3184ac73247dc5cc713214d1005` matched every deployed file hash,
+and all **522 tests passed on production in 38.392 seconds** before restart.
+
+Live acceptance observed three priority batches covering seven owner
+occurrences in **2.6s, 6.6s and 2.8s**. The first six same-side replacements
+landed **19.3-33.7 seconds** after touch cancel, versus the prior 40.60s median
+and 120.09s p90. Fresh economics also proved the safety boundary: one priority
+owner cancelled its now-inappropriate opposite order rather than blindly
+recreating the cancelled side. The live account showed zero positions, zero
+`UNKNOWN_ABSENT` orders and no runner failure. A sample reached 21 working
+orders across the 11 currently viable/bound markets; `max_markets=20` and its
+dedicated scheduler tests were unchanged.
 
 ---
 

@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: deploy and live-accept cancel-confirmed priority replan
+## CURRENT: monitor deployed cancel-confirmed priority replan
 
 The current 22:11:14Z run proved that CANCEL intents normally become terminal
 quickly while their replacement waits behind the full slate. Over 80 joined
@@ -8,19 +8,27 @@ touch-change cycles, cancel confirmation was 1.22s median but the subsequent
 replacement wait was 39.45s median and 118.63s p90; 21 returned at the same
 price and 48 moved at most one tick.
 
-The local fix queues terminal CANCEL owners from both private and REST proof,
+The deployed fix queues terminal CANCEL owners from both private and REST proof,
 re-services only those markets before the next full slate, drains stream events
 that arrive during priority REST work, refreshes derived economics, and then
 uses the unchanged guarded decision path. It adds `[priority-replan]` for live
 measurement and does not alter `max_markets=20`, selection horizon, quote size,
 REST rate, economics, or risk limits.
 
-Focused edge tests and mutation check pass. Full local suite: **522 tests
-passing**. Next: final diff review, stop the runner gracefully and prove flat,
-commit/push, deploy, run the full suite on the server, restart, then measure
-`[priority-replan] elapsed` and new terminal-to-place gaps against the 39.45s
-baseline. Do not claim success from a single working-order sample; selection
-still reported only seven to nine viable markets around the prior restart.
+Commit `abbbd7379728e3184ac73247dc5cc713214d1005` passed the focused edge
+tests, mutation check and all **522 local tests**; its deployed hashes matched
+and all **522 production tests passed in 38.392 seconds**. The old runner
+proved flat before deployment and the new runner started around 23:11:57Z.
+The first three priority batches covered seven owner occurrences in 2.6s,
+6.6s and 2.8s. Six observed same-side replacements arrived 19.3-33.7s after
+touch cancel, below the old 40.60s median / 120.09s p90. The safety sample had
+zero positions, zero unknown-absent rows and no runner failure.
+
+Continue measuring the distribution over a longer run rather than claiming a
+new percentile from six replacements. Also keep viable/bound-market count
+beside working-order count: immediately before deployment selection reported
+11 viable markets and the live account reached 21 working orders across 11
+markets. Twenty remains capacity, not guaranteed supply.
 
 ---
 

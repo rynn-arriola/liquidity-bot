@@ -396,6 +396,12 @@ class CommissioningRunner:
         self._runtime_error_counts: dict[str, int] = {}
         self._selection_scan_seconds_last: float | None = None
         self._rotation_transition_seconds_last: float | None = None
+        # (market, side) -> (label, since). Drives `[eligibility]`. Pruned in
+        # `_bind_markets` alongside `_markets`: a market that is dropped and
+        # later re-selected must not report the interval it spent UNBOUND as
+        # though it had held that state, which would put hour-long `held`
+        # values into the one number the log exists to measure.
+        self._eligibility_state: dict[tuple[str, str], tuple[str, datetime]] = {}
 
     def request_stop(self, reason: str = "operator_requested") -> None:
         self._stop_requested = str(reason or "operator_requested")
@@ -450,6 +456,11 @@ class CommissioningRunner:
         self._markets = {
             slug: self._markets.get(slug) or MarketState(slug)
             for slug in clean}
+        # Same contract as `_markets` above, for the same reason: state for a
+        # market we no longer hold must not survive to describe it later.
+        self._eligibility_state = {
+            key: value for key, value in self._eligibility_state.items()
+            if key[0] in self._markets}
 
     @property
     def _primary(self) -> MarketState:
@@ -1377,6 +1388,70 @@ class CommissioningRunner:
     def _evaluate_rewards(
         self, now: datetime, slug: str | None = None,
     ) -> None:
+        """Evaluate this market's economics, then record any CHANGE in them.
+
+        The evaluation itself is `_evaluate_rewards_inner`; this wrapper exists
+        only to emit `[eligibility]`. Three separate investigations in one
+        session (2026-08-22/23) failed on the same missing fact -- a bound
+        market resting no order leaves no trace of why, because the runner logs
+        what it DID and a side dropped for ineligibility produces no mutation
+        and therefore no `[action]` line. `price_too_extreme` appears zero
+        times in a 50MB log for exactly this reason.
+
+        Transitions rather than levels, so the volume is bounded: markets are
+        serviced roughly once a second across twenty slots, and logging a level
+        would add ~40 lines/second to a file that is already 12MB a session.
+        A transition also carries the quantity a level cannot -- `held`, how
+        long the previous state lasted, which is the oscillation period that
+        decides between the three candidate fixes recorded in FINDINGS for the
+        `reward_ineligible` churn.
+        """
+
+        state = self.state_for(slug or self.market_slug)
+        self._evaluate_rewards_inner(now, slug)
+        self._record_eligibility(state, self._now())
+
+    def _record_eligibility(self, state: MarketState, now: datetime) -> None:
+        """Log a side whose reason-to-quote changed, with how long it held.
+
+        Never raises. This is reporting, and `_evaluate_rewards` is reached
+        from the shutdown path where an exception reads as a failure to prove
+        flat -- which exits 3, which the supervisor never restarts. Same
+        argument `_idle_market_reasons` and `_awaiting_rotation` already carry.
+        """
+
+        try:
+            for side in ("bid", "offer"):
+                label = (
+                    "eligible" if side in state.reward_eligible
+                    else state.economic_blocker_by_side.get(
+                        side, "not_evaluated"))
+                key = (state.slug, side)
+                previous = self._eligibility_state.get(key)
+                if previous is not None and previous[0] == label:
+                    continue
+                self._eligibility_state[key] = (label, now)
+                if previous is None:
+                    # First observation of this side carries no duration, and
+                    # a bare "from=none" line per market per bind is noise.
+                    continue
+                resting = any(
+                    order.side == side
+                    for order in self._working_orders(state.slug))
+                print(
+                    f"[eligibility] at={now.isoformat()} "
+                    f"market={state.slug} side={side} "
+                    f"from={previous[0]} to={label} "
+                    f"held={(now - previous[1]).total_seconds():.1f}s "
+                    f"resting={'yes' if resting else 'no'}",
+                    flush=True,
+                )
+        except Exception:
+            return
+
+    def _evaluate_rewards_inner(
+        self, now: datetime, slug: str | None = None,
+    ) -> None:
         self._accrue_score(now)
         state = self.state_for(slug or self.market_slug)
         state.clear_economics()
@@ -1389,6 +1464,13 @@ class CommissioningRunner:
                 "bid": "market_retired", "offer": "market_retired"}
             return
         if state.market is None or state.book is None or state.incentive is None:
+            # Named rather than bare: these three are the difference between
+            # "we looked and declined" and "we never got the data", and they
+            # were indistinguishable in the log. Reporting only.
+            missing = ("no_market_metadata" if state.market is None
+                       else "no_book" if state.book is None
+                       else "no_incentive")
+            state.economic_blocker_by_side = {"bid": missing, "offer": missing}
             return
         if not state.market.is_supported_moneyline:
             state.economic_blocker_by_side = {
@@ -1400,8 +1482,18 @@ class CommissioningRunner:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now)
         except AmbiguousIncentiveError:
+            state.economic_blocker_by_side = {
+                "bid": "ambiguous_incentive", "offer": "ambiguous_incentive"}
             return
         if period is None or period.period == "live" or state.market.tick_size is None:
+            # Invariant 39: only `day_of` has a provable clock. Which of the
+            # three it is matters -- "no applicable period" is a slate that has
+            # not opened yet, "live" is a market we may never quote, and a
+            # missing tick is bad metadata. Reporting only.
+            why = ("no_applicable_period" if period is None
+                   else "period_is_live" if period.period == "live"
+                   else "no_tick_size")
+            state.economic_blocker_by_side = {"bid": why, "offer": why}
             return
         if not state.book.is_two_sided:
             # `best_bid`/`best_offer` are `max`/`min` over a list, so an empty

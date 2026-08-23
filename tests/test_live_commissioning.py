@@ -3912,6 +3912,117 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_eligibility_changes_are_logged_with_how_long_they_held(self):
+        """The measurement three investigations needed and did not have.
+
+        A bound market resting no order left no trace of why: the runner logs
+        what it DID, and a side dropped for ineligibility produces no mutation
+        and so no `[action]` line. `price_too_extreme` appears zero times in a
+        50MB log for that reason. `held` is the load-bearing field -- it is the
+        oscillation period that decides between the candidate fixes for the
+        `reward_ineligible` churn, where 87% of cancels come back to the
+        identical price.
+        """
+
+        import contextlib
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        state = runner.state_for(runner.market_slug)
+
+        # First observation establishes a baseline and must stay silent -- a
+        # "from=none" line per side per bind is noise, not signal.
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            runner._record_eligibility(state, NOW)
+        self.assertEqual(captured.getvalue(), "")
+
+        # No change: still silent. Transitions, not levels -- twenty markets
+        # serviced once a second would otherwise add ~40 lines/second.
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            runner._record_eligibility(state, NOW + timedelta(seconds=30))
+        self.assertEqual(captured.getvalue(), "")
+
+        # Now it genuinely changes, 45 seconds after the state was entered.
+        state.reward_eligible = frozenset({"offer"})
+        state.economic_blocker_by_side = {"bid": "outside_reward_cutoff"}
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            runner._record_eligibility(state, NOW + timedelta(seconds=45))
+        lines = [l for l in captured.getvalue().splitlines() if l.strip()]
+
+        bid = next(l for l in lines if "side=bid" in l)
+        self.assertIn("[eligibility] at=", bid)
+        self.assertIn(f"market={state.slug}", bid)
+        self.assertIn("to=outside_reward_cutoff", bid)
+        # 45s, not 15s: duration runs from when the state was ENTERED, not
+        # from the previous observation. Measuring the gap between samples
+        # would report the service interval instead of the thing being asked
+        # about, and every value would come out ~1s.
+        self.assertIn("held=45.0s", bid)
+        self.assertIn("resting=", bid)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_rebinding_a_market_forgets_its_old_eligibility(self):
+        """Unbound time must never be reported as time spent holding a state.
+
+        A market dropped by rotation and re-selected an hour later would
+        otherwise emit `held=3600s`, putting a fabricated hour into the one
+        number this log exists to measure.
+        """
+
+        import contextlib
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        runner._record_eligibility(state, NOW)
+        self.assertIn((slug, "bid"), runner._eligibility_state)
+
+        runner._bind_markets(("some-other-market",))
+        self.assertNotIn((slug, "bid"), runner._eligibility_state)
+
+        # Re-selected: the first observation is a baseline again, so the stale
+        # interval can never be printed.
+        runner._bind_markets((slug,))
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            runner._record_eligibility(
+                runner.state_for(slug), NOW + timedelta(hours=1))
+        self.assertEqual(captured.getvalue(), "")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_every_refusal_to_evaluate_names_itself(self):
+        """"We looked and declined" and "we never had the data" are different.
+
+        These paths returned bare, leaving `economic_blocker_by_side` empty --
+        which `_idle_market_reasons` then reports as `no_quote_yet`, the same
+        label a market gets when it is simply between cycles. Reporting only;
+        nothing here changes what is quoted.
+        """
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        state = runner.state_for(runner.market_slug)
+
+        book = state.book
+        state.book = None
+        runner._evaluate_rewards(NOW)
+        self.assertEqual(
+            set(state.economic_blocker_by_side.values()), {"no_book"})
+
+        state.book = book
+        state.incentive = None
+        runner._evaluate_rewards(NOW)
+        self.assertEqual(
+            set(state.economic_blocker_by_side.values()), {"no_incentive"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_retired_market_accrues_no_score(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

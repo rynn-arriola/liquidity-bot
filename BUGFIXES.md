@@ -107,8 +107,11 @@ refresh never marks state fresh; the 30-second gate still refuses entries.
 
 Five new boundary/failure/slow-response/twenty-slot regressions bring the full
 suite to **513 passing locally and on the droplet** (40.881 seconds in the
-production virtual environment). Source commit `2eed575` is deployed. The bot
-remains stopped and flat pending the monitored restart.
+production virtual environment). Source commit `2eed575` is deployed. The
+monitored restart remained alive beyond the prior failure window: at 10m18s it
+had 64 actions across 18 action-producing markets, 26 working orders, zero
+`execution_state_unknown` quarantines or runner failures, and zero unresolved
+intents, absent/unknown orders, or positions. The bot remains running.
 
 **Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
 quote size, exposure limits, and 90-second reward-eligibility dwell. The last

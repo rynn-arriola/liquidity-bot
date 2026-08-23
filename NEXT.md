@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: restart and monitor the deployed execution-state freshness edge
+## CURRENT: deployed, restarted, and accepted; continue normal observation
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,
@@ -18,17 +18,20 @@ local patch refreshes at 25 seconds, stamps freshness at REST completion, and
 limits a failed account-wide refresh to one attempt per sweep while remaining
 fail-closed. The expanded suite passes **513 tests locally and on the droplet**
 (40.881 seconds in production). Source commit `2eed575` is deployed. The
-operator stopped the bot flat at **2026-08-23T04:45:13Z**; it remains stopped
-pending the monitored restart.
+operator stopped the prior run flat at **2026-08-23T04:45:13Z**. The final run
+started around 04:56Z and passed the prior failure window: at 10m18s it had 64
+actions across 18 action-producing markets, 26 working orders across 14 at the
+sampled instant, and zero `execution_state_unknown`, runner failures,
+unresolved intents, absent/unknown orders, or positions. It remains running.
 
-Before restarting:
+Completed acceptance:
 
-1. update `DEPLOYED_COMMIT` to source commit `2eed575`;
-2. restart once and verify placements remain distributed across the slate;
-3. monitor beyond the prior seven-minute run and verify no new
-   `execution_state_unknown` quarantine occurs during healthy stream/REST
-   operation;
-4. retain unresolved/absent/position and process-health evidence.
+1. `DEPLOYED_COMMIT` is source commit `2eed575`;
+2. source/test/doc hashes matched the reviewed local files;
+3. all 513 production tests passed in 40.881 seconds;
+4. the restart remained live beyond ten minutes with broad action distribution
+   and no recurrence of the execution-state freshness failure;
+5. ledger safety state was clean at acceptance.
 
 Do not combine the restart with a reward-eligibility dwell change. That policy
 remains under the explicit measurement rule in `WATCHLIST.md`.

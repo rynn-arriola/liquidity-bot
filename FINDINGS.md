@@ -4388,6 +4388,86 @@ gate continues refusing new risk. REST and startup proofs are timestamped at
 completion so slow responses do not begin partly expired. Full local suite
 after this final edge review: **513 tests passing**.
 
+### Proper way to tell whether all twenty slots are actually working
+
+Do not answer this from one dashboard count. The four numbers describe
+different layers:
+
+- `Viable now` is universe supply and can exceed twenty;
+- `Eligible sides` is pre-decision side eligibility, not proof of an attempted
+  order;
+- `Quoting`/working orders is an instantaneous resting result after decisions,
+  cancellations, fills, and book movement;
+- a **working slot** is a bound market that is actually reached by the decision
+  scheduler on its cadence, even when its correct result is an empty plan.
+
+Use this sequence:
+
+1. Capture one exact-time snapshot: the ordered `active_slugs` set, balance and
+   equity observation times, private/REST gate times, unresolved intents,
+   per-market recovery deadlines, current books, working orders, and positions.
+   Do not combine a dashboard from one instant with catalog or ledger data from
+   another.
+2. For every slug in that exact bound set, run the reconciler plan independently
+   against the captured state without applying mutations. Record whether it
+   returns `PLACE_POST_ONLY`, `CANCEL`, or no action, plus its blocker. This is
+   the control group: it answers whether the market itself could be acted on.
+3. From the same session start/bind boundary, group `[action]` lines by market
+   and slot order—not just total creates. Also count unresolved ownership,
+   `[runtime-recovery]` attempt depth, and quarantine reason. A total of twenty
+   actions can still be one early slot churning twenty times.
+4. Compare the independently plannable set with scheduler coverage and resting
+   results:
+
+   | Observation | Diagnosis |
+   |---|---|
+   | All/most slugs plan independently, but actions repeat on the first few | Cross-slot scheduler or shared-freshness starvation |
+   | Actions reach the slate, but working orders disappear | Retention issue; split cancels by `reward_ineligible`, touch change, fill, or retirement |
+   | Independent plans are empty with explicit blockers | Market economics/selection mismatch, not scheduler starvation |
+   | One unresolved slug coincides with silence everywhere | Regression to account-wide intent blocking; only the owner should pause |
+   | Raw `book_stale` is high but attempt one immediately succeeds | Normal best-effort refresh; inspect duration and attempt depth before blaming REST |
+   | Equity age approaches 15s or execution-state age approaches 30s before tail slots | Shared freshness is expiring inside the serial sweep |
+
+The decisive evidence in this incident was exactly that comparison: all twenty
+captured slugs returned placement plans independently, while live placement
+history reached only four markets and was distributed 14/5/2/1. That proves a
+scheduler problem. Conversely, the accepted fixed run produced 33 placements
+across all twenty markets, and the final restart produced 64 actions across 18
+action-producing markets in its first 10m18s. The other two markets having no
+action is not itself failure; an empty economic plan is valid. Coverage must be
+judged against the independent plan/control result, not against `20` blindly.
+
+For a fast live check, start with these server commands. Set `RUN_START` to the
+current runner's UTC start time; the `awk` filter prevents old sessions from
+contaminating the result:
+
+```bash
+./scripts/status_commissioning.sh
+RUN_START='2026-08-23T04:56:00'
+awk -v start="$RUN_START" '{
+  for (i=1; i<=NF; i++) if ($i ~ /^at=/) {
+    if (substr($i,4) >= start) print
+    break
+  }
+}' logs/commissioning.log | grep -a '\[action\]' \
+  | sed -E 's/.* market=([^ ]+).*/\1/' | sort | uniq -c | sort -nr
+awk -v start="$RUN_START" '{
+  for (i=1; i<=NF; i++) if ($i ~ /^at=/) {
+    if (substr($i,4) >= start) print
+    break
+  }
+}' logs/commissioning.log \
+  | grep -aE 'execution_state_unknown|runner_failure'
+```
+
+The second command is a safety/freshness check, not a substitute for the
+independent per-market plan comparison. At present, empty plans are not logged
+as `[action]`; therefore action-log coverage alone can identify concentration
+but cannot prove that every no-op slot was skipped. The dashboard also does not
+list the ordered bound set. Use the captured-state independent plan comparison
+for the definitive answer; this is the current observability limitation to
+remember next time.
+
 ### Still open, deliberately not folded into this fix
 
 `reward_ineligible` cancellation churn is an independent reducer of resting

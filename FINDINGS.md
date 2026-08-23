@@ -4145,3 +4145,74 @@ that this measurement never showed they were worse. Thin distant books fail
 `target_not_met` outright (a third of the 120+ bucket paid nothing), and that
 part is real and is about the book, not about the clock. The open question
 remains competition and depth by time-to-kickoff, measured on realised reward.
+
+### Re-checked against the docs and the live payload before changing anything
+
+2026-08-23T02:15Z, at the operator's request to verify 6h and 2h are equally
+paid *before* acting.
+
+**What the docs state.**
+
+- day_of is *"From 6 hours before until the event starts"*
+- *"Each snapshot is equally weighted regardless of how much liquidity is on
+  the book"*
+- payout is *"purely proportional to your share of the total score"*
+- on any multiplier, boost, ramp or weighting that raises payout closer to the
+  event, the docs are **completely silent** -- no such mechanism is documented
+
+**What the docs do NOT state.** How a pool is sized, how many snapshots occur
+per second, or explicitly that a period's pool is divided evenly across its full
+duration. So the correct claim is **"no documented mechanism pays more near
+kickoff"**, not "proven identical per second".
+
+**What the live payload shows** (three markets at T-0.0h, T-5.6h, T-7.9h,
+2026-08-23T02:10Z) -- identical regardless of distance from kickoff:
+
+```
+period=live    pool=100.0  target=5000.0  discount=0.5
+period=day_of  pool= 35.0  target=5000.0  discount=0.5
+starts_at=2026-07-21T02:00:00Z   ends_at=None
+```
+
+Two things fall out. The pool, target and discount **do not vary with time to
+kickoff** -- a market 7.9 hours out advertises the same $35 day_of pool as one
+at kickoff. And `starts_at` is a **program-level date from a month ago** with
+`ends_at=None`: the venue publishes no per-market period window at all, which
+is why `project_order_reward` derives it as `event_start - 6h -> event_start`
+from the documented definition rather than reading it.
+
+### The empirical check is impossible retroactively, and that is its own finding
+
+The decisive test -- resting time bucketed by distance from kickoff against
+realised reward, over the 6h era -- **cannot be run.** Kickoff times for every
+past market are gone:
+
+```
+slug date    markets traded   still in catalog   coverage
+2026-08-14              32                  0         0%
+2026-08-15              88                  0         0%
+   ...
+2026-08-22             148                  0         0%
+2026-08-23              11                 10        91%
+```
+
+The venue's catalog holds only current and future markets, and **the ledger
+never records `game_start`**. So every question of the form "how did
+time-to-kickoff affect this" is unanswerable after the fact. That is why the
+2026-08-16 snapshot was a snapshot: it was the only form the measurement could
+take, and it is still the only form available today.
+
+**Fix this before running the A/B.** Recording `game_start` on the ledger when a
+market is bound is a small, safe change, and without it the A/B can only compare
+daily totals -- it will not be able to say *where* the reward came from, which
+is the actual question. Twice now a selection rule has been argued from a single
+snapshot because nothing durable was being written down.
+
+### Standing answer to "are 6h and 2h equally paid"
+
+**Per second of resting, the venue documents no difference.** Same pool, same
+target, same discount, equal snapshot weighting, no ramp.
+
+**Per second of resting, what we RECEIVE may still differ**, because payout is
+share-based and competition is not documented and has never been measured by us.
+That is the one live unknown, and it is the thing the A/B has to answer.

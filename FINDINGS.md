@@ -3571,3 +3571,56 @@ this is the same trap with a different counter.
 **The measurement to build, if this comes up again.** A per-sweep record of
 `drop_cause` by market and side. Everything above took ~35 venue calls and two
 throwaway scripts to establish, and it would have been one grep.
+
+### Correction, same night: the cause above is WITHDRAWN, and the real number is worse
+
+Written 2026-08-23T01:00Z, against the section immediately above.
+
+That section named `reward_ineligible` as the dominant reason bound slots sat
+idle. **Measured properly, that is wrong.** Replicating the runner's own gates
+in order, against live books, for all 19 bound markets at 00:48-00:52Z:
+
+```
+applicable period      day_of for 19/19
+reward score at the price it would actually rest at
+                       32/38 sides ELIGIBLE (6 more eligible but under the
+                       0.10 price floor)
+stressed exit          38/38 complete, worst -7.30 against the 8.00 cap
+worst-loss budget      nowhere near 90 / 340
+```
+
+So the economics are not refusing these markets, and the WATCHLIST-9 depth
+mechanism is not what was holding the slots.
+
+**But the replication is also wrong, and that is the finding.** It predicts ~32
+resting sides. Reconstructing concurrent working orders from the ledger, the
+bot's actual peak across the whole of 2026-08-22 was **11 orders**, with a
+typical 4-9:
+
+```
+17:40-21:20    8-11 orders    the day's best stretch
+21:30-23:50    2-5
+00:00-00:20    0              slate rotation
+00:30-00:50    1 -> 2         recovering
+```
+
+A replication that over-predicts by 3x against the bot's own best hour is
+missing a gate, so **neither number can be used as evidence of a fault** --
+which is exactly the mistake this correction is undoing. The 0-2 stretch after
+00:00 is a decline into the overnight ITF slate plus a rotation trough, with
+the same recovery shape the 16:00 and 19:00 rotations show.
+
+**What is actually established, and it is not about tonight.** The bot rests
+orders in at most half its twenty slots even at its best, and usually a third.
+That is not new, not caused by rotation, and not a fault anywhere -- no stop,
+no unresolved intent, no absent order, nothing retired that should not be.
+Reward is paid for resting, so this is the standing gap worth measuring:
+**where do the other ten slots go, on an ordinary healthy hour?**
+
+**Method note.** Three candidate causes were proposed and killed by measurement
+in one session -- reward depth, period selection, and a WebSocket collapse (the
+`book_stale` rate per market is flat at 1.0-2.0/min all session, identical
+across the rotation and across the hours the bot WAS placing 45-90 orders/hr).
+Each was plausible from the code and none survived contact with the ledger.
+The per-sweep `drop_cause` record proposed above would have settled all three
+in one grep, and is now the first thing to build.

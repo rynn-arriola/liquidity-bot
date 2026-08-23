@@ -3610,12 +3610,19 @@ which is exactly the mistake this correction is undoing. The 0-2 stretch after
 00:00 is a decline into the overnight ITF slate plus a rotation trough, with
 the same recovery shape the 16:00 and 19:00 rotations show.
 
-**What is actually established, and it is not about tonight.** The bot rests
-orders in at most half its twenty slots even at its best, and usually a third.
-That is not new, not caused by rotation, and not a fault anywhere -- no stop,
-no unresolved intent, no absent order, nothing retired that should not be.
-Reward is paid for resting, so this is the standing gap worth measuring:
-**where do the other ten slots go, on an ordinary healthy hour?**
+**What is actually established, and it is not about tonight.** Nothing is
+faulted -- no stop, no unresolved intent, no absent order, nothing retired that
+should not be.
+
+> **RETRACTED the same night.** This paragraph originally read "the bot rests
+> orders in at most half its twenty slots even at its best, and usually a
+> third... the standing gap worth measuring". That divides by **20 slots**, the
+> denominator `WATCHLIST.md` item 3 forbids in writing ("compare against
+> candidate count, not against 20, or you will repeat the mistake of reading
+> availability as starvation") and that the method note above already warns
+> dominates the answer. Measured span-weighted per day the bot runs at
+> 46.9-71.8%, and 2026-08-22 is 53.8% -- ordinary. See "Resting fraction: the
+> 85.6% is a filtered statistic" below for the measurement that replaces this.
 
 **Method note.** Three candidate causes were proposed and killed by measurement
 in one session -- reward depth, period selection, and a WebSocket collapse (the
@@ -3624,3 +3631,109 @@ across the rotation and across the hours the bot WAS placing 45-90 orders/hr).
 Each was plausible from the code and none survived contact with the ledger.
 The per-sweep `drop_cause` record proposed above would have settled all three
 in one grep, and is now the first thing to build.
+
+---
+
+## Resting fraction: the 85.6% is a filtered statistic, the real number is ~54%, and it does not predict reward
+
+Measured 2026-08-23T01:15Z, after three consecutive wrong conclusions in one
+session about slot occupancy. This entry exists so the fourth one does not
+happen.
+
+### What I got wrong, and what caught it
+
+I measured time-weighted slot occupancy at **16% of 20 slots** and called it
+"the standing problem". `WATCHLIST.md` item 3 already forbids that number in
+writing:
+
+> Note a genuine dip is expected overnight when fewer games exist; **compare
+> against candidate count, not against 20, or you will repeat the mistake of
+> reading availability as starvation.**
+
+And `FINDINGS` already recorded the general form:
+
+> **Denominator choice dominated the answer:** the same data reads 30% or 63%
+> depending on it, and 30% would have justified work that 63% does not.
+
+Both were in the repo before I started. Reading them first would have saved
+about eighty venue calls.
+
+### The measurement that stands
+
+Span-weighted: total resting time over total bound time, every side weighted by
+its own span, **non-overlapping UTC days**. No coverage cutoff -- the cutoff is
+what produces the artifact below.
+
+```
+UTC day         rest   sides  markets  side-hrs   reward
+2026-08-14     15.3%      68       46      76.2     5.48
+2026-08-15     71.8%     182      106     334.9    28.46
+2026-08-16     53.6%     185      104     305.4    22.39
+2026-08-17     46.9%     348      193     442.9    34.60   <- BEST reward day
+2026-08-18     63.1%     271      149     273.1    14.60
+2026-08-19     64.2%     228      128     236.0    15.13   churn fix deployed
+2026-08-20     67.4%     156       82     148.8    22.21   size 5 -> 10
+2026-08-21     59.7%     283      154     215.4    29.54   (28.43 still PENDING)
+2026-08-22     53.8%     264      154     264.5    not posted
+```
+
+**Two things fall out, and both matter.**
+
+### 1. `85.6%` is not the bot's resting fraction
+
+`CLAUDE.md` and `NEXT.md` both carry 85.6% (and 84.7% "confirmed over a full
+session") as the post-2026-08-19 state. Those came from
+`resting_fraction.py --coverage 0.8` over 3h41m and 5h29m windows. That flag
+keeps only sides whose market was bound for >=80% of the window -- and a market
+bound that long is, by construction, one that kept quoting. Markets that bound,
+failed to quote, and rotated out are **excluded from the average**.
+
+The filter is not wrong for its purpose; treating its output as "the share of
+time the bot rests" is. Measured span-weighted over the same period, 08-19 reads
+**64.2%**, and the churn fix moved the daily number 63.1% -> 64.2% -> 67.4% --
+a real but modest gain, well inside the 46.9-71.8% day-to-day range.
+
+Confirming this: at coverage 0.8 over tonight's 372-minute window, **all 49
+sides are excluded** and the script prints no mean at all, because nothing stays
+bound for 80% of six hours when markets rotate every ~90 minutes. The 85.6%
+was only computable because that window was short enough.
+
+### 2. Resting fraction does not predict daily reward
+
+Across eight bot-era days the relationship is absent, and where it appears it
+runs the wrong way:
+
+- **best reward day (08-17, $34.60) had the LOWEST resting fraction** of any
+  mature day, 46.9%
+- highest resting fraction (08-20, 67.4%) earned $22.21
+- 08-18 and 08-19 rest 63-64% and earn 14.60 / 15.13; 08-20 and 08-21 rest
+  67% / 60% and earn 22.21 / 29.54
+
+Reward per resting hour swings 2.7x (0.085 to 0.230 $/hr) with no visible
+relation to the fraction. That is expected once stated: reward is
+`your_score / total_score x pool`, so resting longer earns nothing extra when
+the pool is small or the competition is deep -- which is the same depth
+mechanism WATCHLIST 9 measured.
+
+**This bears directly on `NEXT.md` item 00b**, which calls resting fraction
+"the largest continuous drag on earnings". That claim was made before any
+outcome data existed. It is now measurable and **not supported**: eight days of
+paired resting/reward show no relationship.
+
+**Bounds on the claim, deliberately kept.** Eight days, one partial, with
+confounds (08-20 changed size mid-day; slates and pool sizes differ daily).
+This is enough to retire "resting fraction is the binding constraint" as an
+assumption. It is **not** enough to conclude resting time does not matter --
+only that it is not what separates a $15 day from a $35 one.
+
+**The measurement that would settle it:** reward per market-hour-of-resting,
+bucketed by pool size and by depth at the touch. If that is flat, resting is
+genuinely not the lever and selection is. `scripts/rewards_report.py` gives the
+numerator per market; the span data above gives the denominator.
+
+### Tonight, for the record
+
+2026-08-22 reads 53.8%, squarely inside the range every day since 08-15 has
+run at. Nothing broke tonight. The 0-2 resting orders after the 00:00Z
+rotation is an overnight slate plus a rotation trough, and 08-23 is 2.5
+side-hours of data -- too little to read at all.

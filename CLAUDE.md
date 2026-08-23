@@ -9,7 +9,16 @@ Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
 - **Bot is RUNNING** and healthy: rotation unblocked, no risk stops, resting
-  fraction **85.6%** (was 57.3% before the 2026-08-19 churn fix).
+  fraction **~54%** span-weighted over a full UTC day (2026-08-22).
+  The **85.6%** this block used to carry is a *different statistic* --
+  `resting_fraction.py --coverage 0.8` over a 3h41m window, which keeps only
+  sides whose market stayed bound for 80% of it and so silently excludes every
+  market that bound, failed to quote, and rotated out. Measured span-weighted
+  over full days the bot has run at **46.9-71.8% every day since 08-15**, and
+  the churn fix moved it 63.1% -> 64.2% -> 67.4%, not 57% -> 86%.
+  **Reward does not track this number** -- the best reward day (08-17, $34.60)
+  had the lowest resting fraction of any mature day. See FINDINGS, "Resting
+  fraction: the 85.6% is a filtered statistic".
 - **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
   against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
   dashboard is account-wide since inception and is dominated by pre-bot

@@ -4287,3 +4287,40 @@ which is the same `drop_cause` logging this file has now asked for three times.
 the 2026-08-19 fix, which addressed `expected_net_not_positive`. This is a
 DIFFERENT cancel reason with the same shape, and it was not covered by that fix
 or by any measurement since.
+
+### The instrument is live as of 2026-08-23T02:45Z
+
+`[eligibility]` now logs every change in a side's reason-to-quote, with how
+long the previous state held. Deployed in `e8c23ff`. First lines, three minutes
+after the restart:
+
+```
+market=aec-ufc-anther-grerod  side=offer  eligible -> outside_reward_cutoff  held=64.6s
+market=aec-ufc-anther-grerod  side=offer  outside_reward_cutoff -> eligible  held=40.1s
+market=aec-setkameua-khadmy-smyvas side=offer eligible -> target_not_met     held=109.2s
+```
+
+**This is the oscillation, measured rather than inferred.** The UFC market held
+eligible for 64.6s, went ineligible for 40.1s, and came back -- at an unchanged
+price, moved only by other makers' depth. The 40.1s spell is inside the 90s
+`reward_eligibility_dwell_seconds` and correctly did NOT cause a cancel; the
+109.2s spell would have.
+
+**To choose the fix, collect a few hours and take the distribution of INELIGIBLE
+spell durations** -- the `held` value on any `-> eligible` transition:
+
+```bash
+grep -a '\[eligibility\]' logs/commissioning.log | grep 'to=eligible' \
+  | grep -oE 'from=[a-z_]+|held=[0-9.]+' | paste - -
+```
+
+- If most spells are well under 90s, the dwell is already doing its job and the
+  451 cancels come from a minority of long spells -- raise the dwell.
+- If most exceed 90s, raising it chases the tail forever and the same-price
+  suppression (option 3) is the real fix.
+- Splitting by `from=` also separates `outside_reward_cutoff` (competitors took
+  the cutoff past our price) from `target_not_met` (the book thinned below
+  target), which are different problems wearing one cancel reason.
+
+Do not decide before the data exists. Five hypotheses died by measurement in
+the session that produced this entry.

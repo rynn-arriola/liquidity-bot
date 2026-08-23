@@ -86,7 +86,8 @@ could make the decision gate stale. `_consume_ready_stream_tasks` now applies
 the held result first, drains the complete finite backlog in order, and runs
 both when the loop wakes and immediately after REST service. Market books drain
 as latest-per-slug snapshots; private mutations retain wire order. Two new
-regressions bring the full local suite to **508 passing**. The bot was stopped
+regressions bring the full suite to **508 passing locally and on the droplet**
+(40.514 seconds on the production virtual environment). The bot was stopped
 flat at 2026-08-23T04:10:48Z before editing; a brief pre-review restart sent no
 orders and was also stopped flat. It is currently stopped, and the final
 repaired scheduling behavior has not yet been observed after restart.

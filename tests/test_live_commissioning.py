@@ -481,14 +481,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._bind_markets(slugs)
         planned: list[str] = []
         reconciles: list[datetime] = []
+        reconcile_scopes: list[frozenset[str] | None] = []
 
         async def decide(slug, now):
             planned.append(slug)
             moment[0] += timedelta(seconds=2)
             return None, 0.0
 
-        async def reconcile(now):
+        async def reconcile(now, *, strict_order_markets=None):
             reconciles.append(now)
+            reconcile_scopes.append(strict_order_markets)
             runner.gate.on_rest_reconciled(moment[0])
 
         with patch.object(runner, "_decide_for_market", side_effect=decide), \
@@ -501,6 +503,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(outcome)
         self.assertEqual(planned, list(slugs))
         self.assertEqual(reconciles, [NOW + timedelta(seconds=26)])
+        self.assertEqual(reconcile_scopes, [frozenset()])
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -516,6 +519,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             await runner._refresh_execution_state_for_decision(
                 NOW + timedelta(seconds=25))
             reconcile.assert_awaited_once()
+            self.assertEqual(
+                reconcile.await_args.kwargs["strict_order_markets"],
+                frozenset(),
+            )
 
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -1587,9 +1594,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # positive presence in the complete open-order snapshot keeps it
         # known and working, and must not block market-one's quarantine.
         original_retrieve = client.orders.retrieve
+        other_market_reads = 0
 
         async def other_market_not_found(order_id):
+            nonlocal other_market_reads
             if order_id == "order-two":
+                other_market_reads += 1
                 raise AdapterError(
                     f"GET /v1/order/{order_id} failed: NotFoundError")
             return await original_retrieve(order_id)
@@ -1602,8 +1612,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         cancelled = [str(call) for call in client.orders.cancel_calls]
         self.assertTrue(any("order-one" in call for call in cancelled))
         self.assertFalse(any("order-two" in call for call in cancelled))
+        self.assertEqual(
+            other_market_reads, 0,
+            "scoped recovery must not spend time reading another market")
 
-    async def test_quarantine_can_cancel_from_snapshot_when_first_id_read_lags(self):
+    async def test_quarantine_uses_snapshot_before_target_terminal_read(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         runner._bind_markets(("market-one",))
         runner.ledger.prepare_intent(
@@ -1629,15 +1642,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         original_retrieve = client.orders.retrieve
         reads = 0
 
-        async def first_read_not_found(order_id):
+        async def count_terminal_read(order_id):
             nonlocal reads
             reads += 1
-            if reads == 1:
-                raise AdapterError(
-                    f"GET /v1/order/{order_id} failed: NotFoundError")
             return await original_retrieve(order_id)
 
-        client.orders.retrieve = first_read_not_found
+        client.orders.retrieve = count_terminal_read
         runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
 
         await runner._quarantine_working_orders("market-one")
@@ -1645,6 +1655,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(
             order_id == "lag-order"
             for order_id, _payload in client.orders.cancel_calls))
+        self.assertEqual(
+            reads, 1,
+            "the observational pass uses the snapshot; only terminal proof "
+            "reads the target id")
         self.assertFalse(runner.ledger.unresolved_intents("market-one"))
         self.assertFalse(runner.ledger.working_orders("market-one"))
 
@@ -1691,6 +1705,25 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             order_id == "known-order"
             for order_id, _payload in client.orders.cancel_calls))
         self.assertFalse(runner.ledger.working_orders("market-two"))
+
+    async def test_unresolved_background_reconcile_rotates_one_market_at_a_time(self):
+        runner, _, _ = self.build_runner()
+        rows = [
+            {"market_slug": "market-two"},
+            {"market_slug": "market-one"},
+            {"market_slug": "market-two"},
+        ]
+
+        scopes = [
+            runner._next_unresolved_reconcile_scope(rows)
+            for _ in range(3)
+        ]
+
+        self.assertEqual(scopes, [
+            frozenset({"market-one"}),
+            frozenset({"market-two"}),
+            frozenset({"market-one"}),
+        ])
 
     async def test_recovery_loads_a_market_whose_game_already_started(self):
         """A leftover order does not stop being ours because the game began.
@@ -3893,9 +3926,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         client.orders.cancel = accepted_but_not_terminal
         client.orders.list = active_orders
         original_retrieve = client.orders.retrieve
+        lagged_reads = 0
 
         async def retrieve_with_consistency_lag(order_id):
+            nonlocal lagged_reads
             if order_id in hidden:
+                lagged_reads += 1
                 raise AdapterError(
                     f"GET /v1/order/{order_id} failed: NotFoundError")
             return await original_retrieve(order_id)
@@ -3913,6 +3949,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._frame(runner._now(), "market-two").state_known)
         self.assertTrue(runner.gate.session_ready(
             runner.ledger, now=runner._now()))
+        self.assertEqual(
+            lagged_reads, 0,
+            "private recovery must scope the owner without waiting on its id")
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

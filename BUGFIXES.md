@@ -63,10 +63,12 @@ obtains complete REST order/position snapshots, reconnects the private stream,
 and resumes unaffected markets after fresh private state. Unresolved intents,
 `UNKNOWN_ABSENT` rows, and attributed GET failures continue to close only their
 own market's execution-state gate until positive terminal proof arrives.
-Single-market quarantine is strict for its requested market but tolerates
-attributed read failures in other markets. Default/global reconciliation stays
-strict, and unattributable or conflicting ownership always remains
-account-wide fail-closed. Absence is still never cancellation.
+Single-market quarantine is strict for its requested market but does not issue
+individual reads, absent repairs, or uncertain-cancel retries for other
+positively-attributed markets; complete account snapshots still update every
+market. Default/global reconciliation stays strict, and unattributable or
+conflicting ownership always remains account-wide fail-closed. Absence is still
+never cancellation.
 
 Genuine private reconnect failure is capped at 12 attempts. Exhaustion returns
 a runner failure; shutdown then preserves invariant 53: only a separately
@@ -83,7 +85,27 @@ exactly 12 attempts without claiming flat. Two final quarantine edge tests
 prove that a complete snapshot's positive OPEN evidence still licenses the
 cancel when the first ID read lags, and that one unresolved owner cannot stop
 known orders in later markets being canceled before terminal failure. Full
-local suite: **517 tests passing**. Deployment is pending final review.
+local suite: **517 tests passing**.
+
+The first deployment passed all 517 production tests in 38.286 seconds, then
+live acceptance found one incomplete part of the repair. At 21:53:55Z one
+market entered `execution_state_unknown`; `_rest_reconcile` correctly tolerated
+two unrelated read failures but did so only **after spending 20 seconds** on
+their GET retry ladders (`scoped_order_read_failures` at 21:54:15Z). Tolerating
+the result was not enough—the serial scheduler still paid the latency. The
+final local revision skips those unrelated individual reads entirely and logs
+`scoped_order_reads_skipped`; target terminal proof and account snapshots stay
+mandatory. Routine ten-second and mid-sweep freshness renewal now uses complete
+snapshots without individual order reads, and the background unresolved repair
+reads one owning market per pass in round-robin order. Thus a persistent 404
+cannot monopolize either shared freshness or the repair queue. The intermediate
+runner was stopped for this correction.
+
+The dedicated twenty-slot tests still prove all twenty slots are planned and
+both shared equity and execution-state freshness renew mid-sweep. Slot cap,
+selection, decision cadence, and economics are unchanged. Final deployment is
+pending another full-suite and live check. Final local suite: **518 tests
+passing in 28.727 seconds**, including round-robin unresolved-owner coverage.
 
 ---
 

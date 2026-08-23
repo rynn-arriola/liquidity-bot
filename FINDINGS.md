@@ -4562,10 +4562,23 @@ The established distinction is:
 The implemented repair follows that boundary. Private recovery restores the
 streams and lets the existing per-market gate contain ambiguous owners.
 Single-market quarantine requires readable/terminal proof for its target but
-does not wait on attributed NotFound IDs in other markets. The normal global
-REST reconcile remains strict. Twelve failed private reconnect attempts bound
-the dormant loop, but the cap never proves flat; restartability still comes
-only from the independent shutdown flat proof.
+does not issue individual reads for attributed IDs in other markets; complete
+account snapshots still cover the whole account. Normal global REST reconcile
+remains strict. Twelve failed private reconnect attempts bound the dormant
+loop, but the cap never proves flat; restartability still comes only from the
+independent shutdown flat proof.
+
+Live acceptance disproved an intermediate implementation. It fetched all IDs
+first and merely ignored unrelated failures afterward. At 21:53:55Z the target
+market entered recovery; only at 21:54:15Z did the log report two tolerated
+foreign failures. That 20-second gap still paused the serial runner. Scoping a
+failure result is not scoping work: unrelated GETs, absent repairs, and
+uncertain-cancel retries must not be performed on the scoped path at all.
+The same rule applies to the routine ten-second account freshness refresh and
+the mid-sweep 25-second renewal: complete snapshots renew visibility, while
+individual ambiguity stays behind its owner gate. Background terminal repair
+still performs GET-by-ID, but for one owning market per pass in round-robin
+order so a persistent 404 cannot starve the other owners or all twenty slots.
 
 ### How to recognize this exact failure next time
 
@@ -4588,8 +4601,9 @@ grep -a '\[action\]' logs/commissioning.log | tail -40
   since the current run start.
 - After this fix, look for `[private-recovery] ... resumed=yes
   scoped_ambiguous=N` and `[rest-reconcile] ...
-  scoped_order_read_failures=N markets=...`. Those lines mean visibility is
-  restored and only the named owners remain blocked.
+  scoped_order_reads_skipped=N markets=...`. Those lines mean unrelated
+  individual reads were actually deferred—not merely tolerated after their
+  latency—and only the named owners remain blocked.
 
 A concise prompt for another reviewer is: **“Review liquidity-bot twenty-slot
 liveness for account-wide head-of-line blocking. From the current run start,

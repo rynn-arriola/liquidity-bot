@@ -250,7 +250,10 @@ These are implementation requirements, not suggestions.
     position snapshots plus fresh private state. An unresolved intent,
     `UNKNOWN_ABSENT` row, or failed order read positively owned by one market
     keeps that market's execution gate closed until terminal proof; it does not
-    make unrelated owners unknown. Absence is never cancellation. Missing,
+    make unrelated owners unknown or require their individual reads on a
+    scoped/freshness pass. Terminal repair rotates one attributable owner per
+    pass; complete account snapshots remain mandatory. Absence is never
+    cancellation. Missing,
     conflicting, unowned, or out-of-scope ownership remains account-wide
     terminal. A bounded reconnect failure never proves flat: only shutdown's
     independent whole-account proof may authorize restartable exit `5`.

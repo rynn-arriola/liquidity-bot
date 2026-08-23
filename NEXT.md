@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: bot stopped; scoped private/order recovery verified locally; deploy next
+## CURRENT: intermediate deploy stopped; remove remaining scoped-read latency, then redeploy
 
 At **2026-08-23T21:00:01Z** the private stream disconnected. The deployed
 runner eventually recovered itself after attempt 35 and resumed placements at
@@ -10,7 +10,7 @@ resumed placements then hit GET-by-ID NotFound consistency lag; per-market
 again stopped useful scheduler progress. This is an availability failure, not
 proof that any ambiguous order was terminal.
 
-The local fix restores private visibility after complete REST account
+The fix restores private visibility after complete REST account
 snapshots and fresh private state while leaving each ambiguous owner behind its
 existing per-market gate. Single-market quarantine no longer waits on
 positively-attributed read failures in other markets. Global/default reconcile,
@@ -30,7 +30,10 @@ Verification completed locally:
 4. two final edge tests prove snapshot-positive OPEN orders are still canceled
    when the first ID read lags, and later known markets are canceled before a
    global quarantine reports an earlier ambiguous owner;
-5. full suite: **517 tests passing in 29.886 seconds**.
+5. full suite: **517 tests passing in 29.886 seconds**;
+6. the dedicated twenty-slot regressions still pass: all twenty slots plan,
+   equity refreshes mid-sweep, and execution state refreshes mid-sweep. The
+   configured cap and all selection/strategy inputs are unchanged.
 
 The supervisor was stopped and SIGTERM sent before deployment. Shutdown waited
 for a real 0.0600 partial fill and its unresolved order rather than claiming
@@ -38,6 +41,25 @@ flat; venue reconciliation cleared both, and the runner stopped with
 `flat: true` at **2026-08-23T21:47:28Z**. Next: final diff review, commit and
 push, deploy source/tests/docs, run all tests on the droplet, restart, and
 verify the new scoped-recovery log markers and broad action progress.
+
+The first deployment of source `fe2e813` matched local hashes and passed all
+517 production tests in 38.286 seconds. An accidentally-run probe then caused
+Cloudflare Error 1015 at 21:51:55Z; the supervisor restarted safely and the new
+runner placed 12 orders across six markets with zero positions and zero absent
+orders. That probe failure is external and separate from the code defect.
+
+The live run then found a real remaining latency edge: at 21:53:55Z one market
+entered `execution_state_unknown`, and the new scoped path did not report its
+two unrelated tolerated order failures until 21:54:15Z. It still performed the
+foreign GET retry ladders before ignoring their results, pausing the serial
+scheduler for 20 seconds. The final revision skips unrelated individual order
+reads, absent repairs, and uncertain-cancel retries entirely while retaining
+complete account snapshots and strict target proof. Routine/mid-sweep freshness
+uses snapshots without individual reads, and unresolved terminal repair rotates
+one owner per pass so no permanent 404 monopolizes the queue. The intermediate
+runner was stopped gracefully. Focused recovery and twenty-slot tests pass, and
+the full local suite passes **518 tests in 28.727 seconds**. Commit, push, run
+the production suite, deploy a new source marker, restart, and verify live.
 
 ---
 

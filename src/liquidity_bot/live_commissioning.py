@@ -306,6 +306,10 @@ class CommissioningRunner:
         # Recovery delay belongs to the market that requested it. The old
         # sweep let one unhealthy slot pause the other nineteen.
         self._next_decision_at: dict[str, datetime] = {}
+        # Resolve one attributable market per background pass, round-robin.
+        # Asking every unresolved id serially before decisions recreated the
+        # same twenty-slot head-of-line stall the per-market scheduler removed.
+        self._unresolved_reconcile_cursor = 0
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -800,7 +804,9 @@ class CommissioningRunner:
         self._bot_era_rewards = bot_era_rewards_by_status(rows_all)
         self._earnings_observed_at = now
 
-    async def _retry_uncertain_cancels(self, now: datetime) -> None:
+    async def _retry_uncertain_cancels(
+        self, now: datetime, *, markets: frozenset[str] | None = None,
+    ) -> None:
         """Re-issue a cancel the venue has just confirmed did not land.
 
         `cancel` moves its intent to `UNCERTAIN` when the request fails, and a
@@ -838,6 +844,9 @@ class CommissioningRunner:
             if not exchange_id:
                 continue
             seen.add(exchange_id)
+            if (markets is not None
+                    and str(row["market_slug"]) not in markets):
+                continue
             if not self.ledger.order_is_active(exchange_id):
                 continue
             last = self._cancel_retried_at.get(exchange_id)
@@ -875,14 +884,15 @@ class CommissioningRunner:
         which the ledger correctly rejects as a replay -- so a caller that may
         run alongside another at the same instant passes its own tag.
 
-        By default, failure to retrieve any owned live/ambiguous order fails
-        the reconcile. A recovery already scoped to particular markets may
-        pass those markets in ``strict_order_markets``. Retrieval failures in
-        other positively-attributed markets are then recorded and left behind
-        their per-market gates while the complete account snapshots still let
-        the requested recovery proceed. An empty set is the private-stream
-        form: reconnect visibility account-wide, but keep every ambiguous
-        owner dormant. An unattributable failure is always strict.
+        By default, every owned live/ambiguous order is retrieved and any
+        failure fails the reconcile. A recovery already scoped to particular
+        markets may pass those markets in ``strict_order_markets``. Individual
+        reads and absent-order repairs for other positively-attributed markets
+        are deferred to their own recovery/normal sweep; complete account
+        snapshots still update them, and their per-market gates remain closed
+        if ambiguity survives. An empty set is the private-stream form:
+        reconnect visibility account-wide, but keep every ambiguous owner
+        dormant. An unattributable order is always read strictly.
         """
 
         # First ask for terminal state on every bot-owned working order. A
@@ -916,7 +926,16 @@ class CommissioningRunner:
         # per-market gate remains closed. Either way, one unreadable order no
         # longer hides every other order's answer or the complete snapshots.
         reconcile_failures: list[tuple[str, str]] = []
+        skipped_order_ids: set[str] = set()
+        skipped_order_markets: set[str] = set()
         for exchange_id in sorted(exchange_ids):
+            markets = exchange_markets.get(exchange_id, set())
+            if strict_order_markets is not None and len(markets) == 1:
+                market = next(iter(markets))
+                if market not in strict_order_markets:
+                    skipped_order_ids.add(exchange_id)
+                    skipped_order_markets.add(market)
+                    continue
             try:
                 await self.executor.reconcile_order(
                     exchange_id, observed_at=now)
@@ -934,9 +953,9 @@ class CommissioningRunner:
         # written the venue's current word on every readable order, which is
         # the only thing that licenses re-issuing a cancel -- and an unreadable
         # order in some other market must not postpone repairing this one.
-        await self._retry_uncertain_cancels(now)
+        await self._retry_uncertain_cancels(
+            now, markets=strict_order_markets)
         blocking_reconcile_failures: list[tuple[str, str]] = []
-        tolerated_failure_markets: set[str] = set()
         for exchange_id, detail in reconcile_failures:
             markets = exchange_markets.get(exchange_id, set())
             # More than one owner is a ledger conflict, and no owner means the
@@ -948,8 +967,6 @@ class CommissioningRunner:
             if (strict_order_markets is None
                     or market in strict_order_markets):
                 blocking_reconcile_failures.append((exchange_id, detail))
-            else:
-                tolerated_failure_markets.add(market)
         # Then the orders we have already lost sight of. These are in neither
         # set above -- `UNKNOWN_ABSENT` is not a working state and their
         # intents are long since RECONCILED -- so before this nothing ever
@@ -968,6 +985,9 @@ class CommissioningRunner:
             if not exchange_id or exchange_id in exchange_ids:
                 continue
             absent_ids.add(exchange_id)
+            if (strict_order_markets is not None
+                    and str(row["market_slug"]) not in strict_order_markets):
+                continue
             # Throttled, unlike the strict sweep above. `_rest_reconcile` runs
             # on every service cycle and every bind, and `retrieve` answers a
             # 404 by retrying four times with 0.5/1/2s backoff -- so an order
@@ -1059,11 +1079,11 @@ class CommissioningRunner:
                 + "; ".join(
                     f"{exchange_id}: {detail}"
                     for exchange_id, detail in blocking_reconcile_failures))
-        if tolerated_failure_markets:
+        if skipped_order_ids:
             print(
                 f"[rest-reconcile] at={self._now().isoformat()} "
-                f"scoped_order_read_failures={len(reconcile_failures)} "
-                f"markets={','.join(sorted(tolerated_failure_markets))}",
+                f"scoped_order_reads_skipped={len(skipped_order_ids)} "
+                f"markets={','.join(sorted(skipped_order_markets))}",
                 flush=True,
             )
         # Freshness begins when the multi-call reconciliation has completed,
@@ -1935,7 +1955,8 @@ class CommissioningRunner:
                 self.gate.last_reconcile_at,
             ) if at is not None)
         if not observations:
-            await self._rest_reconcile(now)
+            await self._rest_reconcile(
+                now, strict_order_markets=frozenset())
             return
         age = (now - max(observations)).total_seconds()
         refresh_at = max(
@@ -1944,7 +1965,8 @@ class CommissioningRunner:
             - DECISION_STATE_REFRESH_MARGIN_SECONDS,
         )
         if age < 0 or age >= refresh_at:
-            await self._rest_reconcile(now)
+            await self._rest_reconcile(
+                now, strict_order_markets=frozenset())
 
     def _session_realized(self) -> Decimal:
         """Session P&L from settled cash, falling back to the fill ledger.
@@ -2194,6 +2216,25 @@ class CommissioningRunner:
             return None
         oldest = min(datetime.fromisoformat(row["updated_at"]) for row in rows)
         return (now - oldest).total_seconds()
+
+    def _next_unresolved_reconcile_scope(
+        self, rows: list[Any] | None = None,
+    ) -> frozenset[str] | None:
+        """Choose one attributable owner, round-robin; None means unscoped."""
+
+        unresolved = rows if rows is not None else self.ledger.unresolved_intents()
+        if any(not str(row["market_slug"] or "").strip()
+               for row in unresolved):
+            return None
+        markets = sorted({
+            str(row["market_slug"]) for row in unresolved
+            if str(row["market_slug"] or "").strip()
+        })
+        if not markets:
+            return frozenset()
+        market = markets[self._unresolved_reconcile_cursor % len(markets)]
+        self._unresolved_reconcile_cursor += 1
+        return frozenset({market})
 
     def _quiet_book_needs_rest_refresh(self, now: datetime) -> bool:
         if self.book_observed_at is None:
@@ -4619,7 +4660,13 @@ class CommissioningRunner:
                     next_balance = now + timedelta(seconds=5)
                 if now >= next_state_reconcile:
                     try:
-                        await self._rest_reconcile(now)
+                        # Fresh complete snapshots renew account visibility.
+                        # Individual ambiguity stays behind its market gate and
+                        # is repaired one owner at a time below; reading every
+                        # id here made the ten-second freshness task itself a
+                        # twenty-slot head-of-line blocker.
+                        await self._rest_reconcile(
+                            now, strict_order_markets=frozenset())
                     except Exception:
                         # Preserve the last proven state briefly. If both the
                         # private stream and REST remain quiet/unavailable, the
@@ -4737,8 +4784,16 @@ class CommissioningRunner:
                     continue
                 if self.ledger.unresolved_intents():
                     if now >= next_reconcile:
+                        unresolved_rows = self.ledger.unresolved_intents()
+                        # Unattributable ambiguity cannot be scoped. Otherwise
+                        # repair one owner per pass and advance even on failure,
+                        # so a persistent 404 cannot hide every market behind it.
+                        reconcile_scope = (
+                            self._next_unresolved_reconcile_scope(
+                                unresolved_rows))
                         try:
-                            await self._rest_reconcile(now)
+                            await self._rest_reconcile(
+                                now, strict_order_markets=reconcile_scope)
                         except Exception as exc:
                             # Ambiguous state remains quarantined. Equity and
                             # stream freshness independently force shutdown if
@@ -4758,7 +4813,7 @@ class CommissioningRunner:
                         else:
                             self._runtime_error_counts.pop(
                                 "unresolved_mutation_reconcile", None)
-                        next_reconcile = now + timedelta(seconds=2)
+                        next_reconcile = self._now() + timedelta(seconds=2)
                     now = self._now()
                     unresolved_age = self._oldest_unresolved_age_seconds(now)
                     if unresolved_age is not None:

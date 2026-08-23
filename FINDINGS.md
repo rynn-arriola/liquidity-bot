@@ -3820,3 +3820,96 @@ the price floor is eating the slate and the selector fix pays for itself twice.
 five at size 5, and daily reward swings $14-$35 at constant size. 1.89x is
 consistent with the rule; it is not yet independently established. 08-22 and
 08-23 posting will make it three days.
+
+---
+
+## The 6h -> 2h horizon halved market supply, and that -- not the price floor -- is where the resting hours went
+
+Measured 2026-08-23T01:35Z, from the `[selection]` counters already in the log.
+Prompted by the operator remembering the change; it is the correct explanation
+and it **withdraws the `minimum_entry_price` hypothesis** recorded an hour
+earlier in this file.
+
+`0b04c2b` "Stop selecting markets more than two hours from kickoff" narrowed
+`selection_horizon_seconds` 21600 -> 7200, landing **2026-08-17T02:27Z**. The
+effect on supply is large and immediate:
+
+```
+UTC day    scans   executable   viable      note
+2026-08-16    78          113       36      6h horizon
+2026-08-17   263           83       14      change lands 02:27Z
+2026-08-18   204           54        7
+2026-08-19   274           53        4
+2026-08-20   270           61        2
+2026-08-21   268           44        8
+2026-08-22   275           51       10
+```
+
+`executable` (in horizon, supported) fell **113 -> ~50**, close to the 2/6
+ratio the change implies. `viable` -- the count that actually maps to fillable
+slots -- fell **36 to single digits**.
+
+### This answers the question three separate investigations kept re-asking
+
+**Median viable is 2-10 against 20 slots.** The bot is not failing to fill its
+slots; on most days there is nothing to fill them with. Every "why is it only
+quoting three markets" alarm since 08-17, including the one that consumed this
+entire session, has this as its answer. `usable_markets.py` reports it live;
+the per-day series above is the thing to check first.
+
+### The price-floor hypothesis is withdrawn
+
+The entry above proposed `minimum_entry_price` (added 08-21) as the cause of
+the resting-hours drop, on a coincidence of dates. It does not survive: bound
+side-hours peak on **08-17** (442.9) and decline through 08-18 (273.1), 08-19
+(236.0) and 08-20 (148.8) -- **before** the floor existed -- then partially
+recover on 08-21 (215.4) and 08-22 (264.5), which is the wrong direction. The
+decline tracks the horizon change, not the floor.
+
+The `minimum_entry_price` selector gap in `BUGFIXES.md` is still a real defect;
+it is just not this one. Fourth hypothesis killed by measurement this session.
+
+### What the two changes did together
+
+```
+horizon 6h -> 2h   resting hours   187 -> 135 order-hours/day   (-28%)
+size    5  -> 10   reward rate     0.121 -> 0.230 $/rest-hr     (+89%)
+```
+
+They very nearly cancel on daily reward, which is why the size doubling looked
+like it did nothing. **It did not do nothing; it was offset.**
+
+### Open, and it is the live question
+
+The horizon change was argued on projected reward -- the 120+ minute bucket at
+a median 0.000022 against 0.000313 at 15-30 minutes -- and on distant slots
+carrying fill risk for no reward. It was a reasonable call on that evidence.
+**But it was made at size 5, before any outcome data existed, and it is now
+testable against realised reward rather than projections.**
+
+`selection_horizon_seconds` restores the old behaviour by config, not deploy.
+**Do not change it on this entry alone.** Widening buys resting hours in the
+window that was measured to pay least, and it buys fill risk with them -- and
+trading loss now runs about -0.045/pair at any size (below), so more resting in
+thin distant books could easily cost more than the reward it adds. The
+measurement that would settle it is reward and trading P&L bucketed by
+time-to-kickoff at size 10, which `scripts/resting_by_kickoff.py` already
+produces for the numerator.
+
+### Trading loss scales with size, cleanly
+
+```
+day        pairs   trading   per pair
+08-18        299    -12.33     -0.041
+08-19        188     -9.83     -0.052
+08-20        250    -11.08     -0.044
+08-21        796    -35.14     -0.044
+08-22        587    -27.40     -0.047
+```
+
+Per-pair loss is flat at about **-0.045 across both sizes**. The doubling did
+not make each trade worse; it made more of them. Combined with venue reward
+(PAID+PENDING), net by day: 08-18 +2.27, 08-19 +5.30, 08-20 +11.13,
+**08-21 -5.60** -- the first full day at size 10, and the first negative one.
+08-22 has not posted. One day is not a verdict, and 08-21 still carries $28.43
+PENDING, but this is the number `NEXT.md`'s rollback section exists to watch.

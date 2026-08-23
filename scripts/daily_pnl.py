@@ -88,15 +88,35 @@ def trading_by_day(db: str, since: str) -> tuple[dict, dict, int]:
     return pnl, pairs, unbalanced
 
 
-async def reward_by_day() -> dict:
+async def reward_by_day() -> tuple[dict, dict]:
+    """Returns (paid_by_day, pending_by_day).
+
+    Pending is returned, not discarded, because a day can post PARTIALLY -- and
+    a partially posted day is the one case where PAID alone is actively
+    misleading. Measured 2026-08-23: 2026-08-21 held $1.11 PAID against $28.43
+    PENDING, so netting the paid part against a full day of trading printed
+    `NET -34.03` for a day whose real figure was about -5.60. That is a $28
+    error in the direction that reads as a disaster, on the exact number
+    NEXT.md tells an operator to judge a size rollback by.
+
+    Invariant 22 still holds: pending never enters an accounted net. It only
+    decides whether a net may be printed at all.
+    """
+
     gateway = AsyncReadOnlyGateway(client_from_environment())
     rows = await gateway.fetch_earnings(program_type="liquidityProgram")
-    paid = defaultdict(Decimal)
+    paid: dict = defaultdict(Decimal)
+    pending: dict = defaultdict(Decimal)
     for row in rows:
-        if str(row.status).upper() != "PAID" or not is_bot_era(row.date):
+        if not is_bot_era(row.date):
             continue
-        paid[str(row.date)[:10]] += Decimal(str(row.reward))
-    return paid
+        status = str(row.status).upper()
+        day = str(row.date)[:10]
+        if status == "PAID":
+            paid[day] += Decimal(str(row.reward))
+        elif status == "PENDING":
+            pending[day] += Decimal(str(row.reward))
+    return paid, pending
 
 
 async def main() -> int:
@@ -106,7 +126,7 @@ async def main() -> int:
     args = parser.parse_args()
 
     pnl, pairs, unbalanced = trading_by_day(args.db, CLEAN_FROM)
-    paid = await reward_by_day()
+    paid, pending = await reward_by_day()
 
     today = datetime.now(timezone.utc).date()
     days = [(today - timedelta(days=n)).isoformat()
@@ -138,6 +158,17 @@ async def main() -> int:
             # that is missing its income side.
             print(f"{day:12} {float(pair_n):>7.0f} {trade_s} "
                   f"{'pending':>9} {'--':>9}  reward not posted yet")
+            continue
+        due = pending.get(day)
+        if due:
+            # PARTIALLY posted. The paid part is real but incomplete, so a net
+            # built from it understates income by whatever is still pending --
+            # which is most of the day when reward is one to two days behind.
+            # Show both parts and withhold the net, exactly as a fully
+            # unposted day does.
+            print(f"{day:12} {float(pair_n):>7.0f} {trade_s} "
+                  f"{float(reward):9.2f} {'--':>9}  "
+                  f"+{float(due):.2f} still PENDING, net withheld")
             continue
         if trade is None:
             print(f"{day:12} {float(pair_n):>7.0f} {trade_s} "

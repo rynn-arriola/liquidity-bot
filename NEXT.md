@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: intermediate deploy stopped; remove remaining scoped-read latency, then redeploy
+## CURRENT: scoped private/order recovery deployed and live-accepted
 
 At **2026-08-23T21:00:01Z** the private stream disconnected. The deployed
 runner eventually recovered itself after attempt 35 and resumed placements at
@@ -58,8 +58,17 @@ complete account snapshots and strict target proof. Routine/mid-sweep freshness
 uses snapshots without individual reads, and unresolved terminal repair rotates
 one owner per pass so no permanent 404 monopolizes the queue. The intermediate
 runner was stopped gracefully. Focused recovery and twenty-slot tests pass, and
-the full local suite passes **518 tests in 28.727 seconds**. Commit, push, run
-the production suite, deploy a new source marker, restart, and verify live.
+the full local suite passes **518 tests in 28.137 seconds**.
+
+Final source commit `501c743` matched all deployed hashes and passed all **518
+tests on the droplet in 37.105 seconds**. The intermediate runner reconciled
+the two remaining acknowledged cancels and stopped with `flat: true` at
+22:09:48Z. The final supervisor and runner started at 22:11:13Z/22:11:14Z.
+Live acceptance emitted `scoped_order_reads_skipped=8` at 22:12:07Z and then
+continued actions at 22:12:10Z, eliminating the measured 20-second foreign-ID
+pause. It rested 11 orders across the seven currently viable markets with zero
+positions. The configured 20-slot capacity and scheduling flow are unchanged;
+the current unused slots reflect only the seven-market viable supply.
 
 ---
 

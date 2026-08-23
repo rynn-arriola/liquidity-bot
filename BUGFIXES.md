@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
-### FIXED LOCALLY — private-stream recovery waited for every cancel, then unrelated order 404s serialized every market
+### FIXED AND DEPLOYED — private-stream recovery waited for every cancel, then unrelated order 404s serialized every market
 
 **Symptom.** The runner stayed alive but stopped trading after a private
 WebSocket disconnect at **21:00:01Z**. Recovery reached attempt 35 at
@@ -103,9 +103,16 @@ runner was stopped for this correction.
 
 The dedicated twenty-slot tests still prove all twenty slots are planned and
 both shared equity and execution-state freshness renew mid-sweep. Slot cap,
-selection, decision cadence, and economics are unchanged. Final deployment is
-pending another full-suite and live check. Final local suite: **518 tests
-passing in 28.727 seconds**, including round-robin unresolved-owner coverage.
+selection, decision cadence, and economics are unchanged. Final local suite:
+**518 tests passing in 28.137 seconds**, including round-robin unresolved-owner
+coverage. Source commit `501c743` matched all six deployed file hashes and all
+**518 production tests passed in 37.105 seconds**. The old runner first proved
+flat at 22:09:48Z; the final runner started at 22:11:14Z. Live acceptance saw
+`scoped_order_reads_skipped=8` at 22:12:07Z and new actions at 22:12:10Z, so
+the former 20-second foreign-ID pause is gone. The current slate had only seven
+economically viable markets; it rested 11 orders across all seven with zero
+positions. That is supply below the unchanged 20-slot capacity, not scheduler
+starvation.
 
 ---
 

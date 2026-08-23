@@ -4580,6 +4580,17 @@ individual ambiguity stays behind its owner gate. Background terminal repair
 still performs GET-by-ID, but for one owning market per pass in round-robin
 order so a persistent 404 cannot starve the other owners or all twenty slots.
 
+Final acceptance deployed source commit `501c743` after the prior runner proved
+flat at 22:09:48Z. All 518 production tests passed in 37.105 seconds. In the
+new run, `scoped_order_reads_skipped=8` was emitted at 22:12:07Z and the next
+action appeared at 22:12:10Z. The earlier implementation took 20 seconds just
+to report two tolerated foreign reads; the final implementation renewed the
+snapshot and continued the slate in about three seconds. At that observation
+the venue had only seven economically viable markets, and the bot rested 11
+orders across all seven with zero positions. Fewer than twenty active quoting
+markets in that state is exhausted viable supply, not evidence that the slot
+cap or scheduler regressed.
+
 ### How to recognize this exact failure next time
 
 Use the session start boundary and correlate these signatures:

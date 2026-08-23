@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
-### FIXED AND DEPLOYED — the 20-slot scheduler let shared freshness and one market's state starve the slate
+### FIXED — the 20-slot scheduler let shared freshness and one market's state starve the slate
 
 **Symptom.** Restoring the six-hour selection horizon produced abundant supply
 but almost no resting orders: 98 viable markets, 20 bound slots, 40 eligible
@@ -87,10 +87,27 @@ the held result first, drains the complete finite backlog in order, and runs
 both when the loop wakes and immediately after REST service. Market books drain
 as latest-per-slug snapshots; private mutations retain wire order. Two new
 regressions bring the full suite to **508 passing locally and on the droplet**
-(40.514 seconds on the production virtual environment). The bot was stopped
-flat at 2026-08-23T04:10:48Z before editing; a brief pre-review restart sent no
-orders and was also stopped flat. It is currently stopped, and the final
-repaired scheduling behavior has not yet been observed after restart.
+(40.514 seconds on the production virtual environment).
+
+The 2026-08-23T04:37:47Z live acceptance then proved the scheduler repair:
+**33 placements reached all twenty distinct markets** instead of the old four.
+At one snapshot, 26 orders were working across 16 markets with zero unresolved
+intents, absent/unknown orders, or positions. The run sent 37 orders before the
+operator stopped it flat at 04:45:13Z.
+
+That broader sweep exposed a final execution-state freshness edge. The private
+or REST proof is valid for 30 seconds, but serial service can now legitimately
+span that boundary. Live `execution_state_unknown` quarantines appeared at
+04:40:39Z, 04:42:00Z, 04:42:50Z, and 04:44:28Z. This was fail-closed and scoped
+to each owning market, but over time it could cancel otherwise healthy tail
+slots. The runner now refreshes account execution state at a five-second
+pre-expiry margin, stamps REST freshness when the multi-call response finishes,
+and makes at most one failed account-wide refresh attempt per sweep. A failed
+refresh never marks state fresh; the 30-second gate still refuses entries.
+
+Five new boundary/failure/slow-response/twenty-slot regressions bring the full
+local suite to **513 passing**. The bot remains stopped and flat while this
+last edge fix is deployed and server-tested.
 
 **Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
 quote size, exposure limits, and 90-second reward-eligibility dwell. The last

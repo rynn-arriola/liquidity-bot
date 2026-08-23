@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: final 20-slot scheduler fix is deployed and awaiting restart
+## CURRENT: deploy the final execution-state freshness edge, then restart
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,
@@ -9,23 +9,26 @@ and backoff isolation, decision-time equity freshness, truthful stream receipt
 times/book coalescing/private draining, selector gate parity, strict shutdown
 flat proof, and corrected slot reporting.
 
-The first implementation passed **506 tests locally and on the droplet**. A
-brief restart was stopped again at the operator's request before acceptance;
-it sent no orders and stopped flat. The final edge review then found and fixed
-the task-held stream-event window described in `BUGFIXES.md`. The expanded
-local suite now passes **508 tests**. The final source and regressions were
-deployed, and the production virtual environment also passed all **508 tests in
-40.514 seconds**. The bot remains stopped pending the restart below.
+The scheduler and task-held stream fixes passed **508 tests locally and on the
+droplet** (40.514 seconds). The 04:37:47Z live acceptance then placed 33 times
+across all twenty distinct markets and reached 26 working orders across 16,
+proving the original starvation repair. It also exposed a 30-second
+execution-state freshness expiry during the longer productive sweep. The final
+local patch refreshes at 25 seconds, stamps freshness at REST completion, and
+limits a failed account-wide refresh to one attempt per sweep while remaining
+fail-closed. The expanded local suite passes **513 tests**. The operator stopped
+the bot flat at **2026-08-23T04:45:13Z**; it remains stopped for deployment.
 
 Before restarting:
 
-1. update `DEPLOYED_COMMIT` to source commit `d3b52aa`;
-2. start once and verify all selected eligible slots receive decision/action
-   opportunities rather than placements concentrating in the first few;
-3. verify unresolved mutations and recovery delays leave unaffected markets
-   active;
-4. keep the first post-restart order/resting distribution as the live
-   acceptance evidence for the final commit.
+1. commit and deploy the execution-state refresh source and regressions;
+2. pass all 513 tests in the production virtual environment and update
+   `DEPLOYED_COMMIT` to that source commit;
+3. restart once and verify placements remain distributed across the slate;
+4. monitor beyond the prior seven-minute run and verify no new
+   `execution_state_unknown` quarantine occurs during healthy stream/REST
+   operation;
+5. retain unresolved/absent/position and process-health evidence.
 
 Do not combine the restart with a reward-eligibility dwell change. That policy
 remains under the explicit measurement rule in `WATCHLIST.md`.

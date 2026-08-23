@@ -97,6 +97,7 @@ MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 # Refresh before the risk guard's hard freshness edge. A twenty-market sweep
 # can itself take several seconds when individual books need REST recovery.
 DECISION_EQUITY_REFRESH_MARGIN_SECONDS = 5.0
+DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
 
 # Conditions that describe one market's inventory or exit, never the account.
 # The reconciler plans per market, so these are per-market verdicts: the right
@@ -1018,7 +1019,9 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
-        self.gate.on_rest_reconciled(now)
+        # Freshness begins when the multi-call reconciliation has completed,
+        # not when its first request entered the shared REST limiter.
+        self.gate.on_rest_reconciled(self._now())
 
     async def _observe_private(self, event: Any, now: datetime) -> None:
         received_at = getattr(event, "received_at", None) or now
@@ -1272,7 +1275,10 @@ class CommissioningRunner:
             and self._startup_recovery_is_scoped(report.blockers))
         if not report.ready and not recovery_only:
             raise CommissioningRefused("; ".join(report.blockers))
-        self.gate.on_rest_reconciled(now)
+        # The startup proof can span several paginated REST calls. Start its
+        # freshness window when that proof completed, just like periodic
+        # reconciliation, or a slow preflight can arrive at the loop stale.
+        self.gate.on_rest_reconciled(self._now())
         self.balance = await self.account.fetch_balance(observed_at=now)
         self.risk_guard = SessionRiskGuard(
             started_at=now,
@@ -1870,6 +1876,28 @@ class CommissioningRunner:
         )
         if age < 0 or age >= refresh_at:
             await self._refresh_balance(now)
+
+    async def _refresh_execution_state_for_decision(
+        self, now: datetime,
+    ) -> None:
+        """Reconcile before the private/session gate expires mid-sweep."""
+
+        observations = tuple(
+            at for at in (
+                self.gate.last_message_at,
+                self.gate.last_reconcile_at,
+            ) if at is not None)
+        if not observations:
+            await self._rest_reconcile(now)
+            return
+        age = (now - max(observations)).total_seconds()
+        refresh_at = max(
+            0.0,
+            self.gate.max_silence_seconds
+            - DECISION_STATE_REFRESH_MARGIN_SECONDS,
+        )
+        if age < 0 or age >= refresh_at:
+            await self._rest_reconcile(now)
 
     def _session_realized(self) -> Decimal:
         """Session P&L from settled cash, falling back to the fill ledger.
@@ -2523,6 +2551,7 @@ class CommissioningRunner:
     async def _decision_sweep(self) -> str | None:
         """Plan every due market without cross-slot intent/backoff blocking."""
 
+        state_refresh_failed = False
         for slug in self.active_slugs:
             if self.ledger.market_has_unresolved_intent(slug):
                 continue
@@ -2530,6 +2559,15 @@ class CommissioningRunner:
             due_at = self._next_decision_at.get(slug)
             if due_at is not None and now < due_at:
                 continue
+            if not state_refresh_failed:
+                try:
+                    await self._refresh_execution_state_for_decision(now)
+                except Exception:
+                    # Preserve the last observation until its 30-second bound;
+                    # once stale, the frame refuses new risk. Do not retry this
+                    # account-wide REST proof for every remaining market in the
+                    # same sweep; the outer loop will give it another chance.
+                    state_refresh_failed = True
             try:
                 await self._refresh_equity_for_decision(now)
             except Exception:

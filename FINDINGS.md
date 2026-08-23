@@ -4359,6 +4359,7 @@ is cross-slot scheduling around otherwise successful work.
 | Finding | Disposition |
 |---|---|
 | Serial service can expire 15-second equity before later decisions | Refresh at response receipt and within a five-second pre-expiry decision margin |
+| A full-slate sweep can expire the 30-second execution-state proof | Refresh REST state at 25 seconds, stamp response completion, and attempt a failed refresh only once per sweep |
 | One unresolved mutation pauses all twenty | Skip only its owning slug; unattributable state remains account-wide fail-closed |
 | One market's backoff sleeps the runner | Per-slug next-decision deadlines; no sweep sleep |
 | Queued books/private events are stamped fresh on dequeue | Socket receipt timestamps retained; full books coalesced per slug; the task-held event is applied first and both backlogs drain immediately after REST service |
@@ -4372,8 +4373,20 @@ The local regression suite contains a twenty-slot timing test: all twenty are
 planned, and the account equity observation refreshes at slot eleven rather
 than silently starving the tail. A separate boundary test proves events that
 arrive while REST service is running are applied before decisions, preserving
-private-event order and receipt time. Full suite after the final edge review:
-**508 tests passing**.
+private-event order and receipt time.
+
+The first repaired live run began at 04:37:47Z and placed on **all 20 distinct
+markets**: 33 initial placements versus the old history's four-market
+concentration. It reached 26 working orders across 16 markets with no unresolved
+intent, absent/unknown order, or position. That acceptance also revealed
+per-market `execution_state_unknown` quarantines once the now-productive serial
+sweep crossed the private gate's 30-second freshness edge (04:40:39Z,
+04:42:00Z, 04:42:50Z, 04:44:28Z). The condition was safe but reduced coverage
+progressively, so the decision loop now renews the proof at 25 seconds. If the
+renewal fails, it is attempted once—not once per remaining slot—and the stale
+gate continues refusing new risk. REST and startup proofs are timestamped at
+completion so slow responses do not begin partly expired. Full local suite
+after this final edge review: **513 tests passing**.
 
 ### Still open, deliberately not folded into this fix
 

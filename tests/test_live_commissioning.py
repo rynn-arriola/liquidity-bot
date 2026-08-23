@@ -472,6 +472,114 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_all_twenty_slots_refresh_execution_state_mid_sweep(self):
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
+        await runner.preflight()
+        slugs = tuple(f"market-{index}" for index in range(20))
+        runner._bind_markets(slugs)
+        planned: list[str] = []
+        reconciles: list[datetime] = []
+
+        async def decide(slug, now):
+            planned.append(slug)
+            moment[0] += timedelta(seconds=2)
+            return None, 0.0
+
+        async def reconcile(now):
+            reconciles.append(now)
+            runner.gate.on_rest_reconciled(moment[0])
+
+        with patch.object(runner, "_decide_for_market", side_effect=decide), \
+                patch.object(runner, "_rest_reconcile", side_effect=reconcile), \
+                patch.object(
+                    runner, "_refresh_equity_for_decision",
+                    new=AsyncMock()):
+            outcome = await runner._decision_sweep()
+
+        self.assertIsNone(outcome)
+        self.assertEqual(planned, list(slugs))
+        self.assertEqual(reconciles, [NOW + timedelta(seconds=26)])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_execution_state_refresh_uses_the_pre_expiry_boundary(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+
+        with patch.object(
+                runner, "_rest_reconcile", new=AsyncMock()) as reconcile:
+            await runner._refresh_execution_state_for_decision(
+                NOW + timedelta(seconds=24.999))
+            reconcile.assert_not_awaited()
+            await runner._refresh_execution_state_for_decision(
+                NOW + timedelta(seconds=25))
+            reconcile.assert_awaited_once()
+
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_state_refresh_leaves_the_private_gate_fail_closed(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        stale = NOW + timedelta(seconds=31)
+
+        with patch.object(
+                runner, "_rest_reconcile", new=AsyncMock(
+                    side_effect=AdapterError("REST unavailable"))):
+            with self.assertRaisesRegex(AdapterError, "REST unavailable"):
+                await runner._refresh_execution_state_for_decision(stale)
+
+        self.assertFalse(runner.gate.session_ready(runner.ledger, now=stale))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_state_refresh_is_attempted_once_per_sweep(self):
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
+        await runner.preflight()
+        moment[0] += timedelta(seconds=31)
+        slugs = tuple(f"market-{index}" for index in range(20))
+        runner._bind_markets(slugs)
+
+        with patch.object(
+                runner, "_rest_reconcile", new=AsyncMock(
+                    side_effect=AdapterError("REST unavailable"))) as reconcile, \
+                patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        return_value=(None, 0.0))) as decide, \
+                patch.object(
+                    runner, "_refresh_equity_for_decision",
+                    new=AsyncMock()):
+            outcome = await runner._decision_sweep()
+
+        self.assertIsNone(outcome)
+        self.assertEqual(reconcile.await_count, 1)
+        self.assertEqual(decide.await_count, 20)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_rest_state_freshness_is_stamped_after_slow_response(self):
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
+        await runner.preflight()
+        original = runner.account.fetch_positions
+
+        async def delayed_positions(*, observed_at):
+            result = await original(observed_at=observed_at)
+            moment[0] += timedelta(seconds=7)
+            return result
+
+        runner.account.fetch_positions = delayed_positions
+        await runner._rest_reconcile(NOW)
+
+        self.assertEqual(
+            runner.gate.last_reconcile_at,
+            NOW + timedelta(seconds=7),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_balance_freshness_is_stamped_when_the_response_arrives(self):
         moment = [NOW]
         runner, _, _ = self.build_runner(clock=lambda: moment[0])
@@ -3546,10 +3654,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(next_refresh, NOW + timedelta(seconds=5))
 
     async def test_periodic_rest_reconcile_backstops_quiet_private_stream(self):
-        runner, _, _ = self.build_runner()
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
         await runner.preflight()
         later = NOW + timedelta(seconds=31)
         self.assertFalse(runner.gate.ready(runner.ledger, now=later))
+        moment[0] = later
         await runner._rest_reconcile(later)
         self.assertTrue(runner.gate.ready(runner.ledger, now=later))
         self.assertEqual(runner.gate.last_message_at, NOW)

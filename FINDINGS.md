@@ -2599,6 +2599,50 @@ Every pending dollar cleared. `140.94 received / 0.00 pending`, up from
 convert was unfounded -- payouts arrive in bursts, days after the earning date,
 and one reading of the table says nothing about whether they have stalled.
 
+### Payouts do not land on weekends -- operator fact, confirmed against the ledger
+
+Told by the operator 2026-08-23 and verified the same hour against the full
+transfer history. Recorded because the PENDING column looks identical to a
+stall over a weekend, and this file already contains one wrong "the venue has
+not paid us in a week" conclusion drawn from exactly that view.
+
+Every reward payout this account has ever received, by weekday:
+
+```
+2026-08-11  Tue   32.06
+2026-08-17  Mon    5.85  5.83  42.77  5.43  25.83  22.93     <- 6-payout burst
+2026-08-20  Thu   35.73  14.85  15.50
+2026-08-21  Fri   19.72
+                                        TOTAL 226.50 account-wide
+```
+
+**Eleven payouts, all Mon/Tue/Thu/Fri, none on a Saturday or Sunday**, across
+two full weekends (08-15/16 and 08-22/23). The Monday 08-17 burst of six
+transfers totalling $108.64 is the catch-up after the first of those weekends,
+which is the shape the rule predicts.
+
+**What this means for reading the earnings table on a weekend:**
+
+- PENDING not moving is expected, not a stall. On 2026-08-23 (Sunday) $31.06
+  sat pending for 14+ hours unchanged; nothing was wrong.
+- A Saturday or Sunday earning date showing **no rows at all** is also
+  expected. 08-22 had none 16 hours after the day closed.
+- So on a weekend the table cannot distinguish "not posted yet" from "earned
+  nothing" *or* from "stalled" -- three states, one appearance. Do not judge
+  reward, or any change made to chase reward, from a weekend reading.
+
+**Check cash, not status.** `GET /v1/portfolio/activities`, rows with
+`description = "liquidity reward payout"` and `status COMPLETED`, is the only
+view that says whether money arrived. See the entry above,
+"Reward PAID/PENDING is not cash".
+
+**Consequence for the horizon A/B.** 2026-08-22 and 2026-08-23 are Saturday and
+Sunday, so the first clean day of reward data on the six-hour horizon plus the
+scheduler fix will not be readable until **Monday 2026-08-24 posts, at the
+earliest**. The per-pair trading cost measured 0.082 on 08-23 against ~0.045 on
+the five preceding days; that number is real now, but its income side is not
+visible yet and must not be judged against a weekend blank.
+
 ## A just-placed order can be accepted, then unreadable for over two minutes
 
 Measured 2026-08-18, from the incident in `BUGFIXES.md`. Order

@@ -3507,3 +3507,67 @@ that is up but quoting nothing earns exactly as much as one that is down.
 Caveat kept deliberately: a day can post partially and convert PENDING later
 (08-16 still carries 1.90). 08-18 showing PAID 0.01 with no pending makes a
 late correction unlikely, but re-read before quoting this as final.
+
+---
+
+## "Bound but not quoting" has no diagnosis in the log, and one real cause
+
+Measured 2026-08-23T00:18-00:22Z, on a healthy runner (up 5h18m, `f41566a`).
+
+**The state.** 20 slots, 17 markets bound, and **1 working order at the
+venue.** Every fault indicator was clean: rotation unblocked, 0 `UNKNOWN_ABSENT`,
+0 unresolved intents, 0 positions, no risk stops, retirements releasing
+normally. The whole slate had rotated 18 minutes earlier
+(`[top-up] released=19 added=19` at 00:00:39Z), and 16 of the 17 new markets
+had placed **no order at all** in those 18 minutes.
+
+`usable_markets.py` at the same moment reported **24 viable, most both sides**.
+So the selector and the reconciler disagreed about 20-odd markets, and nothing
+recorded why.
+
+**Why the log cannot answer it.** The runner logs `[action]` only when it
+mutates. A sweep that plans and decides to do nothing writes nothing, so an
+idle bound slot is indistinguishable from a healthy one that happens to have
+nothing to do. This is the same blind spot twice fixed elsewhere and never
+fixed here: `usable_markets.py` exists because `[selection]`'s five counters
+could not separate "nothing is eligible" from "markets are being lost", and
+`book-stale-why` was added because `book_stale` at attempt=1 could not say
+whether the refresh fired, landed stale, or was never replanned on.
+
+**What the causes actually are.** Two, established by fetching the live books
+for the 17 bound markets directly:
+
+1. `reward_ineligible` — dominant, and economic rather than faulty. Session
+   totals for cancel reasons:
+
+   ```
+   2340  side_no_longer_desired:reward_ineligible
+      5  side_no_longer_desired:expected_net_not_positive
+      1  side_no_longer_desired:exit_incomplete
+   ```
+
+   This is the depth mechanism from WATCHLIST 9 in its ordinary form: the
+   reward score is computed at the *backed-off* entry price, not at the touch,
+   and `targetSize` is often reached before the quote gets there. Three of the
+   17 bound markets had touch depth alone at or past the 7,500 target
+   (`saualh-alejon` 15,700 on the bid; `yukmat-jiapan` 10,287 on the ask;
+   `grilomkritam-taiichmasima` 11,204 on the bid), so only the touch scores at
+   all. **A bot that is bound and not quoting is usually correct**, and this is
+   the reason.
+
+2. `price_too_extreme` — a real defect, recorded in `BUGFIXES.md` 2026-08-23.
+   The floor lives only in `reconciler.py`, so the selector binds books it can
+   never quote. **`price_too_extreme` occurs zero times in the entire log**,
+   because the cause only reaches a log line via
+   `side_no_longer_desired:<cause>`, which needs a working order to cancel —
+   and this gate fires before any order exists.
+
+**Do not read "1 of 20 resting" as broken.** Resting fraction over the same
+session was 62.8% across 44 sides (down from the 85.6% of 2026-08-19, worth
+watching but not a fault). An instant slot count cannot tell a wholesale slate
+rotation from a stall — CLAUDE.md already says this about absent counts, and
+this is the same trap with a different counter.
+
+**The measurement to build, if this comes up again.** A per-sweep record of
+`drop_cause` by market and side. Everything above took ~35 venue calls and two
+throwaway scripts to establish, and it would have been one grep.

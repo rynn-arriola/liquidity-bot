@@ -29,6 +29,74 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-23
+
+### `minimum_entry_price` lives only in the reconciler, so the selector binds markets that can never be quoted
+
+**Symptom.** Slots bound and silently idle. At 2026-08-23T00:18Z the venue held
+**1 working order across 20 slots** while 17 markets were bound and the
+selector reported 24 viable. Nothing was faulted: rotation unblocked, 0
+unresolved intents, 0 `UNKNOWN_ABSENT`, 0 positions, no risk stops. The log
+gives no reason at all, because a market the reconciler declines to act on
+produces no `[action]` line.
+
+**Mechanism.** `minimum_entry_price` (0.10) was added to `ReconcilerPolicy` on
+2026-08-21 to refuse opening near either end of the book. It exists in exactly
+one place:
+
+```
+$ grep -rn minimum_entry_price src/ scripts/
+src/liquidity_bot/reconciler.py:90:    minimum_entry_price: float = 0.10
+src/liquidity_bot/reconciler.py:648:        floor = self.policy.minimum_entry_price
+```
+
+`market_selector.py` does not model it. So `viable_sides` — which is
+`expected_net_value > 0`, and knows nothing about the floor — marks an extreme
+book viable, the selector binds it, and `_flat_plan` then drops every side with
+`drop_cause = "price_too_extreme"` on every sweep, forever. The market holds
+its slot until the next rotation without ever placing an order.
+
+Measured at 00:22Z against the 17 bound markets:
+
+```
+market                              bid    ask   gate
+aec-itfme-yukmoc-shilin-2026-08-23  0.920  0.970  BOTH sides price_too_extreme
+aec-itfme-lukmcm-edwmar-2026-08-23  0.820  0.910  offer price_too_extreme
+aec-itfwo-yukmat-jiapan-2026-08-23  0.850  0.940  offer price_too_extreme
+aec-itfme-kehun-chuhou-2026-08-23   0.090  0.270  bid price_too_extreme
+```
+
+One slot fully dead, three half-dead, out of seventeen.
+
+**Why it is invisible.** `price_too_extreme` appears **zero times** in the
+entire log. `drop_cause` only reaches a log line through
+`side_no_longer_desired:<cause>`, which requires a *working order to cancel* —
+and this gate fires before any order is ever placed. Compare
+`side_no_longer_desired:reward_ineligible`, which has 2,340 occurrences,
+purely because that condition can arise after a placement.
+
+So the gate is doing its job (it was worth ~$40 of the 2026-08-21 loss
+buckets) and is simultaneously unobservable and un-costed.
+
+**Fix.** Not yet applied — the bot is running and this is not urgent. Two
+parts, and the second matters more than the first:
+
+1. Teach `market_selector.py` the same floor so an unquotable market is never
+   bound. **A gate that lives in two places is one where changing a single
+   side does nothing** — this is that ground rule again, in the other
+   direction: a gate that lives in *one* place is one the other side cannot
+   respect.
+2. Log the drop, so a bound-and-idle slot says why. Today the runner records
+   only what it *did*; a sweep that decides to do nothing writes nothing, which
+   is the same blind spot `usable_markets.py` was built to fix for
+   `[selection]` and `book-stale-why` was added to fix for stale books.
+
+**Cost.** Unmeasured, and small — roughly one slot in seventeen at the sampled
+moment. Recorded because the mechanism is general: every future reconciler-only
+gate will bind markets it cannot quote, and none of them will leave a trace.
+
+---
+
 ## 2026-08-21
 
 ### A live match sat in the pregame universe, and cost $9.29 at 7 cents

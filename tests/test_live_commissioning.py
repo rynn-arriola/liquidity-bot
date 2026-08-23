@@ -394,6 +394,155 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
+    async def test_decision_sweep_skips_only_the_market_with_an_unresolved_intent(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.prepare_intent(
+            "pending-one", "PLACE", "market-one", "client-one", {},
+            created_at=NOW)
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()) as refresh, patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        return_value=(None, 0.0))) as decide:
+            outcome = await runner._decision_sweep()
+
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            [call.args[0] for call in decide.await_args_list],
+            ["market-two"],
+        )
+        self.assertEqual(refresh.await_count, 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_decision_backoff_is_per_market_not_a_global_sleep(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        side_effect=[(None, 30.0), (None, 0.0),
+                                     (None, 0.0)])) as decide:
+            await runner._decision_sweep()
+            await runner._decision_sweep()
+
+        self.assertEqual(
+            [call.args[0] for call in decide.await_args_list],
+            ["market-one", "market-two", "market-two"],
+        )
+        self.assertEqual(
+            runner._next_decision_at["market-one"],
+            NOW + timedelta(seconds=30),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_all_twenty_slots_are_planned_and_equity_refreshes_mid_sweep(self):
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
+        await runner.preflight()
+        slugs = tuple(f"market-{index}" for index in range(20))
+        runner._bind_markets(slugs)
+        planned: list[str] = []
+        refreshes: list[datetime] = []
+
+        async def decide(slug, now):
+            planned.append(slug)
+            moment[0] += timedelta(seconds=1)
+            return None, 0.0
+
+        async def refresh(now):
+            refreshes.append(now)
+            runner.risk_guard.observe_equity(
+                runner.balance.marked_equity, observed_at=moment[0])
+
+        with patch.object(runner, "_decide_for_market", side_effect=decide), \
+                patch.object(runner, "_refresh_balance", side_effect=refresh):
+            outcome = await runner._decision_sweep()
+
+        self.assertIsNone(outcome)
+        self.assertEqual(planned, list(slugs))
+        self.assertEqual(refreshes, [NOW + timedelta(seconds=10)])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_balance_freshness_is_stamped_when_the_response_arrives(self):
+        moment = [NOW]
+        runner, _, _ = self.build_runner(clock=lambda: moment[0])
+        await runner.preflight()
+        original = runner.account.fetch_balance
+
+        async def delayed_balance(*, observed_at):
+            result = await original(observed_at=observed_at)
+            moment[0] += timedelta(seconds=7)
+            return result
+
+        runner.account.fetch_balance = delayed_balance
+        await runner._refresh_balance(NOW)
+
+        self.assertEqual(
+            runner.risk_guard.equity_observed_at,
+            NOW + timedelta(seconds=7),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stream_book_keeps_socket_receipt_time_when_dequeued_late(self):
+        runner, _, _ = self.build_runner(clock=lambda: NOW + timedelta(seconds=20))
+        runner._bind_markets(("market-one",))
+        received = NOW + timedelta(seconds=2)
+
+        runner._accept_book(BookSnapshot(
+            "market-one",
+            (BookLevel(.49, 10),),
+            (BookLevel(.51, 10),),
+            received_at=received,
+        ))
+
+        self.assertEqual(runner.state_for("market-one").book_observed_at, received)
+
+    async def test_unresolved_create_prevents_shutdown_flat_proof(self):
+        runner, _, _ = self.build_runner()
+        runner.ledger.prepare_intent(
+            "ambiguous-create", "PLACE", "market-one", "client-one", {},
+            created_at=NOW)
+
+        self.assertFalse(runner._venue_proves_flat())
+
+    async def test_empty_plan_is_not_reported_as_recent_order_activity(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+
+        with patch.object(runner.reconciler, "plan", return_value=[]), \
+                patch.object(runner.driver, "apply_one", new=AsyncMock()):
+            outcome, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 0.0)
+        self.assertNotIn("market-one", runner._last_action_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_private_event_keeps_socket_receipt_time_when_processed_late(self):
+        runner, _, _ = self.build_runner()
+        event = PrivateEvent(
+            PrivateEventKind.HEARTBEAT, {},
+            received_at=NOW + timedelta(seconds=2),
+        )
+        runner.gate.observe = lambda observed, *, received_at: self.assertEqual(
+            received_at, NOW + timedelta(seconds=2))
+        runner.projector.apply = lambda observed, *, received_at: self.assertEqual(
+            received_at, NOW + timedelta(seconds=2))
+
+        await runner._observe_private(event, NOW + timedelta(seconds=20))
+
     async def test_preflight_then_first_fake_order_is_exactly_the_quote_size(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()

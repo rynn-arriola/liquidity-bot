@@ -454,6 +454,18 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("6 viable market(s) not quoted", embed["description"])
 
+    def test_unquoted_viable_count_never_exceeds_slot_capacity(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(hours=2),
+            active_markets=0, resting_markets=0,
+            slot_capacity=20, viable_markets=98, rewarded_markets=247,
+        )
+
+        description = build_liquidity_summary(summary)["embeds"][0]["description"]
+        self.assertIn("20 viable market(s) not quoted", description)
+        self.assertNotIn("98 viable market(s) not quoted", description)
+
     def test_a_summary_without_supply_data_keeps_the_old_wording(self):
         """`slot_capacity` is the sentinel. Shadow runs and older callers
         supply no funnel, and must not be told how many slots are free or

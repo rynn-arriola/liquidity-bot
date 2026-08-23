@@ -293,6 +293,7 @@ class CommissioningConfig:
     # ~25s per scan against a 900s interval.
     max_selection_book_candidates: int = 100
     minimum_entry_spread: Decimal = Decimal("0.02")
+    minimum_entry_price: Decimal = Decimal("0.10")
     manual_stop_only: bool = True
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -386,6 +387,9 @@ class CommissioningConfig:
                 "two outcomes' quotes")
         if self.minimum_entry_spread <= 0:
             problems.append("commissioning spread threshold is invalid")
+        if self.minimum_entry_price != Decimal("0.10"):
+            problems.append(
+                "commissioning entry quotes must remain between 0.10 and 0.90")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

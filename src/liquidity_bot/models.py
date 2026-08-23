@@ -66,6 +66,8 @@ class BookSnapshot:
     offers: tuple[BookLevel, ...]
     state: str | None = None
     transact_time: datetime | None = None
+    # Local socket receipt, distinct from the exchange transaction clock.
+    received_at: datetime | None = None
 
     def has_side(self, side: str) -> bool:
         """Whether this book can price that side at all.

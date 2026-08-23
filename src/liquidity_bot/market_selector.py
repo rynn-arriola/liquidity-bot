@@ -53,6 +53,7 @@ class RewardSelectionPolicy:
     exit_cost_safety_multiple: float = 2.0
     max_book_candidates: int = 25
     minimum_entry_spread: float = 0.02
+    minimum_entry_price: float = 0.10
     # Mirrors CommissioningConfig.enforce_reward_cost_gate. The same test
     # existed here and in the runner's per-market pass; disabling it in one
     # place only did nothing, because a market that never becomes viable here
@@ -107,6 +108,8 @@ class RewardSelectionPolicy:
             raise ValueError("selection book-candidate cap must be in [1, 100]")
         if not 0 < self.minimum_entry_spread < 1:
             raise ValueError("selection entry spread must be in (0, 1)")
+        if not 0 < self.minimum_entry_price < .5:
+            raise ValueError("selection entry price must be in (0, .5)")
 
 
 @dataclass(frozen=True)
@@ -297,7 +300,9 @@ def evaluate_market_opportunity(
         exit_complete = False
         exit_pnl = 0.0
         expected: float | None = None
-        if spread + 1e-9 < policy.minimum_entry_spread:
+        if min(price, 1.0 - price) < policy.minimum_entry_price - 1e-9:
+            blocker = "price_too_extreme"
+        elif spread + 1e-9 < policy.minimum_entry_spread:
             blocker = "spread_below_entry_minimum"
         elif not projection.eligible:
             blocker = projection.reason
@@ -606,8 +611,8 @@ class RewardMarketSelector:
             if item[0].slug not in selected_slugs)
         return chosen, deferred
 
-    @staticmethod
     def _applicable_period(
+        self,
         market: MarketMetadata,
         incentive: MarketIncentive,
         now: datetime,
@@ -617,7 +622,7 @@ class RewardMarketSelector:
                 or market.game_start is None or market.game_start <= now
                 or market.tick_size is None
                 or market.minimum_trade_qty is None
-                or market.minimum_trade_qty > 1
+                or market.minimum_trade_qty > self.policy.quote_size
                 or not market.is_supported_moneyline):
             return None
         period = select_applicable_period(

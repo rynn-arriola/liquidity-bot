@@ -175,6 +175,20 @@ class OpportunityTests(unittest.TestCase):
             {"spread_below_entry_minimum"},
         )
 
+    def test_extreme_price_is_rejected_during_selection_not_after_binding(self):
+        item = evaluate_market_opportunity(
+            market("extreme"),
+            incentive("extreme", pool=20_000),
+            book("extreme", bid=.07, offer=.93),
+            period=incentive("extreme", pool=20_000).periods[0],
+            now=NOW,
+            policy=RewardSelectionPolicy(),
+        )
+
+        self.assertEqual(item.viable_sides, ())
+        self.assertEqual({side.blocker for side in item.sides},
+                         {"price_too_extreme"})
+
 
 class RankingTests(unittest.IsolatedAsyncioTestCase):
     """Only twenty slots exist, so which twenty is the whole game."""
@@ -383,6 +397,20 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.eligible_pregame_markets, 1)
         self.assertEqual(reward_market_slugs(result), ("open",))
         self.assertEqual(gateway.book_calls, ["open"])
+
+    async def test_minimum_quantity_equal_to_authorized_quote_size_is_included(self):
+        sized = MarketMetadata(
+            **{**market("sized").__dict__, "minimum_trade_qty": 10})
+        gateway = FakeGateway(
+            {"sized": sized},
+            {"sized": incentive("sized", pool=20_000)},
+            {"sized": book("sized")},
+        )
+
+        result = await RewardMarketSelector(
+            gateway, RewardSelectionPolicy(quote_size=10)).select(now=NOW)
+
+        self.assertEqual(reward_market_slugs(result), ("sized",))
 
     async def test_undocumented_period_is_counted_without_rest_fanout(self):
         markets = {"tournament": market("tournament")}

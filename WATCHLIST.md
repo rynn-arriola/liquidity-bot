@@ -16,6 +16,32 @@ seeing the result is not a test, it is a rationalisation.
 
 ---
 
+## 0. Should reward-ineligible orders get a longer dwell or same-price suppression?
+
+**Decide when:** at least several hours of `[eligibility]` transitions produce
+a materially larger sample than the current nine completed ineligible spells,
+split by `target_not_met` and `outside_reward_cutoff`.
+
+**Baseline (2026-08-23):** 451 `reward_ineligible` cancel/re-place cycles; 87%
+returned at the identical price, median dark gap 71 seconds, about 1,082
+market-minutes dark. In the first new instrumented session, nine spells returned
+eligible: six `target_not_met`, three `outside_reward_cutoff`; five of nine
+lasted longer than the current 90-second dwell. This sample proves the path is
+real but not which policy dominates.
+
+**Measure:** for every `from=<reason> to=eligible`, the ineligible `held`
+duration and whether the quote price stayed identical through the spell.
+
+**Change if:** most completed spells cluster just above 90 seconds—raise the
+dwell beyond that measured cluster. If long spells have a broad tail but quotes
+mostly return at the same price, suppress only the same-price cancellation.
+
+**Do not change if:** the larger sample shows most >90-second spells return at a
+different price or remain ineligible through kickoff/rotation; then cancellation
+is removing genuine dead quotes. Do not disable the gate from nine observations.
+
+---
+
 ## 1. Is the 900s inventory deadline cutting off passive exits?
 
 **Decide when:** one clean session on `418aa54` or later, ideally 3+ days.

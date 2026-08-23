@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import unittest
 from pathlib import Path
@@ -95,10 +96,32 @@ class StreamTests(unittest.TestCase):
         client, event = self.run_async(scenario())
         self.assertEqual(event.slug, "market-one")
         self.assertEqual(event.bid_depth, 5100)
+        self.assertIsNotNone(event.received_at)
         self.assertEqual(client.market_socket.calls[0], ("connect",))
         self.assertEqual(client.market_socket.calls[1][0], "market_data")
         self.assertEqual(client.market_socket.calls[1][2], ["market-one"])
         self.assertEqual(client.market_socket.calls[-1], ("close",))
+
+    def test_market_stream_coalesces_pending_full_books_by_slug(self):
+        async def scenario():
+            client = FakeClient()
+            stream = MarketReadOnlyStream(client)
+            await stream.start(["market-one"])
+            first = fixture("book.json")
+            latest = copy.deepcopy(first)
+            latest["marketData"]["bids"][0]["px"]["value"] = "0.5100"
+            client.market_socket.emit("market_data", first)
+            client.market_socket.emit("market_data", latest)
+            queued = stream._queue.qsize()
+            try:
+                event = await stream.next_book(timeout=0.1)
+            finally:
+                await stream.close()
+            return queued, event
+
+        queued, event = self.run_async(scenario())
+        self.assertEqual(queued, 1)
+        self.assertEqual(event.best_bid.price, .51)
 
     def test_market_stream_rejects_a_book_outside_its_subscription(self):
         """A scope violation is our bug, not the venue's, so it stays fatal."""
@@ -159,6 +182,23 @@ class StreamTests(unittest.TestCase):
         kinds = [call[0] for call in client.private_socket.calls]
         self.assertEqual(kinds, ["connect", "orders", "positions", "balance", "close"])
         self.assertEqual(event.kind, PrivateEventKind.ORDER_SNAPSHOT)
+        self.assertIsNotNone(event.received_at)
+
+    def test_private_stream_drains_the_current_backlog_in_wire_order(self):
+        async def scenario():
+            client = FakeClient()
+            stream = PrivateReadOnlyStream(client)
+            await stream.start(["market-one"])
+            for value in (1, 2, 3):
+                client.private_socket.emit("message", {"heartbeat": value})
+            try:
+                return stream.drain_events()
+            finally:
+                await stream.close()
+
+        events = self.run_async(scenario())
+        self.assertEqual([event.payload for event in events], [1, 2, 3])
+        self.assertTrue(all(event.received_at is not None for event in events))
 
     def test_private_event_carries_single_market_subscription_scope(self):
         async def scenario():

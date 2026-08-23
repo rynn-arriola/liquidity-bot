@@ -1,5 +1,29 @@
 # Next session — outstanding fixes
 
+## CURRENT: 20-slot scheduler repair is local, tested, and awaiting deployment
+
+The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
+repair addresses the observed 0/20 state without changing the six-hour horizon,
+quote size, slot cap, REST rate, or risk limits. It includes per-market intent
+and backoff isolation, decision-time equity freshness, truthful stream receipt
+times/book coalescing/private draining, selector gate parity, strict shutdown
+flat proof, and corrected slot reporting.
+
+Local suite after the change: **506 passing**. Before restarting:
+
+1. review the final diff and run `git diff --check`;
+2. deploy the complete source/test/doc set to the droplet;
+3. run the full suite on the droplet;
+4. start once and verify all selected eligible slots receive decision/action
+   opportunities rather than placements concentrating in the first few;
+5. verify unresolved mutations and recovery delays leave unaffected markets
+   active; write `DEPLOYED_COMMIT` only after the deployed tree is identified.
+
+Do not combine the restart with a reward-eligibility dwell change. That policy
+remains under the explicit measurement rule in `WATCHLIST.md`.
+
+---
+
 ## ROLLING BACK THE 2026-08-23 CHANGE -- read this first if things look wrong
 
 **Two changes, one deploy, operator decision 2026-08-23.** Quote size was NOT

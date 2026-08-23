@@ -94,6 +94,10 @@ Clock = Callable[[], datetime]
 # before a transient startup condition is finally treated as a refusal.
 MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 
+# Refresh before the risk guard's hard freshness edge. A twenty-market sweep
+# can itself take several seconds when individual books need REST recovery.
+DECISION_EQUITY_REFRESH_MARGIN_SECONDS = 5.0
+
 # Conditions that describe one market's inventory or exit, never the account.
 # The reconciler plans per market, so these are per-market verdicts: the right
 # response is to stop quoting that market and keep working its exit, not to end
@@ -258,6 +262,7 @@ class CommissioningRunner:
                         config.max_selection_book_candidates),
                     minimum_entry_spread=float(
                         config.minimum_entry_spread),
+                    minimum_entry_price=float(config.minimum_entry_price),
                     enforce_reward_cost_gate=(
                         config.enforce_reward_cost_gate),
                 ),
@@ -292,6 +297,9 @@ class CommissioningRunner:
         # stuck; without this it was counted as stuck and the alarm fired on
         # ordinary churn. See `_cycling_markets`.
         self._last_action_at: dict[str, datetime] = {}
+        # Recovery delay belongs to the market that requested it. The old
+        # sweep let one unhealthy slot pause the other nineteen.
+        self._next_decision_at: dict[str, datetime] = {}
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
         self.market_stream = market_stream_factory(client)
@@ -378,6 +386,7 @@ class CommissioningRunner:
             hard_exit_confirmation_timeout_seconds=(
                 config.hard_exit_confirmation_timeout_seconds),
             minimum_entry_spread=float(config.minimum_entry_spread),
+            minimum_entry_price=float(config.minimum_entry_price),
             force_exit_before_start_seconds=float(
                 config.force_exit_before_start_seconds),
         ))
@@ -461,6 +470,9 @@ class CommissioningRunner:
         self._eligibility_state = {
             key: value for key, value in self._eligibility_state.items()
             if key[0] in self._markets}
+        self._next_decision_at = {
+            slug: value for slug, value in self._next_decision_at.items()
+            if slug in self._markets}
 
     @property
     def _primary(self) -> MarketState:
@@ -741,7 +753,7 @@ class CommissioningRunner:
         if state is None:
             return
         state.book = book
-        state.book_observed_at = self._now()
+        state.book_observed_at = book.received_at or self._now()
 
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
@@ -1009,8 +1021,9 @@ class CommissioningRunner:
         self.gate.on_rest_reconciled(now)
 
     async def _observe_private(self, event: Any, now: datetime) -> None:
-        self.gate.observe(event, received_at=now)
-        self.projector.apply(event, received_at=now)
+        received_at = getattr(event, "received_at", None) or now
+        self.gate.observe(event, received_at=received_at)
+        self.projector.apply(event, received_at=received_at)
 
     async def _wait_for_initial_private_state(self, timeout_seconds: float = 15) -> None:
         loop = asyncio.get_running_loop()
@@ -1824,8 +1837,11 @@ class CommissioningRunner:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
         self.balance = await self.account.fetch_balance(observed_at=now)
+        # Freshness begins when the response is received, not when the request
+        # entered the shared 4 req/s governor.
+        observed_at = self._now()
         self.risk_guard.observe_equity(
-            self.balance.marked_equity, observed_at=now)
+            self.balance.marked_equity, observed_at=observed_at)
         # Realised P&L from the fill ledger, per market and in total. This
         # used to attribute the whole account's marked-equity change to the
         # primary market, which was wrong twice over: marked equity is not
@@ -1835,6 +1851,25 @@ class CommissioningRunner:
         self.risk_guard.observe_market_realized({
             slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
             for slug, value in self.ledger.realized_by_market().items()})
+
+    async def _refresh_equity_for_decision(self, now: datetime) -> None:
+        """Keep the account-risk observation fresh across a long slot sweep."""
+
+        guard = self.risk_guard
+        if guard is None:
+            raise RuntimeError("risk guard is not initialized")
+        observed_at = guard.equity_observed_at
+        if observed_at is None:
+            await self._refresh_balance(now)
+            return
+        age = (now - observed_at).total_seconds()
+        refresh_at = max(
+            0.0,
+            guard.max_equity_age_seconds
+            - DECISION_EQUITY_REFRESH_MARGIN_SECONDS,
+        )
+        if age < 0 or age >= refresh_at:
+            await self._refresh_balance(now)
 
     def _session_realized(self) -> Decimal:
         """Session P&L from settled cash, falling back to the fill ledger.
@@ -2313,11 +2348,11 @@ class CommissioningRunner:
         """Plan and apply at most one mutation for one market.
 
         Returns ``(stop_reason, backoff_seconds)``. A stop reason is terminal
-        for the whole session; a backoff is this market asking the sweep to
-        pause. Recoverable conditions are handled here so one market's stale
-        book or pending exit cannot stall the other seven.
+        for the whole session; a backoff defers only this market's next pass.
+        Recoverable conditions are handled here so one market's stale book or
+        pending exit cannot stall the other nineteen.
 
-        The clock is read per market rather than once per sweep: issuing eight
+        The clock is read per market rather than once per sweep: issuing twenty
         mutations through a 4 requests/second governor takes real time, and a
         market whose book aged meanwhile must report ``book_stale`` and be
         skipped rather than quote on data that is no longer fresh.
@@ -2471,7 +2506,6 @@ class CommissioningRunner:
                          state.expected_net_by_side.items()} }",
                 flush=True,
             )
-        self._last_action_at[slug] = now
         try:
             await self.driver.apply_one(
                 actions, market=state.market,
@@ -2481,7 +2515,36 @@ class CommissioningRunner:
             if stop:
                 return stop, 0.0
             return None, self._recovery_delay(f"action_driver:{slug}")
+        if actions:
+            # Stamp a successful mutation, not an empty healthy plan.
+            self._last_action_at[slug] = self._now()
         return None, 0.0
+
+    async def _decision_sweep(self) -> str | None:
+        """Plan every due market without cross-slot intent/backoff blocking."""
+
+        for slug in self.active_slugs:
+            if self.ledger.market_has_unresolved_intent(slug):
+                continue
+            now = self._now()
+            due_at = self._next_decision_at.get(slug)
+            if due_at is not None and now < due_at:
+                continue
+            try:
+                await self._refresh_equity_for_decision(now)
+            except Exception:
+                # Preserve the last observation until its 15-second bound;
+                # once stale, `_frame` removes entry eligibility fail-closed.
+                pass
+            outcome, delay = await self._decide_for_market(slug, self._now())
+            if outcome:
+                return outcome
+            if delay > 0:
+                self._next_decision_at[slug] = (
+                    self._now() + timedelta(seconds=delay))
+            else:
+                self._next_decision_at.pop(slug, None)
+        return None
 
     async def _refresh_bound_books(self, now: datetime) -> None:
         """Prove a book for every bound market, dropping the ones that fail.
@@ -3996,11 +4059,13 @@ class CommissioningRunner:
         """True when the last venue snapshot showed no orders and no position.
 
         Read from the snapshots the shutdown loop already refreshes, so this
-        adds no requests. Deliberately ignores unresolved intents and absent
-        orders: those describe what we have not yet *proven*, and a venue
-        showing nothing open has already answered the question they ask.
+        adds no requests. An unresolved create or UNKNOWN_ABSENT order is not
+        flat proof: it may have reached the venue and simply not appeared in
+        the open-order snapshot yet.
         """
 
+        if self.ledger.unresolved_intents() or self.ledger.absent_orders():
+            return False
         if self.ledger.query(
                 "SELECT 1 FROM execution_orders WHERE status IN "
                 "('OPEN','NEW','PARTIAL','PENDING','SUBMITTED') LIMIT 1"):
@@ -4356,6 +4421,13 @@ class CommissioningRunner:
                     try:
                         await self._observe_private(
                             private_task.result(), self._now())
+                        # Private updates cannot be coalesced safely (fills and
+                        # order transitions are ordered), so drain the current
+                        # backlog in wire order before beginning REST work.
+                        drain = getattr(self.private_stream, "drain_events", None)
+                        if callable(drain):
+                            for event in drain(limit=1000):
+                                await self._observe_private(event, self._now())
                     except Exception as exc:
                         stop_reason = await self._recover_private_stream(exc) or ""
                         if stop_reason:
@@ -4534,22 +4606,15 @@ class CommissioningRunner:
                         if now >= next_summary:
                             await self._send_summary(now)
                             next_summary = now + timedelta(minutes=5)
-                    # A reconciliation pass may consume most of the book-age
-                    # budget. Re-enter the loop so book/state freshness is
-                    # rechecked before any new decision, even if it resolved.
-                    continue
-                sweep_delay = 0.0
-                for slug in self.active_slugs:
-                    outcome, delay = await self._decide_for_market(
-                        slug, self._now())
-                    if outcome:
-                        stop_reason = outcome
-                        break
-                    sweep_delay = max(sweep_delay, delay)
+                    # Attributable mutations quarantine only their owner. An
+                    # intent without a market cannot be scoped, so retain the
+                    # account-wide fail-closed behavior for that case.
+                    if any(not str(row["market_slug"] or "").strip()
+                           for row in self.ledger.unresolved_intents()):
+                        continue
+                stop_reason = await self._decision_sweep() or ""
                 if stop_reason:
                     break
-                if sweep_delay:
-                    await self.sleep(sweep_delay)
                 if now >= next_summary:
                     await self._send_summary(now)
                     next_summary = now + timedelta(minutes=5)

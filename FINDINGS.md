@@ -4324,3 +4324,61 @@ grep -a '\[eligibility\]' logs/commissioning.log | grep 'to=eligible' \
 
 Do not decide before the data exists. Five hypotheses died by measurement in
 the session that produced this entry.
+
+---
+
+## The 20-slot scheduler, not the six-hour horizon, caused the 0/20 order state
+
+Established 2026-08-23 from the exact live twenty-market set, then fixed and
+covered locally before restart.
+
+### Evidence
+
+At inspection time the summary showed 98 viable markets, 20 bound, 40 eligible
+sides and no working orders. Evaluating each bound market independently with
+the same live state produced a placement action for all twenty. Actual live
+placement history reached only four markets: 22 creates distributed 14/5/2/1,
+with one order working at the sampled moment. A six-hour horizon therefore did
+what it was meant to do—supply candidates—and was not the bottleneck.
+
+The ordering explains the contradiction. The run loop refreshed balance,
+serially serviced up to twenty markets through one 4 req/s limiter, then began
+deciding. Equity aged out after 15 seconds. `_frame` correctly failed closed by
+removing entry sides, but the dashboard counted the pre-risk eligibility set.
+One unresolved mutation and one market's recovery delay each added separate
+account-wide pauses. Full-book and private queues could also deliver delayed
+events that the runner relabeled as current.
+
+This is distinct from the earlier rejected theory that a high raw
+`book_stale` count proves contention. The attempt-depth evidence still shows
+that nearly all stale recoveries succeed immediately. The newly proven failure
+is cross-slot scheduling around otherwise successful work.
+
+### Deterministic findings and disposition
+
+| Finding | Disposition |
+|---|---|
+| Serial service can expire 15-second equity before later decisions | Refresh at response receipt and within a five-second pre-expiry decision margin |
+| One unresolved mutation pauses all twenty | Skip only its owning slug; unattributable state remains account-wide fail-closed |
+| One market's backoff sleeps the runner | Per-slug next-decision deadlines; no sweep sleep |
+| Queued books/private events are stamped fresh on dequeue | Socket receipt timestamps retained; full books coalesced per slug; private backlog drained in order |
+| Shutdown ignores ambiguous creates | Unresolved and absent orders now defeat venue-flat proof |
+| Selector omits 0.10 entry floor | One configured floor passed to selector and reconciler |
+| Selector hardcodes minimum quantity 1 | Compare venue minimum with configured quote size 10 |
+| `98 viable not quoted` exceeds capacity | Unmet count capped at twenty; `Viable now` still reports 98 |
+| Empty plans look like re-quoting | `_last_action_at` updates only after a non-empty successful apply |
+
+The local regression suite contains a twenty-slot timing test: all twenty are
+planned, and the account equity observation refreshes at slot eleven rather
+than silently starving the tail. Full suite after implementation: **506 tests
+passing**.
+
+### Still open, deliberately not folded into this fix
+
+`reward_ineligible` cancellation churn is an independent reducer of resting
+orders after placement. Historical evidence (451 cycles, 87% returning at the
+same price) proves material churn, but the current fixed-price ineligibility
+spell sample is only nine completed spells, five longer than 90 seconds. That
+is not enough to choose between a longer dwell and same-price suppression.
+Changing it in the scheduler patch would mix a proven mechanical repair with
+an under-sampled strategy decision.

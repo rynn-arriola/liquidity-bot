@@ -259,7 +259,15 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     #          exists and is going uncollected.
     #   free   capacity with nothing viable to put in it. Not a fault, and on
     #          a quiet evening it is most of the board.
-    unmet = max(0, summary.viable_markets - summary.resting_markets)
+    # Universe supply can exceed the bot's authorized capacity. Only supply
+    # that could occupy a slot is unmet capacity; the full universe remains
+    # visible in the separate "Viable now" row.
+    unmet = (max(
+        0,
+        min(summary.viable_markets, summary.slot_capacity)
+        - summary.resting_markets,
+    ) if summary.slot_capacity else max(
+        0, summary.viable_markets - summary.resting_markets))
     free = max(0, summary.slot_capacity - summary.active_markets)
     # Only slots that are actually stuck. A market that has kicked off is
     # idle for a known, harmless reason and is excluded, so this count keeps

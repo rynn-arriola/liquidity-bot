@@ -31,6 +31,62 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
+### FIXED LOCALLY — the 20-slot scheduler let shared freshness and one market's state starve the slate
+
+**Symptom.** Restoring the six-hour selection horizon produced abundant supply
+but almost no resting orders: 98 viable markets, 20 bound slots, 40 eligible
+sides, and 0/20 quoting. At the live inspection around 03:31Z, every one of the
+exact twenty bound markets produced a valid placement when evaluated alone,
+but placements had reached only four markets (22 total, distributed 14/5/2/1)
+and only one order was then working.
+
+**Mechanisms.** These were independent forms of head-of-line blocking:
+
+- balance was read before serial REST service, while equity freshness expired
+  after 15 seconds; later frames silently lost entry eligibility;
+- any unresolved mutation caused an account-wide `continue`, although the
+  ledger and private-state gate already scope it to the owning market;
+- the maximum recovery delay from one market slept the whole runner;
+- queued WebSocket data was timestamped when dequeued, not received, and full
+  books accumulated without bound;
+- selector minimum-size and price-floor gates differed from execution;
+- the summary counted impossible universe demand and classified empty plans as
+  recent quote activity;
+- shutdown accepted an empty venue snapshot despite unresolved/absent creates.
+
+This does **not** revive the disproved claim that raw `book_stale` counts prove
+REST failure. The measured stale recoveries usually succeed on attempt one.
+The defect is the time those successful operations consume before later slots
+reach the separate equity and state gates.
+
+**Fix.** The runner now refreshes equity at response receipt and again before
+the decision freshness margin expires; plans all due markets through a
+per-market scheduler; skips only the market owning an unresolved intent; and
+stores recovery deadlines per slug without a global sleep. Full market books
+coalesce to the latest pending snapshot per slug, market/private events retain
+socket receipt timestamps, and current private backlogs drain in wire order
+before REST work. Empty plans no longer update `_last_action_at`.
+
+Selection now shares the configured 0.10–0.90 entry floor and accepts a market
+minimum quantity up to the authorized quote size. Shutdown flat proof refuses
+unresolved intents and `UNKNOWN_ABSENT` orders. The Discord unmet count is
+capped by the twenty-slot authorization while the full viable universe remains
+reported separately.
+
+**Proof.** New tests exercise each regression, including a simulated twenty
+slot sweep in which every slot is planned and equity refreshes halfway through,
+an unresolved intent that skips only its owner, and a 30-second delay that does
+not stop the unaffected slot. Full local suite: **506 tests passing**. The bot
+was stopped flat at 2026-08-23T04:10:48Z before editing. **Not deployed or
+restarted yet.**
+
+**Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
+quote size, exposure limits, and 90-second reward-eligibility dwell. The last
+one remains a measured open question rather than a guessed policy change; see
+`WATCHLIST.md`.
+
+---
+
 ### `minimum_entry_price` lives only in the reconciler, so the selector binds markets that can never be quoted
 
 **Symptom.** Slots bound and silently idle. At 2026-08-23T00:18Z the venue held
@@ -78,7 +134,10 @@ purely because that condition can arise after a placement.
 So the gate is doing its job (it was worth ~$40 of the 2026-08-21 loss
 buckets) and is simultaneously unobservable and un-costed.
 
-**Fix.** Not yet applied — the bot is running and this is not urgent. Two
+**Fix.** Superseded by the 20-slot scheduler fix above. The selector now shares
+the configured floor with the reconciler and regression coverage proves an
+extreme market is rejected before binding. The second observability request
+remains useful but is no longer required to identify this known gate. Two
 parts, and the second matters more than the first:
 
 1. Teach `market_selector.py` the same floor so an unquotable market is never

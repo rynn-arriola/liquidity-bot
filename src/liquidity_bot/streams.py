@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .adapters import parse_book_response, parse_trade_response
@@ -34,7 +35,10 @@ class MarketReadOnlyStream:
 
     def __init__(self, client: Any):
         self._socket = client.ws.markets()
-        self._queue: asyncio.Queue[BookSnapshot | Exception] = asyncio.Queue()
+        # At most one pending full snapshot per market. New full books
+        # supersede old ones instead of creating an unbounded stale backlog.
+        self._queue: asyncio.Queue[str | Exception] = asyncio.Queue()
+        self._pending_books: dict[str, BookSnapshot] = {}
         self._slugs: set[str] = set()
         self._started = False
         # Books the venue sent that no consumer can use. Counted, never
@@ -73,7 +77,10 @@ class MarketReadOnlyStream:
             self._queue.put_nowait(AdapterError(
                 f"received market data for unsubscribed slug {book.slug}"))
             return
-        self._queue.put_nowait(book)
+        book = replace(book, received_at=datetime.now(timezone.utc))
+        if book.slug not in self._pending_books:
+            self._queue.put_nowait(book.slug)
+        self._pending_books[book.slug] = book
 
     def _on_error(self, error: Any) -> None:
         self._queue.put_nowait(AdapterError(f"market WebSocket error: {error}"))
@@ -107,7 +114,7 @@ class MarketReadOnlyStream:
                 else await asyncio.wait_for(self._queue.get(), timeout))
         if isinstance(item, Exception):
             raise item
-        return item
+        return self._pending_books.pop(item)
 
     async def close(self) -> None:
         try:
@@ -115,6 +122,7 @@ class MarketReadOnlyStream:
         finally:
             self._started = False
             self._slugs.clear()
+            self._pending_books.clear()
 
 
 class PrivateReadOnlyStream:
@@ -134,6 +142,7 @@ class PrivateReadOnlyStream:
     def _on_message(self, message: Any) -> None:
         try:
             event = decode_private_message(message)
+            event = replace(event, received_at=datetime.now(timezone.utc))
             if event.request_id in self._market_scope_by_request_id:
                 event = replace(
                     event,
@@ -226,6 +235,20 @@ class PrivateReadOnlyStream:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def drain_events(self, *, limit: int = 1000) -> tuple[PrivateEvent, ...]:
+        """Return queued events in wire order without waiting for new data."""
+
+        events: list[PrivateEvent] = []
+        for _ in range(max(0, limit)):
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, Exception):
+                raise item
+            events.append(item)
+        return tuple(events)
 
     async def close(self) -> None:
         try:
@@ -399,6 +422,20 @@ class PrivateStreamPool:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def drain_events(self, *, limit: int = 1000) -> tuple[PrivateEvent, ...]:
+        """Drain the merged shard backlog while preserving its queue order."""
+
+        events: list[PrivateEvent] = []
+        for _ in range(max(0, limit)):
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, Exception):
+                raise item
+            events.append(item)
+        return tuple(events)
 
     async def close(self) -> None:
         for reader in self._readers:

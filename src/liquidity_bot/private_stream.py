@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -27,6 +28,8 @@ class PrivateEvent:
     request_id: str | None = None
     subscription_type: str | None = None
     market_scope: tuple[str, ...] | None = None
+    # Stamped by the WebSocket adapter at callback receipt.
+    received_at: datetime | None = None
 
 
 _PAYLOADS = (

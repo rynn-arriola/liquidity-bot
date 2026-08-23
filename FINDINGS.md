@@ -4216,3 +4216,74 @@ target, same discount, equal snapshot weighting, no ramp.
 **Per second of resting, what we RECEIVE may still differ**, because payout is
 share-based and competition is not documented and has never been measured by us.
 That is the one live unknown, and it is the thing the A/B has to answer.
+
+---
+
+## The `reward_ineligible` cancel is churn: 87% come back to the identical price
+
+Measured 2026-08-23T02:35Z over 2026-08-22T14:00Z onward, prompted by the
+operator noticing "it will place it but also cancel it sometimes". It is the
+answer to why so few orders rest at any instant, and it predates the horizon
+restore.
+
+**Split by cancel reason, because the existing measurement covers only one row:**
+
+```
+cancel reason                              cycles  same price  median gap   dark min
+side_no_longer_desired:reward_ineligible      451         87%        71s     1082.3
+resting_price_left_the_touch                   95         14%        51s      245.0
+replace_reducing_at_active_touch               76         29%        22s       33.8
+hard_timeout_cancel_confirm_first              11          0%        19s        5.4
+```
+
+`resting_price_left_the_touch` reads **14% on 95 cycles**, consistent with the
+10% on 119 cycles measured 2026-08-17. That path is healthy and the churn fix
+holds. **`reward_ineligible` was never measured, and it is 87% on 451 cycles.**
+
+### Why it destroys value rather than protecting anything
+
+An order at price P scores in any second where the reward cutoff includes P.
+The cutoff moves when OTHER makers add or pull depth, so eligibility oscillates
+while the correct price never changes. Cancelling turns "scores some seconds"
+into "scores no seconds" for a median 71 seconds -- and then re-places at the
+**same price**, so it does not even avoid the fill risk it appears to be
+avoiding. The cancel buys nothing and costs the interval.
+
+`reward_eligibility_dwell_seconds` (90s) exists precisely to stop this flapping.
+At 87% it is not doing so: the side stays ineligible past the dwell, gets
+cancelled, and flips back inside a further 71 seconds.
+
+### Scale
+
+1,082 market-minutes = **18 hours of order-time** dark, in a 12.5-hour window
+across ~20 slots. At the measured 0.230 $/rest-hr that is about $4 over the
+window, roughly **$8/day against reward of $22-30/day** -- on the order of a
+quarter of the reward line.
+
+Treat that as an upper bound on the recoverable amount: some of those seconds
+would have scored zero anyway, because the cutoff genuinely had moved inside P.
+The recoverable share is whatever fraction of the dark time the cutoff was back
+outside P, which this measurement does not separate.
+
+### Candidate fixes, none applied
+
+1. **Do not cancel a flat-state entry quote for reward-ineligibility at all.**
+   An ineligible resting order costs only fill risk, and the 87% figure says we
+   re-accept that risk 71 seconds later anyway. Simplest, and the most
+   aggressive.
+2. **Raise `reward_eligibility_dwell_seconds`** well past 90s. Cheapest, but it
+   only moves the threshold -- the oscillation period sets how much it helps,
+   and that has not been measured.
+3. **Suppress the cancel when the re-place price would be identical.** Most
+   surgical, and it targets the 87% directly rather than the condition.
+
+**Do not pick one from this entry alone.** The missing measurement is the
+oscillation period of eligibility at a fixed price -- how long a side stays
+ineligible before flipping back. That decides between (2) and (3) and bounds
+what (1) is worth. It needs `state.economic_blocker_by_side` sampled per sweep,
+which is the same `drop_cause` logging this file has now asked for three times.
+
+**Relation to `NEXT.md` item 00b.** That item is about churn and was closed by
+the 2026-08-19 fix, which addressed `expected_net_not_positive`. This is a
+DIFFERENT cancel reason with the same shape, and it was not covered by that fix
+or by any measurement since.

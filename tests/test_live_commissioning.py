@@ -23,6 +23,7 @@ from liquidity_bot.discord_summary import GRAY, RED
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
+    MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS,
     MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
     RETIREMENT_COOLDOWN_SECONDS,
@@ -1582,11 +1583,114 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 "createTime": NOW.isoformat(),
             }
 
+        # The other market's order is temporarily unreadable by id. Its
+        # positive presence in the complete open-order snapshot keeps it
+        # known and working, and must not block market-one's quarantine.
+        original_retrieve = client.orders.retrieve
+
+        async def other_market_not_found(order_id):
+            if order_id == "order-two":
+                raise AdapterError(
+                    f"GET /v1/order/{order_id} failed: NotFoundError")
+            return await original_retrieve(order_id)
+
+        client.orders.retrieve = other_market_not_found
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
         await runner._quarantine_working_orders("market-one")
 
         cancelled = [str(call) for call in client.orders.cancel_calls]
         self.assertTrue(any("order-one" in call for call in cancelled))
         self.assertFalse(any("order-two" in call for call in cancelled))
+
+    async def test_quarantine_can_cancel_from_snapshot_when_first_id_read_lags(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        runner._bind_markets(("market-one",))
+        runner.ledger.prepare_intent(
+            "place-lag", "PLACE", "market-one", "lag-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "place-lag", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "place-lag", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="lag-order")
+        client.orders.rows["lag-order"] = {
+            "id": "lag-order",
+            "clientOrderId": "lag-client",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+        original_retrieve = client.orders.retrieve
+        reads = 0
+
+        async def first_read_not_found(order_id):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                raise AdapterError(
+                    f"GET /v1/order/{order_id} failed: NotFoundError")
+            return await original_retrieve(order_id)
+
+        client.orders.retrieve = first_read_not_found
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        await runner._quarantine_working_orders("market-one")
+
+        self.assertTrue(any(
+            order_id == "lag-order"
+            for order_id, _payload in client.orders.cancel_calls))
+        self.assertFalse(runner.ledger.unresolved_intents("market-one"))
+        self.assertFalse(runner.ledger.working_orders("market-one"))
+
+    async def test_global_quarantine_cancels_other_known_orders_before_failing(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.prepare_intent(
+            "unknown-place", "PLACE", "market-one", "unknown-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "unknown-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.apply_order_event(
+            "ws", "known-other",
+            OrderState(
+                client_order_id="known-client",
+                exchange_order_id="known-order",
+                market_slug="market-two",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        client.orders.rows["known-order"] = {
+            "id": "known-order",
+            "clientOrderId": "known-client",
+            "marketSlug": "market-two",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+
+        with self.assertRaises(AdapterError):
+            await runner._quarantine_working_orders()
+
+        self.assertTrue(any(
+            order_id == "known-order"
+            for order_id, _payload in client.orders.cancel_calls))
+        self.assertFalse(runner.ledger.working_orders("market-two"))
 
     async def test_recovery_loads_a_market_whose_game_already_started(self):
         """A leftover order does not stop being ours because the game began.
@@ -3738,6 +3842,95 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stop, "operator_requested")
         self.assertEqual(sleeps, 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_private_recovery_resumes_other_markets_while_cancel_is_ambiguous(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self._complete_neighbour_frame(runner)
+        runner.ledger.apply_order_event(
+            "ws", "owned-before-disconnect",
+            OrderState(
+                client_order_id="liquidity-before-disconnect",
+                exchange_order_id="exchange-before-disconnect",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        client.orders.rows["exchange-before-disconnect"] = {
+            "id": "exchange-before-disconnect",
+            "clientOrderId": "liquidity-before-disconnect",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+        hidden: set[str] = set()
+
+        async def accepted_but_not_terminal(order_id, payload):
+            client.orders.cancel_calls.append((order_id, payload))
+            hidden.add(order_id)
+
+        async def active_orders(_params):
+            return {"orders": [
+                row for order_id, row in client.orders.rows.items()
+                if order_id not in hidden
+            ]}
+
+        client.orders.cancel = accepted_but_not_terminal
+        client.orders.list = active_orders
+        original_retrieve = client.orders.retrieve
+
+        async def retrieve_with_consistency_lag(order_id):
+            if order_id in hidden:
+                raise AdapterError(
+                    f"GET /v1/order/{order_id} failed: NotFoundError")
+            return await original_retrieve(order_id)
+
+        client.orders.retrieve = retrieve_with_consistency_lag
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(len(runner.ledger.unresolved_intents("market-one")), 1)
+        self.assertEqual(len(runner.ledger.absent_orders("market-one")), 1)
+        self.assertFalse(runner._frame(runner._now(), "market-one").state_known)
+        self.assertTrue(runner._frame(runner._now(), "market-two").state_known)
+        self.assertTrue(runner.gate.session_ready(
+            runner.ledger, now=runner._now()))
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_private_reconnect_failures_are_bounded_without_claiming_flat(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.private_stream_factory = FailingPrivateStream
+
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertEqual(
+            stop, "runner_failure:private_stream_recovery_exhausted")
+        self.assertEqual(
+            runner._runtime_error_counts["private_stream"],
+            MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS,
+        )
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

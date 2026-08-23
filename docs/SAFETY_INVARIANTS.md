@@ -245,3 +245,12 @@ These are implementation requirements, not suggestions.
     budget and would otherwise replan forever, including after kickoff. More
     distinct retirements than `max_markets` is systemic, not unlucky, and stops
     the session.
+64. Stream visibility and order ambiguity have different scope. A private
+    reconnect may resume unaffected markets only after complete REST order and
+    position snapshots plus fresh private state. An unresolved intent,
+    `UNKNOWN_ABSENT` row, or failed order read positively owned by one market
+    keeps that market's execution gate closed until terminal proof; it does not
+    make unrelated owners unknown. Absence is never cancellation. Missing,
+    conflicting, unowned, or out-of-scope ownership remains account-wide
+    terminal. A bounded reconnect failure never proves flat: only shutdown's
+    independent whole-account proof may authorize restartable exit `5`.

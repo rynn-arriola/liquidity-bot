@@ -111,6 +111,11 @@ DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
 # one market before that market is retired instead of retried forever.
 MAX_RECOVERY_ATTEMPTS = 12
 
+# A stream reconnect that genuinely cannot be established must not hold a live
+# process dormant forever. Shutdown still decides whether this is restartable:
+# flat -> exit 5, ambiguous/open state -> exit 3. Never infer flat from the cap.
+MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
+
 RETIRED_EXIT_RETRY_SECONDS = 60
 
 # After this many failed rounds the runner stops planning a retired market at
@@ -859,25 +864,42 @@ class CommissioningRunner:
             key: at for key, at in self._cancel_retried_at.items()
             if key in seen}
 
-    async def _rest_reconcile(self, now: datetime, *, tag: str = "") -> None:
+    async def _rest_reconcile(
+        self, now: datetime, *, tag: str = "",
+        strict_order_markets: frozenset[str] | None = None,
+    ) -> None:
         """Re-read the whole account from REST and apply it to the ledger.
 
         `tag` namespaces the snapshot event ids. Two reconciles at the same
         clock reading would otherwise build the same id from different content,
         which the ledger correctly rejects as a replay -- so a caller that may
         run alongside another at the same instant passes its own tag.
+
+        By default, failure to retrieve any owned live/ambiguous order fails
+        the reconcile. A recovery already scoped to particular markets may
+        pass those markets in ``strict_order_markets``. Retrieval failures in
+        other positively-attributed markets are then recorded and left behind
+        their per-market gates while the complete account snapshots still let
+        the requested recovery proceed. An empty set is the private-stream
+        form: reconnect visibility account-wide, but keep every ambiguous
+        owner dormant. An unattributable failure is always strict.
         """
 
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
-        exchange_ids = {
-            row["exchange_order_id"]
-            for row in tuple(self.ledger.working_orders(owned_only=True))
-            if row["exchange_order_id"]
-        }
-        exchange_ids.update(
-            row["exchange_order_id"] for row in self.ledger.unresolved_intents()
-            if row["exchange_order_id"])
+        exchange_markets: dict[str, set[str]] = {}
+        for row in (
+            *self.ledger.working_orders(owned_only=True),
+            *self.ledger.unresolved_intents(),
+        ):
+            exchange_id = str(row["exchange_order_id"] or "").strip()
+            if not exchange_id:
+                continue
+            market = str(row["market_slug"] or "").strip()
+            exchange_markets.setdefault(exchange_id, set())
+            if market:
+                exchange_markets[exchange_id].add(market)
+        exchange_ids = set(exchange_markets)
         # Ask about every one before failing, rather than raising on the first
         # id the venue will not answer for. `sorted()` makes which id that is
         # deterministic rather than harmless: measured 2026-08-18, the first in
@@ -887,13 +909,13 @@ class CommissioningRunner:
         # the 60s critical stop is armed by exactly that, so the account-wide
         # terminal stop fired and the bot was down for four hours.
         #
-        # Strictness is deliberately unchanged: any failure still fails the
-        # whole reconcile, because a working order we could not re-read is
-        # live risk and nothing below may proceed as if it were known. What
-        # changes is that one unreadable order no longer hides the state of
-        # every other order in the account -- including the ones whose answer
-        # would have cleared the countdown.
-        reconcile_failures: list[str] = []
+        # Default strictness is deliberately unchanged: any failure still
+        # fails the reconcile, because a working order we could not re-read is
+        # live risk and nothing may proceed as if it were known. Recovery may
+        # explicitly contain a positively-owned failure to that market; its
+        # per-market gate remains closed. Either way, one unreadable order no
+        # longer hides every other order's answer or the complete snapshots.
+        reconcile_failures: list[tuple[str, str]] = []
         for exchange_id in sorted(exchange_ids):
             try:
                 await self.executor.reconcile_order(
@@ -906,17 +928,28 @@ class CommissioningRunner:
                 # true if anything below ever starts to.
                 raise
             except Exception as exc:
-                reconcile_failures.append(
-                    f"{exchange_id}: {type(exc).__name__}: {exc}")
-        # Deliberately before the raise below. The sweep above has just written
-        # the venue's current word on every order, which is the only thing that
-        # licenses re-issuing a cancel -- and an unreadable order in some other
-        # market must not postpone repairing this one.
+                reconcile_failures.append((
+                    exchange_id, f"{type(exc).__name__}: {exc}"))
+        # Deliberately before failure classification. The sweep above has just
+        # written the venue's current word on every readable order, which is
+        # the only thing that licenses re-issuing a cancel -- and an unreadable
+        # order in some other market must not postpone repairing this one.
         await self._retry_uncertain_cancels(now)
-        if reconcile_failures:
-            raise AdapterError(
-                f"could not re-read {len(reconcile_failures)} working "
-                "order(s): " + "; ".join(reconcile_failures))
+        blocking_reconcile_failures: list[tuple[str, str]] = []
+        tolerated_failure_markets: set[str] = set()
+        for exchange_id, detail in reconcile_failures:
+            markets = exchange_markets.get(exchange_id, set())
+            # More than one owner is a ledger conflict, and no owner means the
+            # ambiguity cannot be contained. Both stay account-wide failures.
+            if len(markets) != 1:
+                blocking_reconcile_failures.append((exchange_id, detail))
+                continue
+            market = next(iter(markets))
+            if (strict_order_markets is None
+                    or market in strict_order_markets):
+                blocking_reconcile_failures.append((exchange_id, detail))
+            else:
+                tolerated_failure_markets.add(market)
         # Then the orders we have already lost sight of. These are in neither
         # set above -- `UNKNOWN_ABSENT` is not a working state and their
         # intents are long since RECONCILED -- so before this nothing ever
@@ -924,11 +957,11 @@ class CommissioningRunner:
         # session. One such row holds `risk_state_known(None)` false
         # account-wide, which is what wedged every stream bind on 2026-08-16.
         #
-        # Best-effort, unlike the strict sweep above: those are live risk and a
-        # failure there must stop the reconcile, while these are already lost
-        # and a persistent 404 must not take the whole reconcile -- and every
-        # bind that depends on it -- down with it. Absence is still never read
-        # as cancellation: only a terminal state from the venue clears the row.
+        # Best-effort, unlike the default-strict sweep above: these are already
+        # lost and a persistent 404 must not take the whole reconcile -- and
+        # every bind that depends on it -- down with it. Absence is still never
+        # read as cancellation: only a terminal state from the venue clears the
+        # row.
         absent_ids = set()
         for row in self.ledger.absent_orders():
             exchange_id = row["exchange_order_id"]
@@ -1019,6 +1052,20 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        if blocking_reconcile_failures:
+            raise AdapterError(
+                "could not re-read "
+                f"{len(blocking_reconcile_failures)} working order(s): "
+                + "; ".join(
+                    f"{exchange_id}: {detail}"
+                    for exchange_id, detail in blocking_reconcile_failures))
+        if tolerated_failure_markets:
+            print(
+                f"[rest-reconcile] at={self._now().isoformat()} "
+                f"scoped_order_read_failures={len(reconcile_failures)} "
+                f"markets={','.join(sorted(tolerated_failure_markets))}",
+                flush=True,
+            )
         # Freshness begins when the multi-call reconciliation has completed,
         # not when its first request entered the shared REST limiter.
         self.gate.on_rest_reconciled(self._now())
@@ -3101,9 +3148,9 @@ class CommissioningRunner:
             )
 
     async def _quarantine_working_orders(
-        self, slug: str | None = None,
+        self, slug: str | None = None, *, require_terminal: bool = True,
     ) -> None:
-        """Cancel known quotes and prove their terminal state before resume.
+        """Cancel known quotes, optionally requiring terminal proof to return.
 
         ``slug`` limits the quarantine to one market. A per-market fault --
         this market's execution state is unknown, this market's action failed
@@ -3133,7 +3180,22 @@ class CommissioningRunner:
             flush=True,
         )
         now = self._now()
-        await self._rest_reconcile(now)
+        # A single-market repair must not wait on an unreadable order owned by
+        # another market. Private-stream repair uses the empty set: reconnect
+        # account visibility, then let each ambiguous market's normal gate
+        # contain it. The global terminal form remains strict for every order.
+        terminal_order_markets = (
+            None if slug is None and require_terminal
+            else frozenset({slug}) if require_terminal and slug is not None
+            else frozenset()
+        )
+        # The first pass is observational: tolerate only positively-attributed
+        # read failures long enough to apply the complete account snapshots.
+        # Positive OPEN evidence can then license a cancel even when GET-by-id
+        # is lagging. The second pass below enforces the requested terminal
+        # postcondition.
+        await self._rest_reconcile(
+            now, strict_order_markets=frozenset())
         self._assert_runtime_scope()
         # Retire quotes in every market that could hold them, not just the
         # primary. Resuming with one market's order still working would let it
@@ -3142,12 +3204,21 @@ class CommissioningRunner:
         slugs = (slug,) if slug is not None else self._shutdown_slugs()
         for market in slugs:
             if self.ledger.market_has_unresolved_intent(market):
-                raise AdapterError(
-                    f"runtime recovery has unresolved order intents in {market}")
+                # The intent and UNKNOWN_ABSENT row identify exactly which
+                # market is ambiguous. After a fresh private bind, the normal
+                # per-market gate keeps this owner dormant while other markets
+                # resume. Keep walking so one ambiguous owner cannot prevent
+                # cancellation of positively-known orders in later markets.
+                # Reissuing a cancel without positive OPEN evidence is
+                # forbidden; see `_retry_uncertain_cancels`.
+                continue
             if self.ledger.working_orders(market):
                 await self.kill_switch.initiate(market, now=self._now())
-        await self._rest_reconcile(self._now())
+        await self._rest_reconcile(
+            self._now(), strict_order_markets=terminal_order_markets)
         self._assert_runtime_scope()
+        if not require_terminal:
+            return
         for market in slugs:
             if self.ledger.market_has_unresolved_intent(market):
                 raise AdapterError(
@@ -3543,16 +3614,46 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
-                await self._quarantine_working_orders()
+                # A private disconnect is account-wide, so first request
+                # cancellation for every known quote. Cancellation proof can
+                # lag for minutes: a complete snapshot may omit the order while
+                # GET-by-id still reports it active. That ambiguity belongs to
+                # the order's market. Reconnect the account stream and let the
+                # existing per-market gate keep only those owners dormant;
+                # requiring every cancel terminal here held all twenty markets
+                # dark for 20+ minutes on 2026-08-23.
+                await self._quarantine_working_orders(require_terminal=False)
                 stream = self.private_stream_factory(self.client)
                 self.private_stream = stream
                 await stream.start(list(self.active_slugs))
                 self.gate.on_connect()
-                await self._rest_reconcile(self._now())
+                await self._rest_reconcile(
+                    self._now(), strict_order_markets=frozenset())
                 await self._wait_for_initial_private_state()
+                ambiguous_markets = sorted({
+                    str(row["market_slug"])
+                    for row in (
+                        *self.ledger.unresolved_intents(),
+                        *self.ledger.absent_orders(),
+                    )
+                    if str(row["market_slug"] or "").strip()
+                })
+                if ambiguous_markets:
+                    print(
+                        f"[private-recovery] at={self._now().isoformat()} "
+                        f"resumed=yes scoped_ambiguous={len(ambiguous_markets)} "
+                        f"markets={','.join(ambiguous_markets)}",
+                        flush=True,
+                    )
                 await self.notifier.send_async(
                     "✅ Liquidity Bot private stream recovered; REST and fresh "
-                    "private state passed. Quoting may resume.")
+                    "private state passed. "
+                    + (
+                        f"Quoting may resume on unaffected markets; "
+                        f"{len(ambiguous_markets)} market(s) remain scoped "
+                        "until terminal order proof."
+                        if ambiguous_markets else "Quoting may resume."
+                    ))
                 self._runtime_error_counts.pop("private_stream", None)
                 return None
             except RuntimeInvariantViolation as invariant:
@@ -3565,6 +3666,17 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
+                if attempt >= MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS:
+                    exhausted = AdapterError(
+                        "private stream recovery exhausted "
+                        f"{MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS} attempts: "
+                        f"{type(recovery_exc).__name__}: {recovery_exc}")
+                    await self._report_runtime_error(
+                        "private_stream_terminal", exhausted, attempt)
+                    # `main` maps runner_failure to restart only after shutdown
+                    # proves the whole account flat. Unresolved/absent orders
+                    # make `result.flat` false and therefore exit 3 instead.
+                    return "runner_failure:private_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
     async def _recover_market_stream(self, initial: Exception) -> str | None:

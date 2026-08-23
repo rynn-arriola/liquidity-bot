@@ -31,6 +31,62 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
+### FIXED LOCALLY — private-stream recovery waited for every cancel, then unrelated order 404s serialized every market
+
+**Symptom.** The runner stayed alive but stopped trading after a private
+WebSocket disconnect at **21:00:01Z**. Recovery reached attempt 35 at
+21:24:18Z while every attempt reported an unresolved cancel in one market.
+It eventually recovered without intervention and began placing again at
+21:25:48Z, but the recovery had held all twenty markets dark for about
+24 minutes. The new placements then exposed a second form of the same
+head-of-line bug: single-market `execution_state_unknown` recovery spent
+roughly 17–33 seconds re-reading 3–8 unrelated order IDs that returned
+`NotFound`, then moved to the next market.
+
+**What was disproved.** The cancel intents were not permanently dead, and the
+GET-by-ID repair path was not missing. Individual `GET /v1/order/{id}` calls
+eventually returned terminal states—the count fell from 29 to 14 to 6 and the
+loop escaped. The defect was requiring the slowest market's terminal proof
+before restoring account visibility for every other market.
+
+**Mechanism.** `_recover_private_stream` called global quarantine, whose
+terminal postcondition rejected any unresolved cancel. A complete open-order
+snapshot deliberately cannot turn absence into cancellation, so ordinary
+venue consistency lag kept the loop closed even though the ambiguity was
+owned by known markets. Separately, `_rest_reconcile` retrieved every owned
+working/unresolved exchange ID and treated every read failure as account-wide.
+Therefore `_recover_strategy_state(slug)` could not repair `slug` until
+unrelated markets' NotFound retries completed too.
+
+**Fix.** Private recovery now cancels what has positive working-order evidence,
+obtains complete REST order/position snapshots, reconnects the private stream,
+and resumes unaffected markets after fresh private state. Unresolved intents,
+`UNKNOWN_ABSENT` rows, and attributed GET failures continue to close only their
+own market's execution-state gate until positive terminal proof arrives.
+Single-market quarantine is strict for its requested market but tolerates
+attributed read failures in other markets. Default/global reconciliation stays
+strict, and unattributable or conflicting ownership always remains
+account-wide fail-closed. Absence is still never cancellation.
+
+Genuine private reconnect failure is capped at 12 attempts. Exhaustion returns
+a runner failure; shutdown then preserves invariant 53: only a separately
+proved-flat account exits restartable, while any open or ambiguous state exits
+terminal and is not restarted.
+
+**Proof.** Focused regressions reproduce both production shapes: a foreign
+market's GET-by-ID NotFound does not block the requested market's quarantine,
+and a cancel accepted then omitted from the complete snapshot while GET-by-ID
+still returns NotFound leaves its owner unknown but restores the neighboring
+market and creates no new orders during recovery. The default strict-sweep
+regression still raises, and a permanently failing private stream stops after
+exactly 12 attempts without claiming flat. Two final quarantine edge tests
+prove that a complete snapshot's positive OPEN evidence still licenses the
+cancel when the first ID read lags, and that one unresolved owner cannot stop
+known orders in later markets being canceled before terminal failure. Full
+local suite: **517 tests passing**. Deployment is pending final review.
+
+---
+
 ### FIXED AND DEPLOYED — the 20-slot scheduler let shared freshness and one market's state starve the slate
 
 **Symptom.** Restoring the six-hour selection horizon produced abundant supply

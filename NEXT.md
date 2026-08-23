@@ -1,6 +1,47 @@
 # Next session — outstanding fixes
 
-## CURRENT: deployed, restarted, and accepted; continue normal observation
+## CURRENT: bot stopped; scoped private/order recovery verified locally; deploy next
+
+At **2026-08-23T21:00:01Z** the private stream disconnected. The deployed
+runner eventually recovered itself after attempt 35 and resumed placements at
+21:25:48Z, but all twenty markets had been dark for about 24 minutes. The
+resumed placements then hit GET-by-ID NotFound consistency lag; per-market
+`execution_state_unknown` recovery waited on 3–8 unrelated IDs at a time and
+again stopped useful scheduler progress. This is an availability failure, not
+proof that any ambiguous order was terminal.
+
+The local fix restores private visibility after complete REST account
+snapshots and fresh private state while leaving each ambiguous owner behind its
+existing per-market gate. Single-market quarantine no longer waits on
+positively-attributed read failures in other markets. Global/default reconcile,
+unowned or conflicting state, positions, and flat proof remain strict. A
+genuine private reconnect loop is capped at 12 attempts; only the independent
+shutdown flat proof can turn that into restartable exit 5.
+
+Verification completed locally:
+
+1. focused production-shape regressions pass for accepted-cancel + omitted
+   snapshot + GET NotFound, unrelated-market GET NotFound, strict default
+   failure, and bounded reconnect failure;
+2. the ambiguous owner remains `state_known=False`, the neighbor becomes
+   ready, and recovery creates no orders;
+3. `git diff --check` is clean apart from the repository's existing CRLF
+   normalization warning for the test file;
+4. two final edge tests prove snapshot-positive OPEN orders are still canceled
+   when the first ID read lags, and later known markets are canceled before a
+   global quarantine reports an earlier ambiguous owner;
+5. full suite: **517 tests passing in 29.886 seconds**.
+
+The supervisor was stopped and SIGTERM sent before deployment. Shutdown waited
+for a real 0.0600 partial fill and its unresolved order rather than claiming
+flat; venue reconciliation cleared both, and the runner stopped with
+`flat: true` at **2026-08-23T21:47:28Z**. Next: final diff review, commit and
+push, deploy source/tests/docs, run all tests on the droplet, restart, and
+verify the new scoped-recovery log markers and broad action progress.
+
+---
+
+## PREVIOUS: twenty-slot scheduler repair deployed and accepted
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,

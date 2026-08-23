@@ -4521,3 +4521,79 @@ spell sample is only nine completed spells, five longer than 90 seconds. That
 is not enough to choose between a longer dwell and same-price suppression.
 Changing it in the scheduler patch would mix a proven mechanical repair with
 an under-sampled strategy decision.
+
+---
+
+## Private recovery eventually escaped, but account-wide waiting still stopped the twenty-slot scheduler
+
+Established 2026-08-23 from the live runner, ledger, and exact log timeline.
+
+The private stream disconnected at **21:00:01Z**. The runner remained alive,
+but recovery attempts 2 through 35 rejected resume because one or more CANCEL
+intents were not terminal. Attempt 35 was at 21:24:18Z; the first subsequent
+placement was at 21:25:48Z. Therefore the bot did recover itself, but only
+after roughly 24 minutes in which all twenty markets were dark.
+
+This corrects the initial diagnosis: GET-by-ID terminal reconciliation already
+exists and works. The evidence was the unresolved count falling from 29 to 14
+to 6, and order `C24EPEEAYDJR` receiving a venue CANCELED state and reconciling
+at 21:19:26Z. Absence from a complete open-order snapshot correctly remained
+`UNKNOWN_ABSENT`; it was not interpreted as cancellation.
+
+The recovery immediately exposed a second measured head-of-line case. From
+21:25:48Z through 21:25:56Z the bot issued placements across the slate. Their
+acknowledged IDs then encountered GET-by-ID NotFound consistency lag. At
+21:34:46Z one market entered `execution_state_unknown`; its recovery did not
+return until 21:35:19Z after waiting on **8 order IDs**, most belonging to
+other markets. The next market waited 21:35:20–21:35:49Z on 7 IDs. At the last
+pre-fix snapshot the runner was still alive and repeating this pattern with
+3–8 IDs per recovery, but no new `[action]` lines had appeared after 21:25:56Z.
+
+The established distinction is:
+
+- terminal state is an order fact and must never be inferred from absence;
+- ownership is a scope fact, so ambiguity positively tied to one market need
+  not make nineteen unrelated markets unknown;
+- a complete REST account snapshot plus a fresh private bind restores account
+  visibility even while one owned order remains ambiguous;
+- unowned, missing-owner, conflicting-owner, open-position, and failed account
+  snapshot state cannot be scoped and remain account-wide fail-closed.
+
+The implemented repair follows that boundary. Private recovery restores the
+streams and lets the existing per-market gate contain ambiguous owners.
+Single-market quarantine requires readable/terminal proof for its target but
+does not wait on attributed NotFound IDs in other markets. The normal global
+REST reconcile remains strict. Twelve failed private reconnect attempts bound
+the dormant loop, but the cap never proves flat; restartability still comes
+only from the independent shutdown flat proof.
+
+### How to recognize this exact failure next time
+
+Use the session start boundary and correlate these signatures:
+
+```bash
+./scripts/status_commissioning.sh
+grep -aE 'component=private_stream|\[private-recovery\]' logs/commissioning.log | tail -80
+grep -aE 'execution_state_unknown|strategy_state_recovery' logs/commissioning.log | tail -80
+grep -a '\[action\]' logs/commissioning.log | tail -40
+```
+
+- Increasing `component=private_stream attempt=N` plus `runtime recovery has
+  unresolved order intents` means private visibility is waiting on terminal
+  proof instead of reconnecting around scoped ambiguity.
+- A `strategy_state_recovery:<one slug>` error that lists many order IDs from
+  other slugs means account-wide order reads are serializing per-market repair.
+- A live PID is not proof of trading. Compare the timestamp of the newest
+  `[action]` with the newest recovery line and count distinct action markets
+  since the current run start.
+- After this fix, look for `[private-recovery] ... resumed=yes
+  scoped_ambiguous=N` and `[rest-reconcile] ...
+  scoped_order_read_failures=N markets=...`. Those lines mean visibility is
+  restored and only the named owners remain blocked.
+
+A concise prompt for another reviewer is: **“Review liquidity-bot twenty-slot
+liveness for account-wide head-of-line blocking. From the current run start,
+correlate private-stream attempt depth, quarantine caller, unresolved and
+UNKNOWN_ABSENT ownership by market, GET-by-ID failures, and distinct `[action]`
+markets; verify ambiguous state blocks only its owning market and compare with
+independent per-market plans.”**

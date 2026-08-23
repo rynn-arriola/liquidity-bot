@@ -3999,3 +3999,58 @@ dataclass default in `market_selector.py` and is never passed from
 `CommissioningConfig` or the command line, so changing it is a code edit, a
 deploy and a restart. Wire it to the config before running the A/B, or the
 experiment costs a deploy in each direction.
+
+### The venue's rule says distance from kickoff does not reduce pay at all
+
+Checked at `docs.polymarket.us/incentives/liquidity`, 2026-08-23T01:55Z, at the
+operator's prompting. This is the part nobody checked before narrowing the
+horizon, and it removes the mechanism the change assumed.
+
+> **"Every second of the time period is equally weighted regardless of how much
+> liquidity is on the book."**
+
+The periods, each with **its own pool**:
+
+```
+early / pre-game    listing        -> 6h before event
+day_of / pre-game   6h before      -> event start        <- the only one we quote
+live                event start    -> settlement
+daily               midnight -> midnight ET
+```
+
+**There is no time-decay within a period.** The `day_of` pool is spread evenly
+across all 21,600 seconds of its six hours. An order five hours out earns
+identically per second to the same order fifteen minutes out. The only quantity
+that varies with time-to-kickoff is **competition** -- other makers' total score
+-- because payout is purely `your_score / total_score` per second.
+
+Two consequences, and they run against `0b04c2b`:
+
+1. **Quoting only the last two hours makes us present for one third of the
+   seconds the `day_of` pool pays across.** At the pool of 35 recorded in
+   `docs/API_CONTRACTS.md`, roughly $11.67 of it is reachable by construction,
+   whatever we do with the other settings.
+2. **Early hours should pay BETTER per second, not worse.** The pool slice per
+   second is fixed *regardless of book depth*, so an hour with few competing
+   makers hands us a larger share of identical money. That is the opposite of
+   the change's premise.
+
+So "six hours don't pay as much" was never a statement about the rule. It was a
+claim about competition, inferred from a projection that `44bfecd` had already
+flagged as internally inconsistent by 500x.
+
+**Three independent lines now agree** the narrowing was a mistake: the venue's
+rule (no distance penalty, and a pool we are absent for two thirds of), realised
+per-market reward (68% -> 47% earning, median 0.085 -> 0.030), and reward per
+resting hour (0.128 -> 0.093).
+
+**What still argues the other way, and it is not nothing.** The change was also
+about fill risk -- distant thin books filling us and costing an exit. Clean
+trading data begins 2026-08-18, after the change, so that half has never been
+measured either way. Trading now runs about -0.045/pair, and more resting hours
+means more pairs. The A/B must be judged on **net**, not reward.
+
+**This also reopens `early`.** It is a separate pool, running from listing until
+six hours out, that this bot has never touched -- excluded by invariant 39 for
+want of a provable clock, not because it does not pay. Worth a look once the
+`day_of` horizon question is settled; do not conflate the two.

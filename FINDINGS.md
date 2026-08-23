@@ -4085,3 +4085,63 @@ and resting hours fell because there was nothing left to rest in.
 So the two horizons are NOT "same seconds, different quality". They are "enough
 candidates to fill the book" versus "not enough", and the venue's equal-weighting
 rule means the seconds we lost were worth the same as the ones we kept.
+
+### Root cause: `projected_reward` is time-invariant, so the buckets never measured timing
+
+Traced 2026-08-23T02:05Z, answering "where did we get that 2h pays more".
+
+The whole chain rests on one section, "Reward is concentrated in the hours
+before kickoff" -- a **single snapshot of 48 markets on 2026-08-16**, bucketing
+the selector's `projected_reward` by minutes to kickoff, showing 0.000313 at
+15-30 minutes against 0.000022 at 120+.
+
+**That quantity does not vary with time to kickoff.** From
+`project_order_reward` (`rewards.py`):
+
+```python
+duration           = 6 hours, constant for every day_of market
+dollars_per_second = pool * 0.5 * share * haircut / duration
+projected          = dollars_per_second * min(horizon, remaining)
+```
+
+`horizon` is `reward_projection_horizon_seconds` = **30**, and `remaining` is
+always above 300 seconds because the pre-kickoff flatten fires at T-300. So
+`min(horizon, remaining)` is **always exactly 30**, and
+
+```
+projected_reward = 30 * pool * 0.5 * haircut * share / 21600
+                 = a constant x (pool x share)
+```
+
+It contains no term that decays with distance from kickoff. It measures the
+market's pool and our score share, and nothing else.
+
+**So the buckets compared different markets, not the same market at different
+times.** A market 120 minutes from kickoff at 22:00Z is a different event, in a
+different league, with a different pool and a different book, from one 20
+minutes out at 22:00Z. The 14x gap is a difference between those markets. It was
+then read as a property of *when* rather than of *which*, and a selection rule
+was built on it.
+
+**The source section says so itself, and was ignored:**
+
+> This is *projected* reward at a single snapshot, not realized earnings, and
+> **every market passes through every bucket** as its game approaches -- today's
+> 120+ market becomes a 30-minute market later. **So the claim is NOT "distant
+> markets are worse to hold".**
+
+That sentence is the exact inference `0b04c2b` made. Together with `44bfecd`'s
+"neither number should be used to justify a change to selection" nine minutes
+before the change, the evidence carried two explicit warnings against the use it
+was put to.
+
+**Also explains the 500x discrepancy** left open in `44bfecd`: if
+`projected_reward` is `k x pool x share`, its magnitude is driven entirely by
+which markets are in the sample, so two samples taken hours apart on different
+slates have no reason to agree. They were never the same population.
+
+**What this does NOT establish.** That distant markets are equally *good* -- only
+that this measurement never showed they were worse. Thin distant books fail
+`target_not_met` outright (a third of the 120+ bucket paid nothing), and that
+part is real and is about the book, not about the clock. The open question
+remains competition and depth by time-to-kickoff, measured on realised reward.

@@ -4054,3 +4054,34 @@ means more pairs. The A/B must be judged on **net**, not reward.
 six hours out, that this bot has never touched -- excluded by invariant 39 for
 want of a provable clock, not because it does not pay. Worth a look once the
 `day_of` horizon question is settled; do not conflate the two.
+
+#### Correcting the "one third of the pool" argument, written minutes earlier
+
+The per-market statement is true and the portfolio conclusion drawn from it was
+not. With a fixed twenty slots, a 2h horizon holds each market ~2h and a 6h
+horizon holds it ~6h, so the narrow window covers roughly **three times as many
+markets at one third the coverage each**. Total pool-seconds accessed is
+approximately conserved. "We forfeit two thirds of the pool" is wrong as a
+portfolio argument.
+
+**The argument that survives is slot starvation, and it is stronger.** Supply
+measured from the `[selection]` counters:
+
+```
+                    6h horizon    2h horizon
+executable              113          ~50
+viable (median)          36          2-10        against 20 slots
+```
+
+At 2h the bot **cannot fill its twenty slots** -- median viable is 2 to 10.
+Slots sit empty, and an empty slot earns exactly nothing. At 6h there were 36
+viable, comfortably more than capacity, so the ranking could choose and every
+slot could be filled.
+
+That is the mechanism, and it also explains the realised numbers without any
+appeal to competition: reward per resting hour fell because resting hours fell,
+and resting hours fell because there was nothing left to rest in.
+
+So the two horizons are NOT "same seconds, different quality". They are "enough
+candidates to fill the book" versus "not enough", and the venue's equal-weighting
+rule means the seconds we lost were worth the same as the ones we kept.

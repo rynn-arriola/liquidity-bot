@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT: deploy the final execution-state freshness edge, then restart
+## CURRENT: restart and monitor the deployed execution-state freshness edge
 
 The live bot was stopped flat at **2026-08-23T04:10:48Z** before changes. The
 repair addresses the observed 0/20 state without changing the six-hour horizon,
@@ -16,19 +16,19 @@ proving the original starvation repair. It also exposed a 30-second
 execution-state freshness expiry during the longer productive sweep. The final
 local patch refreshes at 25 seconds, stamps freshness at REST completion, and
 limits a failed account-wide refresh to one attempt per sweep while remaining
-fail-closed. The expanded local suite passes **513 tests**. The operator stopped
-the bot flat at **2026-08-23T04:45:13Z**; it remains stopped for deployment.
+fail-closed. The expanded suite passes **513 tests locally and on the droplet**
+(40.881 seconds in production). Source commit `2eed575` is deployed. The
+operator stopped the bot flat at **2026-08-23T04:45:13Z**; it remains stopped
+pending the monitored restart.
 
 Before restarting:
 
-1. commit and deploy the execution-state refresh source and regressions;
-2. pass all 513 tests in the production virtual environment and update
-   `DEPLOYED_COMMIT` to that source commit;
-3. restart once and verify placements remain distributed across the slate;
-4. monitor beyond the prior seven-minute run and verify no new
+1. update `DEPLOYED_COMMIT` to source commit `2eed575`;
+2. restart once and verify placements remain distributed across the slate;
+3. monitor beyond the prior seven-minute run and verify no new
    `execution_state_unknown` quarantine occurs during healthy stream/REST
    operation;
-5. retain unresolved/absent/position and process-health evidence.
+4. retain unresolved/absent/position and process-health evidence.
 
 Do not combine the restart with a reward-eligibility dwell change. That policy
 remains under the explicit measurement rule in `WATCHLIST.md`.

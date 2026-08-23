@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-23
 
-### FIXED — the 20-slot scheduler let shared freshness and one market's state starve the slate
+### FIXED AND DEPLOYED — the 20-slot scheduler let shared freshness and one market's state starve the slate
 
 **Symptom.** Restoring the six-hour selection horizon produced abundant supply
 but almost no resting orders: 98 viable markets, 20 bound slots, 40 eligible
@@ -106,8 +106,9 @@ and makes at most one failed account-wide refresh attempt per sweep. A failed
 refresh never marks state fresh; the 30-second gate still refuses entries.
 
 Five new boundary/failure/slow-response/twenty-slot regressions bring the full
-local suite to **513 passing**. The bot remains stopped and flat while this
-last edge fix is deployed and server-tested.
+suite to **513 passing locally and on the droplet** (40.881 seconds in the
+production virtual environment). Source commit `2eed575` is deployed. The bot
+remains stopped and flat pending the monitored restart.
 
 **Not changed.** The six-hour horizon, 4 req/s REST ceiling, twenty-slot cap,
 quote size, exposure limits, and 90-second reward-eligibility dwell. The last

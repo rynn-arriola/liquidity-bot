@@ -659,6 +659,134 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._observe_private(event, NOW + timedelta(seconds=20))
 
+    async def test_terminal_cancel_private_event_prioritizes_only_its_market(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_order_event(
+            "ws", "priority-open",
+            OrderState(
+                client_order_id="liquidity-priority",
+                exchange_order_id="exchange-priority",
+                market_slug="market-two",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        runner.ledger.prepare_intent(
+            "cancel-priority", "CANCEL", "market-two",
+            "liquidity-priority", {"orderId": "exchange-priority"},
+            created_at=NOW,
+        )
+        runner.ledger.transition_intent(
+            "cancel-priority", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "cancel-priority", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="exchange-priority")
+
+        await runner._observe_private(PrivateEvent(
+            PrivateEventKind.ORDER_UPDATE,
+            {"execution": {
+                "id": "private-cancel-priority",
+                "type": "EXECUTION_TYPE_CANCEL",
+                "order": {
+                    "id": "exchange-priority",
+                    "marketSlug": "market-two",
+                    "intent": "ORDER_INTENT_BUY_LONG",
+                    "side": "ORDER_SIDE_BUY",
+                    "state": "ORDER_STATE_CANCELED",
+                    "price": {"value": "0.49", "currency": "USD"},
+                    "quantity": "1",
+                    "cumQuantity": "0",
+                    "updateTime": (NOW + timedelta(seconds=1)).isoformat(),
+                },
+            }},
+            "priority-cancel-update",
+        ), NOW + timedelta(seconds=1))
+
+        self.assertEqual(runner._take_priority_replans(), ("market-two",))
+        self.assertEqual(runner._take_priority_replans(), ())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_terminal_cancel_rest_proof_also_prioritizes_its_market(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.apply_order_event(
+            "ws", "rest-priority-open",
+            OrderState(
+                client_order_id="liquidity-rest-priority",
+                exchange_order_id="exchange-rest-priority",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        runner.ledger.prepare_intent(
+            "cancel-rest-priority", "CANCEL", "market-one",
+            "liquidity-rest-priority",
+            {"orderId": "exchange-rest-priority"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "cancel-rest-priority", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "cancel-rest-priority", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="exchange-rest-priority")
+        client.orders.rows["exchange-rest-priority"] = {
+            "id": "exchange-rest-priority",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "1",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_CANCELED",
+            "createTime": NOW.isoformat(),
+            "lastTransactTime": (NOW + timedelta(seconds=1)).isoformat(),
+        }
+
+        await runner._rest_reconcile(NOW + timedelta(seconds=2))
+
+        self.assertEqual(runner._take_priority_replans(), ("market-one",))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_priority_decision_sweep_does_not_replan_other_slots(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two", "market-three"))
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        return_value=(None, 0.0))) as decide:
+            outcome = await runner._decision_sweep(("market-two",))
+
+        self.assertIsNone(outcome)
+        decide.assert_awaited_once()
+        self.assertEqual(decide.await_args.args[0], "market-two")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_rebind_discards_priority_for_released_market(self):
+        runner, _, _ = self.build_runner()
+        runner._bind_markets(("market-one", "market-two"))
+        runner._priority_replan_slugs.update(("market-one", "market-two"))
+
+        runner._bind_markets(("market-two",))
+
+        self.assertEqual(runner._take_priority_replans(), ("market-two",))
+
     async def test_events_arriving_during_rest_service_are_applied_before_decisions(self):
         runner, _, _ = self.build_runner(clock=lambda: NOW + timedelta(seconds=20))
         runner._bind_markets(("market-one",))

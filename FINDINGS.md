@@ -4622,3 +4622,90 @@ correlate private-stream attempt depth, quarantine caller, unresolved and
 UNKNOWN_ABSENT ownership by market, GET-by-ID failures, and distinct `[action]`
 markets; verify ambiguous state blocks only its owning market and compare with
 independent per-market plans.”**
+
+---
+
+## Cancel confirmation was fast; the replacement waited behind the slate
+
+Established 2026-08-23 after the scoped private-recovery deployment, from the
+current run's action log and execution ledger.
+
+This is separate from the 21:00Z private-stream outage. That outage kept all
+markets dark for about 25 minutes and the scoped-recovery changes fixed it. The
+lower instantaneous order count after the restart prompted a second review of
+the cancel/re-place path.
+
+### Evidence and history check
+
+From the 22:11:14Z run start, 80 completed
+`resting_price_left_the_touch` cancel/replacement pairs could be joined to
+their CANCEL intents and order rows:
+
+```
+CANCEL terminal confirmation     median 1.22s   p90 2.10s   max 3.77s
+terminal -> next replacement     median 39.45s  p90 118.63s
+cancel -> next replacement       median 40.60s  p90 120.09s
+same replacement price           21 / 80
+within one tick                   48 / 80
+```
+
+The exchange and ledger were therefore not the main wait. After positive
+terminal proof, the owner still went through periodic account work and the
+shared bound-market service path before the next full decision sweep. That
+path regularly refreshed stale books through the single 4 req/s governor. A
+market with no working order remained dark while unrelated slots were
+serviced.
+
+The operator correctly tied the visible change to the 21:00Z incident, but a
+before/after history comparison disproved the recovery patch as the origin of
+this latency:
+
+```
+                         touch cancels   completed pairs   median dark gap
+16:00-21:00 before stop       122              119              122.4s
+22:11+ after restart           85               83               41.1s
+```
+
+The post-recovery code was already materially better. The underlying
+cancel-first behavior dates to 2026-08-13, the touch-change reason dates to
+2026-08-14, and cancel/re-place cycling was measured on 2026-08-19. The restart
+also rebuilt the slate while selection reported only seven to nine viable
+markets; 20 is capacity, not a promise that twenty candidates exist.
+
+### Fix boundary
+
+When a CANCEL intent gains terminal proof from either the private stream or
+REST, its positively-known owner is queued once in active-slot order. Before
+the next full-slate service pass, only those owners are re-serviced and sent
+through the existing decision path. The fast path does not infer cancellation,
+does not place while an intent is unresolved, and does not bypass book,
+execution-state, equity, economics, loss, or ownership gates.
+
+Priority service can itself yield for REST, so ready market/private events are
+applied and drained before the decision. The owner's derived book economics
+are then refreshed once more (normally without REST) before planning. This
+preserves the same fill-before-decision ordering as the full-slate path. A
+released market is removed from the queue, multiple cancel confirmations for
+one owner deduplicate, and a normal full sweep consumes a REST-created marker
+so it cannot cause duplicate work.
+
+The new live marker is:
+
+```
+[priority-replan] at=... elapsed=... markets=slug[,slug]
+```
+
+To recognize this exact issue next time, compare each touch CANCEL with the
+next `PLACE_POST_ONLY` for the same market and side, then split the elapsed time
+at the CANCEL intent's `updated_at`. A short cancel-confirm interval and a long
+terminal-to-place interval is scheduler latency. A long cancel-confirm interval
+is venue/private/REST reconciliation instead. Also compare periods on both
+sides of any deployment before attributing the change.
+
+A concise prompt for another reviewer is: **“Audit liquidity-bot
+cancel-confirmed replan latency. From one run boundary, join
+`resting_price_left_the_touch` CANCEL actions to CANCEL intent `updated_at` and
+the next same-market/same-side PLACE; report cancel-confirm and
+terminal-to-place distributions, same-price returns, `[priority-replan]`
+elapsed time, and verify all stream/equity/execution/economic gates run before
+replacement.”**

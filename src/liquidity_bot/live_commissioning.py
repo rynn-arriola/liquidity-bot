@@ -306,6 +306,11 @@ class CommissioningRunner:
         # Recovery delay belongs to the market that requested it. The old
         # sweep let one unhealthy slot pause the other nineteen.
         self._next_decision_at: dict[str, datetime] = {}
+        # Markets whose CANCEL intent became terminal on the private stream.
+        # They are serviced and replanned before the next full bound-market
+        # pass. Without this, a confirmed cancel waits behind REST service and
+        # decisions for the whole slate before its replacement is considered.
+        self._priority_replan_slugs: set[str] = set()
         # Resolve one attributable market per background pass, round-robin.
         # Asking every unresolved id serially before decisions recreated the
         # same twenty-slot head-of-line stall the per-market scheduler removed.
@@ -483,6 +488,7 @@ class CommissioningRunner:
         self._next_decision_at = {
             slug: value for slug, value in self._next_decision_at.items()
             if slug in self._markets}
+        self._priority_replan_slugs.intersection_update(self._markets)
 
     @property
     def _primary(self) -> MarketState:
@@ -895,6 +901,7 @@ class CommissioningRunner:
         dormant. An unattributable order is always read strictly.
         """
 
+        unresolved_cancels = self._unresolved_cancel_owners()
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
         exchange_markets: dict[str, set[str]] = {}
@@ -1072,6 +1079,7 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        self._record_resolved_cancel_owners(unresolved_cancels)
         if blocking_reconcile_failures:
             raise AdapterError(
                 "could not re-read "
@@ -1090,10 +1098,45 @@ class CommissioningRunner:
         # not when its first request entered the shared REST limiter.
         self.gate.on_rest_reconciled(self._now())
 
+    def _unresolved_cancel_owners(self) -> dict[str, str]:
+        """Map unresolved CANCEL intents to their positively-known owner."""
+
+        return {
+            str(row["intent_id"]): str(row["market_slug"] or "").strip()
+            for row in self.ledger.unresolved_intents()
+            if str(row["operation"]).upper() == "CANCEL"
+        }
+
+    def _record_resolved_cancel_owners(
+        self, unresolved_cancels: dict[str, str],
+    ) -> None:
+        """Prioritize owners whose CANCEL gained terminal proof."""
+
+        if not unresolved_cancels:
+            return
+        still_unresolved = {
+            str(row["intent_id"])
+            for row in self.ledger.unresolved_intents()
+        }
+        self._priority_replan_slugs.update(
+            slug for intent_id, slug in unresolved_cancels.items()
+            if intent_id not in still_unresolved and slug in self._markets)
+
     async def _observe_private(self, event: Any, now: datetime) -> None:
+        unresolved_cancels = self._unresolved_cancel_owners()
         received_at = getattr(event, "received_at", None) or now
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
+        self._record_resolved_cancel_owners(unresolved_cancels)
+
+    def _take_priority_replans(self) -> tuple[str, ...]:
+        """Take cancel-confirmed markets in stable active-slot order."""
+
+        selected = tuple(
+            slug for slug in self.active_slugs
+            if slug in self._priority_replan_slugs)
+        self._priority_replan_slugs.difference_update(selected)
+        return selected
 
     async def _wait_for_initial_private_state(self, timeout_seconds: float = 15) -> None:
         loop = asyncio.get_running_loop()
@@ -2636,11 +2679,16 @@ class CommissioningRunner:
             self._last_action_at[slug] = self._now()
         return None, 0.0
 
-    async def _decision_sweep(self) -> str | None:
+    async def _decision_sweep(
+        self, slugs: tuple[str, ...] | None = None,
+    ) -> str | None:
         """Plan every due market without cross-slot intent/backoff blocking."""
 
         state_refresh_failed = False
-        for slug in self.active_slugs:
+        planned_slugs = self.active_slugs if slugs is None else slugs
+        for slug in planned_slugs:
+            if slug not in self._markets:
+                continue
             if self.ledger.market_has_unresolved_intent(slug):
                 continue
             now = self._now()
@@ -2663,6 +2711,10 @@ class CommissioningRunner:
                 # once stale, `_frame` removes entry eligibility fail-closed.
                 pass
             outcome, delay = await self._decide_for_market(slug, self._now())
+            # A normal full sweep can reach a market whose REST terminal proof
+            # queued priority earlier in this same loop. Its replan has now
+            # happened, so do not service it again next iteration.
+            self._priority_replan_slugs.discard(slug)
             if outcome:
                 return outcome
             if delay > 0:
@@ -2756,7 +2808,9 @@ class CommissioningRunner:
         if len(healthy) != len(self.active_slugs):
             self._bind_markets(tuple(healthy))
 
-    async def _service_bound_markets(self) -> str:
+    async def _service_bound_markets(
+        self, slugs: tuple[str, ...] | None = None,
+    ) -> str:
         """Visit every bound market, surviving any one of them failing.
 
         Serviced, not merely selected: a market holding risk must keep being
@@ -2779,7 +2833,10 @@ class CommissioningRunner:
         surfaces as one.
         """
 
-        for slug in self.managed_slugs():
+        serviced_slugs = self.managed_slugs() if slugs is None else slugs
+        for slug in serviced_slugs:
+            if slug not in self._markets:
+                continue
             try:
                 await self._service_market_state(slug, self._now())
             except RuntimeInvariantViolation as invariant:
@@ -4686,6 +4743,54 @@ class CommissioningRunner:
                             "reward_earnings_refresh", exc)
                     next_earnings = now + timedelta(
                         seconds=self.config.earnings_refresh_seconds)
+                # A terminal CANCEL is positive proof that this owner may be
+                # planned again. Re-service only those owners, then run the
+                # same freshness/equity/intent-gated decision path used by the
+                # full slate. Measured 2026-08-23: cancel confirmation took a
+                # median 1.2s, but the replacement waited another 39.5s
+                # (p90 118.6s) behind the shared service/sweep path; 21/80
+                # replacements returned at the exact price just cancelled.
+                # This removes that scheduler wait without placing before a
+                # terminal state or weakening any quote/economic gate.
+                priority_replans = self._take_priority_replans()
+                if priority_replans:
+                    priority_started_at = self._now()
+                    stop_reason = await self._service_bound_markets(
+                        priority_replans)
+                    if stop_reason:
+                        break
+                    # Priority service can itself yield for REST. Apply any
+                    # fill/order/book events that arrived during that work
+                    # before deciding, exactly as the full-slate path below
+                    # does. Otherwise the fast path could place from a ledger
+                    # that predates a fill received while its book refreshed.
+                    market_task, private_task, stream_stop = (
+                        await self._consume_ready_stream_tasks(
+                            market_task, private_task))
+                    if stream_stop:
+                        stop_reason = stream_stop
+                        break
+                    # A drained book may have changed the candidate price and
+                    # economics after the first service. This second pass is
+                    # normally REST-free because the first advanced the
+                    # per-market timers; it synchronizes those derived gates
+                    # with the just-applied stream state.
+                    stop_reason = await self._service_bound_markets(
+                        priority_replans)
+                    if stop_reason:
+                        break
+                    stop_reason = await self._decision_sweep(
+                        priority_replans) or ""
+                    if stop_reason:
+                        break
+                    priority_finished_at = self._now()
+                    print(
+                        f"[priority-replan] "
+                        f"at={priority_finished_at.isoformat()} "
+                        f"elapsed={max(0.0, (priority_finished_at - priority_started_at).total_seconds()):.1f} "
+                        f"markets={','.join(priority_replans)}",
+                        flush=True,
+                    )
                 # Service every bound market on its own cadence. Keep this
                 # last among periodic REST work so account latency cannot age a
                 # book before the decisions below.

@@ -257,3 +257,12 @@ These are implementation requirements, not suggestions.
     conflicting, unowned, or out-of-scope ownership remains account-wide
     terminal. A bounded reconnect failure never proves flat: only shutdown's
     independent whole-account proof may authorize restartable exit `5`.
+65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
+    only after a terminal order state resolves its intent. Priority changes
+    scheduling, never authorization: ownership, unresolved-intent, private/REST
+    execution freshness, equity freshness, book freshness, economics, loss and
+    exit gates remain identical to a normal decision. If priority service
+    yields for REST, every ready private and market event is applied before the
+    decision and the derived market economics are refreshed against that
+    drained state. Rebind discards owners no longer active, and duplicate
+    terminal notices cannot create duplicate priority work.

@@ -116,6 +116,43 @@ starvation.
 
 ---
 
+## Terminal cancels waited behind the full market slate before replacement
+
+**Symptom.** After the 2026-08-23 private-stream recovery fix, the bot was live
+and moving across the slate but an instantaneous sample often showed only
+12-14 orders. Markets repeatedly disappeared between a touch-change cancel and
+their replacement.
+
+**Mechanism.** The reconciler correctly cancels first and refuses replacement
+until terminal proof. Confirmation was fast (1.22s median over 80 current-run
+pairs), but a confirmed owner then waited behind periodic account work,
+per-market REST service and the next full decision sweep (39.45s median after
+confirmation, 118.63s p90). Twenty-one replacements returned at the exact
+cancelled price and 48/80 moved no more than one tick, so that dark time often
+bought no durable price improvement.
+
+This did **not** originate in the preceding recovery patch. Before the 21:00Z
+outage the comparable median cancel-to-place gap was worse at 122.4s. The
+recovery patch fixed the distinct 25-minute all-market deadlock and remains in
+place.
+
+**Fix.** Terminal CANCEL transitions from private or REST state queue only the
+positively-owned market for immediate re-service/replan ahead of the full
+slate. Ready stream events are drained after priority REST work and economics
+are refreshed again before planning. Unresolved intents, unknown ownership,
+stale execution/equity/book state, and uneconomic quotes still refuse exactly
+as before. Rebind removes released owners, sets deduplicate, and an ordinary
+sweep consumes a marker it already serviced. `[priority-replan]` records the
+elapsed fast-path time and owners for production verification.
+
+**Verification.** Focused tests cover private terminal proof, REST terminal
+proof, one-owner decision scope, released-market cleanup, stream draining and
+both twenty-slot freshness boundaries. Mutation-checking removal of the queue
+write makes the terminal-private regression fail. Full local suite: **522 tests
+passing** before deployment.
+
+---
+
 ### FIXED AND DEPLOYED — the 20-slot scheduler let shared freshness and one market's state starve the slate
 
 **Symptom.** Restoring the six-hour selection horizon produced abundant supply

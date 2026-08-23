@@ -1,6 +1,30 @@
 # Next session — outstanding fixes
 
-## CURRENT: scoped private/order recovery deployed and live-accepted
+## CURRENT: deploy and live-accept cancel-confirmed priority replan
+
+The current 22:11:14Z run proved that CANCEL intents normally become terminal
+quickly while their replacement waits behind the full slate. Over 80 joined
+touch-change cycles, cancel confirmation was 1.22s median but the subsequent
+replacement wait was 39.45s median and 118.63s p90; 21 returned at the same
+price and 48 moved at most one tick.
+
+The local fix queues terminal CANCEL owners from both private and REST proof,
+re-services only those markets before the next full slate, drains stream events
+that arrive during priority REST work, refreshes derived economics, and then
+uses the unchanged guarded decision path. It adds `[priority-replan]` for live
+measurement and does not alter `max_markets=20`, selection horizon, quote size,
+REST rate, economics, or risk limits.
+
+Focused edge tests and mutation check pass. Full local suite: **522 tests
+passing**. Next: final diff review, stop the runner gracefully and prove flat,
+commit/push, deploy, run the full suite on the server, restart, then measure
+`[priority-replan] elapsed` and new terminal-to-place gaps against the 39.45s
+baseline. Do not claim success from a single working-order sample; selection
+still reported only seven to nine viable markets around the prior restart.
+
+---
+
+## PREVIOUS: scoped private/order recovery deployed and live-accepted
 
 At **2026-08-23T21:00:01Z** the private stream disconnected. The deployed
 runner eventually recovered itself after attempt 35 and resumed placements at

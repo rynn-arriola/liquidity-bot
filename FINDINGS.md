@@ -3913,3 +3913,89 @@ not make each trade worse; it made more of them. Combined with venue reward
 **08-21 -5.60** -- the first full day at size 10, and the first negative one.
 08-22 has not posted. One day is not a verdict, and 08-21 still carries $28.43
 PENDING, but this is the number `NEXT.md`'s rollback section exists to watch.
+
+---
+
+## Testing the horizon change against realised reward: the premise does not hold up
+
+Measured 2026-08-23T01:45Z, at the operator's prompting -- "we made that change
+knowing 6 hours don't pay that much, can you check that". Checking it is the
+point of this file, and the answer is not the one the change assumed.
+
+### The evidence the change was made on, and the caveat attached to it
+
+`0b04c2b` narrowed `selection_horizon_seconds` 21600 -> 7200 citing a median
+**projected** reward of `0.000022` in the 120+ minute bucket against `0.000313`
+at 15-30 minutes. Those numbers come from `44bfecd`, committed **nine minutes
+earlier**, which says of them:
+
+> Either the two measurements are not the same field, or one is wrong. Until
+> that is resolved, **neither number should be used to justify a change to
+> selection**, because the whole argument for reweighting rests on projections
+> being comparable across buckets.
+
+The 500x discrepancy that caveat describes has never been resolved. So the
+change rests on a projection comparison this file had, minutes before, declared
+unreliable. The action is not identical to the one `44bfecd` refused --
+excluding distant markets is not reweighting toward near ones -- but the
+evidence underneath is the same, and so is the objection.
+
+### Realised reward, which we now have and did not then
+
+Per-market reward from the venue (PAID+PENDING), against markets actually bound:
+
+```
+day        horizon  bound  earned  %earn  median   p25    p75  <$0.10   total
+2026-08-15      6h    106      71    67%   0.060  0.020  0.260    55%   28.46
+2026-08-16      6h    104      72    69%   0.110  0.040  0.340    43%   22.39
+2026-08-17     mix    193     128    66%   0.090  0.040  0.230    54%   34.60
+2026-08-18      2h    149      63    42%   0.020  0.010  0.080    78%   14.60
+2026-08-19      2h    128      66    52%   0.040  0.010  0.150    61%   15.13
+2026-08-20      2h     82      48    59%   0.165  0.040  0.580    42%   22.21   size 10
+2026-08-21      2h    154      93    60%   0.110  0.040  0.520    44%   29.54   size 10
+```
+
+**The change predicted that cutting distant markets would RAISE the share of
+markets that earn and RAISE the median, because what is removed is the
+worthless tail.** Comparing like-for-like at quote size 5:
+
+```
+                        6h era (08-15,16)   2h era (08-18,19)
+share of bound markets
+  earning anything             68%                47%
+median per-market reward      0.085              0.030
+earning under $0.10            49%                70%
+reward per resting hour       0.128              0.093
+```
+
+Every measure moved the wrong way. The 08-20/08-21 recovery is the size
+doubling (score is linear in size), not the horizon.
+
+### Why this is suggestive and not yet a verdict
+
+**The two post-change days are the two worst operational days the bot has
+had.** 08-18 restarted ten times; 08-19 ran the churn bug until the fix landed
+mid-day. Attributing their weakness to the horizon rather than to those is not
+safe, and two days against two days is a thin comparison however it is framed.
+
+**And there is a genuine blind spot.** The change was argued on trading risk as
+much as reward -- "a slot out there carries the full risk of being filled and
+having to exit at a loss in exchange for approximately no reward". Clean
+trading data starts **2026-08-18** (the `isAggressor` fix), which is *after* the
+change, so the cost side of that argument cannot be compared before and after
+at all. It may well have been right about fill risk even if it was wrong about
+reward.
+
+### What would settle it, and one correction
+
+Run the 6h horizon for three days at size 10 and compare against 08-21/08-22/
+08-23 at 2h and size 10, on **net** (reward minus trading), not on reward
+alone. That is a real A/B and both sides are now measurable, which they were
+not in August's first week.
+
+**Correction to `0b04c2b`'s message:** it states the old behaviour is restorable
+"by config rather than by deploy". It is not. `selection_horizon_seconds` is a
+dataclass default in `market_selector.py` and is never passed from
+`CommissioningConfig` or the command line, so changing it is a code edit, a
+deploy and a restart. Wire it to the config before running the A/B, or the
+experiment costs a deploy in each direction.

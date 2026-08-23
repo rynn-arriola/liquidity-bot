@@ -210,22 +210,26 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
             ranked[0], "thin",
             "the market where our size is a bigger share must win the slot")
 
-    async def test_a_distant_market_is_not_selected_at_all(self):
-        """A slot out there is negative expected value, not free.
+    async def test_the_default_horizon_takes_the_whole_day_of_period(self):
+        """Six hours by default, restored 2026-08-23.
 
-        The venue's `day_of` reward period runs six hours and the selector used
-        all of it. FINDINGS measures the 120+ minute bucket at a median
-        projected reward of 0.000022 with 67% of markets paying anything,
-        against 0.000313 and 100% at 15-30 minutes -- so a distant slot carries
-        the full risk of being filled and exiting at a loss in exchange for
-        approximately nothing. An empty slot strictly dominates it.
+        This test asserted the opposite until then. The narrowing to two hours
+        was argued from `projected_reward` bucketed by time-to-kickoff, and
+        that quantity is `constant x (pool x share)` -- its only time term is
+        `min(horizon, remaining)`, which is always exactly 30 because the
+        pre-kickoff flatten keeps `remaining` above 300. It cannot vary with
+        distance, so the buckets compared different markets, not different
+        times. Polymarket's docs give no distance penalty either: day_of runs
+        six hours, every second equally weighted. See FINDINGS.
+
+        `later` is deliberately the RICHER book -- thinner touch, bigger share
+        -- so this also pins that a distant market is allowed to WIN a slot on
+        its economics, which is the whole behaviour the narrowing removed.
         """
         gateway = FakeGateway(
             {"soon": market("soon", starts_in_hours=1),
              "later": market("later", starts_in_hours=5)},
             {s: incentive(s, pool=100.0) for s in ("soon", "later")},
-            # `later` is the RICHER book -- thinner touch, bigger share -- so
-            # projection alone would rank it first. It must not be offered.
             {"soon": book("soon", touch_size=5000),
              "later": book("later", touch_size=5)})
         selector = RewardMarketSelector(
@@ -234,13 +238,21 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
         out = await selector.select(now=NOW)
 
-        self.assertEqual([i.market.slug for i in out.opportunities], ["soon"])
-        self.assertNotIn(
+        self.assertEqual(
+            sorted(i.market.slug for i in out.opportunities),
+            ["later", "soon"])
+        self.assertIn(
             "later", gateway.book_calls,
-            "a market outside the horizon must not even cost a book fetch")
+            "a market inside the six-hour window must be priced, not skipped")
 
-    async def test_the_horizon_is_configurable_back_to_six_hours(self):
-        """Revertible by config rather than by deploy."""
+    async def test_the_horizon_is_configurable_back_down_to_two_hours(self):
+        """Narrowing stays available by config, and still skips the book fetch.
+
+        Kept as a live path rather than deleted: if the fill-risk half of the
+        original argument turns out to be right -- it has never been measured,
+        because clean trading data begins after the change -- this is how it
+        goes back.
+        """
 
         gateway = FakeGateway(
             {"soon": market("soon", starts_in_hours=1),
@@ -251,14 +263,15 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
         selector = RewardMarketSelector(
             gateway,
             RewardSelectionPolicy(quote_size=1.0,
-                                  selection_horizon_seconds=21600),
+                                  selection_horizon_seconds=7200),
             fill_hazard_model=FixedFillHazard(0.05))
 
         out = await selector.select(now=NOW)
 
-        self.assertEqual(
-            sorted(i.market.slug for i in out.opportunities),
-            ["later", "soon"])
+        self.assertEqual([i.market.slug for i in out.opportunities], ["soon"])
+        self.assertNotIn(
+            "later", gateway.book_calls,
+            "a market outside the horizon must not even cost a book fetch")
 
     def test_the_horizon_cannot_exceed_the_authorized_window(self):
         """Narrowing is a strategy choice; widening past the venue's `day_of`

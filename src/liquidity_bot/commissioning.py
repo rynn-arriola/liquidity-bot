@@ -56,12 +56,23 @@ def next_six_am_new_york(now: datetime) -> datetime:
 class CommissioningConfig:
     """Non-scalable one-contract experimental authorization.
 
-    Three loss limits, one operative threshold. ``max_market_loss_usd`` and
-    ``max_session_loss_usd`` are both stops -- they appear in
-    ``runtime_safety.blockers()`` and halt quoting -- and both sit at $30 so
-    exactly one number can fire. ``hard_stop_loss_usd`` is the emergency
-    ceiling on marked account equity; it sits at $35 only because it is
-    required to exceed the normal stop, and should never trigger.
+    Three loss limits. ``max_market_loss_usd`` and ``max_session_loss_usd``
+    are both stops -- they appear in ``runtime_safety.blockers()`` and halt
+    quoting. ``hard_stop_loss_usd`` is the emergency ceiling on marked account
+    equity and is required to exceed the normal stop.
+
+    They sat at $40/$40/$45 until 2026-08-23, deliberately equal so exactly one
+    number could fire. The operator then raised the session stop to $50 and the
+    ceiling to $60 and left the per-market stop at $40, so that symmetry is
+    gone on purpose: **a single market losing $40 now pauses trading before the
+    session budget of $50 is spent.** The session limit is only reachable by
+    losses spread across several markets. That is the tighter direction, not
+    the looser one, but it does mean "which stop fired" is now a real question
+    -- the alert names it.
+
+    This docstring previously quoted $30 and $35 against code that had said
+    $40 and $45 for weeks. Numbers in prose go stale; the fields below are the
+    source.
     """
 
     market_slug: str
@@ -128,15 +139,25 @@ class CommissioningConfig:
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
-    # One operative stop, raised to $40 on 2026-08-14 alongside quote size 5.
-    # $40 is the fully-adverse exposure of the whole authorized set: five
-    # contracts across eight markets on both sides, each contract able to lose
-    # about a dollar. Both tiers sit at $40 so exactly one threshold can fire;
-    # the $45 ceiling exists only because the emergency stop is required to sit
-    # above the normal stop, and it should never trigger.
+    # Raised to $40 on 2026-08-14 alongside quote size 5, both tiers equal so
+    # exactly one threshold could fire.
+    #
+    # **Operator decision 2026-08-23: session $40 -> $50, ceiling $45 -> $60.**
+    # Taken together with restoring the six-hour selection horizon in the same
+    # change, which puts materially more markets in play. The per-market stop
+    # was NOT raised, so it is now the binding one for a single bad market and
+    # the session budget is only reachable across several -- see the class
+    # docstring.
+    #
+    # Scale, so this is judgeable rather than a bare number: marked equity was
+    # $419.91 at 2026-08-23T02:20Z, so these are 11.9% and 14.3%, up from 9.5%
+    # and 10.7%. Trading loss at size 10 has run -$27.40 to -$35.14 per day, so
+    # 2026-08-21 spent 88% of the OLD $40 budget on an ordinary day.
+    #
+    # The rollback point is `size-5-known-good` and the top of NEXT.md.
     max_market_loss_usd: Decimal = Decimal("40")
-    max_session_loss_usd: Decimal = Decimal("40")
-    hard_stop_loss_usd: Decimal = Decimal("45")
+    max_session_loss_usd: Decimal = Decimal("50")
+    hard_stop_loss_usd: Decimal = Decimal("60")
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
     # `max_market_loss_usd` and so could never fire, because five contracts
@@ -312,11 +333,11 @@ class CommissioningConfig:
                 "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 40 or self.max_market_loss_usd != 40
-                or self.hard_stop_loss_usd != 45):
+        if (self.max_session_loss_usd != 50 or self.max_market_loss_usd != 40
+                or self.hard_stop_loss_usd != 60):
             problems.append(
-                "commissioning must keep a single $40 stop with a $45 "
-                "emergency equity ceiling above it")
+                "commissioning must keep a $40 per-market stop, a $50 session "
+                "stop, and a $60 emergency equity ceiling above them")
         if self.max_consecutive_loss_stop_days != 3:
             problems.append(
                 "a paused loss stop must become terminal after three "

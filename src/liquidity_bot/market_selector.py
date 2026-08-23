@@ -60,22 +60,36 @@ class RewardSelectionPolicy:
     enforce_reward_cost_gate: bool = False
     # How far ahead of kickoff a market may be and still be selected.
     #
-    # The venue's `day_of` reward period runs six hours, and this used to take
-    # all of it. That is the window in which reward CAN be paid, not the window
-    # in which it is: FINDINGS measures the 120+ minute bucket at a median
-    # projected reward of 0.000022 with only 67% of markets paying anything,
-    # against 0.000313 and 100% at 15-30 minutes.
+    # **Restored to the full six hours on 2026-08-23, operator decision, after
+    # the evidence for narrowing it did not survive re-checking.** It was 7200
+    # from 2026-08-17T02:27Z (`0b04c2b`) to then. The reasoning is in FINDINGS,
+    # "Testing the horizon change against realised reward"; the short form:
     #
-    # A slot spent out there is not free. It carries the full risk of being
-    # filled and having to exit at a loss, in exchange for approximately no
-    # reward -- so it is negative expected value, and an empty slot strictly
-    # dominates it. Narrowing is also strictly more conservative than the
-    # authorized six-hour window, never wider.
+    # 1. `projected_reward` -- the quantity the narrowing was argued from --
+    #    is `constant x (pool x share)`. Its only time term is
+    #    `min(horizon, remaining)` with horizon 30s and remaining always above
+    #    300s, so it is ALWAYS 30. It cannot vary with distance from kickoff,
+    #    so the buckets compared different markets, not different times.
+    # 2. Polymarket's own docs give no distance penalty: day_of runs six hours
+    #    and "every second of the time period is equally weighted regardless
+    #    of how much liquidity is on the book". Pool, target and discount are
+    #    identical at T-8h and T-0h in the live payload.
+    # 3. Supply, measured: executable markets fell 113 -> ~50 and median
+    #    viable 36 -> 2-10 against twenty slots. At 7200 the bot cannot fill
+    #    its book, and an empty slot earns exactly nothing.
+    # 4. Realised reward moved the wrong way at constant quote size: share of
+    #    bound markets earning anything 68% -> 47%, median per-market reward
+    #    0.085 -> 0.030, reward per resting hour 0.128 -> 0.093.
     #
-    # Nothing is given up by waiting: every market passes through this window
-    # on its way to kickoff, and selection re-runs often enough to pick it up
-    # when it does. Set to 21600 to restore the previous six-hour behaviour.
-    selection_horizon_seconds: float = 7200.0
+    # **What is still unmeasured, and is the reason to watch this.** The
+    # narrowing was also argued on fill risk in thin distant books, and clean
+    # trading data begins 2026-08-18 -- after the change -- so that half has
+    # never been compared either way. Trading runs about -$0.045/pair and more
+    # resting hours means more pairs. Judge this on NET, not on reward.
+    #
+    # 21600 is also the ceiling `__post_init__` allows, so this cannot widen
+    # further without that bound moving too. Set to 7200 to go back.
+    selection_horizon_seconds: float = 21600.0
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:

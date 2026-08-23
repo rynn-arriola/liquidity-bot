@@ -45,8 +45,12 @@ class CommissioningTests(unittest.TestCase):
         # contracts sits below the median crossed loss and would refuse almost
         # every early exit. See commissioning.py.
         self.assertEqual(str(self.authorized().max_early_exit_loss_usd), "8")
-        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "45")
-        self.assertEqual(str(self.authorized().max_session_loss_usd), "40")
+        # Operator decision 2026-08-23, alongside restoring the six-hour
+        # selection horizon: session $40 -> $50, ceiling $45 -> $60. The
+        # per-market stop deliberately stayed at $40, so it now binds before
+        # the session budget for a single bad market.
+        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "60")
+        self.assertEqual(str(self.authorized().max_session_loss_usd), "50")
         self.assertEqual(str(self.authorized().max_market_loss_usd), "40")
         # Deliberately NOT doubled with size. The stops protect the account and
         # equity did not double: $40 is ~9% of ~$467, $80 would be ~18%. They

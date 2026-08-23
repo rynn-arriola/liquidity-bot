@@ -1,5 +1,70 @@
 # Next session — outstanding fixes
 
+## ROLLING BACK THE 2026-08-23 CHANGE -- read this first if things look wrong
+
+**Two changes, one deploy, operator decision 2026-08-23.** Quote size was NOT
+touched and stays at 10.
+
+```
+selection_horizon_seconds   7200 -> 21600     six hours, back to the full day_of period
+max_session_loss_usd          40 -> 50
+hard_stop_loss_usd            45 -> 60
+max_market_loss_usd           40 (unchanged, now binds before the session stop)
+```
+
+**Known-good point: `horizon-2h-stops-40-45`, commit `f41566a`.** Two files
+carry the whole change:
+
+```bash
+git fetch --tags
+git checkout horizon-2h-stops-40-45 -- src/liquidity_bot/market_selector.py                                        src/liquidity_bot/commissioning.py
+# deploy both, run the suite ON the droplet, then cycle the bot and write
+# DEPLOYED_COMMIT by hand -- nothing does it for you
+```
+
+### State at the moment of the change, so "is it worse?" is answerable
+
+```
+marked equity            419.91  (was 467.46 at the size-5 tag on 08-20)
+reward PAID (bot era)    141.35  + 31.06 PENDING
+net by day  08-18 +2.27   08-19 +5.30   08-20 +11.13   08-21 -5.60
+trading/day at size 10   -27.40 to -35.14
+resting fraction         53.8% span-weighted (08-22)
+median viable markets    2-10 against 20 slots  <- the thing the horizon fixes
+```
+
+### Why, and what was argued against it
+
+The horizon restore is well-evidenced: FINDINGS "Testing the horizon change
+against realised reward" and the three entries after it. The narrowing rested
+on `projected_reward` bucketed by time-to-kickoff, and that quantity is
+`constant x (pool x share)` -- it has no term that varies with distance, so the
+buckets compared different markets rather than different times. The venue's docs
+give no distance penalty either.
+
+**The stop raise was argued against and the operator decided to proceed.** The
+case against, recorded so it can be checked rather than re-litigated: equity was
+down $47.55 in three days, 2026-08-21 spent 88% of the old $40 budget on an
+ordinary day, and raising a loss limit while the account is losing raises the
+ceiling on the loss. Changing two things at once also means a bad week cannot be
+attributed to one of them.
+
+**So if things look wrong, roll back the HORIZON first** -- it is the change
+that adds exposure. The stops do not cause losses; they bound them.
+
+### What to watch
+
+- **Net per day**, not reward per day. Reward will rise with the horizon; the
+  question is whether trading loss rises faster. `scripts/daily_pnl.py`.
+- **Whether the $50 session stop fires.** If it fires on a day that was not
+  genuinely bad, the stop is too tight for this configuration. If it fires on a
+  genuinely bad day, it is working.
+- **Fill rate.** Pairs went 250 -> 796 at 2x size, which is 3.2x rather than
+  2x. More markets in play will push it further. This is the unmeasured half of
+  the original narrowing argument.
+
+---
+
 ## ROLLING BACK THE SIZE CHANGE -- read this first if things look wrong
 
 **Quote size was doubled 5 -> 10 on 2026-08-20 by operator decision.** If the

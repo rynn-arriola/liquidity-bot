@@ -8,10 +8,13 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is STOPPED for the reviewed size/risk configuration deployment.** The
-  next authorized start is quote size 10 with $40/$70/$80 market/session/hard
-  stops. The 20-slot scheduler and six-hour horizon are unchanged.
-  The previous runner was `b3ad73e`, started 2026-08-24T16:15:26Z at size 5.
+- **Bot is RUNNING on `13bf261` since 2026-08-24T16:56:06Z at quote size 10.**
+  The first process safely recovered one residual size-5 position, proved flat
+  and exited `startup_recovery_only`; the supervisor then started the normal
+  runner. Live acceptance found all open orders at quantity 10, 20 bound
+  slots, 18 instantaneously quoting, zero positions, zero unresolved intents
+  and zero unknown-absent orders. Active stops are $40/$70/$80 for
+  market/session/hard. The six-hour horizon is unchanged.
   Live verification reached 20/20 quoted markets; venue orders reported only
   original/remaining quantity 5, with zero positions, unknown-absent orders or
   unresolved intents. Quote size is one persistent restart-scoped setting,
@@ -45,6 +48,10 @@ from fact rather than from the last thing someone remembers.
   durable UTC baseline proved the actual cash/equity drawdown was $47.032.
   The runner uses the latter and had $2.968 session / $12.968 hard headroom at
   restart. Do not stop the bot from the standalone bars alone; see FINDINGS.
+- **Do not run stacked authenticated diagnostics during live startup.** The
+  size-10 acceptance ran `dashboard.py` and a second venue snapshot back to
+  back; the runner's next backfill received one Cloudflare 1015 rate limit,
+  then recovered at attempt 1. Use one venue read, then SQLite `mode=ro`.
 - **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
   against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
   dashboard is account-wide since inception and is dominated by pre-bot

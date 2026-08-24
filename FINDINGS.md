@@ -45,6 +45,32 @@ preserves the invariant that a restart cannot hand back the UTC day's equity
 budget. Deliberate mutations of the session stop, hard stop, and 20-market
 lock were all refused; all 551 tests passed after the correction.
 
+Production acceptance matched all eleven deployed file hashes and passed the
+same 551 tests. The normal runner began at 2026-08-24T16:56:06Z after a
+recovery-only process flattened one residual size-5 position. A venue read
+found 23 initial orders across 16 markets, all with original and remaining
+quantity exactly 10, and no position. The bound slate still totalled 20. After
+convergence, the read-only ledger showed 33 working orders across 18 markets,
+quantity 10 only, with zero unresolved intents, unknown-absent orders or
+positions. Eighteen quoted markets is an instantaneous resting count, not a
+reduction of the twenty bound slots.
+
+The acceptance itself caused one avoidable transient: `dashboard.py` plus a
+second authenticated order/position check ran outside the live process's REST
+governor. The runner's next execution-backfill read received one Cloudflare
+1015 `RateLimitError` at 16:57:50Z, recovered at attempt 1, and continued
+placing. Subsequent acceptance used SQLite `mode=ro` only. Do not stack
+authenticated diagnostics on a live startup; use one venue read for quantity,
+then observe convergence from the ledger and logs.
+
+One operational finding is separate from the configuration change: the prior
+graceful stop command returned success although the runner's final JSON said
+`flat: false`. The script waits for process disappearance, not flat proof. The
+next startup's fail-closed recovery prevented new risk and flattened the
+residue before the normal runner started, but a successful stop command alone
+must not be cited as venue-flat evidence. This is recorded as an open item in
+`NEXT.md`.
+
 ---
 
 ## The standalone dashboard can show a spent stop while the runner still has durable headroom

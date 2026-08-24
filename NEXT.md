@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## REVIEWED, BOT STOPPED: return to size 10 with $70/$80 account stops
+## DEPLOYED AND RESTARTED: size 10 with $70/$80 account stops
 
 The operator authorized quote size 10, a $70 realized session stop and an $80
 marked-equity hard stop on 2026-08-24. Graceful shutdown completed before the
@@ -9,8 +9,28 @@ $8 early-exit cap, $90 per-market exposure and $3 execution-fee cap. The
 20-slot scheduler, 8 + 8 + 4 private layout, six-hour horizon, 4 req/s REST
 ceiling, reward economics and exit timing are unchanged. The same-day restart
 drawdown test now derives its scenario from the configured hard stop. Focused
-tests, three deliberate configuration mutations and all 551 tests pass.
-Deployment and live acceptance remain to be recorded here.
+tests, three deliberate configuration mutations and all 551 local and
+production tests pass. Commit `13bf261` was pushed and all eleven deployed
+hashes matched. The first start recovered one residual size-5 position and
+proved flat; the normal runner started at 16:56:06Z. Acceptance observed 20
+bound slots, 18 instantaneously quoted markets, 33 working orders all at
+quantity 10, and zero position, unresolved intent or unknown-absent order.
+
+## OPEN: graceful stop reported success although the runner recorded `flat: false`
+
+At 16:48:24Z the old size-5 runner received SIGTERM with two positions. It
+canceled building orders and parked the reducing orders, then ended at
+16:48:55Z with `stop_reason=operator_sigterm` and `flat=false`. The stop script
+returned success because it checks only that the runner process disappeared;
+it does not inspect the final flat proof. On the next start, recovery-only mode
+canceled the remaining reducer, crossed the residual +5 position, proved
+`flat=true`, and exited before the normal runner could quote. No size-10
+building risk overlapped the residue.
+
+This is now an operator-visible acceptance gap: never treat a successful
+`stop_commissioning.sh` exit alone as flat proof. Read the final JSON record or
+query the venue. Review whether the script should fail when the latest run is
+non-flat, while preserving invariant 32's explicitly bounded non-flat exit.
 
 ## SUPERSEDED 2026-08-24: dynamic quote size, size 5 deployment
 

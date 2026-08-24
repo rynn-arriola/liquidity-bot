@@ -40,6 +40,17 @@ before it began, the audit was SQLite `mode=ro` with no venue call, and the same
 failure already occurred at 07:20Z. See the newest `FINDINGS.md` entry for the
 full measured timeline.
 
+**Priority escalation at 12:31Z:** the first cooldown expired and the bot did
+repopulate automatically (`session_creates` 677 -> 711 between 12:15Z and
+12:21Z), proving a restart was unnecessary for that recovery. A third private
+disconnect at 12:28:09Z immediately repeated the failure: recovery resumed in
+37.48s, 31 CANCEL intents covered 18 markets, 30 exceeded 60 seconds and 17
+markets retired. By 12:31Z every cancel had terminal proof and ambiguity was
+zero, but a +3.1100 position remained under the bot's exit management. Do not
+restart or terminate the runner while that position remains. Once venue-flat
+proof exists, stop the session rather than accepting another recurring
+30-minute outage, then implement and mutation-check this fix before restarting.
+
 ## CURRENT LIVE: collect prospective adverse-fill telemetry through 2026-08-27
 
 The next approved restart can begin a measurement-only run. Each building

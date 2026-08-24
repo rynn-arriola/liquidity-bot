@@ -32,6 +32,7 @@ The private stream disconnected twice in the same session:
 |---|---:|---:|---:|---:|---:|
 | 07:20:02Z | 07:20:38Z | 20 | 29 across 19 markets | 26 / 29 | 18 |
 | 11:47:30Z | 11:48:10Z | 20 | 29 across 18 markets | 27 / 29 | 19 |
+| 12:28:09Z | 12:28:46Z | 19 | 31 across 18 markets | 30 / 31 | 17 |
 
 The second incident is the source of the operator's retirement alerts. Global
 private-stream quarantine correctly canceled positively-known working orders,
@@ -66,6 +67,20 @@ captured with zero missing. The deployed observation code therefore remains
 disproved as the trigger; the open defect is the interaction between global
 recovery cancellation, slow owner-at-a-time terminal repair, the 60-second
 timeout and the 30-minute post-resolution bar.
+
+**Third recurrence, 12:28Z:** the earlier bars expired as predicted and broad
+quoting resumed without a restart: `session_creates` rose from 677 at 12:15Z
+to 711 at 12:21Z, with placements across the recovered slate beginning at
+12:19Z. Only nine minutes later the private stream disconnected again. Fresh
+private visibility returned in 37.48s, but 17 owners retired from 12:29:21Z
+through 12:29:52Z. All 31 recovery CANCEL intents were RECONCILED by the
+12:31Z audit, at 151.91s median and 155.49s maximum; 30 exceeded the 60-second
+threshold. Unknown-absent and unresolved counts had returned to zero, but one
+market still held +3.1100 contracts and three active orders remained. This
+proves the cooldown does self-clear and the scheduler repopulates afterward,
+but repeated private disconnects can erase that recovery again before it has
+earned for even ten minutes. Leaving the defect to recurring cooldowns is not
+an acceptable operating state.
 
 ---
 

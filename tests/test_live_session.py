@@ -255,6 +255,26 @@ class LiveSessionTests(unittest.TestCase):
         self.assertIsNotNone(result.submitted)
         self.assertTrue(executor.places[0][0].reducing)
 
+    def test_driver_attaches_observation_only_to_building_quote(self):
+        executor = Executor()
+        driver = ControlledActionDriver(executor, self.ledger)
+        observation = object()
+        building = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one", "reward",
+            side="bid", price=.50, qty=Decimal("1"))
+        self.run_async(driver.apply_one(
+            [building], market=market(), position=Decimal("0"), now=NOW,
+            quote_observation=observation))
+        self.assertIs(executor.places[0][0].quote_observation, observation)
+
+        reducing = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one", "reduce",
+            side="offer", price=.51, qty=Decimal("1"))
+        self.run_async(driver.apply_one(
+            [reducing], market=market(), position=Decimal("1"), now=NOW,
+            quote_observation=observation))
+        self.assertIsNone(executor.places[1][0].quote_observation)
+
     def test_kill_switch_waits_for_terminal_cancel_and_flat_position(self):
         self.ledger.apply_order_event("ws", "new", order(), received_at=NOW)
         executor = Executor()

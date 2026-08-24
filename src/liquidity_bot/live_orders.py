@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError
-from .execution_ledger import ExecutionLedger
+from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
 from .venue_state import normalize_execution, normalize_order
 
@@ -49,6 +49,9 @@ class OrderRequest:
     reducing: bool = False
     time_in_force: str = "TIME_IN_FORCE_GOOD_TILL_CANCEL"
     post_only: bool = True
+    # Local-only measurement payload.  It is deliberately omitted from the
+    # venue wire body and has no role in order validation or strategy policy.
+    quote_observation: QuoteObservation | None = None
 
 
 @dataclass(frozen=True)
@@ -249,7 +252,11 @@ class LiveOrderExecutor:
         client_order_id = client_order_id or self._id("liquidity")
         self.ledger.prepare_intent(
             intent_id, "PLACE", request.market_slug, client_order_id,
-            payload, created_at=now)
+            payload, created_at=now,
+            quote_observation=(
+                request.quote_observation if not request.reducing else None),
+            quote_observation_required=(
+                request.post_only and not request.reducing))
         self.ledger.transition_intent(intent_id, "SUBMITTING", updated_at=now)
         try:
             response = await self.gateway.create(payload)

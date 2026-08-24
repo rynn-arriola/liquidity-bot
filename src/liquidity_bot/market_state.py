@@ -12,11 +12,14 @@ runner can ask a market whether its book is stale without reaching inside.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .models import BookSnapshot, MarketIncentive, MarketMetadata
-from .rewards import RewardProjection
+from .rewards import RewardProjection, RewardScore
+from .risk import OpportunityEconomics
+from .shadow_math import ExitResult
 
 
 @dataclass
@@ -55,6 +58,20 @@ class MarketState:
     economic_blocker_by_side: dict[str, str] = field(default_factory=dict)
     fill_probability_by_side: dict[str, float] = field(default_factory=dict)
     fill_risk_driver_by_side: dict[str, str] = field(default_factory=dict)
+    # Decision-time inputs retained only long enough to write an immutable
+    # building-quote observation.  They are never read by the reconciler.
+    reward_score_by_side: dict[str, RewardScore] = field(default_factory=dict)
+    stressed_exit_by_side: dict[str, ExitResult] = field(default_factory=dict)
+    opportunity_economics_by_side: dict[str, OpportunityEconomics] = field(
+        default_factory=dict)
+    model_queue_ahead_by_side: dict[str, float] = field(default_factory=dict)
+    # A bounded stream of BBO CHANGE times, not every book message.  This
+    # measures touch velocity without increasing public subscriptions or REST
+    # work, and has no scheduler/strategy consumer.
+    touch_change_times: deque[datetime] = field(default_factory=deque)
+    last_touch: tuple[float | None, float | None] | None = None
+    last_touch_changed_at: datetime | None = None
+    last_touch_observed_at: datetime | None = None
     # Each market keeps its own REST cadence so one quiet book cannot starve
     # the others through the shared request governor.
     next_book_refresh: datetime | None = None
@@ -75,6 +92,10 @@ class MarketState:
         self.economic_blocker_by_side = {}
         self.fill_probability_by_side = {}
         self.fill_risk_driver_by_side = {}
+        self.reward_score_by_side = {}
+        self.stressed_exit_by_side = {}
+        self.opportunity_economics_by_side = {}
+        self.model_queue_ahead_by_side = {}
 
     def forget_contracts(self) -> None:
         """Forget metadata and book so nothing stale can authorize risk."""
@@ -83,7 +104,48 @@ class MarketState:
         self.incentive = None
         self.book = None
         self.book_observed_at = None
+        self.touch_change_times.clear()
+        self.last_touch = None
+        self.last_touch_changed_at = None
+        self.last_touch_observed_at = None
         self.clear_economics()
+
+    def observe_book_touch(
+        self, book: BookSnapshot, *, observed_at: datetime,
+    ) -> None:
+        """Record only BBO changes and retain at most the last two minutes."""
+
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ValueError("book observation must be timezone-aware")
+        if (self.last_touch_observed_at is not None
+                and observed_at < self.last_touch_observed_at):
+            # A delayed/coalesced book may be applied after a newer receipt.
+            # It must not make the telemetry clock run backwards.
+            return
+        self.last_touch_observed_at = observed_at
+        touch = (
+            book.best_bid.price if book.bids else None,
+            book.best_offer.price if book.offers else None,
+        )
+        if self.last_touch is None:
+            self.last_touch = touch
+            self.last_touch_changed_at = observed_at
+        elif touch != self.last_touch:
+            self.last_touch = touch
+            self.last_touch_changed_at = observed_at
+            self.touch_change_times.append(observed_at)
+        cutoff = observed_at - timedelta(seconds=120)
+        while self.touch_change_times and self.touch_change_times[0] < cutoff:
+            self.touch_change_times.popleft()
+
+    def touch_changes(self, now: datetime, *, seconds: float) -> int:
+        cutoff = now - timedelta(seconds=float(seconds))
+        return sum(at >= cutoff for at in self.touch_change_times)
+
+    def seconds_since_touch_change(self, now: datetime) -> float | None:
+        if self.last_touch_changed_at is None:
+            return None
+        return max(0.0, (now - self.last_touch_changed_at).total_seconds())
 
     def book_age_seconds(self, now: datetime) -> float | None:
         if self.book_observed_at is None:

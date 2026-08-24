@@ -20,6 +20,69 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Prospective adverse-fill observation — built locally 2026-08-23, not deployed
+
+The existing ledger can describe what happened after a fill, but it did not
+persist the decision-time book and reward facts needed to learn which resting
+orders are most likely to fill. A read-only study of the mutable 2026-08-21
+snapshot found:
+
+- 5,054 post-only resting orders, 833.7 order-hours and 344 maker-filled
+  orders;
+- 1,964 matched entry/exit pairs across 180 balanced markets, with gross
+  trading P&L of -$99.47, $10.66 of fees and net trading P&L of -$110.13;
+- passive/maker-only exits averaged about -$0.0064 per pair, while any taker
+  exit averaged -$0.0632 to -$0.0652 per pair;
+- a market-cluster bootstrap put the taker result at -$0.0632 per pair with a
+  95% interval of [-$0.0811, -$0.0474], maker-only at -$0.0064 with
+  [-$0.0269, +$0.0084], and their difference at -$0.0568 with
+  [-$0.0803, -$0.0310].
+
+This is correlation, not proof that refusing taker exits is safer. LONG versus
+SHORT, broad price, recent touch-cancel count, re-entry delay and prior
+same-side price range did not produce a stable monotonic temporal separator.
+The 15-minute-plus placement-to-fill bucket was the worst validation bucket,
+so the evidence also does not support a universal cooldown. League was not a
+stable causal signal and must not be used as a filter.
+
+The missing prospective inputs were exact price-time queue ahead, Target Size
+surplus/cutoff, spread and depth imbalance, touch velocity, projected reward,
+stressed-exit result and expected net at placement. The local observation
+branch now records those values atomically with the exact building PLACE
+intent/client order ID. It never writes observation fields into the venue
+payload and reducers are excluded. Missing telemetry is marked for coverage
+reporting and never blocks a valid order.
+
+One concrete model discrepancy was found while tracing that path: the current
+fill-hazard input calls best-touch size `queue_ahead`, including when the quote
+is backed off from the touch. Under price-time priority, the observed queue at
+that planned price includes every better level plus the full same-price level.
+Both numbers are now recorded separately. The live model was deliberately not
+changed before held-out evidence exists.
+
+Public trade-volume fields remain NULL because commissioning subscribes to
+books, not public trades; using our own fills as market volume would be false.
+No trade subscription, REST call, extra placement-time ledger lookup,
+selection criterion, league gate, scheduler input, slot limit or strategy
+decision was added. The observation JSON is
+about 1,245 bytes; at the historical high placement rate the rough additional
+ledger growth is about 15 MB/day, or 45 MB for the proposed three-day sample.
+On a local 1,000-intent comparison, baseline durable intent preparation took
+1.157s and intent-plus-observation took 1.642s: about 0.49ms incremental work
+per building order, including observation construction. The checkpointed
+SQLite files used about 2.15KB additional space per observed order after table
+and index overhead. This is a synthetic local measurement, not a production
+latency percentile.
+
+The acceptance rule is prospective: collect at least 72 hours and about 300
+maker-filled observed orders, use the first two UTC-day cohorts for training,
+and keep the third cohort held out. Any candidate rule must first run in
+would-refuse shadow mode. This code is local only as of this entry; it has not
+been pushed, deployed or used to restart the bot. No production defect is
+claimed fixed by this measurement work.
+
+---
+
 ## Current status — 2026-08-15
 
 **`max_markets` is 16** across two private connections -- set by the REST

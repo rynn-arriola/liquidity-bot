@@ -46,6 +46,34 @@ every 15 minutes while keeping only one execution scope. It performs a bounded
 slug, the existing executor cancels its quotes and proves the whole account
 flat, order-free, resolved, and owned; only then are singleton streams rebound.
 
+### Observation-only branch
+
+For a building post-only action, the runner may construct an immutable
+decision-time observation after the normal planner has already chosen the
+action. The execution ledger writes that observation and its PLACE intent in
+one transaction, using the exact client order ID that later appears on orders
+and fills. If construction fails, the intent is marked as requiring an
+observation so the coverage report exposes the gap, while the unchanged action
+continues. Observation fields have no edge back into the planner, reconciler,
+risk gate, scheduler or wire payload.
+
+```mermaid
+flowchart LR
+    A[Unchanged guarded plan] --> B[Building PLACE intent]
+    A -. describe only .-> C[Decision-time quote observation]
+    C --> D[(Atomic intent plus observation)]
+    B --> D
+    D --> E[Venue order]
+    E --> F[Exact client-ID fill label]
+    D --> G[Read-only coverage and diagnostic report]
+    F --> G
+    G -. no strategy feedback while collecting .-> H[Held-out review]
+```
+
+The public commissioning stream currently supplies books only. Trade-volume
+fields therefore remain explicitly unknown rather than being inferred from
+the bot's own fills, and no league grouping or filtering is part of this path.
+
 ## Current boundary
 
 Implemented:

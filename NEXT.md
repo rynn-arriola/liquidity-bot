@@ -1,5 +1,45 @@
 # Next session — outstanding fixes
 
+## CURRENT LOCAL: prospective adverse-fill telemetry built, not deployed
+
+The next approved restart can begin a measurement-only run. Each building
+post-only PLACE intent will atomically retain its exact decision-time book,
+actual price-time queue, the queue approximation used by the current model,
+Target Size/cutoff, touch-change velocity, projected reward, stressed exit and
+expected net. The exact client order ID later supplies the fill/no-fill label;
+there is no market/time guessing. Reducers are excluded and an observation
+failure is visible in coverage without suppressing the order.
+
+This work does **not** change the 20-slot scheduler, six-hour horizon, market
+selection, quote size, reward economics, risk limits, order payload or exit
+behavior. The action and observation reuse one position snapshot, so it adds
+no placement-time ledger lookup, REST call or public-stream subscription. It
+does not filter or group strategy decisions by league. Public trade-volume
+columns stay NULL until a separately reviewed trade-stream change exists.
+The local 1,000-order benchmark measured about 0.49ms incremental preparation
+time and 2.15KB of checkpointed SQLite storage per observed order. Treat those
+as local sizing numbers; deployment acceptance must still verify scheduler
+cadence, REST rate, book/private freshness, observation coverage and ledger
+growth on the server.
+
+After deployment, let it collect for at least 72 hours and roughly 300
+maker-filled observed orders. Run the local, read-only report with:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -B scripts/quote_observation_report.py --database data/commissioning.db
+```
+
+Require zero missing observations. Freeze the first two UTC-day cohorts for
+training and evaluate the third held out; only then consider a would-refuse
+shadow rule. Do not enforce a refusal rule from the historical correlations.
+As of this entry the code has passed 534 local tests and four deliberate
+mutation checks, but is uncommitted, unpushed and undeployed. The live server
+has not been stopped, changed or restarted for this work; wait for explicit
+operator approval.
+
+---
+
 ## CURRENT: monitor deployed cancel-confirmed priority replan
 
 The current 22:11:14Z run proved that CANCEL intents normally become terminal

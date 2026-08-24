@@ -106,6 +106,36 @@ python -B -m liquidity_bot.probe --slug MARKET-SLUG --earnings --stream-seconds 
 The `--size` argument is hypothetical and is used only to calculate reward
 score. The probe never submits it.
 
+## Prospective building-quote observations
+
+The commissioning ledger can retain a measurement-only snapshot for every
+building post-only PLACE: exact price-time queue and current model queue,
+Target Size/cutoff, BBO-change velocity, reward projection, stressed exit and
+expected net. It is linked to the durable intent and later fill by the exact
+client order ID. It is not sent to the venue and is not read by selection,
+the reconciler, risk policy or the 20-slot scheduler. Reducers and IOC exits do
+not record entry observations. There is deliberately no league filter.
+
+Inspect collection coverage and fill/no-fill labels from the local ledger only
+(the report makes no venue/API calls):
+
+```powershell
+$env:PYTHONPATH = "src"
+python -B scripts/quote_observation_report.py --database data/commissioning.db
+```
+
+On the Linux server, use:
+
+```bash
+PYTHONPATH=src .venv/bin/python -B scripts/quote_observation_report.py \
+  --database data/commissioning.db
+```
+
+Do not turn a diagnostic bucket into an entry refusal until coverage is
+complete, at least 72 hours and about 300 maker-filled observations exist, and
+a candidate trained on the first two UTC-day cohorts succeeds on the third
+held-out cohort. It must then run in would-refuse shadow mode before enforcement.
+
 ## Discord summaries and alerts
 
 The shadow runner reuses maker-lab's normal and error webhooks. Every five

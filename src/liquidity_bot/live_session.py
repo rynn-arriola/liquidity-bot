@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from .account_snapshots import AsyncAccountSnapshotGateway
-from .execution_ledger import ExecutionLedger
+from .execution_ledger import ExecutionLedger, QuoteObservation
 from .errors import RuntimeInvariantViolation
 from .live_orders import LiveOrderExecutor, OrderRequest, SubmittedOrder
 from .models import MarketMetadata
@@ -191,9 +191,15 @@ class ControlledActionDriver:
             (exchange_order_id,))
         return rows[0] if rows else None
 
-    async def apply_one(self, actions: Iterable[PlanAction], *,
-                        market: MarketMetadata, position: Decimal,
-                        now: datetime) -> ActionResult | None:
+    async def apply_one(
+        self,
+        actions: Iterable[PlanAction],
+        *,
+        market: MarketMetadata,
+        position: Decimal,
+        now: datetime,
+        quote_observation: QuoteObservation | None = None,
+    ) -> ActionResult | None:
         action = next(iter(actions), None)
         if action is None:
             return None
@@ -250,7 +256,9 @@ class ControlledActionDriver:
                         "inventory quote must reduce the entire exact position")
             request = OrderRequest(
                 market.slug, action.side, Decimal(str(action.price)), action.qty,
-                reducing=reducing)
+                reducing=reducing,
+                quote_observation=(
+                    quote_observation if not reducing else None))
         else:
             raise RuntimeInvariantViolation(
                 "unsupported_action", f"unsupported action {action.kind}")

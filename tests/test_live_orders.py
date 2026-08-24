@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -295,6 +296,9 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(len(self.client.orders.create_calls), 1)
         row = self.ledger.unresolved_intents()[0]
         self.assertEqual(row["state"], "UNCERTAIN")
+        self.assertEqual(row["quote_observation_required"], 1)
+        self.assertEqual(self.ledger.query(
+            "SELECT * FROM execution_quote_observations"), [])
         self.assertTrue(self.ledger.market_has_unresolved_intent("market-one"))
         self.assertFalse(self.ledger.risk_state_known())
 
@@ -305,6 +309,39 @@ class LiveOrderExecutorTests(unittest.TestCase):
                 self.request(), market(), now=NOW,
                 intent_id="intent-no-id", client_order_id="client-no-id"))
         self.assertEqual(self.ledger.unresolved_intents()[0]["state"], "UNCERTAIN")
+
+    def test_building_observation_reaches_intent_but_never_the_wire(self):
+        observation = object()
+        request = replace(self.request(), quote_observation=observation)
+        self.client.orders.create_results = [
+            {"id": "exchange-observed", "executions": []}]
+        with patch.object(self.ledger, "prepare_intent") as prepare, patch.object(
+                self.ledger, "transition_intent"):
+            self.run_async(self.executor.place(
+                request, market(), now=NOW,
+                intent_id="intent-observed", client_order_id="client-observed"))
+
+        self.assertIs(prepare.call_args.kwargs["quote_observation"], observation)
+        self.assertTrue(
+            prepare.call_args.kwargs["quote_observation_required"])
+        wire = self.client.orders.create_calls[0]
+        self.assertNotIn("quote_observation", wire)
+        self.assertNotIn("clientOrderId", wire)
+
+    def test_reducing_request_cannot_persist_building_observation(self):
+        request = replace(
+            self.request(), reducing=True, quote_observation=object())
+        self.client.orders.create_results = [
+            {"id": "exchange-reducing", "executions": []}]
+        with patch.object(self.ledger, "prepare_intent") as prepare, patch.object(
+                self.ledger, "transition_intent"):
+            self.run_async(self.executor.place(
+                request, market(), now=NOW,
+                intent_id="intent-reducing", client_order_id="client-reducing"))
+
+        self.assertIsNone(prepare.call_args.kwargs["quote_observation"])
+        self.assertFalse(
+            prepare.call_args.kwargs["quote_observation_required"])
 
     def test_private_stream_adopts_exactly_one_timed_out_create(self):
         self.client.orders.create_results = [TimeoutError("lost response")]

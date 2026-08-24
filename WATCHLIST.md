@@ -198,17 +198,48 @@ driver and the lever is selection or exit instead.
 
 ## 6. Which markets and sides precede the losing fills?
 
-**Not yet measured.** This is the version of question 4 that does not cost
+**Prospective capture built locally 2026-08-23; not yet deployed or
+decided.** This is the version of question 4 that does not cost
 reward: losses come from *which* market and side we quote and *how the
 position exits*, not from queue position. Queue position is what the venue
 pays for; selection and exit are free to change.
 
-**Decide when:** enough round trips to split by market characteristics —
-current sample is 29, which is too few to slice.
+Historical review found no stable monotonic separator in side, broad price,
+recent touch-cancel count, re-entry delay or prior same-side price range. It
+also did not justify a universal cooldown. League is diagnostic context only
+and must not become a filter.
+
+**Decide when:** the exact intent-linked capture has zero coverage gaps, spans
+at least 72 hours and includes roughly 300 maker-filled observations. Train on
+the first two UTC-day cohorts, keep the third held out, then shadow the
+candidate as would-refuse before any enforcement.
 
 **Measure:** for each losing round trip, the market's reward-band width,
 book depth at entry, distance from midpoint, time to kickoff, and which side
-filled. Compare against the winning round trips.
+filled. The capture additionally records actual price-time queue versus the
+current model's best-touch-size approximation, Target Size/cutoff, spread,
+depth imbalance, touch velocity, projected reward, stressed exit and expected
+net. Compare against terminal unfilled orders and winning round trips using
+the exact client order ID; do not join by market/time guesses.
+
+**Queue-model discrepancy found 2026-08-23:** the current fill-hazard model
+uses only the best-touch size as `queue_ahead`. That is close when our order is
+at the touch, but incomplete when it is backed off. For example, if 100
+contracts bid at $0.50 and 200 already bid at $0.49, a new $0.49 bid has 300
+contracts ahead under price-time priority; the current model records only the
+100 at $0.50. It can therefore estimate that a backed-off order is closer to a
+fill than its observed queue position indicates. This is a discrepancy to
+measure, not yet proof of a safer replacement model: a large incoming order
+can sweep multiple levels. The capture stores both `model_queue_ahead=100` and
+`observed_queue_ahead=300` so prospective results can decide which predicts
+fills better. Do not change the live model from this example alone.
+
+**Operation after an approved deployment:** collection is automatic whenever
+the normal bot creates a building post-only PLACE; there is no separate
+collector process, cron job or command. Schema migration is additive at normal
+runner startup. Analysis is deliberately manual and read-only: run
+`scripts/quote_observation_report.py` when checking coverage, and do not treat
+its diagnostic buckets as an automatic strategy gate.
 
 **Change if:** a characteristic separates them cleanly. The lever is the
 projection gate in `market_selector.py`, not the quoting rule.

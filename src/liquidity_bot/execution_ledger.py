@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS execution_intents (
     state TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    error TEXT
+    error TEXT,
+    quote_observation_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_execution_intents_state
     ON execution_intents(state, market_slug);
@@ -126,6 +128,36 @@ CREATE TABLE IF NOT EXISTS execution_day_baselines (
     opening_cash TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_quote_observations (
+    intent_id TEXT PRIMARY KEY,
+    client_order_id TEXT NOT NULL UNIQUE,
+    market_slug TEXT NOT NULL,
+    side TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    book_observed_at TEXT NOT NULL,
+    game_start TEXT,
+    quote_price TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    fill_probability REAL,
+    fill_risk_driver TEXT,
+    model_queue_ahead REAL,
+    observed_queue_ahead REAL,
+    target_size REAL,
+    cutoff_price REAL,
+    touch_changes_30s INTEGER NOT NULL,
+    touch_changes_120s INTEGER NOT NULL,
+    seconds_since_touch_change REAL,
+    projected_reward REAL,
+    expected_net REAL,
+    stressed_exit_pnl REAL,
+    trade_volume_30s REAL,
+    trade_volume_120s REAL,
+    observation_json TEXT NOT NULL,
+    observation_hash TEXT NOT NULL,
+    FOREIGN KEY(intent_id) REFERENCES execution_intents(intent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_quote_observations_market_at
+    ON execution_quote_observations(market_slug, observed_at);
 """
 
 
@@ -260,6 +292,87 @@ class InventoryBasis:
     opened_at: datetime
 
 
+@dataclass(frozen=True)
+class QuoteObservation:
+    """Decision-time facts for one building post-only order.
+
+    This record is deliberately descriptive.  No value in it is read by the
+    reconciler or order policy.  The exact client order id is attached only
+    when the durable PLACE intent is prepared, which lets later order and fill
+    rows label this snapshot without market/time guessing.
+    """
+
+    market_slug: str
+    side: str
+    observed_at: datetime
+    book_observed_at: datetime
+    game_start: datetime | None
+    quote_price: Decimal
+    quantity: Decimal
+    decision_reason: str
+    best_bid: float
+    best_bid_size: float
+    best_offer: float
+    best_offer_size: float
+    spread: float
+    bid_depth: float
+    offer_depth: float
+    model_queue_ahead: float
+    observed_queue_ahead: float
+    depth_better_than_quote: float
+    depth_at_quote: float
+    depth_through_quote: float
+    touch_changes_30s: int
+    touch_changes_120s: int
+    seconds_since_touch_change: float | None
+    seconds_to_event: float | None
+    program_id: str
+    reward_period: str
+    reward_pool: float
+    discount_factor: float
+    target_size: float
+    cutoff_price: float | None
+    depth_to_reward_cutoff: float
+    ticks_from_best: int | None
+    order_score: float
+    total_score: float
+    snapshot_share: float
+    projected_reward: float
+    maximum_remaining_reward: float
+    fill_probability: float
+    fill_risk_driver: str
+    stressed_exit_complete: bool
+    stressed_exit_closed_qty: float
+    stressed_exit_average_price: float | None
+    stressed_exit_worst_price: float | None
+    stressed_exit_fee: float
+    stressed_exit_pnl: float
+    expected_net: float
+    reward_cost_safety_multiple: float
+    # The live commissioning market stream currently subscribes to books, not
+    # public trades.  Keep these explicitly NULL rather than inventing volume
+    # from our own fills; a future trade subscription can populate them.
+    trade_volume_30s: float | None = None
+    trade_volume_120s: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.market_slug or self.side not in {"bid", "offer"}:
+            raise ValueError("quote observation identity is incomplete")
+        _time(self.observed_at, "observed_at")
+        _time(self.book_observed_at, "book_observed_at")
+        if self.game_start is not None:
+            _time(self.game_start, "game_start")
+        price = _decimal(self.quote_price, "quote_price")
+        quantity = _decimal(self.quantity, "quantity")
+        if not 0 < price < 1 or quantity <= 0:
+            raise ValueError("quote observation order values are invalid")
+        for name, value in asdict(self).items():
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        if min(self.touch_changes_30s, self.touch_changes_120s) < 0:
+            raise ValueError("touch change counts cannot be negative")
+
+
 class ExecutionLedger:
     """SQLite system of record for intents and observed execution state."""
 
@@ -278,6 +391,8 @@ class ExecutionLedger:
     # already been created -- and this ledger is never rebuilt, because it is
     # what proves what we own at the venue.
     ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("execution_intents", "quote_observation_required",
+         "INTEGER NOT NULL DEFAULT 0"),
         ("execution_orders", "reject_reason", "TEXT"),
         ("execution_fills", "outcome", "TEXT"),
         ("execution_positions", "cost", "TEXT"),
@@ -427,6 +542,8 @@ class ExecutionLedger:
         payload: Mapping[str, Any],
         *,
         created_at: datetime,
+        quote_observation: QuoteObservation | None = None,
+        quote_observation_required: bool = False,
     ) -> bool:
         operation = operation.upper()
         if operation not in INTENT_OPERATIONS:
@@ -436,23 +553,96 @@ class ExecutionLedger:
         at = _time(created_at, "created_at")
         body = _json(dict(payload))
         digest = _hash(dict(payload))
+        observation_required = int(bool(quote_observation_required))
+        if quote_observation is not None:
+            if operation != "PLACE":
+                raise ValueError("quote observations belong only to PLACE intents")
+            if quote_observation.market_slug != market_slug:
+                raise ValueError("quote observation market does not match intent")
         with self.connection:
             row = self.connection.execute(
-                "SELECT operation,market_slug,client_order_id,payload_hash "
+                "SELECT operation,market_slug,client_order_id,payload_hash,"
+                "quote_observation_required "
                 "FROM execution_intents WHERE intent_id=?", (intent_id,)).fetchone()
             if row is not None:
                 existing = tuple(row)
-                proposed = (operation, market_slug, client_order_id, digest)
+                proposed = (operation, market_slug, client_order_id, digest,
+                            observation_required)
                 if existing != proposed:
                     raise LedgerConflict("intent id was reused with different content")
+                if quote_observation is not None:
+                    self._record_quote_observation(
+                        intent_id, client_order_id, quote_observation)
                 return False
             self.connection.execute(
                 "INSERT INTO execution_intents(intent_id,operation,market_slug,"
-                "client_order_id,payload_json,payload_hash,state,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "client_order_id,payload_json,payload_hash,state,created_at,updated_at,"
+                "quote_observation_required) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (intent_id, operation, market_slug, client_order_id, body,
-                 digest, "PREPARED", at, at))
+                 digest, "PREPARED", at, at, observation_required))
+            if quote_observation is not None:
+                self._record_quote_observation(
+                    intent_id, client_order_id, quote_observation)
         return True
+
+    def _record_quote_observation(
+        self,
+        intent_id: str,
+        client_order_id: str,
+        observation: QuoteObservation,
+    ) -> None:
+        """Insert one immutable observation inside the intent transaction."""
+
+        document = asdict(observation)
+        body = _json(document)
+        digest = _hash(document)
+        existing = self.connection.execute(
+            "SELECT observation_hash FROM execution_quote_observations "
+            "WHERE intent_id=?", (intent_id,)).fetchone()
+        if existing is not None:
+            if str(existing["observation_hash"]) != digest:
+                raise LedgerConflict(
+                    "quote observation intent was reused with different content")
+            return
+        self.connection.execute(
+            "INSERT INTO execution_quote_observations("
+            "intent_id,client_order_id,market_slug,side,observed_at,"
+            "book_observed_at,game_start,quote_price,quantity,fill_probability,"
+            "fill_risk_driver,model_queue_ahead,observed_queue_ahead,target_size,"
+            "cutoff_price,touch_changes_30s,touch_changes_120s,"
+            "seconds_since_touch_change,projected_reward,expected_net,"
+            "stressed_exit_pnl,trade_volume_30s,trade_volume_120s,"
+            "observation_json,observation_hash) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                intent_id,
+                client_order_id,
+                observation.market_slug,
+                observation.side,
+                _time(observation.observed_at, "observed_at"),
+                _time(observation.book_observed_at, "book_observed_at"),
+                (_time(observation.game_start, "game_start")
+                 if observation.game_start is not None else None),
+                _number(observation.quote_price, "quote_price"),
+                _number(observation.quantity, "quantity"),
+                observation.fill_probability,
+                observation.fill_risk_driver,
+                observation.model_queue_ahead,
+                observation.observed_queue_ahead,
+                observation.target_size,
+                observation.cutoff_price,
+                observation.touch_changes_30s,
+                observation.touch_changes_120s,
+                observation.seconds_since_touch_change,
+                observation.projected_reward,
+                observation.expected_net,
+                observation.stressed_exit_pnl,
+                observation.trade_volume_30s,
+                observation.trade_volume_120s,
+                body,
+                digest,
+            ),
+        )
 
     def transition_intent(
         self,

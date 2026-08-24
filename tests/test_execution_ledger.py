@@ -13,6 +13,7 @@ from liquidity_bot.execution_ledger import (
     LedgerConflict,
     OrderState,
     PositionState,
+    QuoteObservation,
 )
 from liquidity_bot.models import RewardEarning
 
@@ -52,6 +53,34 @@ def execution(execution_id: str, qty: str, *, side="BUY",
     )
 
 
+def quote_observation(**changes) -> QuoteObservation:
+    values = dict(
+        market_slug="market-one", side="bid", observed_at=T0,
+        book_observed_at=T0, game_start=T0 + timedelta(hours=5),
+        quote_price=Decimal("0.48"), quantity=Decimal("10"),
+        decision_reason="reward_positive_candidate",
+        best_bid=.49, best_bid_size=100, best_offer=.51,
+        best_offer_size=120, spread=.02, bid_depth=500, offer_depth=600,
+        model_queue_ahead=100, observed_queue_ahead=250,
+        depth_better_than_quote=100, depth_at_quote=150,
+        depth_through_quote=250, touch_changes_30s=2,
+        touch_changes_120s=7, seconds_since_touch_change=4,
+        seconds_to_event=18000, program_id="program-one",
+        reward_period="day_of", reward_pool=35, discount_factor=.5,
+        target_size=5000, cutoff_price=.47, depth_to_reward_cutoff=5100,
+        ticks_from_best=1, order_score=5, total_score=4000,
+        snapshot_share=.00125, projected_reward=.002,
+        maximum_remaining_reward=1.44, fill_probability=.02,
+        fill_risk_driver="queue:100_500", stressed_exit_complete=True,
+        stressed_exit_closed_qty=10, stressed_exit_average_price=.47,
+        stressed_exit_worst_price=.46, stressed_exit_fee=.01,
+        stressed_exit_pnl=-.21, expected_net=-.004,
+        reward_cost_safety_multiple=2,
+    )
+    values.update(changes)
+    return QuoteObservation(**values)
+
+
 class ExecutionLedgerTests(unittest.TestCase):
     def setUp(self):
         self.path = Path(tempfile.mkdtemp(prefix="liquidity-ledger-")) / "ledger.db"
@@ -76,6 +105,65 @@ class ExecutionLedgerTests(unittest.TestCase):
             self.ledger.prepare_intent(
                 "intent-one", "PLACE", "market-one", "client-one",
                 {"price": "0.51", "qty": "2.00"}, created_at=T0)
+
+    def test_quote_observation_is_immutable_and_linked_to_exact_intent(self):
+        observation = quote_observation()
+        created = self.ledger.prepare_intent(
+            "intent-observed", "PLACE", "market-one", "client-observed",
+            {"price": "0.48", "qty": "10"}, created_at=T0,
+            quote_observation=observation,
+            quote_observation_required=True)
+        self.assertTrue(created)
+        row = self.ledger.query(
+            "SELECT * FROM execution_quote_observations")[0]
+        self.assertEqual(row["intent_id"], "intent-observed")
+        self.assertEqual(row["client_order_id"], "client-observed")
+        self.assertEqual(row["observed_queue_ahead"], 250)
+        self.assertEqual(row["model_queue_ahead"], 100)
+        self.assertIsNone(row["trade_volume_30s"])
+        self.assertFalse(self.ledger.prepare_intent(
+            "intent-observed", "PLACE", "market-one", "client-observed",
+            {"price": "0.48", "qty": "10"}, created_at=T0,
+            quote_observation=observation,
+            quote_observation_required=True))
+        with self.assertRaisesRegex(LedgerConflict, "different content"):
+            self.ledger.prepare_intent(
+                "intent-observed", "PLACE", "market-one", "client-observed",
+                {"price": "0.48", "qty": "10"}, created_at=T0,
+                quote_observation=quote_observation(projected_reward=.003),
+                quote_observation_required=True)
+
+    def test_missing_required_quote_observation_is_measurable(self):
+        self.ledger.prepare_intent(
+            "intent-missing-observation", "PLACE", "market-one",
+            "client-missing-observation", {}, created_at=T0,
+            quote_observation_required=True)
+        intent = self.ledger.query(
+            "SELECT quote_observation_required FROM execution_intents")[0]
+        self.assertEqual(intent["quote_observation_required"], 1)
+        self.assertEqual(self.ledger.query(
+            "SELECT * FROM execution_quote_observations"), [])
+
+    def test_existing_intent_table_gains_observation_required_column(self):
+        import sqlite3
+
+        self.ledger.close()
+        legacy = sqlite3.connect(self.path)
+        legacy.execute("DROP TABLE execution_intents")
+        legacy.execute(
+            "CREATE TABLE execution_intents (intent_id TEXT PRIMARY KEY,"
+            "operation TEXT NOT NULL,market_slug TEXT NOT NULL,"
+            "client_order_id TEXT NOT NULL,exchange_order_id TEXT,"
+            "payload_json TEXT NOT NULL,payload_hash TEXT NOT NULL,"
+            "state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,"
+            "error TEXT)")
+        legacy.commit()
+        legacy.close()
+
+        self.ledger = ExecutionLedger(self.path)
+        columns = {row["name"] for row in self.ledger.connection.execute(
+            "PRAGMA table_info(execution_intents)")}
+        self.assertIn("quote_observation_required", columns)
 
     def test_venue_cancel_resolves_an_order_marked_absent_first(self):
         # Reproduces the live failure of 2026-08-14T04:21:56Z exactly. The

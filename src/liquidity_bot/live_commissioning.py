@@ -38,7 +38,7 @@ from .commissioning import (
 from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import AdapterError, RuntimeInvariantViolation
-from .execution_ledger import ExecutionLedger, LedgerConflict
+from .execution_ledger import ExecutionLedger, LedgerConflict, QuoteObservation
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
     AsyncTradingGateway,
@@ -744,6 +744,8 @@ class CommissioningRunner:
         # Stamp receipt, not request start. REST and limiter latency can be a
         # material fraction of the five-second decision freshness budget.
         state.book_observed_at = self._now()
+        state.observe_book_touch(
+            state.book, observed_at=state.book_observed_at)
         if state.market is None:
             raise RuntimeError("market metadata is unavailable")
         # Validate both possible passive wire payloads before the first
@@ -768,8 +770,10 @@ class CommissioningRunner:
         state = self._markets.get(book.slug)
         if state is None:
             return
+        observed_at = book.received_at or self._now()
+        state.observe_book_touch(book, observed_at=observed_at)
         state.book = book
-        state.book_observed_at = book.received_at or self._now()
+        state.book_observed_at = observed_at
 
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
@@ -1666,6 +1670,7 @@ class CommissioningRunner:
                 levels=state.book.levels(side), incentive=period,
                 tick_size=state.market.tick_size,
                 order_already_resting=already_resting)
+            state.reward_score_by_side[side] = result
             if result.eligible:
                 eligible.add(side)
             else:
@@ -1698,6 +1703,12 @@ class CommissioningRunner:
                 state.book.best_bid.size
                 if side == "bid"
                 else state.book.best_offer.size)
+            # Preserve the exact approximation fed to the current model.  A
+            # backed-off quote can have several better levels ahead of it, so
+            # the durable observation also records actual cumulative queue
+            # separately.  Measurement only: do not silently recalibrate the
+            # live model while collecting its replacement data.
+            state.model_queue_ahead_by_side[side] = queue_ahead
             seconds_to_event = max(
                 0.0, (state.market.game_start - now).total_seconds())
             fill_hazard = self.fill_hazard_model.estimate(
@@ -1726,6 +1737,7 @@ class CommissioningRunner:
                 # depth, even while our order is already visible in the book.
                 exclude_entry_level=True,
             )
+            state.stressed_exit_by_side[side] = exit_result
             if not exit_result.complete:
                 state.economic_blocker_by_side[side] = (
                     "stressed_exit_incomplete")
@@ -1747,6 +1759,7 @@ class CommissioningRunner:
                     fill_hazard.probability * unwind_cost
                     * (float(self.config.reward_cost_safety_multiple) - 1.0)),
             )
+            state.opportunity_economics_by_side[side] = economics
             if economics.should_quote or not self.config.enforce_reward_cost_gate:
                 # The reconciler only quotes a side whose expected net is
                 # strictly positive. With the gate advisory this value is
@@ -1948,6 +1961,119 @@ class CommissioningRunner:
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
         )
+
+    def _quote_observation_for_action(
+        self,
+        state: MarketState,
+        action: PlanAction,
+        now: datetime,
+        position: Decimal,
+    ) -> QuoteObservation | None:
+        """Describe a building PLACE without influencing whether it is sent.
+
+        A failure here is reported and the order follows the unchanged action
+        path.  Coverage is independently measurable because the durable PLACE
+        intent is marked ``quote_observation_required`` even when this returns
+        ``None``.
+        """
+
+        if (action.kind != ActionKind.PLACE_POST_ONLY
+                or action.side not in {"bid", "offer"}
+                or action.price is None or action.qty is None
+                or position != 0):
+            return None
+        try:
+            if (state.market is None or state.book is None
+                    or state.book_observed_at is None
+                    or state.incentive is None):
+                raise RuntimeError("market observation state is incomplete")
+            period = select_applicable_period(
+                state.incentive.periods, state.market.game_start, now)
+            if period is None:
+                raise RuntimeError("applicable reward period is unavailable")
+            side = action.side
+            score = state.reward_score_by_side[side]
+            projection = state.reward_projection_by_side[side]
+            hazard = state.fill_probability_by_side[side]
+            driver = state.fill_risk_driver_by_side[side]
+            exit_result = state.stressed_exit_by_side[side]
+            economics = state.opportunity_economics_by_side[side]
+            model_queue = state.model_queue_ahead_by_side[side]
+
+            quote_price = float(action.price)
+            better = at_quote = 0.0
+            for level_price, level_size in state.book.levels(side):
+                if (side == "bid" and level_price > quote_price + 1e-9
+                        or side == "offer" and level_price < quote_price - 1e-9):
+                    better += level_size
+                elif abs(level_price - quote_price) <= 1e-9:
+                    at_quote += level_size
+            observed_queue = better + at_quote
+            seconds_to_event = (
+                max(0.0, (state.market.game_start - now).total_seconds())
+                if state.market.game_start is not None else None)
+            return QuoteObservation(
+                market_slug=state.slug,
+                side=side,
+                observed_at=now,
+                book_observed_at=state.book_observed_at,
+                game_start=state.market.game_start,
+                quote_price=Decimal(str(action.price)),
+                quantity=action.qty,
+                decision_reason=action.reason,
+                best_bid=state.book.best_bid.price,
+                best_bid_size=state.book.best_bid.size,
+                best_offer=state.book.best_offer.price,
+                best_offer_size=state.book.best_offer.size,
+                spread=state.book.best_offer.price - state.book.best_bid.price,
+                bid_depth=state.book.bid_depth,
+                offer_depth=state.book.offer_depth,
+                model_queue_ahead=model_queue,
+                observed_queue_ahead=observed_queue,
+                depth_better_than_quote=better,
+                depth_at_quote=at_quote,
+                depth_through_quote=observed_queue,
+                touch_changes_30s=state.touch_changes(now, seconds=30),
+                touch_changes_120s=state.touch_changes(now, seconds=120),
+                seconds_since_touch_change=(
+                    state.seconds_since_touch_change(now)),
+                seconds_to_event=seconds_to_event,
+                program_id=period.program_id,
+                reward_period=period.period,
+                reward_pool=period.reward_pool,
+                discount_factor=period.discount_factor,
+                target_size=period.target_size,
+                cutoff_price=score.cutoff_price,
+                depth_to_reward_cutoff=score.total_depth,
+                ticks_from_best=score.ticks_from_best,
+                order_score=score.score,
+                total_score=projection.total_score,
+                snapshot_share=projection.snapshot_share,
+                projected_reward=projection.projected_reward,
+                maximum_remaining_reward=(
+                    projection.maximum_remaining_reward),
+                fill_probability=hazard,
+                fill_risk_driver=driver,
+                stressed_exit_complete=exit_result.complete,
+                stressed_exit_closed_qty=exit_result.closed_qty,
+                stressed_exit_average_price=exit_result.average_price,
+                stressed_exit_worst_price=exit_result.worst_price,
+                stressed_exit_fee=exit_result.taker_fee,
+                stressed_exit_pnl=exit_result.pnl,
+                expected_net=economics.expected_net_value,
+                reward_cost_safety_multiple=float(
+                    self.config.reward_cost_safety_multiple),
+            )
+        except Exception as exc:
+            # Observation is reporting.  It must never turn a valid action
+            # into a strategy refusal or make shutdown unable to prove flat.
+            print(
+                f"[quote-observation] at={now.isoformat()} "
+                f"market={state.slug} side={action.side} "
+                f"missing={type(exc).__name__}:{exc}",
+                flush=True,
+            )
+            return None
 
     async def _refresh_balance(self, now: datetime) -> None:
         if self.risk_guard is None:
@@ -2666,9 +2792,18 @@ class CommissioningRunner:
                 flush=True,
             )
         try:
+            # Reuse one ledger snapshot for both observation classification
+            # and the action driver.  Observation must not add another query
+            # to each placement or see a different position than the driver.
+            position = self.ledger.position(slug)
+            quote_observation = (
+                self._quote_observation_for_action(
+                    state, actions[0], now, position)
+                if actions else None)
             await self.driver.apply_one(
                 actions, market=state.market,
-                position=self.ledger.position(slug), now=now)
+                position=position, now=now,
+                quote_observation=quote_observation)
         except Exception as exc:
             stop = await self._handle_action_failure(exc, slug)
             if stop:

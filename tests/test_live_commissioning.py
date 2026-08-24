@@ -395,6 +395,102 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
+    async def test_building_observation_records_actual_queue_separately_from_model(self):
+        runner, _, _ = self.build_runner()
+        state = runner.state_for("market-one")
+        state.market = MarketMetadata(
+            slug="market-one", game_start=GAME_START, tick_size=.01,
+            minimum_trade_qty=1, active=True, closed=False,
+            status="MARKET_STATUS_OPEN",
+            sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE")
+        period = IncentivePeriod(
+            "queue-study", "day_of", "active", 35, .5, 500)
+        state.incentive = MarketIncentive("market-one", (period,))
+        prior = BookSnapshot(
+            "market-one", (BookLevel(.49, 90),), (BookLevel(.51, 90),))
+        state.observe_book_touch(
+            prior, observed_at=NOW - timedelta(seconds=20))
+        state.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.50, 100), BookLevel(.49, 200), BookLevel(.48, 500)),
+            (BookLevel(.50, 120), BookLevel(.51, 200), BookLevel(.52, 500)),
+        )
+        state.book_observed_at = NOW - timedelta(seconds=2)
+        state.observe_book_touch(
+            state.book, observed_at=state.book_observed_at)
+
+        runner._evaluate_rewards_inner(NOW, "market-one")
+        with patch.object(
+                runner.ledger, "position",
+                side_effect=AssertionError("telemetry added a position read")):
+            observation = runner._quote_observation_for_action(
+                state,
+                PlanAction(
+                    ActionKind.PLACE_POST_ONLY, "market-one",
+                    "reward_positive_candidate", side="bid", price=.49,
+                    qty=runner.config.quote_size),
+                NOW,
+                Decimal("0"),
+            )
+
+        self.assertIsNotNone(observation)
+        # Current production model uses best-touch size only.
+        self.assertEqual(observation.model_queue_ahead, 100)
+        # At a backed-off 0.49 quote, both the 0.50 and existing 0.49 levels
+        # are ahead under price-time priority.
+        self.assertEqual(observation.observed_queue_ahead, 300)
+        self.assertEqual(observation.depth_better_than_quote, 100)
+        self.assertEqual(observation.depth_at_quote, 200)
+        self.assertEqual(observation.target_size, 500)
+        self.assertEqual(observation.touch_changes_120s, 1)
+        self.assertIsNone(observation.trade_volume_30s)
+
+    async def test_successful_live_building_action_persists_exact_observation(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+
+        outcome, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 0)
+        observation = runner.ledger.query(
+            "SELECT * FROM execution_quote_observations")
+        self.assertEqual(len(observation), 1)
+        intent = runner.ledger.query(
+            "SELECT intent_id,client_order_id,quote_observation_required "
+            "FROM execution_intents WHERE operation='PLACE'")[0]
+        self.assertEqual(observation[0]["intent_id"], intent["intent_id"])
+        self.assertEqual(
+            observation[0]["client_order_id"], intent["client_order_id"])
+        self.assertEqual(intent["quote_observation_required"], 1)
+        self.assertIsNone(observation[0]["trade_volume_30s"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_missing_telemetry_never_suppresses_a_valid_building_action(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+        # Simulate one reporting field being unavailable after the unchanged
+        # plan was authorized.  The order still follows that plan, while the
+        # required marker makes the telemetry gap visible to the report.
+        runner.state_for("market-one").reward_score_by_side.clear()
+
+        outcome, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 0)
+        self.assertEqual(len(client.orders.create_calls), 1)
+        intent = runner.ledger.query(
+            "SELECT quote_observation_required FROM execution_intents "
+            "WHERE operation='PLACE'")[0]
+        self.assertEqual(intent["quote_observation_required"], 1)
+        self.assertEqual(runner.ledger.query(
+            "SELECT * FROM execution_quote_observations"), [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_decision_sweep_skips_only_the_market_with_an_unresolved_intent(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

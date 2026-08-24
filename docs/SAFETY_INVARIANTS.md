@@ -266,3 +266,13 @@ These are implementation requirements, not suggestions.
     decision and the derived market economics are refreshed against that
     drained state. Rebind discards owners no longer active, and duplicate
     terminal notices cannot create duplicate priority work.
+66. Prospective quote observation is reporting, never authorization. It may
+    describe only a non-reducing post-only PLACE and must be written in the
+    same durable transaction as that intent, keyed by its exact client order
+    ID before venue mutation. Reducers, IOC exits and cancels cannot carry an
+    entry observation. A missing or malformed observation is counted as a
+    coverage gap and must not veto, delay, reorder or cancel an otherwise valid
+    action. No observation field, including league, may feed selection,
+    reconciliation, scheduler priority, slot capacity or risk policy until a
+    separately reviewed rule passes a prospective held-out cohort and first
+    runs in would-refuse shadow mode.

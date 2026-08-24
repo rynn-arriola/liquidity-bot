@@ -12,11 +12,11 @@ strategy is profitable and not permission to scale.
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 5 contracts per quote across at most 20 concurrently bound markets by
-  default (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 10; it returned 10 -> 5 on
-  2026-08-24 without reducing the 20-slot breadth. `commissioning.py` is the
-  authority;
+- 5 contracts per quote by default across at most 20 concurrently bound
+  markets (one bid and one offer may rest per market while flat). Size is a
+  restart-scoped whole number from 5 through 10; the live operator setting
+  returned to 10 on 2026-08-24 without changing the 20-slot breadth.
+  `commissioning.py` is the authority;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
@@ -33,13 +33,13 @@ strategy is profitable and not permission to scale.
   comes first, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
-  An early cross costing more than `0.8 × quote size` ($4 at size 5) is refused
+  An early cross costing more than `0.8 × quote size` ($8 at live size 10) is refused
   and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
 - allow at most 20 taker exits, with a session fee cap of `0.30 × quote size`
-  ($1.50 at size 5), so the cap continues to cover twenty peak-fee exits;
-- $40 per-market realized-loss stop, $50 realized session stop, and $60
+  ($3 at live size 10), so the cap continues to cover twenty peak-fee exits;
+- $40 per-market realized-loss stop, $70 realized session stop, and $80
   emergency marked-account-equity hard stop. These account-level loss limits
   do not scale down with quote size;
 - run until an operator stop or terminal safety/loss condition, then remain

@@ -1,6 +1,18 @@
 # Next session — outstanding fixes
 
-## FIXED, DEPLOYED AND RESTARTED: dynamic quote size, currently 5, without changing twenty slots
+## REVIEWED, BOT STOPPED: return to size 10 with $70/$80 account stops
+
+The operator authorized quote size 10, a $70 realized session stop and an $80
+marked-equity hard stop on 2026-08-24. Graceful shutdown completed before the
+change. The $40 per-market stop stays unchanged. Size-derived limits become an
+$8 early-exit cap, $90 per-market exposure and $3 execution-fee cap. The
+20-slot scheduler, 8 + 8 + 4 private layout, six-hour horizon, 4 req/s REST
+ceiling, reward economics and exit timing are unchanged. The same-day restart
+drawdown test now derives its scenario from the configured hard stop. Focused
+tests, three deliberate configuration mutations and all 551 tests pass.
+Deployment and live acceptance remain to be recorded here.
+
+## SUPERSEDED 2026-08-24: dynamic quote size, size 5 deployment
 
 The bot was gracefully stopped and proved flat at 15:52:48Z. The authorized
 current size is 5 contracts, producing a $4 maximum early-exit loss, $45

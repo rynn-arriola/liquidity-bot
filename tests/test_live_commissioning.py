@@ -3517,20 +3517,21 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         lower equity ratchets the floor down and every individual step stays
         inside the limit while the account walks away.
 
-        The two amounts are scaled to the stops, not absolute: each step must
-        sit inside the ceiling while their SUM exceeds it. They were $30 + $20
-        against a $45 ceiling until 2026-08-23, when the operator raised the
-        ceiling to $60; $50 then stopped tripping anything and this test began
-        failing. Same ratios, rescaled.
+        The two amounts derive from the active stop: each step must sit inside
+        the ceiling while their SUM exceeds it. This keeps an operator limit
+        change from silently weakening the restart-ratchet regression.
         """
         runner, client, _ = self.build_runner()
         await runner.preflight()
         opening = runner.risk_guard.starting_equity
 
-        # Lose $40 -- inside the $60 ceiling -- then die. This is the step that
-        # gets forgiven by a per-process baseline, and it is what makes the
-        # ratchet possible.
-        client.account.current_balance -= Decimal("40")
+        ceiling = runner.config.hard_stop_loss_usd
+        first_step = ceiling / Decimal("2")
+        second_step = ceiling - first_step + Decimal("1")
+
+        # Lose half the ceiling, then die. This is the step that gets forgiven
+        # by a per-process baseline, and it is what makes the ratchet possible.
+        client.account.current_balance -= first_step
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
         await runner.private_stream.close()
@@ -3544,10 +3545,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # The day's opening equity, NOT the depressed equity it just read.
         self.assertEqual(restarted.risk_guard.starting_equity, opening)
 
-        # $25 more. Measured from the DAY's open that is $65 and past the $60
-        # ceiling; measured from this process's own start it is $25 and trips
-        # nothing at all, which is exactly the bug.
-        client.account.current_balance -= Decimal("25")
+        # Lose the other half plus $1. Measured from the DAY's open this is $1
+        # past the ceiling; measured from this process's own start it remains
+        # inside the ceiling, which is exactly the historical bug.
+        client.account.current_balance -= second_step
         await restarted._refresh_balance(NOW)
         self.assertEqual(
             restarted._stop_reason(NOW), "EMERGENCY_EQUITY_HARD_STOP")

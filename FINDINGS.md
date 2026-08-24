@@ -20,6 +20,33 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Ten contracts and the $70/$80 account stops do not alter the twenty-slot flow
+
+Established from the 2026-08-24 operator-authorized configuration review and
+the full 551-test suite. Quote size is restart-scoped, so the live size can
+return from 5 to 10 without editing the scheduler. At size 10 the existing
+formulas mechanically produce an $8 early-exit cross cap, $90 per-market open
+exposure, and $3 session execution-fee cap. `max_markets` remains 20, the
+private-stream layout remains 8 + 8 + 4, the selection horizon remains 21,600
+seconds, and the shared REST ceiling remains 4 requests/second.
+
+The operator separately raised the realized session stop from $50 to $70 and
+the marked-equity hard stop from $60 to $80. The $40 per-market stop is
+unchanged and therefore remains the first loss bound for one bad market. These
+are account-level daily budgets, not size-derived values. Three consecutive
+full session-stop days can now consume about $210 before the existing terminal
+consecutive-day bound requires intervention.
+
+The review found one brittle regression test, not a production defect: the
+same-UTC-day restart test simulated fixed $40 + $25 losses, which no longer
+crossed the new hard stop. It now derives two individually sub-limit losses
+from the active hard ceiling whose combined drawdown exceeds it by $1. This
+preserves the invariant that a restart cannot hand back the UTC day's equity
+budget. Deliberate mutations of the session stop, hard stop, and 20-market
+lock were all refused; all 551 tests passed after the correction.
+
+---
+
 ## The standalone dashboard can show a spent stop while the runner still has durable headroom
 
 Established immediately before the 2026-08-24 size-5 restart. At 16:13Z the

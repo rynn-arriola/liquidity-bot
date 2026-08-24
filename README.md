@@ -32,21 +32,21 @@ The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a non-scalable commissioning process. It joins the active sports
 catalog to reward programs and binds a single executor to one selected market at
-a time. The operative limits, **as configured and running** (verified against
-`CommissioningConfig` and the live command line 2026-08-16 — the runner takes no
-config overrides, so the dataclass defaults are what execute):
+a time. The operative authorized limits are below. Quote size is read from the
+restart-scoped runtime setting; the account loss limits remain hard-locked by
+`CommissioningConfig`:
 
 | limit | value |
 |---|---|
-| quote size | 5 contracts (restart-scoped, allowed 5-10) |
+| quote size | 10 contracts (restart-scoped, allowed 5-10) |
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
-| session loss stop | $50 |
-| emergency hard stop | $60 marked equity |
+| session loss stop | $70 |
+| emergency hard stop | $80 marked equity |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
-| early-exit cross cap | $4 at size 5 (`0.8 × size`) |
-| per-market open exposure | $45 at size 5 (`9 × size`) |
+| early-exit cross cap | $8 at size 10 (`0.8 × size`) |
+| per-market open exposure | $90 at size 10 (`9 × size`) |
 | REST budget | 4 requests/second |
 
 Plus an operator-controlled graceful stop. **These numbers have moved several

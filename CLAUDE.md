@@ -8,7 +8,10 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is RUNNING on `b3ad73e` since 2026-08-24T16:15:26Z at quote size 5.**
+- **Bot is STOPPED for the reviewed size/risk configuration deployment.** The
+  next authorized start is quote size 10 with $40/$70/$80 market/session/hard
+  stops. The 20-slot scheduler and six-hour horizon are unchanged.
+  The previous runner was `b3ad73e`, started 2026-08-24T16:15:26Z at size 5.
   Live verification reached 20/20 quoted markets; venue orders reported only
   original/remaining quantity 5, with zero positions, unknown-absent orders or
   unresolved intents. Quote size is one persistent restart-scoped setting,

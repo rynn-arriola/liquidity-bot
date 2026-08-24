@@ -67,13 +67,12 @@ class CommissioningConfig:
     equity and is required to exceed the normal stop.
 
     They sat at $40/$40/$45 until 2026-08-23, deliberately equal so exactly one
-    number could fire. The operator then raised the session stop to $50 and the
-    ceiling to $60 and left the per-market stop at $40, so that symmetry is
-    gone on purpose: **a single market losing $40 now pauses trading before the
-    session budget of $50 is spent.** The session limit is only reachable by
-    losses spread across several markets. That is the tighter direction, not
-    the looser one, but it does mean "which stop fired" is now a real question
-    -- the alert names it.
+    number could fire. The operator raised the session/hard limits to $50/$60
+    that day, then to $70/$80 on 2026-08-24, while leaving the per-market stop
+    at $40. A single market losing $40 therefore still pauses trading before
+    the session budget is spent; the session limit is reachable only through
+    losses spread across several markets. "Which stop fired" is a real
+    question, and the alert names it.
 
     This docstring previously quoted $30 and $35 against code that had said
     $40 and $45 for weeks. Numbers in prose go stale; the fields below are the
@@ -91,8 +90,9 @@ class CommissioningConfig:
     # share is size-linear, so size 1 earns a rounding error. Worst case is
     # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
     # stop below is set to.
-    # Raised 5 -> 10 on 2026-08-20, then returned to 5 on 2026-08-24 by
-    # operator decision. Size is leverage, not edge: FINDINGS measured reward
+    # Raised 5 -> 10 on 2026-08-20, returned to 5 on 2026-08-24, then restored
+    # to 10 later that day by operator decision. Size is leverage, not edge:
+    # FINDINGS measured reward
     # and unwind BOTH scaling linearly (25x size -> 24.4x reward, gate_ratio
     # 0.0310 -> 0.0305), so doubling pays more reward when a quote qualifies
     # but also doubles what a bad fill costs without improving the ratio. The
@@ -130,7 +130,8 @@ class CommissioningConfig:
     # riding toward settlement -- how maker-lab lost $443.88.
     #
     # Worst case exposure: both sides of a market risk quote_size x p +
-    # quote_size x (1 - p) = $5, so 20 markets is $100 against the $340 cap.
+    # quote_size x (1 - p) = quote_size, so 20 size-10 markets is $200 against
+    # the $340 cap.
     max_markets: int = 20
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
@@ -146,22 +147,21 @@ class CommissioningConfig:
     # Raised to $40 on 2026-08-14 alongside quote size 5, both tiers equal so
     # exactly one threshold could fire.
     #
-    # **Operator decision 2026-08-23: session $40 -> $50, ceiling $45 -> $60.**
-    # Taken together with restoring the six-hour selection horizon in the same
-    # change, which puts materially more markets in play. The per-market stop
-    # was NOT raised, so it is now the binding one for a single bad market and
-    # the session budget is only reachable across several -- see the class
-    # docstring.
+    # **Operator decisions: session/hard $40/$45 -> $50/$60 on 2026-08-23,
+    # then $70/$80 on 2026-08-24.** The per-market stop was NOT raised, so it
+    # remains binding for a single bad market and the session budget is only
+    # reachable across several -- see the class docstring.
     #
     # Scale, so this is judgeable rather than a bare number: marked equity was
     # $419.91 at 2026-08-23T02:20Z, so these are 11.9% and 14.3%, up from 9.5%
     # and 10.7%. Trading loss at size 10 has run -$27.40 to -$35.14 per day, so
     # 2026-08-21 spent 88% of the OLD $40 budget on an ordinary day.
     #
-    # The rollback point is `size-5-known-good` and the top of NEXT.md.
+    # Quote size returned to 10 by operator decision on 2026-08-24. Loss stops
+    # remain account budgets and do not derive from quote size.
     max_market_loss_usd: Decimal = Decimal("40")
-    max_session_loss_usd: Decimal = Decimal("50")
-    hard_stop_loss_usd: Decimal = Decimal("60")
+    max_session_loss_usd: Decimal = Decimal("70")
+    hard_stop_loss_usd: Decimal = Decimal("80")
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
     # `max_market_loss_usd` and so could never fire, because five contracts
@@ -198,11 +198,11 @@ class CommissioningConfig:
     # own, so the bot resumes without anyone touching it.
     #
     # That is unbounded on its own, and this is the bound. The budget resets
-    # every midnight, so a systematically wrong strategy would lose its full
-    # $40 daily forever with nothing forcing attention -- and the $45 emergency
-    # ceiling cannot catch it either, because that re-baselines each morning
-    # too. One bad day is variance; three in a row is a broken model. Worst
-    # case before it demands a human is about $120.
+    # every midnight, so a systematically wrong strategy could lose its full
+    # session budget daily forever with nothing forcing attention -- and the
+    # emergency ceiling cannot catch it either, because that re-baselines each
+    # morning too. One bad day is variance; three in a row is a broken model.
+    # At the current $70 session limit, the bound is about $210.
     max_consecutive_loss_stop_days: int = 3
     # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
     # one pair of numbers served as both, which is incoherent once size grows:
@@ -402,11 +402,11 @@ class CommissioningConfig:
                 "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 50 or self.max_market_loss_usd != 40
-                or self.hard_stop_loss_usd != 60):
+        if (self.max_session_loss_usd != 70 or self.max_market_loss_usd != 40
+                or self.hard_stop_loss_usd != 80):
             problems.append(
-                "commissioning must keep a $40 per-market stop, a $50 session "
-                "stop, and a $60 emergency equity ceiling above them")
+                "commissioning must keep a $40 per-market stop, a $70 session "
+                "stop, and an $80 emergency equity ceiling above them")
         if self.max_consecutive_loss_stop_days != 3:
             problems.append(
                 "a paused loss stop must become terminal after three "

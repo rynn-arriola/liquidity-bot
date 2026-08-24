@@ -57,14 +57,13 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. Losses are stopped at a single **$40** threshold -- `max_market_loss_usd`
-    and `max_session_loss_usd` both sit there so exactly one can fire. The
-    **$45** hard stop exists only because the emergency ceiling must sit above
-    the normal stop, and is measured on marked account equity
-    (`currentBalance` plus `assetNotional`). Buying power is never treated as
-    P&L or marked equity. (Corrected 2026-08-16: this read $30/$35, which had
-    not been true for some time. Verified against `CommissioningConfig`, which
-    validates both at startup and refuses to arm if changed.)
+25. Losses have three distinct thresholds: a **$40** per-market realized-loss
+    stop, a **$70** realized session stop, and an **$80** emergency marked-
+    account-equity hard stop (`currentBalance` plus `assetNotional`). The
+    market stop remains the first bound for one bad market; only losses spread
+    across markets can reach the session stop. Buying power is never treated
+    as P&L or marked equity. `CommissioningConfig` validates all three at
+    startup and refuses to arm if they drift.
 26. A restart may mutate only persisted, identified orders/positions in one
     ledger-selected recovery market, and then only to recover flat. Unowned or cross-market
     state refuses without mutation.
@@ -196,7 +195,7 @@ These are implementation requirements, not suggestions.
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
 57. **Superseded 2026-08-16 — kept because it was used as grounds not to
-    investigate.** The live limits are 20 markets and currently 5 contracts per quote
+    investigate.** The live limits are 20 markets and currently 10 contracts per quote
     (invariant 13). The per-connection reasoning below is still correct; what
     was wrong is treating one connection's cap as the account's. Connections
     are independent and each carries its own quota, and 29 subscriptions were

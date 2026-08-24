@@ -44,12 +44,11 @@ class CommissioningTests(unittest.TestCase):
         # Returned with size so it keeps its contract-level meaning.
         self.assertEqual(
             self.authorized().max_early_exit_loss_usd, Decimal("4.0"))
-        # Operator decision 2026-08-23, alongside restoring the six-hour
-        # selection horizon: session $40 -> $50, ceiling $45 -> $60. The
-        # per-market stop deliberately stayed at $40, so it now binds before
-        # the session budget for a single bad market.
-        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "60")
-        self.assertEqual(str(self.authorized().max_session_loss_usd), "50")
+        # Operator decisions: session/hard $40/$45 -> $50/$60 on 2026-08-23,
+        # then $70/$80 on 2026-08-24. The per-market stop deliberately stayed
+        # at $40, so it still binds before the session budget for one market.
+        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "80")
+        self.assertEqual(str(self.authorized().max_session_loss_usd), "70")
         self.assertEqual(str(self.authorized().max_market_loss_usd), "40")
         # Deliberately NOT doubled with size. The stops protect the account and
         # equity did not double: $40 is ~9% of ~$467, $80 would be ~18%. They

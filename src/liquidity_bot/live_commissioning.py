@@ -3,7 +3,7 @@
 The economic evidence gate remains red. This runner exists only for the
 operator-accepted experiment and is mechanically constrained to 20 selected
 rewarded markets, a restart-scoped whole quote size from 5 to 10 contracts, an
-operator-controlled stop, a $50 normal session stop, and a $60 emergency hard
+operator-controlled stop, a $70 normal session stop, and an $80 emergency hard
 stop.
 
 Importing this module has no side effect. Exchange access is possible only

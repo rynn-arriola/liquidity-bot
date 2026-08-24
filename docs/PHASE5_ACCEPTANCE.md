@@ -29,9 +29,9 @@ Operator exception, **as configured and running** (corrected 2026-08-16; this
 previously read one market, one contract, 30-second inventory age and
 $2/$5/$15 stops, none of which had been true for some time): automatically
 selected rewarded markets, up to 20 bound at once, 5 contracts per quote by
-default (restart-scoped whole values 5-10 are allowed), 900s
-inventory age, 300s pre-kickoff flatten, $40 market / $50 session soft limits,
-$60 emergency hard stop, and a graceful operator-controlled stop.
+default with live size 10 (restart-scoped whole values 5-10 are allowed), 900s
+inventory age, 300s pre-kickoff flatten, $40 market / $70 session soft limits,
+$80 emergency hard stop, and a graceful operator-controlled stop.
 `commissioning.py` validates these at startup and refuses to arm if changed. Startup still requires the whole account flat, exclusive
 key ownership, maker-lab stopped, fresh private state, and a current applicable
 liquidity program. See `docs/COMMISSIONING.md`.

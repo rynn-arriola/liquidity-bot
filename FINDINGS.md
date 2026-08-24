@@ -92,6 +92,20 @@ partial August 24 cohort is warm-up; August 25–26 are training, August 27 is
 held out, so the earliest review is **2026-08-28T00:00Z**, and later if fewer
 than roughly 300 maker-filled observed orders exist then.
 
+**Live integrity checkpoint, 2026-08-24T11:47:56Z:** 569 building PLACE
+intents required observations and all 569 had one; missing, orphaned, duplicate
+and intent/client/market linkage mismatches were all zero. A second-pass audit
+found zero mismatches in nested wire price, quantity, BUY_LONG/BUY_SHORT side
+mapping, post-only flag, immutable JSON hash, observed-queue arithmetic,
+30s-versus-120s touch ordering or observation/intent clocks. Book age was
+0.001226s median, 4.991020s maximum and never exceeded the 5s decision bound.
+All 569 intents were RECONCILED; 38 had exact maker-fill labels, 502 were
+terminal unfilled and 29 remained open. The capture already contained 105
+orders where model and observed queue differed. There were zero
+`[quote-observation]` errors. Public trade volume remained NULL by design.
+The read-only report correctly returned `COLLECTING`, not an enforcement
+recommendation.
+
 ---
 
 ## Current status — 2026-08-15

@@ -247,6 +247,12 @@ its diagnostic buckets as an automatic strategy gate.
 zero missing and no `[quote-observation]` errors. This is coverage proof only,
 not enough outcome data to select a rule.
 
+The **2026-08-24T11:47:56Z** recheck had 569/569 captured, zero missing or
+link/payload/hash/arithmetic/timestamp errors, 38 maker-fill labels and 105
+model-versus-observed queue differences. Freshness stayed inside the live 5s
+bound (4.991020s maximum). The report remained `COLLECTING`; these early bucket
+rates are not permission to filter any league or enforce any refusal.
+
 **Change if:** a characteristic separates them cleanly. The lever is the
 projection gate in `market_selector.py`, not the quoting rule.
 

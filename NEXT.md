@@ -47,6 +47,15 @@ showed 37 required observations, 37 captured, zero missing, zero positions and
 the live process was placing across the slate. Do not restart merely to inspect
 telemetry; the report opens the ledger read-only.
 
+Live recheck at **2026-08-24T11:47:56Z**: 569 required / 569 captured / zero
+missing, all exact links unique and all intents RECONCILED. The payload, side,
+post-only, hash, queue-arithmetic, touch-window and timestamp integrity audit
+found zero errors. Book age was 0.001226s median and 4.991020s maximum, with
+none beyond the 5s decision bound. Labels were 38 maker-filled, 502 terminal
+unfilled and 29 still open; 105 observations already distinguish actual queue
+from the current model queue. The report verdict remains `COLLECTING` and no
+strategy rule is authorized yet.
+
 ---
 
 ## CURRENT: monitor deployed cancel-confirmed priority replan

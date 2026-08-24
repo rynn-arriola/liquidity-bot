@@ -8,17 +8,19 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **A dual-stream recovery defect is fixed locally and awaiting safe deploy.**
+- **The dual-stream recovery repair is deployed as `bec8a83`.**
   At 21:31Z a top-up bind closed both streams, then owned GET-by-ID NotFound
   lag left four acknowledged cancels `UNKNOWN_ABSENT`; strict
   `_recover_bound_streams` held all twenty markets dark while the process
   stayed alive. The local fix scopes those known owners after complete REST
   snapshots and fresh private state, keeps each ambiguous owner barred, and
   bounds genuine rebind failure at 12 attempts. Normal active-set binds remain
-  strict. All 573 local tests and three mutation checks pass. The last live
-  inspection also had two nonzero positions, so no restart/deploy may infer
-  flat from zero working orders. See the newest BUGFIXES, FINDINGS and NEXT
-  entries for the exact detection signature and acceptance steps.
+  strict. All 573 local and production tests and three mutation checks pass.
+  The old runner ultimately proved flat; the new size-10 runner began at
+  22:01:08Z, bound exactly 20 markets and produced placements across 18
+  distinct markets with zero positions or unknown-absent orders at acceptance.
+  See the newest BUGFIXES, FINDINGS and NEXT entries for the exact detection
+  signature and the marker to verify on the next natural failed bind.
 
 - **The almost-front queue study is deployed as `6085ca5` and collecting.**
   It adds only an isolated bounded public-trade socket, durable

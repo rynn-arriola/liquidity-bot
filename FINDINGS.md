@@ -65,6 +65,13 @@ proof, while other owners may produce `[action]` lines. If attempts reach 12
 without that marker, the runner returns a bounded failure; shutdown still has
 to prove the entire account flat before a supervisor restart is authorized.
 
+Deployment acceptance on commit `bec8a83` preserved the scheduler: the
+22:01:08Z runner reported `queue-measurement ... markets=20`, then created 18
+placement intents across 18 distinct markets. The read-only checkpoint showed
+17 working orders across 17 markets, no position, no `UNKNOWN_ABSENT` row and
+one ordinary acknowledged PLACE in flight. That is startup convergence across
+the twenty-slot set, not a reduced slot cap. All 573 production tests passed.
+
 ---
 
 ## Ten contracts and the $70/$80 account stops do not alter the twenty-slot flow

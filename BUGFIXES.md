@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
-### FIXED LOCALLY — failed active-set bind repeated strict quarantine and held every slot dark
+### FIXED AND DEPLOYED — failed active-set bind repeated strict quarantine and held every slot dark
 
 **Symptom.** At 21:31:29Z a normal top-up released an expired market and
 attempted to bind the replacement active set. At 21:32:06Z five owned order
@@ -75,7 +75,19 @@ without claiming flat; an existing test plus a new assertion prove normal
 active-set binds remain strict. All **573 tests pass locally in 36.801s**.
 Three deliberate mutations were killed: terminal-only quarantine, discarding
 the scoped-bind argument, and removing the retry cap each fails its dedicated
-regression. Deployment and live restart acceptance are still pending.
+regression.
+
+Commit `bec8a83` was pushed and all seven deployed file hashes matched. The
+old runner's graceful stop took 6m8s through real venue consistency lag, then
+recorded `flat: true`; the ledger agreed with zero working orders, positions
+or unknown-absent rows. All **573 tests passed in production in 50.894s**.
+The supervisor/runner restarted at 22:01:07Z/22:01:08Z with unchanged size 10.
+Acceptance bound exactly 20 queue-measurement markets and produced 18 placement
+intents across 18 distinct markets; the checkpoint held 17 working orders
+across 17, zero positions, zero `UNKNOWN_ABSENT`, and one ordinary
+acknowledged PLACE still converging. No bound-stream failure was induced on a
+funded account; the new recovery marker will be accepted on its next natural
+occurrence.
 
 ---
 

@@ -20,6 +20,55 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Private recovery resumes the process but mass-cancelled owners time out and remain barred for 30 minutes
+
+Established from the live 2026-08-24 runner, its ledger and the exact two
+private-disconnect timelines. This is an availability defect, not evidence of
+an unsafe position or a telemetry-triggered venue mutation.
+
+The private stream disconnected twice in the same session:
+
+| disconnect | private recovery resumed | scoped owners | CANCEL intents | terminal after 60s | markets retired |
+|---|---:|---:|---:|---:|---:|
+| 07:20:02Z | 07:20:38Z | 20 | 29 across 19 markets | 26 / 29 | 18 |
+| 11:47:30Z | 11:48:10Z | 20 | 29 across 18 markets | 27 / 29 | 19 |
+
+The second incident is the source of the operator's retirement alerts. Global
+private-stream quarantine correctly canceled positively-known working orders,
+and the scoped recovery correctly restored the private stream without waiting
+for every cancel. The remaining cancel proofs were then repaired through the
+background owner-at-a-time path. Their terminal latencies were 388.85s median
+and 695.16s maximum in the 11:47 incident, far beyond the fixed 60-second
+unresolved-mutation threshold. The timeout therefore retired nearly the whole
+bound slate even though the ambiguity was attributable and was still
+converging. The 07:20 incident had the same shape: 346.27s median and 683.29s
+maximum terminal latency.
+
+All 19 markets from the 11:47 incident subsequently logged `released=flat` by
+12:00:03Z. At 12:03Z the read-only ledger showed zero nonzero positions, zero
+unresolved intents and zero `UNKNOWN_ABSENT` orders; the runner and supervisor
+were still alive and new PLACE intents were RECONCILED. However,
+`_release_retired_if_flat` removes the active retirement without clearing the
+1,800-second `_retired_until` bar. Those owners therefore remain unable to
+build quotes until roughly 12:18-12:19Z. The `[selection] retired=36` value is
+the session-cumulative `_retired_ever` counter, not 36 currently unsafe or
+actively retired markets. The alert text saying an unresolved-mutation owner
+"will not quote again this session" is also inaccurate for this transient
+reason: after flat release it can quote when the 30-minute bar expires.
+
+The telemetry audit did not cause the incident. The 11:47 private disconnect
+was logged at **11:47:30.179Z**, about 26 seconds before the read-only audit
+began at 11:47:56Z, and the same mass-retirement pattern had already occurred
+at 07:20Z with no audit running. The report opened SQLite with `mode=ro`, made
+no venue/API call, and the observation path is excluded from CANCEL intents.
+At the 12:03 check observation coverage had advanced to 574 required / 574
+captured with zero missing. The deployed observation code therefore remains
+disproved as the trigger; the open defect is the interaction between global
+recovery cancellation, slow owner-at-a-time terminal repair, the 60-second
+timeout and the 30-minute post-resolution bar.
+
+---
+
 ## Prospective adverse-fill observation — live collection began 2026-08-24
 
 The existing ledger can describe what happened after a fill, but it did not

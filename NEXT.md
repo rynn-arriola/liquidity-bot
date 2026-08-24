@@ -1,5 +1,45 @@
 # Next session — outstanding fixes
 
+## CURRENT INCIDENT: private reconnect mass-retires the bound slate, then keeps resolved owners barred
+
+Two private-stream disconnects in the 02:50Z live session produced the same
+availability failure. Recovery resumed in 36-40 seconds and correctly scoped
+ambiguity to its owners, but the global quarantine created 29 CANCEL intents.
+Owner-at-a-time terminal repair took 5.8-6.5 minutes at the two medians and
+11.4-11.6 minutes for the slowest cancels, so the 60-second mutation threshold
+retired 18 markets at 07:20Z and 19 at 11:48Z. The second batch was fully flat
+and resolved by 12:00:03Z, but
+the transient retirement still leaves `_retired_until` in force for 1,800
+seconds. At 12:03Z the runner was healthy and flat with zero unresolved or
+unknown-absent state, but only four active orders while the recovered owners
+waited for their bars to expire.
+
+Do not weaken the safety rule that absence is never cancellation, and do not
+remove global quarantine on private visibility loss. Fix the availability
+composition instead:
+
+1. give recovery-created CANCEL owners prompt, rate-governed terminal-proof
+   service after the fresh private bind, instead of letting a full-snapshot,
+   one-owner background cadence push nearly all of them past 60 seconds;
+2. once an `unresolved_mutation_timeout` owner has positive terminal proof, no
+   unresolved intent, no working order and is flat, clear its transient quote
+   bar rather than retaining the generic 30-minute cooldown;
+3. make the retirement alert describe this transient behavior accurately;
+4. preserve the existing per-owner gate while unresolved, exit planning while
+   positioned, permanent book/plan/action retirement cooldowns, the systemic
+   retirement bound, the 4 req/s governor and all twenty-slot tests.
+
+Regression coverage must include 20 owners canceled by one private disconnect,
+slow/NotFound GET-by-ID consistency, a mix of terminal and still-ambiguous
+owners, a positioned retired owner that cannot release early, repeated private
+disconnects, and proof that no building PLACE occurs for an unresolved owner.
+Mutation-check both terminal-proof prioritization and transient-bar release.
+
+The 11:47 telemetry audit was not causal: the socket disconnected 26 seconds
+before it began, the audit was SQLite `mode=ro` with no venue call, and the same
+failure already occurred at 07:20Z. See the newest `FINDINGS.md` entry for the
+full measured timeline.
+
 ## CURRENT LIVE: collect prospective adverse-fill telemetry through 2026-08-27
 
 The next approved restart can begin a measurement-only run. Each building

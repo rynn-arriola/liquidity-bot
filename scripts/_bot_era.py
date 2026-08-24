@@ -15,8 +15,8 @@ $90 of this bot's. Attributing that to the liquidity bot overstates its
 performance by roughly a factor of two, which has happened twice in analysis --
 once reporting a reward-to-loss ratio of 3.5x that was really about 2x.
 
-Reward dates are UTC (proven 2026-08-19, see FINDINGS), so a plain string
-compare against the date column is correct and needs no timezone handling.
+Reward dates use Eastern Time. The first bot order at 04:21:56Z was 00:21:56
+ET on the same date, so this ownership boundary remains unchanged.
 
 ## What can and cannot be scoped
 
@@ -43,7 +43,7 @@ ACCOUNT_WIDE_NOTE = "ACCOUNT-WIDE, includes pre-bot maker-lab"
 def in_bot_era(date: str) -> bool:
     """True if a venue date string belongs to this bot's history.
 
-    Dates are UTC `YYYY-MM-DD`; anything shorter or malformed is excluded
+    Dates are venue ET `YYYY-MM-DD`; anything shorter or malformed is excluded
     rather than guessed at, because a bad parse here silently credits this
     bot with another system's earnings.
     """

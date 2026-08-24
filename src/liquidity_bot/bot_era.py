@@ -15,9 +15,10 @@ is **$86.51** and belongs to maker-lab, against **$54.44** PAID plus $35.73
 PENDING for this bot. Counting the earlier figure here roughly doubles the
 bot's apparent result, which has happened twice in analysis.
 
-Reward dates are UTC -- proven 2026-08-19 against our own order timestamps,
-15 of 15 discriminating markets -- so a plain string compare against the
-venue's ``date`` field is correct and needs no timezone handling.
+Reward dates use Eastern Time, per the venue's earnings API. The first bot
+order at 2026-08-14T04:21:56Z was 00:21:56 ET on the same date, so the bot-era
+boundary remains 2026-08-14 and a plain compare against the venue's date field
+is correct for this ownership filter.
 
 ## What can and cannot be scoped
 
@@ -40,8 +41,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Iterable
 
-# The bot's first order, as a UTC date, compared with a plain string compare
-# against the venue's `date` field. See the module docstring.
+# The bot's first order falls on this date in ET, matching the venue field.
 BOT_ERA_START_DATE = "2026-08-14"
 
 

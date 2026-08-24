@@ -2750,7 +2750,7 @@ thinner margins in exchange, against a measured -6.1c cost per crossed pair and
 95% of pairs completing by crossing. Not obviously a good trade, and not to be
 changed during a measurement week.
 
-## Reward-by-day reconciles to cash within $0.24 -- but the timezone is unverified
+## Reward-by-day reconciles to cash within $0.24 -- venue dates are ET
 
 Measured 2026-08-18T03:30Z, two independent venue sources:
 
@@ -2768,48 +2768,36 @@ directly: a $5.83 payout against a $6.02 earning row, and $42.77 against
 $42.58 -- each off by $0.19 in opposite directions, cancelling exactly. That is
 reward shifting across a day boundary.
 
-**What this test CANNOT detect: a uniform timezone shift.** If the venue dates
-reward in ET and it is bucketed as UTC, every row moves 4-5 hours while the
-total is unchanged, so this reconciliation still passes with every daily row
-misaligned. That matters precisely for subtracting a day's trading loss from
-the same day's reward -- the margins would take the wrong day's losses.
+### CORRECTED 2026-08-24: the venue dates reward in Eastern Time
 
-### RESOLVED 2026-08-19: the venue dates reward in UTC
+The [official earnings API](https://docs.polymarket.us/api-reference/incentives/get-incentive-earnings)
+defines each `date` as midnight-to-midnight Eastern Time, and the liquidity-
+program documentation gives the same boundary. During
+EDT an API row dated `2026-08-22` covers `2026-08-22T04:00Z` through
+`2026-08-23T04:00Z`; during EST the boundary is 05:00Z. Posting or payment can
+happen days later without changing that earning date.
 
-Tested by joining venue earnings against our own order timestamps and keeping
-only the markets whose **entire** order history fell inside 00:00-04:00 UTC.
-Those are the discriminating cases: under ET dating (UTC-4) they belong to the
-previous evening and would reward on D-1.
+The earlier 15-market inference that declared UTC is superseded. A fresh join
+of the live 08-21/08-22 API rows to this bot's intent ledger found **13 rows
+worth $3.14 dated 08-21 whose entire order histories occurred on 08-22 between
+00:10Z and 03:59Z**. Those are direct ET-exclusive counterexamples: that UTC
+interval is still the evening of 08-21 ET. The old result's mechanism was not
+preserved well enough to repair; it must not overrule the documented boundary
+and current discriminating rows.
 
-```
-reward 2026-08-17   orders 2026-08-17 02:57-03:02Z   $1.32   UTC
-reward 2026-08-17   orders 2026-08-17 00:27-02:04Z   $0.12   UTC
-reward 2026-08-16   orders 2026-08-16 00:21-03:31Z   $0.68   UTC
-    ... 15 of 15 discriminating markets, all UTC
-```
+Totals remain correct because timezone bucketing cannot change their sum.
+Daily comparisons were not correct: `daily_pnl.py`, the dashboard's top-day
+strip and `pair_pnl.py` assigned ledger trading by UTC while joining it to ET
+earnings. They now use `America/New_York`, including DST. Historical tables in
+this file that explicitly say `UTC day` retain their original measurement but
+must not be used as exact reward-versus-trading daily joins; rerun the ET-aware
+reports for that decision.
 
-**15 of 15 landed on the UTC date; none shifted back.** So a row dated
-2026-08-17 is reward earned on 2026-08-17 UTC, and subtracting the same UTC
-day's trading loss from it is sound.
-
-Of 288 rewarded markets with order history, 278 matched the UTC date of their
-first order and 10 did not -- and all ten straddled midnight, e.g. orders from
-`2026-08-16T21:51` to `2026-08-17T01:55` rewarded on 08-17. Reward accrues
-where the resting time was, so a market quoted either side of midnight
-attributes to both days. That is the same boundary effect as the +/-$0.25
-per-day drift above, not a dating error.
-
-The test needs the bot to have quoted between 00:00 and 04:00 UTC. It had, on
-2026-08-16/17. If a future run has no orders in that window the test is simply
-inconclusive rather than wrong.
-
-**The test that settles it:** find a market whose kickoff sits near midnight
-UTC. Reward accrues in the hours before kickoff, so a game at 23:30Z on the
-16th landing on the 16th means UTC; landing on the 17th means a shifted zone.
-One query against the per-market breakdown plus the market's kickoff time.
-
-**Do not use the daily P&L table for decisions until that is answered.** Totals
-are fine now; the daily split is not yet proven.
+The **risk day remains UTC intentionally and was not changed**. Session and
+hard stops consume a durable safety budget between UTC midnights; they do not
+attribute venue reward. Moving that reset would change live risk authority and
+could grant a fresh budget at a different instant, so correcting an accounting
+calendar does not authorize it.
 
 ### Also settled 2026-08-18: pending reward does pay
 
@@ -3746,8 +3734,8 @@ ten restarts. So availability mattered less than breadth, which points the
 
 ## (superseded) What the 2026-08-18 outages cost: a full day's reward, measured
 
-Read from the venue 2026-08-19T20:45Z, by earning date (UTC -- dating confirmed
-above):
+Read from the venue 2026-08-19T20:45Z, by the API's earning date. The table was
+originally described as UTC; those labels are ET, as corrected above:
 
 ```
 2026-08-16   PAID 20.49  PENDING  1.90    72 rows
@@ -4159,23 +4147,28 @@ measurement that would settle it is reward and trading P&L bucketed by
 time-to-kickoff at size 10, which `scripts/resting_by_kickoff.py` already
 produces for the numerator.
 
-### Trading loss scales with size, cleanly
+### Trading loss by ET reward day: aggregate per-pair cost stayed similar
 
 ```
 day        pairs   trading   per pair
-08-18        299    -12.33     -0.041
-08-19        188     -9.83     -0.052
-08-20        250    -11.08     -0.044
-08-21        796    -35.14     -0.044
-08-22        587    -27.40     -0.047
+08-18        258    -10.95     -0.042
+08-19        207    -10.78     -0.052
+08-20        404    -17.99     -0.045   size changed mid-day
+08-21        855    -30.52     -0.036
+08-22        342    -24.19     -0.071
 ```
 
-Per-pair loss is flat at about **-0.045 across both sizes**. The doubling did
-not make each trade worse; it made more of them. Combined with venue reward
-(PAID+PENDING), net by day: 08-18 +2.27, 08-19 +5.30, 08-20 +11.13,
-**08-21 -5.60** -- the first full day at size 10, and the first negative one.
-08-22 has not posted. One day is not a verdict, and 08-21 still carries $28.43
-PENDING, but this is the number `NEXT.md`'s rollback section exists to watch.
+The two clean size-5 days aggregate to about **-0.0467 per pair**; the two
+clean size-10 days aggregate to about **-0.0457 per pair**. That supports the
+narrow claim that doubling size did not increase average loss per completed
+pair, but the daily range (-0.036 to -0.071 at size 10) is not "flat".
+
+Combined with current venue reward (PAID+PENDING), ET-day net if every pending
+dollar pays is: 08-18 +3.65, 08-19 +4.35, 08-20 +4.22 and **08-21 +2.27**.
+The old UTC join said 08-21 was -5.60 and the first negative size-10 day; that
+conclusion was an artifact of mismatched calendars. August 22 was visibly
+still posting during this correction -- pending rose from $9.22 to $25.63 --
+so its net remains withheld until the earning rows settle.
 
 ---
 

@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from .models import BookSnapshot
-
-
-NEW_YORK = ZoneInfo("America/New_York")
+from .reward_calendar import split_reward_day_interval
 
 
 @dataclass(frozen=True)
@@ -24,28 +21,6 @@ class ExitResult:
     taker_fee: float
     pnl: float
     worst_price: float | None
-
-
-def split_reward_day_interval(start: datetime, end: datetime) -> list[tuple[str, float]]:
-    """Split a timezone-aware interval across Polymarket's ET reward days."""
-
-    if start.tzinfo is None or end.tzinfo is None:
-        raise ValueError("reward intervals must be timezone-aware")
-    if end < start:
-        raise ValueError("reward interval end precedes start")
-    if end == start:
-        return []
-    out: list[tuple[str, float]] = []
-    cursor = start
-    while cursor < end:
-        local = cursor.astimezone(NEW_YORK)
-        next_date = local.date() + timedelta(days=1)
-        boundary_local = datetime.combine(next_date, time.min, tzinfo=NEW_YORK)
-        boundary = boundary_local.astimezone(cursor.tzinfo)
-        piece_end = min(end, boundary)
-        out.append((local.date().isoformat(), (piece_end - cursor).total_seconds()))
-        cursor = piece_end
-    return out
 
 
 def _exit_levels(

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from liquidity_bot.models import BookLevel, BookSnapshot, MarketMetadata, TradePrint
+from liquidity_bot.reward_calendar import NEW_YORK, reward_day, reward_day_bounds
 from liquidity_bot.rewards import IncentivePeriod
 from liquidity_bot.shadow_engine import ShadowEngine, ShadowPolicy
 from liquidity_bot.shadow_math import cross_exit, split_reward_day_interval
@@ -47,6 +48,36 @@ def trade(*, price, qty, maker_side, at) -> TradePrint:
 
 
 class ShadowMathTests(unittest.TestCase):
+    def test_reward_day_changes_at_midnight_new_york_not_utc(self):
+        self.assertEqual(
+            reward_day(datetime(2026, 8, 22, 3, 59, 59, tzinfo=UTC)),
+            "2026-08-21")
+        self.assertEqual(
+            reward_day(datetime(2026, 8, 22, 4, 0, 0, tzinfo=UTC)),
+            "2026-08-22")
+
+    def test_reward_day_bounds_follow_daylight_saving(self):
+        spring_start, spring_end = reward_day_bounds("2026-03-08")
+        fall_start, fall_end = reward_day_bounds("2026-11-01")
+        self.assertEqual((spring_end - spring_start).total_seconds(), 23 * 3600)
+        self.assertEqual((fall_end - fall_start).total_seconds(), 25 * 3600)
+
+    def test_reward_interval_counts_absolute_seconds_across_dst(self):
+        spring_start = datetime(2026, 3, 8, 0, 0, tzinfo=NEW_YORK)
+        fall_start = datetime(2026, 11, 1, 0, 0, tzinfo=NEW_YORK)
+        self.assertEqual(
+            split_reward_day_interval(
+                spring_start, datetime(2026, 3, 9, 0, 0, tzinfo=NEW_YORK)),
+            [("2026-03-08", 23 * 3600)])
+        self.assertEqual(
+            split_reward_day_interval(
+                fall_start, datetime(2026, 11, 2, 0, 0, tzinfo=NEW_YORK)),
+            [("2026-11-01", 25 * 3600)])
+
+    def test_reward_day_refuses_a_naive_timestamp(self):
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            reward_day(datetime(2026, 8, 22, 4, 0, 0))
+
     def test_reward_interval_splits_at_midnight_new_york(self):
         start = datetime(2026, 8, 13, 3, 59, 50, tzinfo=UTC)
         end = start + timedelta(seconds=20)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trading, reward and net for each of the last N UTC days. One table.
+"""Trading, reward and net for each of the last N ET reward days. One table.
 
 Defaults to 14 days rather than 7 so the settled rows stay visible even
 when the whole most-recent week is still pending -- reward can lag two
@@ -46,9 +46,8 @@ from decimal import Decimal
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.bot_era import is_bot_era  # noqa: E402
-from liquidity_bot.probe import client_from_environment  # noqa: E402
+from liquidity_bot.reward_calendar import reward_day  # noqa: E402
 
 # Fills before this are unusable: the isAggressor fix reached production on
 # 2026-08-17T13:20Z and roughly 60% of earlier fills were never recorded,
@@ -75,7 +74,7 @@ def trading_by_day(db: str, since: str) -> tuple[dict, dict, int]:
             cell["sq"] += qty
             cell["paid"] += qty * (Decimal(1) - price)
         if cell["day"] is None:
-            cell["day"] = row["received_at"][:10]
+            cell["day"] = reward_day(row["received_at"])
 
     pnl, pairs, unbalanced = defaultdict(Decimal), defaultdict(Decimal), 0
     for cell in markets.values():
@@ -103,6 +102,11 @@ async def reward_by_day() -> tuple[dict, dict]:
     decides whether a net may be printed at all.
     """
 
+    # Keep the venue SDK dependency out of module import so the pure ledger
+    # bucketing path remains testable without live-client packages installed.
+    from liquidity_bot.adapters import AsyncReadOnlyGateway
+    from liquidity_bot.probe import client_from_environment
+
     gateway = AsyncReadOnlyGateway(client_from_environment())
     rows = await gateway.fetch_earnings(program_type="liquidityProgram")
     paid: dict = defaultdict(Decimal)
@@ -119,6 +123,14 @@ async def reward_by_day() -> tuple[dict, dict]:
     return paid, pending
 
 
+def _unpaid_reward_display(pending: Decimal | None) -> tuple[str, str]:
+    """Render an all-pending day without calling it an unposted day."""
+
+    if pending:
+        return f"{float(pending):9.2f}", "all PENDING, net withheld"
+    return f"{'pending':>9}", "reward not posted yet"
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
@@ -128,11 +140,11 @@ async def main() -> int:
     pnl, pairs, unbalanced = trading_by_day(args.db, CLEAN_FROM)
     paid, pending = await reward_by_day()
 
-    today = datetime.now(timezone.utc).date()
+    today = date.fromisoformat(reward_day(datetime.now(timezone.utc)))
     days = [(today - timedelta(days=n)).isoformat()
             for n in range(args.days - 1, -1, -1)]
 
-    print(f"daily P&L, last {args.days} UTC days      "
+    print(f"daily P&L, last {args.days} ET reward days "
           f"(trading from {CLEAN_FROM}, balanced-leg markets only)")
     print()
     print(f"{'day':12} {'pairs':>7} {'trading':>9} {'reward':>9} {'NET':>9}  note")
@@ -156,8 +168,9 @@ async def main() -> int:
         if reward is None:
             # Not posted yet. Printing a net here invites quoting a number
             # that is missing its income side.
+            reward_s, pending_note = _unpaid_reward_display(pending.get(day))
             print(f"{day:12} {float(pair_n):>7.0f} {trade_s} "
-                  f"{'pending':>9} {'--':>9}  reward not posted yet")
+                  f"{reward_s} {'--':>9}  {pending_note}")
             continue
         due = pending.get(day)
         if due:

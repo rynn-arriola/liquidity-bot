@@ -283,3 +283,10 @@ These are implementation requirements, not suggestions.
     reconciliation, scheduler priority, slot capacity or risk policy until a
     separately reviewed rule passes a prospective held-out cohort and first
     runs in would-refuse shadow mode.
+67. Reward attribution and risk authority use explicitly different calendars.
+    The venue earnings `date` is midnight-to-midnight `America/New_York`, so a
+    daily trading/reward join must bucket ledger instants into that ET day and
+    must honor DST. Reward totals are timezone-independent. Session and hard
+    stops remain baselined on the durable UTC day: changing their reset instant
+    can grant a fresh loss budget and is a live-risk policy change, never an
+    incidental consequence of correcting a report.

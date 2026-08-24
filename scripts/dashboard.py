@@ -43,6 +43,8 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
+from liquidity_bot.reward_calendar import (  # noqa: E402
+    reward_day, reward_day_bounds)
 
 MAX_MARKETS = 20
 LOG = Path("logs/commissioning.log")
@@ -341,13 +343,13 @@ def _signed(value) -> str:
 
 
 def _pnl_strip(today, total) -> str:
-    left = "TODAY  " + _signed(today)
+    left = "ET DAY " + _signed(today)
     right = "TOTAL  " + _signed(total)
     return left + " " * max(2, W - 6 - 17 - 17) + right
 
 
 def _today_trading(now) -> float:
-    """Realised trading P&L for today, matched-pair priced.
+    """Realised trading P&L for the current ET reward day.
 
     One YES plus one NO settles at exactly 1.0000, so a completed pair
     realises `1.00 - paid` with no direction or settlement data needed.
@@ -360,9 +362,11 @@ def _today_trading(now) -> float:
         books = collections.defaultdict(
             lambda: {"lq": Decimal(0), "lc": Decimal(0),
                      "sq": Decimal(0), "sc": Decimal(0)})
+        start, end = reward_day_bounds(reward_day(now))
         for slug, intent, price, qty in conn.execute(
                 "SELECT market_slug,intent,price,qty FROM execution_fills "
-                "WHERE event_at LIKE ?", (now.strftime("%Y-%m-%d") + "%",)):
+                "WHERE event_at>=? AND event_at<?",
+                (start.isoformat(), end.isoformat())):
             q, p_ = Decimal(str(qty)), Decimal(str(price))
             book = books[slug]
             if intent == "ORDER_INTENT_BUY_LONG":
@@ -564,7 +568,7 @@ async def main() -> int:
         try:
             reward_today = Decimal(0)
             for row in await gateway.fetch_earnings():
-                if str(getattr(row, "date", ""))[:10] == now.strftime("%Y-%m-%d"):
+                if str(getattr(row, "date", ""))[:10] == reward_day(now):
                     reward_today += Decimal(str(getattr(row, "reward", 0) or 0))
             funding, _cash, trusted = await _funding(gateway)
             if trusted:
@@ -777,10 +781,9 @@ async def _pnl(now, gateway, equity) -> None:
     midnight, which cannot be queried retroactively -- so days before the first
     snapshot print `n/a` rather than a fabricated number.
 
-    Two caveats live in the footer rather than in a comment, because they change
-    how the rows should be read: daily figures are good to about +/-$0.25 (reward
-    drifts across day boundaries), and the venue's day boundary has not been
-    proven to be UTC. Week subtotals are immune to both.
+    Venue reward dates are midnight-to-midnight America/New_York. Totals are
+    timezone-independent; any daily trading comparison must use that same
+    boundary rather than UTC.
     """
 
     import json
@@ -900,8 +903,8 @@ async def _pnl(now, gateway, equity) -> None:
         print(line(paint("y", "funding history incomplete — trading and net")))
         print(line(paint("y", "suppressed rather than shown wrong")))
     print(box_bottom())
-    print(paint("d", "  daily rows +/-$0.25; venue day boundary unverified — "
-                     "week subtotals are immune to both"))
+    print(paint("d", "  reward dates use midnight-to-midnight ET; totals are "
+                     "timezone-independent"))
 
 
 if __name__ == "__main__":

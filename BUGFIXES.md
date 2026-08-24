@@ -31,6 +31,42 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
+### FIXED AND DEPLOYED — daily P&L joined UTC trading to ET reward dates
+
+**Symptom.** The API's `2026-08-22` pending reward was presented beside the
+bot's UTC August 22 trading as though both covered the same hours. They do not:
+the venue reward day is midnight-to-midnight Eastern Time, which was
+04:00Z-to-04:00Z during August. Totals were right, but per-day net, the
+dashboard's `TODAY` strip and historical reward-versus-resting comparisons
+could move four hours of activity onto the wrong side of the join.
+
+**Mechanism.** `daily_pnl.py`, `pair_pnl.py` and the dashboard sliced ledger
+timestamps with their UTC `YYYY-MM-DD`, while accepting the earnings API's
+date string unchanged. `FINDINGS.md` incorrectly declared that field UTC from
+an older correlation. The current official API definition and 13 live
+ET-exclusive rows worth $3.14 directly contradict that conclusion.
+
+**Fix.** One `America/New_York` reward calendar now owns instant-to-day
+conversion, ET day bounds and DST-aware interval splitting. Daily trading,
+reward-report gap windows and the dashboard top-day calculation use that
+calendar; the UI says `ET DAY` instead of the ambiguous `TODAY`. The bot-era
+boundary remains August 14 because the first bot order at 04:21:56Z was after
+midnight in ET too. An all-pending day now prints its dollar amount instead of
+claiming the reward has not posted. Reward totals are unchanged.
+
+The session and hard-stop day deliberately remain UTC. Those are persistent
+risk-budget boundaries, not reward attribution, and changing their reset time
+would be a separate live-risk policy change requiring explicit authorization
+and a restart. Regression coverage pins the 04:00Z August boundary, 23/25-hour
+DST days, naive-timestamp refusal, ledger daily bucketing and the dashboard
+label/query bounds. Seventeen focused tests pass locally and the full 547-test
+suite passes on the production droplet. Mutation checks prove that replacing
+ET with UTC fails the boundary, interval and ledger tests, while forcing every
+day to 24 hours fails the DST assertion. Reporting files were deployed without
+restarting or signaling the runner.
+
+---
+
 ### FIXED AND DEPLOYED — private reconnect terminal repair serialized the slate, then a stale cooldown kept proven-flat owners barred
 
 **Symptom.** Three private disconnects at 07:20Z, 11:47Z and 12:28Z recovered

@@ -30,9 +30,17 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import sys
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
+
+sys.path.insert(0, "src")
+sys.path.insert(0, "/root/liquidity-bot/src")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from liquidity_bot.reward_calendar import reward_day  # noqa: E402
 
 # Fills before this are unusable: see the module docstring.
 CLEAN_FROM = "2026-08-18"
@@ -71,7 +79,7 @@ def main() -> int:
             cell["paid"] += qty * (Decimal(1) - price)
         if cell["first"] is None:
             cell["first"] = row["received_at"]
-            cell["day"] = row["received_at"][:10]
+            cell["day"] = reward_day(row["received_at"])
         cell["last"] = row["received_at"]
 
     agg = {b: {"n": 0, "pnl": Decimal(0), "pairs": Decimal(0)} for b in BUCKETS}
@@ -120,7 +128,7 @@ def main() -> int:
           f"   (excluded {unbalanced} market(s) with unbalanced legs)")
 
     print()
-    print("per UTC day")
+    print("per ET reward day")
     print(f"{'day':12} {'markets':>8} {'pairs':>7} {'P&L':>9} {'per pair':>10} "
           f"{'>1h share':>10}")
     for day in sorted(by_day):

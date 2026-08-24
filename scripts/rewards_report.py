@@ -28,13 +28,14 @@ import argparse
 import asyncio
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
+from liquidity_bot.reward_calendar import NEW_YORK  # noqa: E402
 
 from _bot_era import (  # noqa: E402
     ACCOUNT_WIDE_NOTE, BOT_ERA_NOTE, BOT_ERA_START, in_bot_era)
@@ -66,7 +67,7 @@ async def main() -> int:
 
     cutoff = None
     if args.days > 0:
-        cutoff = (datetime.now(timezone.utc)
+        cutoff = (datetime.now(NEW_YORK)
                   - timedelta(days=args.days)).strftime("%Y-%m-%d")
 
     by_date: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -125,10 +126,10 @@ async def main() -> int:
     # from the first of those produced a 46-date list of days the bot was not
     # even running, which buries the two or three that matter.
     if by_date:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(NEW_YORK)
         horizon = now - timedelta(days=args.gap_days)
         cursor = max(datetime.strptime(sorted(by_date)[0], "%Y-%m-%d")
-                     .replace(tzinfo=timezone.utc), horizon)
+                     .replace(tzinfo=NEW_YORK), horizon)
         missing = []
         while cursor.date() <= now.date():
             key = cursor.strftime("%Y-%m-%d")

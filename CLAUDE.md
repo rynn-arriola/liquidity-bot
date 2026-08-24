@@ -25,6 +25,10 @@ from fact rather than from the last thing someone remembers.
   natural private disconnect, validate five-owner `[unresolved-repair]`
   progress and immediate flat-owner release using the newest FINDINGS entry;
   do not induce a disconnect merely to test a funded live account.
+- **Venue reward dates are ET, not UTC.** Daily reward/trading reports use
+  `America/New_York` and DST-aware boundaries. Reward totals never changed.
+  The session and hard-stop budget deliberately remains a durable UTC-day
+  policy; do not move its reset time as part of an accounting change.
 - **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
   against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
   dashboard is account-wide since inception and is dominated by pre-bot

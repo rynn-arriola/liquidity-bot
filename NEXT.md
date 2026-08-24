@@ -1,5 +1,15 @@
 # Next session — outstanding fixes
 
+## FIXED AND DEPLOYED WITHOUT RESTART: reward dates are ET, not UTC
+
+The earnings API groups reward at midnight America/New_York. Daily ledger
+trading and report gap windows now use the same DST-aware calendar, and the
+dashboard labels its joined number `ET DAY`. Reward totals do not change. The
+durable session/hard-stop day remains UTC by design; changing that safety
+budget is not part of this accounting correction. The reporting scripts,
+shared calendar and tests passed the 547-test production suite and were
+deployed without restarting or signaling the live runner.
+
 ## FIXED AND DEPLOYED: private reconnect mass-retired the bound slate, then kept resolved owners barred
 
 The repair is implemented, reviewed and deployed as `a4836b5`. Focused terminal repair now rotates
@@ -294,8 +304,8 @@ git checkout horizon-2h-stops-40-45 -- src/liquidity_bot/market_selector.py     
 ```
 marked equity            419.91  (was 467.46 at the size-5 tag on 08-20)
 reward PAID (bot era)    141.35  + 31.06 PENDING
-net by day  08-18 +2.27   08-19 +5.30   08-20 +11.13   08-21 -5.60
-trading/day at size 10   -27.40 to -35.14
+ET net if pending pays  08-18 +3.65   08-19 +4.35   08-20 +4.22   08-21 +2.27
+ET trading/day at size 10   -24.19 to -30.52
 resting fraction         53.8% span-weighted (08-22)
 median viable markets    2-10 against 20 slots  <- the thing the horizon fixes
 ```
@@ -326,9 +336,10 @@ that adds exposure. The stops do not cause losses; they bound them.
 - **Whether the $50 session stop fires.** If it fires on a day that was not
   genuinely bad, the stop is too tight for this configuration. If it fires on a
   genuinely bad day, it is working.
-- **Fill rate.** Pairs went 250 -> 796 at 2x size, which is 3.2x rather than
-  2x. More markets in play will push it further. This is the unmeasured half of
-  the original narrowing argument.
+- **Fill rate.** Correct ET buckets put 08-20 -> 08-21 at 404 -> 855 pairs.
+  August 20 changed size mid-day, so that 2.1x move is a warning, not a clean
+  size estimate. More markets in play can push it further. This is the
+  unmeasured half of the original narrowing argument.
 
 ---
 

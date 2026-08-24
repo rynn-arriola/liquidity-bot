@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
-### FIXED LOCALLY — private reconnect terminal repair serialized the slate, then a stale cooldown kept proven-flat owners barred
+### FIXED AND DEPLOYED — private reconnect terminal repair serialized the slate, then a stale cooldown kept proven-flat owners barred
 
 **Symptom.** Three private disconnects at 07:20Z, 11:47Z and 12:28Z recovered
 fresh account visibility in 36-40 seconds, but each global quarantine created
@@ -80,7 +80,13 @@ account-wide, and the existing twenty-slot freshness tests. All
 fails the twenty-owner four-pass test; concurrent to serial reads fails the
 mixed-NotFound overlap test; retaining `_retired_until` fails the transient-bar
 release test; removing the ownership-conflict check fails its account-wide
-scope test. Production deployment and live reconnect acceptance are pending.
+scope test. The same 539 tests passed on the production droplet. Commit
+`a4836b5` was deployed and the runner restarted at 13:01Z. Startup acceptance
+reached 20/20 quoting across exactly twenty distinct markets, zero positions,
+zero unknown-absent orders and zero unresolved intents after normal placement
+convergence. A private disconnect was not induced; the next natural reconnect
+must be checked against `[unresolved-repair]` before closing that path's live
+acceptance.
 
 **Cost.** The three measured recurrences retired 18, 19 and 17 markets and
 repeatedly reduced quoting for roughly a half hour. No unsafe flat inference

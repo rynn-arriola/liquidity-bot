@@ -3,7 +3,7 @@
 A live Polymarket US liquidity-reward market maker. **It trades real money on a
 real account.** Every change can lose it.
 
-## Where things stand — 2026-08-19
+## Where things stand — 2026-08-24
 
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
@@ -19,6 +19,12 @@ from fact rather than from the last thing someone remembers.
   **Reward does not track this number** -- the best reward day (08-17, $34.60)
   had the lowest resting fraction of any mature day. See FINDINGS, "Resting
   fraction: the 85.6% is a filtered statistic".
+- **Private-reconnect availability repair is deployed as `a4836b5`.** The
+  13:01Z restart reached 20/20 quoting, zero positions, zero unknown-absent
+  orders and zero unresolved intents after startup convergence. On the next
+  natural private disconnect, validate five-owner `[unresolved-repair]`
+  progress and immediate flat-owner release using the newest FINDINGS entry;
+  do not induce a disconnect merely to test a funded live account.
 - **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
   against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
   dashboard is account-wide since inception and is dominated by pre-bot

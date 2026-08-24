@@ -107,6 +107,16 @@ mixed-404 overlap assertion, and preserving the stale cooldown failed the
 transient release assertion. Conflicting market owners for one exchange id
 remain account-wide; removing that check failed its regression test.
 
+Production acceptance on commit `a4836b5` passed the same 539-test suite on
+the droplet. The runner restarted at 13:01Z and reached 20/20 quoting by
+13:04Z. The 13:02:54Z reconcile listed exactly twenty distinct active markets;
+the account was flat with zero `UNKNOWN_ABSENT` orders, and seven ordinary
+in-flight placement/cancel intents at the first dashboard read converged to
+zero unresolved. This proves the deployment did not reduce twenty-slot
+capacity and normal intent convergence remains healthy. It does not simulate
+the repaired trigger, so live recovery acceptance remains the next naturally
+occurring private disconnect; do not manufacture one on a funded account.
+
 Recognize this exact failure from one run boundary, not from an instantaneous
 order count:
 

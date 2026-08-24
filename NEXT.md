@@ -1,16 +1,21 @@
 # Next session — outstanding fixes
 
-## FIXED LOCALLY, DEPLOY/RESTART PENDING: private reconnect mass-retired the bound slate, then kept resolved owners barred
+## FIXED AND DEPLOYED: private reconnect mass-retired the bound slate, then kept resolved owners barred
 
-The repair is implemented and reviewed. Focused terminal repair now rotates
+The repair is implemented, reviewed and deployed as `a4836b5`. Focused terminal repair now rotates
 five attributable owners per batch, overlaps their GET-by-ID work behind the
 unchanged shared 4 req/s limiter, and does not repeat complete account
 snapshots per owner. A positively terminal, order-free, flat
 `unresolved_mutation_timeout` owner clears only that reason's transient quote
 bar. The alert and `[unresolved-repair]` diagnostics describe the actual state.
-All 539 local tests pass and the four material changes were mutation-checked.
-Remaining work is commit/push, deploy source/tests/docs, run all tests on the
-droplet, restart, and accept the live run against the checks below.
+All 539 local and 539 production tests pass and the four material changes were
+mutation-checked. The bot restarted at 13:01Z. By 13:04Z the dashboard showed
+20/20 quoting, zero positions and zero unknown-absent orders; the seven intents
+observed during initial quote placement converged to zero unresolved. The
+13:02:54Z reconcile named exactly twenty distinct active markets. Do not force
+a private disconnect solely for acceptance: the focused recovery path's live
+acceptance completes on the next natural disconnect using the diagnostics
+below.
 
 Two private-stream disconnects in the 02:50Z live session produced the same
 availability failure. Recovery resumed in 36-40 seconds and correctly scoped

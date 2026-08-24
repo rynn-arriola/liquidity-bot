@@ -222,6 +222,15 @@ class CommissioningRunner:
 
     CANCEL_RETRY_SECONDS = 10.0
 
+    # Background terminal repair is grouped by owner, not by order. Five
+    # owners lets a twenty-slot recovery complete one fair circuit in four
+    # passes while bounding how much REST work can precede normal decisions.
+    # Reads within the batch run concurrently, but the shared limiter still
+    # starts at most four requests per second. This is important for the
+    # venue's multi-minute NotFound consistency gaps: one slow id must not
+    # serialize every other owner's positive terminal proof.
+    UNRESOLVED_RECONCILE_OWNER_BATCH_SIZE = 5
+
     # How long to wait before even re-checking a market that is retired, flat,
     # order-free and past kickoff. Nothing about it can change in a way this
     # process cares about, so the only cost of a long interval is bookkeeping
@@ -2389,11 +2398,24 @@ class CommissioningRunner:
     def _next_unresolved_reconcile_scope(
         self, rows: list[Any] | None = None,
     ) -> frozenset[str] | None:
-        """Choose one attributable owner, round-robin; None means unscoped."""
+        """Choose a bounded owner batch, round-robin; None means unscoped."""
 
         unresolved = rows if rows is not None else self.ledger.unresolved_intents()
         if any(not str(row["market_slug"] or "").strip()
                for row in unresolved):
+            return None
+        # A single exchange id attributed to multiple markets is not scoped
+        # ownership. Include current working rows because a conflicting owner
+        # can be split between the order table and its unresolved intent. The
+        # strict account-wide reconcile retains the existing fail-closed
+        # treatment for this case.
+        exchange_markets: dict[str, set[str]] = {}
+        for row in (*self.ledger.working_orders(owned_only=True), *unresolved):
+            exchange_id = str(row["exchange_order_id"] or "").strip()
+            market = str(row["market_slug"] or "").strip()
+            if exchange_id and market:
+                exchange_markets.setdefault(exchange_id, set()).add(market)
+        if any(len(owners) != 1 for owners in exchange_markets.values()):
             return None
         markets = sorted({
             str(row["market_slug"]) for row in unresolved
@@ -2401,9 +2423,85 @@ class CommissioningRunner:
         })
         if not markets:
             return frozenset()
-        market = markets[self._unresolved_reconcile_cursor % len(markets)]
-        self._unresolved_reconcile_cursor += 1
-        return frozenset({market})
+        size = min(self.UNRESOLVED_RECONCILE_OWNER_BATCH_SIZE, len(markets))
+        start = self._unresolved_reconcile_cursor % len(markets)
+        selected = {
+            markets[(start + offset) % len(markets)]
+            for offset in range(size)
+        }
+        self._unresolved_reconcile_cursor += size
+        return frozenset(selected)
+
+    async def _repair_unresolved_orders(
+        self, now: datetime, *, markets: frozenset[str],
+    ) -> None:
+        """Seek positive terminal proof without repeating account snapshots.
+
+        The normal ten-second reconcile already refreshes complete open-order
+        and position snapshots. Repeating those account reads once per owner
+        made a private disconnect's twenty cancel owners take several minutes
+        to repair. This focused path asks only for the unresolved ids in a
+        bounded owner batch. Each read is independent and concurrent so one
+        venue NotFound retry ladder cannot hide the other answers; the shared
+        REST limiter remains the authority on request rate.
+
+        No absence is interpreted here. An intent resolves only if
+        ``reconcile_order`` applies an affirmative venue state.
+        """
+
+        started_at = self._now()
+        unresolved_rows = self.ledger.unresolved_intents()
+        scoped_intent_ids = {
+            str(row["intent_id"])
+            for row in unresolved_rows
+            if str(row["market_slug"] or "").strip() in markets
+        }
+        unresolved_cancels = self._unresolved_cancel_owners()
+        exchange_ids = sorted({
+            str(row["exchange_order_id"] or "").strip()
+            for row in unresolved_rows
+            if str(row["market_slug"] or "").strip() in markets
+            and str(row["exchange_order_id"] or "").strip()
+        })
+
+        async def repair(exchange_id: str) -> tuple[str, str] | None:
+            try:
+                await self.executor.reconcile_order(
+                    exchange_id, observed_at=now)
+            except RuntimeInvariantViolation:
+                raise
+            except Exception as exc:
+                return exchange_id, f"{type(exc).__name__}: {exc}"
+            return None
+
+        results = await asyncio.gather(*(repair(item) for item in exchange_ids))
+        # A positive OPEN read may license retrying an uncertain cancel. This
+        # still uses the normal per-owner throttle and mutation state machine.
+        await self._retry_uncertain_cancels(now, markets=markets)
+        self._record_resolved_cancel_owners(unresolved_cancels)
+        failures = [result for result in results if result is not None]
+        remaining_intent_ids = {
+            str(row["intent_id"])
+            for row in self.ledger.unresolved_intents()
+            if str(row["market_slug"] or "").strip() in markets
+        }
+        finished_at = self._now()
+        print(
+            f"[unresolved-repair] at={finished_at.isoformat()} "
+            f"owners={len(markets)} ids={len(exchange_ids)} "
+            f"resolved={len(scoped_intent_ids - remaining_intent_ids)} "
+            f"remaining={len(remaining_intent_ids)} failures={len(failures)} "
+            f"elapsed={max(0.0, (finished_at - started_at).total_seconds()):.1f} "
+            f"markets={','.join(sorted(markets))}",
+            flush=True,
+        )
+        if failures:
+            raise AdapterError(
+                "could not re-read "
+                f"{len(failures)} unresolved order(s): "
+                + "; ".join(
+                    f"{exchange_id}: {detail}"
+                    for exchange_id, detail in failures))
 
     def _quiet_book_needs_rest_refresh(self, now: datetime) -> bool:
         if self.book_observed_at is None:
@@ -4122,8 +4220,9 @@ class CommissioningRunner:
         Retirement is strictly less permissive than quoting. The market keeps
         its streams, book refresh and reconciler so the position is still
         worked toward flat, and the pre-kickoff flatten still applies, but no
-        side of it may be quoted again this session. The exit budget is reset
-        so the retry happens on a slow cadence rather than never.
+        side of it may be quoted while the retirement remains in force. The
+        exit budget is reset so the retry happens on a slow cadence rather
+        than never.
 
         Returns a session stop reason only when retirement itself is no longer
         a proportionate response -- a whole slate of failures is systemic.
@@ -4192,10 +4291,20 @@ class CommissioningRunner:
                 critical=True,
             )
         elif rounds == 1 or (rounds & (rounds - 1)) == 0:
+            if reason == "unresolved_mutation_timeout":
+                quote_status = (
+                    "It remains barred until the intent has positive terminal "
+                    "proof and the market is order-free and flat; it then "
+                    "resumes automatically."
+                )
+            else:
+                quote_status = (
+                    "It remains barred while retired and during its cooldown."
+                )
             await self.notifier.send_async(
                 f"⚠️ Liquidity Bot retired {slug}: {reason} (round {rounds}, "
-                f"position {position}). It will not quote again this session; "
-                "the exit keeps being worked and every other market keeps "
+                f"position {position}). {quote_status} "
+                "The exit keeps being worked and every other market keeps "
                 "running.",
                 critical=True,
             )
@@ -4306,6 +4415,13 @@ class CommissioningRunner:
                for row in self.ledger.unresolved_intents()):
             return
         self._retired.pop(slug, None)
+        # This retirement exists only to contain ambiguous mutation state.
+        # Once the venue has positively resolved the intent and the owner is
+        # order-free and flat, carrying the generic thirty-minute cooldown
+        # adds no safety: all of the condition's evidence is gone. Other
+        # retirement reasons keep their cooldown unchanged.
+        if retired.reason == "unresolved_mutation_timeout":
+            self._retired_until.pop(slug, None)
         print(
             f"[market-retired] at={self._now().isoformat()} market={slug} "
             "released=flat",
@@ -5026,14 +5142,19 @@ class CommissioningRunner:
                     if now >= next_reconcile:
                         unresolved_rows = self.ledger.unresolved_intents()
                         # Unattributable ambiguity cannot be scoped. Otherwise
-                        # repair one owner per pass and advance even on failure,
-                        # so a persistent 404 cannot hide every market behind it.
+                        # repair a bounded owner batch per pass. Its reads are
+                        # independently scheduled through the shared limiter,
+                        # so a persistent 404 cannot hide every other owner's
+                        # positive terminal answer behind its retry ladder.
                         reconcile_scope = (
                             self._next_unresolved_reconcile_scope(
                                 unresolved_rows))
                         try:
-                            await self._rest_reconcile(
-                                now, strict_order_markets=reconcile_scope)
+                            if reconcile_scope is None:
+                                await self._rest_reconcile(now)
+                            else:
+                                await self._repair_unresolved_orders(
+                                    now, markets=reconcile_scope)
                         except Exception as exc:
                             # Ambiguous state remains quarantined. Equity and
                             # stream freshness independently force shutdown if

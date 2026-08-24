@@ -82,6 +82,63 @@ but repeated private disconnects can erase that recovery again before it has
 earned for even ten minutes. Leaving the defect to recurring cooldowns is not
 an acceptable operating state.
 
+### Repair validation and the exact diagnostic for next time
+
+Local review established that terminal proof does not require another complete
+account snapshot for every owner. The normal ten-second account reconcile
+continues to provide complete order and position snapshots; the unresolved
+path can independently ask GET-by-ID for a bounded group of positively-owned
+intents. Five concurrent owner scopes still enter the existing shared 4 req/s
+limiter one request at a time, while their independent NotFound retry sleeps no
+longer serialize readable owners. A synthetic twenty-owner recovery set gained
+terminal proof in four fair passes. In a mixed five-owner set, one id remained
+NotFound while the other four resolved and entered cancel-confirmed priority
+replan; the lagged id did not hold them behind it.
+
+The quote bar is now reason-specific. `unresolved_mutation_timeout` releases
+only after the owner has positive terminal intent proof, no working order and a
+zero position, and that release clears its transient `_retired_until`. A
+ten-contract positioned owner remained retired and barred in the regression
+test. Existing book/plan/action cooldown tests and all twenty-slot scheduling
+tests remain unchanged and pass. The complete local suite is 539 tests.
+Mutation checks proved each new assertion detects its corresponding defect:
+one-owner batching exceeded the four-pass bound, serial reads failed the
+mixed-404 overlap assertion, and preserving the stale cooldown failed the
+transient release assertion. Conflicting market owners for one exchange id
+remain account-wide; removing that check failed its regression test.
+
+Recognize this exact failure from one run boundary, not from an instantaneous
+order count:
+
+```bash
+grep -aE 'component=private_stream|\[private-recovery\]|\[quarantine\]' \
+  logs/commissioning.log | tail -80
+grep -aE '\[unresolved-repair\]|unresolved_mutation_timeout|released=flat' \
+  logs/commissioning.log | tail -120
+grep -a '\[action\]' logs/commissioning.log | tail -60
+```
+
+- `[private-recovery] resumed=yes scoped_ambiguous=N` proves visibility
+  recovered; it does not prove the named cancel owners are terminal.
+- `[unresolved-repair] owners<=5` proves the focused batch is running. Watch
+  `resolved`, `remaining`, `failures` and `elapsed` across consecutive lines.
+  Readable owners must progress even when one batch reports a failure.
+- `unresolved_mutation_timeout` followed by terminal/order-free/flat proof must
+  produce `released=flat` without another thirty-minute quote bar. A nonzero
+  position correctly prevents that release.
+- Count distinct `[action]` markets after releases and compare them with the
+  exact active set and independent per-market plans. Do not divide one working
+  order snapshot by twenty, and do not use the cumulative dashboard `retired`
+  value as the number currently barred.
+
+A concise prompt for another reviewer is: **“Audit liquidity-bot post-private-
+disconnect terminal repair and twenty-slot recovery. From the current run
+boundary, correlate quarantine CANCEL owners, `[private-recovery]`, each five-
+owner `[unresolved-repair]` batch, terminal/UNKNOWN_ABSENT state,
+`unresolved_mutation_timeout`, `released=flat`, current quote bars and distinct
+action markets; verify one NotFound owner cannot block readable owners and a
+flat resolved ambiguity retirement has no leftover 1,800-second bar.”**
+
 ---
 
 ## Prospective adverse-fill observation — live collection began 2026-08-24

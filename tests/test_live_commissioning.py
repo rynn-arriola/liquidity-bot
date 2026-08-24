@@ -1930,12 +1930,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             for order_id, _payload in client.orders.cancel_calls))
         self.assertFalse(runner.ledger.working_orders("market-two"))
 
-    async def test_unresolved_background_reconcile_rotates_one_market_at_a_time(self):
+    async def test_unresolved_background_reconcile_rotates_bounded_owner_batches(self):
         runner, _, _ = self.build_runner()
         rows = [
-            {"market_slug": "market-two"},
-            {"market_slug": "market-one"},
-            {"market_slug": "market-two"},
+            {
+                "market_slug": f"market-{index:02d}",
+                "exchange_order_id": f"order-{index:02d}",
+            }
+            for index in range(12)
         ]
 
         scopes = [
@@ -1944,10 +1946,131 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.assertEqual(scopes, [
-            frozenset({"market-one"}),
-            frozenset({"market-two"}),
-            frozenset({"market-one"}),
+            frozenset(f"market-{index:02d}" for index in range(5)),
+            frozenset(f"market-{index:02d}" for index in range(5, 10)),
+            frozenset({"market-10", "market-11", "market-00",
+                       "market-01", "market-02"}),
         ])
+
+    async def test_conflicting_order_owners_stay_account_wide(self):
+        runner, _, _ = self.build_runner()
+        rows = [
+            {"market_slug": "market-one", "exchange_order_id": "same-id"},
+            {"market_slug": "market-two", "exchange_order_id": "same-id"},
+        ]
+
+        self.assertIsNone(runner._next_unresolved_reconcile_scope(rows))
+
+    async def test_unresolved_repair_does_not_serialize_terminal_owners_behind_one_404(self):
+        """One consistency-lagged id cannot hide four terminal answers."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slugs = tuple(f"market-{index}" for index in range(5))
+        runner._bind_markets(slugs)
+        quick_read_started = asyncio.Event()
+        slow_observed_overlap = False
+
+        for index, slug in enumerate(slugs):
+            exchange_id = f"order-{index}"
+            intent_id = f"cancel-{index}"
+            runner.ledger.prepare_intent(
+                intent_id, "CANCEL", slug, f"client-{index}",
+                {"marketSlug": slug}, created_at=NOW)
+            runner.ledger.transition_intent(
+                intent_id, "SUBMITTING", updated_at=NOW)
+            runner.ledger.transition_intent(
+                intent_id, "ACKNOWLEDGED", updated_at=NOW,
+                exchange_order_id=exchange_id)
+            client.orders.rows[exchange_id] = {
+                "id": exchange_id,
+                "clientOrderId": f"client-{index}",
+                "marketSlug": slug,
+                "side": "ORDER_SIDE_BUY",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "5",
+                "cumQuantity": "0",
+                "state": "ORDER_STATE_CANCELED",
+                "createTime": NOW.isoformat(),
+                "lastTransactTime": NOW.isoformat(),
+            }
+
+        original_retrieve = client.orders.retrieve
+
+        async def one_lagged_read(order_id):
+            nonlocal slow_observed_overlap
+            if order_id == "order-0":
+                await asyncio.wait_for(quick_read_started.wait(), timeout=0.2)
+                slow_observed_overlap = True
+                raise AdapterError("NotFound")
+            quick_read_started.set()
+            return await original_retrieve(order_id)
+
+        client.orders.retrieve = one_lagged_read
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        with self.assertRaises(AdapterError):
+            await runner._repair_unresolved_orders(
+                NOW, markets=frozenset(slugs))
+
+        self.assertTrue(slow_observed_overlap)
+        self.assertEqual(
+            [row["market_slug"] for row in runner.ledger.unresolved_intents()],
+            ["market-0"],
+        )
+        self.assertEqual(
+            runner._take_priority_replans(),
+            ("market-1", "market-2", "market-3", "market-4"),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_twenty_recovery_cancel_owners_all_gain_terminal_proof(self):
+        """A disconnect-sized cancel set repairs in bounded fair batches."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slugs = tuple(f"market-{index:02d}" for index in range(20))
+        runner._bind_markets(slugs)
+
+        for index, slug in enumerate(slugs):
+            exchange_id = f"order-{index:02d}"
+            intent_id = f"cancel-{index:02d}"
+            runner.ledger.prepare_intent(
+                intent_id, "CANCEL", slug, f"client-{index:02d}",
+                {"marketSlug": slug}, created_at=NOW)
+            runner.ledger.transition_intent(
+                intent_id, "SUBMITTING", updated_at=NOW)
+            runner.ledger.transition_intent(
+                intent_id, "ACKNOWLEDGED", updated_at=NOW,
+                exchange_order_id=exchange_id)
+            client.orders.rows[exchange_id] = {
+                "id": exchange_id,
+                "clientOrderId": f"client-{index:02d}",
+                "marketSlug": slug,
+                "side": "ORDER_SIDE_BUY",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "5",
+                "cumQuantity": "0",
+                "state": "ORDER_STATE_CANCELED",
+                "createTime": NOW.isoformat(),
+                "lastTransactTime": NOW.isoformat(),
+            }
+
+        passes = 0
+        while runner.ledger.unresolved_intents():
+            scope = runner._next_unresolved_reconcile_scope()
+            self.assertIsNotNone(scope)
+            await runner._repair_unresolved_orders(NOW, markets=scope)
+            passes += 1
+            self.assertLessEqual(passes, 4)
+
+        self.assertEqual(passes, 4)
+        self.assertEqual(runner._take_priority_replans(), slugs)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_recovery_loads_a_market_whose_game_already_started(self):
         """A leftover order does not stop being ours because the game began.
@@ -4165,8 +4288,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         stop = await runner._recover_private_stream(
             AdapterError("private WebSocket disconnected"))
+        repeated_stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected again"))
 
         self.assertIsNone(stop)
+        self.assertIsNone(repeated_stop)
         self.assertEqual(len(runner.ledger.unresolved_intents("market-one")), 1)
         self.assertEqual(len(runner.ledger.absent_orders("market-one")), 1)
         self.assertFalse(runner._frame(runner._now(), "market-one").state_known)
@@ -4589,6 +4715,49 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner._now() - timedelta(seconds=1))
         runner._release_retired_if_flat("market-one")
         self.assertNotIn("market-one", runner._retired)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_resolved_mutation_retirement_clears_only_its_transient_bar(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+
+        await runner._retire_market(
+            slug, "unresolved_mutation_timeout", reset_exit_budget=False)
+        self.assertIn(slug, runner._retired_until)
+
+        runner._release_retired_if_flat(slug)
+
+        self.assertNotIn(slug, runner._retired)
+        self.assertNotIn(slug, runner._retired_until)
+        self.assertFalse(runner._is_barred_from_quoting(slug))
+        retirement_messages = [
+            message for message, _critical in notifier.messages
+            if "unresolved_mutation_timeout" in message
+        ]
+        self.assertTrue(any(
+            "resumes automatically" in message
+            for message in retirement_messages))
+        self.assertFalse(any(
+            "will not quote again this session" in message
+            for message in retirement_messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_positioned_mutation_retirement_cannot_release_early(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        await runner._retire_market(
+            slug, "unresolved_mutation_timeout", reset_exit_budget=False)
+        runner.ledger.position = lambda market_slug=None: Decimal("10")
+
+        runner._release_retired_if_flat(slug)
+
+        self.assertIn(slug, runner._retired)
+        self.assertIn(slug, runner._retired_until)
+        self.assertTrue(runner._is_barred_from_quoting(slug))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

@@ -1,6 +1,16 @@
 # Next session — outstanding fixes
 
-## CURRENT INCIDENT: private reconnect mass-retires the bound slate, then keeps resolved owners barred
+## FIXED LOCALLY, DEPLOY/RESTART PENDING: private reconnect mass-retired the bound slate, then kept resolved owners barred
+
+The repair is implemented and reviewed. Focused terminal repair now rotates
+five attributable owners per batch, overlaps their GET-by-ID work behind the
+unchanged shared 4 req/s limiter, and does not repeat complete account
+snapshots per owner. A positively terminal, order-free, flat
+`unresolved_mutation_timeout` owner clears only that reason's transient quote
+bar. The alert and `[unresolved-repair]` diagnostics describe the actual state.
+All 539 local tests pass and the four material changes were mutation-checked.
+Remaining work is commit/push, deploy source/tests/docs, run all tests on the
+droplet, restart, and accept the live run against the checks below.
 
 Two private-stream disconnects in the 02:50Z live session produced the same
 availability failure. Recovery resumed in 36-40 seconds and correctly scoped
@@ -47,9 +57,10 @@ disconnect at 12:28:09Z immediately repeated the failure: recovery resumed in
 37.48s, 31 CANCEL intents covered 18 markets, 30 exceeded 60 seconds and 17
 markets retired. By 12:31Z every cancel had terminal proof and ambiguity was
 zero, but a +3.1100 position remained under the bot's exit management. Do not
-restart or terminate the runner while that position remains. Once venue-flat
-proof exists, stop the session rather than accepting another recurring
-30-minute outage, then implement and mutation-check this fix before restarting.
+restart or terminate the runner while that position remains. The operator
+subsequently closed the position and canceled all orders; graceful shutdown
+independently proved flat. The bot remains stopped pending deployment of this
+reviewed fix.
 
 ## CURRENT LIVE: collect prospective adverse-fill telemetry through 2026-08-27
 

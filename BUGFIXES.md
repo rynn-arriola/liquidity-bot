@@ -29,6 +29,66 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-24
+
+### FIXED LOCALLY — private reconnect terminal repair serialized the slate, then a stale cooldown kept proven-flat owners barred
+
+**Symptom.** Three private disconnects at 07:20Z, 11:47Z and 12:28Z recovered
+fresh account visibility in 36-40 seconds, but each global quarantine created
+29-31 CANCEL intents across 18-19 markets. Between 17 and 19 markets then
+retired for `unresolved_mutation_timeout`. Even after the ledger returned to
+zero unresolved intents, zero `UNKNOWN_ABSENT` orders and flat positions, most
+of the recovered slate stayed unable to quote for thirty minutes. The alert's
+claim that a retired owner would not quote again that session was inaccurate.
+
+**Mechanism.** Scoped private recovery was correct: it resumed unaffected
+owners without weakening the rule that absence is never cancellation. The
+background repair path then asked for one owner per pass and repeated complete
+open-order, position and execution snapshots on every pass. A disconnect-sized
+set therefore took 2.5-11.6 minutes to acquire terminal proof. The fixed
+60-second containment threshold retired owners that were still converging.
+`_release_retired_if_flat` later removed `_retired`, but left the generic
+1,800-second `_retired_until` value, so positive terminal and flat proof did
+not restore availability.
+
+**Fix.** Attributable unresolved intents now receive focused GET-by-ID repair
+in round-robin batches of five owners. Reads within one batch are independent
+and concurrent, while the existing shared limiter still starts no more than
+four REST calls per second. This removes repeated full-account snapshot work
+from the per-owner path and prevents one order's NotFound retry ladder from
+hiding other owners' terminal answers. Complete account snapshots remain on
+their normal cadence. Unattributable ambiguity still uses strict account-wide
+reconciliation and fails closed.
+
+An `unresolved_mutation_timeout` owner remains unable to quote while its intent
+is unresolved, an order works or a position is nonzero. Once all three tests
+clear through positive venue evidence, release also clears only that reason's
+transient cooldown. Book/plan/action retirements retain their generic cooldown,
+positioned owners retain exit planning, and the alert now says exactly when an
+ambiguity retirement resumes. `[unresolved-repair]` reports owner/id counts,
+resolved and remaining intents, failures, elapsed time and the five-owner
+scope, so future diagnosis does not rely on the dashboard's cumulative
+`retired` count.
+
+**Review and regression proof.** The focused suite covers twenty simultaneous
+recovery cancel owners, terminal plus NotFound owners in the same batch,
+repeated successful private recovery while one owner stays ambiguous, a
+positioned retired owner that cannot release, unchanged building-PLACE refusal
+for an unresolved owner, conflicting exchange-id ownership that remains
+account-wide, and the existing twenty-slot freshness tests. All
+539 local tests pass. Mutation checks were performed: batch size five to one
+fails the twenty-owner four-pass test; concurrent to serial reads fails the
+mixed-NotFound overlap test; retaining `_retired_until` fails the transient-bar
+release test; removing the ownership-conflict check fails its account-wide
+scope test. Production deployment and live reconnect acceptance are pending.
+
+**Cost.** The three measured recurrences retired 18, 19 and 17 markets and
+repeatedly reduced quoting for roughly a half hour. No unsafe flat inference
+was found. The last run was gracefully stopped only after the operator closed
+the remaining position and canceled all orders; shutdown proved flat.
+
+---
+
 ## 2026-08-23
 
 ### FIXED AND DEPLOYED — private-stream recovery waited for every cancel, then unrelated order 404s serialized every market

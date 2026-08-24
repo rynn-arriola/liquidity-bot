@@ -233,11 +233,15 @@ These are implementation requirements, not suggestions.
 62. A condition that describes one market's inventory or exit retires that
     market; it never stops the session. A retired market keeps its streams,
     book refresh and reconciler so its exit is still worked, and the
-    pre-kickoff flatten still applies, but no side of it may be quoted again
-    for the rest of the session -- including after it reaches flat. Ending the
-    session for a per-market condition exits 4, which the supervisor never
-    restarts, so one thin book took down seven healthy markets and left the
-    process dead until an operator noticed.
+    pre-kickoff flatten still applies, but no side of it may be quoted while
+    the retirement remains in force. An `unresolved_mutation_timeout`
+    retirement is purely an ambiguity container: it releases its quote bar
+    only after positive terminal proof, no unresolved intent, no working order
+    and a flat position. Book, plan, action and exit retirements retain their
+    cooldown/abandonment behavior. Ending the session for a per-market
+    condition exits 4, which the supervisor never restarts, so one thin book
+    took down seven healthy markets and left the process dead until an
+    operator noticed.
 63. Retirement is bounded in three directions. Retirement is opt-in by name,
     so an unrecognised critical still fails closed to terminal. A market that
     fails ten rounds is abandoned and never planned again --
@@ -251,9 +255,12 @@ These are implementation requirements, not suggestions.
     `UNKNOWN_ABSENT` row, or failed order read positively owned by one market
     keeps that market's execution gate closed until terminal proof; it does not
     make unrelated owners unknown or require their individual reads on a
-    scoped/freshness pass. Terminal repair rotates one attributable owner per
-    pass; complete account snapshots remain mandatory. Absence is never
-    cancellation. Missing,
+    scoped/freshness pass. Background terminal repair rotates bounded batches
+    of five attributable owners; their GET-by-ID reads may overlap, but every
+    request remains governed by the shared 4 req/s limiter, so one NotFound
+    retry ladder cannot serialize the other owners. Complete account snapshots
+    remain mandatory on their normal cadence. Absence is never cancellation.
+    Missing,
     conflicting, unowned, or out-of-scope ownership remains account-wide
     terminal. A bounded reconnect failure never proves flat: only shutdown's
     independent whole-account proof may authorize restartable exit `5`.

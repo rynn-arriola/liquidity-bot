@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
-### FIXED — slot diagnostics drifted from the live selector configuration
+### FIXED AND DEPLOYED — slot diagnostics drifted from the live selector configuration
 
 **Symptom.** The operator command intended to answer why fewer than twenty
 slots were quoting could report a different viable universe than the runner.
@@ -60,7 +60,8 @@ refuses a change while a runner already exists. Tests cover every allowed
 size, both invalid boundaries, a fractional size, persistence, twenty slots,
 six hours, 100 candidates and identical live/diagnostic policy. Mutating each
 derived formula fails its regression, and the isolated server suite passes all
-551 tests.
+551 tests. Deployed as `b3ad73e`; the production tree passed all 551 again and
+the 16:15:26Z restart reached 20/20 quoted markets at venue quantity 5.
 
 ---
 

@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## REVIEWED, AWAITING DEPLOYMENT: dynamic quote size, currently 5, without changing twenty slots
+## FIXED, DEPLOYED AND RESTARTED: dynamic quote size, currently 5, without changing twenty slots
 
 The bot was gracefully stopped and proved flat at 15:52:48Z. The authorized
 current size is 5 contracts, producing a $4 maximum early-exit loss, $45
@@ -15,10 +15,24 @@ This matters because lowering size can deliberately exclude a venue market
 whose `minimum_trade_qty` is above 5; the diagnostic must apply the same rule
 before calling an empty slot defective. Each of the three derived formulas
 fails its mutation check, 52 focused tests pass locally, and all 551 tests pass
-in an isolated copy using the production environment. Deployment and a flat-gated
-restart remain. Start at another reviewed size with
+in an isolated copy using the production environment. Deployment and a
+flat-gated restart completed at 16:15:26Z on `b3ad73e`. The first live dashboard reached
+20/20 quoted markets; a venue read found only quantity-5 orders and zero
+positions, unknown-absent orders or unresolved intents. Start at another
+reviewed size with
 `./scripts/start_commissioning.sh auto SIZE`; never change size under live
 orders.
+
+## WATCH: standalone dashboard risk bars are not the runner's durable stop inputs
+
+At 16:13Z the dashboard's matched-pair estimate showed $60.97 for both SESSION
+and HARD and appeared to exceed both caps. A direct venue/baseline audit showed
+current cash/equity $333.4311 against the stored UTC opening $380.4631: actual
+drawdown $47.032, leaving $2.968 before the $50 session pause and $12.968
+before the $60 hard stop. `dashboard.py` deliberately labels its estimate
+directional, but drawing the same matched-pair number on HARD is still capable
+of a false alarm. The live runner is correct; reporting should eventually read
+the durable baseline plus venue cash/equity the same way.
 
 ## FIXED AND DEPLOYED WITHOUT RESTART: reward dates are ET, not UTC
 

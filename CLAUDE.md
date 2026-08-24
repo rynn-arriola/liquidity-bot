@@ -8,14 +8,15 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is STOPPED and proved flat at 2026-08-24T15:52:48Z** for the reviewed
-  10 -> 5 contract rollback. Do not restart an older build. Quote size is now
-  one persistent restart-scoped setting, bounded to whole values 5-10; its
-  early-exit, per-market exposure and fee caps derive automatically. The
-  change keeps 20 slots and the six-hour horizon and makes selector diagnostics
-  use the runner's exact policy and persisted size.
-  The pre-deployment production-environment suite passes all 551 tests.
-  Before this stop, rotation was unblocked with no risk stops and resting
+- **Bot is RUNNING on `b3ad73e` since 2026-08-24T16:15:26Z at quote size 5.**
+  Live verification reached 20/20 quoted markets; venue orders reported only
+  original/remaining quantity 5, with zero positions, unknown-absent orders or
+  unresolved intents. Quote size is one persistent restart-scoped setting,
+  bounded to whole values 5-10; its early-exit, per-market exposure and fee
+  caps derive automatically. The six-hour horizon, 20 slots, 8 + 8 + 4 private
+  layout, 4 req/s and $40/$50/$60 account stops are unchanged. All 551 tests
+  passed both in an isolated server copy and again on the deployed tree.
+  Before the size change, rotation was unblocked with no risk stops and resting
   fraction **~54%** span-weighted over a full UTC day (2026-08-22).
   The **85.6%** this block used to carry is a *different statistic* --
   `resting_fraction.py --coverage 0.8` over a 3h41m window, which keeps only
@@ -36,6 +37,11 @@ from fact rather than from the last thing someone remembers.
   `America/New_York` and DST-aware boundaries. Reward totals never changed.
   The session and hard-stop budget deliberately remains a durable UTC-day
   policy; do not move its reset time as part of an accounting change.
+- **Standalone dashboard risk bars are directional, not authoritative.** At
+  16:13Z they displayed $60.97 for both SESSION and HARD, while the venue plus
+  durable UTC baseline proved the actual cash/equity drawdown was $47.032.
+  The runner uses the latter and had $2.968 session / $12.968 hard headroom at
+  restart. Do not stop the bot from the standalone bars alone; see FINDINGS.
 - **Economics, bot era only** (first order 2026-08-14): reward earned +90.16
   against matched-pair trading -44.66, so roughly **+45 net**. `TOTAL` on the
   dashboard is account-wide since inception and is dominated by pre-bot

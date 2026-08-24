@@ -20,6 +20,32 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The standalone dashboard can show a spent stop while the runner still has durable headroom
+
+Established immediately before the 2026-08-24 size-5 restart. At 16:13Z the
+standalone dashboard displayed `$60.97 / $50` for SESSION and repeated the same
+`$60.97 / $60` on HARD. The account was flat. A direct authenticated balance
+read and read-only ledger query showed:
+
+```
+UTC opening equity/cash   380.4631
+current equity/cash       333.4311
+durable drawdown           47.0320
+session headroom            2.9680  (cap 50)
+hard-stop headroom         12.9680  (cap 60)
+```
+
+The discrepancy is explained by the dashboard code: it reconstructs matched
+pairs from today's ledger fills, then draws that same estimate for both SESSION
+and HARD. The runner does not. SESSION reads current settled cash against the
+durable UTC opening cash; HARD reads marked equity against the durable UTC
+opening equity. The dashboard calls its number directional, so this is not a
+trading defect, but the repeated HARD bar is not evidence that the emergency
+stop has fired and can provoke an unnecessary manual shutdown. Confirm with
+the durable baseline and venue balance before acting on that standalone bar.
+
+---
+
 ## Five contracts reduces fill exposure without reducing the twenty-slot scheduler
 
 Established from the size-scaling analysis already recorded below, the live

@@ -137,8 +137,9 @@ overnight when fewer games exist; compare against candidate count, not against
 
 ## 4. Should we quote a tick behind the touch to avoid bad fills?
 
-**Answered NO on 2026-08-16 — recorded here because the answer is
-conditional on a number the venue controls.**
+**Answered NO on 2026-08-16, then REOPENED on 2026-08-24 because trading loss
+grew to the same order as reward.** The original decision remains below so the
+new measurement is compared with what changed rather than argued from scratch.
 
 ```
 discount_factor across 263 live reward periods:
@@ -157,8 +158,110 @@ trading P&L      ~-$1.2/day    (-$3.71 over 29 round trips)
 Stepping back one tick costs ~$18/day to avoid at most ~$1.2/day. About 15x
 negative, wide enough to survive large errors in the estimate.
 
-**Re-open if:** the common `discount_factor` rises above ~0.8, or trading
-losses grow to a similar order as reward accrual. Neither is true today.
+**Re-open condition met:** the common `discount_factor` is still far below
+0.8, but August 23 produced $79.45 reward against -$42.88 recorded trading.
+That does not authorize moving every quote back one tick; it authorizes the
+narrower liquidity-cliff and queue-reset studies in 4a/4b.
+
+---
+
+## 4a. Should entry refuse a severe post-fill liquidity cliff?
+
+**Prospective capture is active; decide with the same three-day adverse-fill
+study as item 6.** This targets the operator-observed case where a resting
+order costs about $5, fills, and the next executable book values the position
+near $3. It is narrower than refusing all fills and narrower than re-enabling
+the old expected-net gate.
+
+The runner already calculates the relevant counterfactual before every
+building PLACE: remove the entry level that must have been consumed for our
+order to fill, halve the remaining displayed depth, and price an immediate
+exit. The value is stored as `stressed_exit_pnl`, but the reward-cost gate is
+advisory, so a severe result does not currently block the order.
+
+**Baseline, 2026-08-24 at 0.62 observed days:** 1,033/1,033 observations,
+64 maker fills and zero missing capture. Among those fills, stressed immediate
+exit P&L was -$0.46 median and -$1.10 mean; 13 were at or below -$2 and the
+worst was -$6.41. Across resolved observations, 200 were projected to retain
+less than 50% of entry value and 12 of those filled. These are decision-time
+counterfactuals, not yet actual post-fill markouts.
+
+**Candidate, shadow only:** require stressed immediate liquidation value to
+retain at least 70% of entry cost. If the active-touch quote fails, test a
+safer reward-eligible price and recompute; if no price passes, the side would
+be refused. Reducers, the 20-slot scheduler, league selection and exit policy
+must remain unchanged. The 70% candidate would refuse the $5 -> $3 example,
+which retains only 60%; it is a starting hypothesis, not an authorized live
+threshold.
+
+**Measure:** after the complete August 25-27 UTC cohorts and roughly 300 maker
+fills, compare the counterfactual with actual side-normalized post-fill
+markouts and realized exits. Run a `would_refuse` replay and count avoided
+trading loss, projected/paid reward surrendered, dark slot-seconds and viable
+sides rejected. Keep August 27 held out.
+
+**Change only if:** on held-out data, avoided realized loss exceeds reward
+surrendered with a conservative margin, severe actual markouts concentrate
+below the retained-value floor, and the rule does not starve the 20-slot slate.
+
+**Do not change if:** stressed exit is merely pessimistic, affected positions
+usually recover passively at basis, or the rule sacrifices more reward than
+actual loss. Do not re-enable the broad expected-net gate to solve this narrow
+problem; it previously rejected nearly the whole universe.
+
+---
+
+## 4b. Should an almost-front resting order cancel and re-place at the same price?
+
+**Feasible as a bounded estimate, not an exact queue rank. Not currently
+instrumented in the live runner.** Under price-time priority, canceling and
+re-placing at the same price puts our replacement behind the quantity already
+resting there while preserving the same reward ticks whenever the price
+remains eligible. This could reduce fills without paying the typical 70% score
+loss of moving one tick back. It also creates dark time and extra mutations,
+and a sweep through the whole level can still fill the replacement.
+
+At placement, every displayed contract already at better prices or the same
+price is ahead of us; `observed_queue_ahead` captures that. After placement:
+
+- a public trade consuming our side at our price definitely reduces queue
+  ahead;
+- a trade through our price exhausts it and can fill us regardless of a reset;
+- a new same-price order is behind us;
+- aggregate book depth disappearing through cancellation is ambiguous: the
+  canceled quantity may have been ahead of us or behind us.
+
+Therefore the tracker must retain lower and upper bounds for queue ahead. It
+may declare `almost_front` only when the conservative bound is small; it must
+never present an exact rank the venue does not publish. The installed market
+SDK supports public `subscribe_trades`, and `ShadowMarketStream` already has
+trade-at-price queue-consumption arithmetic. The live commissioning stream
+subscribes only to books today, so the current three-day observation will not
+answer queue depletion over an order's lifetime. Its `trade_volume_30s` and
+`trade_volume_120s` fields deliberately remain NULL.
+
+**Measurement-only prerequisite:** separately review adding public trades on
+an isolated stream path, persist each resting order's initial queue, definite
+trade consumption, ambiguous book-depth removals, new same-price depth and the
+resulting queue interval. It must add no REST calls, must not delay book or
+private processing, and requires stream-throughput, ledger-growth and coverage
+acceptance before any automatic cancellation exists.
+
+**Candidate, shadow only:** when an order has rested a minimum dwell and the
+conservative queue-ahead bound falls below a predeclared threshold, emit
+`would_queue_reset`. Simulate cancel confirmation plus same-price replacement,
+including measured dark time and the actual priority-replan delay. Add a
+cooldown and hysteresis so one level cannot churn repeatedly.
+
+**Change only if:** held-out replay shows queue resets avoid more realized
+adverse-fill loss than the reward lost during dark time, do not materially
+reduce resting fraction, and keep mutation latency, unresolved state and REST
+load inside current safety bounds.
+
+**Do not change if:** fills are mainly sweeps through the whole level, queue
+position does not separate losing from safe fills, or cancel/re-place dark time
+costs more reward than the losses avoided. Never queue-reset a reducer or an
+order with an unresolved mutation.
 
 ---
 

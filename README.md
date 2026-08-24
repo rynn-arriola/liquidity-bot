@@ -132,9 +132,11 @@ PYTHONPATH=src .venv/bin/python -B scripts/quote_observation_report.py \
 ```
 
 Do not turn a diagnostic bucket into an entry refusal until coverage is
-complete, at least 72 hours and about 300 maker-filled observations exist, and
-a candidate trained on the first two UTC-day cohorts succeeds on the third
-held-out cohort. It must then run in would-refuse shadow mode before enforcement.
+complete across three complete UTC-day cohorts, about 300 maker-filled
+observations exist, and a candidate trained on the first two complete days
+succeeds on the third held-out day. A partial deployment day is warm-up, not a
+cohort. The candidate must then run in would-refuse shadow mode before
+enforcement.
 
 ## Discord summaries and alerts
 

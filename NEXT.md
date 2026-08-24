@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## CURRENT LOCAL: prospective adverse-fill telemetry built, not deployed
+## CURRENT LIVE: collect prospective adverse-fill telemetry through 2026-08-27
 
 The next approved restart can begin a measurement-only run. Each building
 post-only PLACE intent will atomically retain its exact decision-time book,
@@ -22,8 +22,11 @@ as local sizing numbers; deployment acceptance must still verify scheduler
 cadence, REST rate, book/private freshness, observation coverage and ledger
 growth on the server.
 
-After deployment, let it collect for at least 72 hours and roughly 300
-maker-filled observed orders. Run the local, read-only report with:
+Collection began at **2026-08-24T02:51:31Z**. Treat August 24 as a partial
+warm-up day; collect August 25 and 26 as training cohorts and August 27 as the
+held-out cohort. Review no earlier than **2026-08-28T00:00Z**, and continue if
+roughly 300 maker-filled observed orders have not accumulated. Run the local,
+read-only report with:
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -33,10 +36,16 @@ python -B scripts/quote_observation_report.py --database data/commissioning.db
 Require zero missing observations. Freeze the first two UTC-day cohorts for
 training and evaluate the third held out; only then consider a would-refuse
 shadow rule. Do not enforce a refusal rule from the historical correlations.
-As of this entry the code has passed 534 local tests and four deliberate
-mutation checks, but is uncommitted, unpushed and undeployed. The live server
-has not been stopped, changed or restarted for this work; wait for explicit
-operator approval.
+Commit `2acf544` passed 534 local tests and four deliberate mutation checks,
+was pushed, and all 18 deployed hashes matched. A disposable migration of the
+real 78.0MB ledger preserved all 19,850 order and 1,366 fill rows; all 534
+production tests passed in 40.460s. The restart initially encountered the
+already-documented parked-position recovery deadlock and created zero building
+orders. After the operator manually cleared the remaining order/position, the
+normal supervisor and runner started. At **2026-08-24T02:53:52Z** collection
+showed 37 required observations, 37 captured, zero missing, zero positions and
+the live process was placing across the slate. Do not restart merely to inspect
+telemetry; the report opens the ledger read-only.
 
 ---
 

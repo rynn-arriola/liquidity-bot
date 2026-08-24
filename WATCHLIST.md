@@ -198,7 +198,7 @@ driver and the lever is selection or exit instead.
 
 ## 6. Which markets and sides precede the losing fills?
 
-**Prospective capture built locally 2026-08-23; not yet deployed or
+**Prospective capture deployed 2026-08-24; collecting, not yet
 decided.** This is the version of question 4 that does not cost
 reward: losses come from *which* market and side we quote and *how the
 position exits*, not from queue position. Queue position is what the venue
@@ -209,10 +209,11 @@ recent touch-cancel count, re-entry delay or prior same-side price range. It
 also did not justify a universal cooldown. League is diagnostic context only
 and must not become a filter.
 
-**Decide when:** the exact intent-linked capture has zero coverage gaps, spans
-at least 72 hours and includes roughly 300 maker-filled observations. Train on
-the first two UTC-day cohorts, keep the third held out, then shadow the
-candidate as would-refuse before any enforcement.
+**Decide when:** discard the partial August 24 startup cohort, require zero
+coverage gaps across the complete August 25–27 UTC cohorts and roughly 300
+maker-filled observations. Train on August 25–26, keep August 27 held out, then
+shadow the candidate as would-refuse before any enforcement. Earliest review is
+2026-08-28T00:00Z; continue collecting if the fill target is not met.
 
 **Measure:** for each losing round trip, the market's reward-band width,
 book depth at entry, distance from midpoint, time to kickoff, and which side
@@ -240,6 +241,11 @@ collector process, cron job or command. Schema migration is additive at normal
 runner startup. Analysis is deliberately manual and read-only: run
 `scripts/quote_observation_report.py` when checking coverage, and do not treat
 its diagnostic buckets as an automatic strategy gate.
+
+**Live acceptance:** commit `2acf544`; first observation
+2026-08-24T02:51:31Z. The 02:53:52Z checkpoint had 37 required, 37 captured,
+zero missing and no `[quote-observation]` errors. This is coverage proof only,
+not enough outcome data to select a rule.
 
 **Change if:** a characteristic separates them cleanly. The lever is the
 projection gate in `market_selector.py`, not the quoting rule.

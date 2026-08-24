@@ -20,7 +20,7 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
-## Prospective adverse-fill observation — built locally 2026-08-23, not deployed
+## Prospective adverse-fill observation — live collection began 2026-08-24
 
 The existing ledger can describe what happened after a fill, but it did not
 persist the decision-time book and reward facts needed to learn which resting
@@ -74,12 +74,23 @@ SQLite files used about 2.15KB additional space per observed order after table
 and index overhead. This is a synthetic local measurement, not a production
 latency percentile.
 
-The acceptance rule is prospective: collect at least 72 hours and about 300
-maker-filled observed orders, use the first two UTC-day cohorts for training,
-and keep the third cohort held out. Any candidate rule must first run in
-would-refuse shadow mode. This code is local only as of this entry; it has not
-been pushed, deployed or used to restart the bot. No production defect is
-claimed fixed by this measurement work.
+The acceptance rule is prospective: discard the partial startup day, collect
+three complete UTC-day cohorts and about 300 maker-filled observed orders, use
+the first two complete days for training, and keep the third complete day held
+out. Any candidate rule must first run in would-refuse shadow mode. No
+production defect is claimed fixed by this measurement work.
+
+Commit `2acf544` was pushed and deployed on 2026-08-24. All 18 deployed file
+hashes matched, a disposable copy of the real 78.0MB ledger migrated without
+changing its 19,850 order or 1,366 fill rows, and all 534 production tests
+passed in 40.460s. Graceful stop exposed the already-documented parked-position
+recovery deadlock; telemetry created no building risk during recovery. After
+the operator manually canceled/closed the remaining state, the normal runner
+started and the first observation landed at **2026-08-24T02:51:31Z**. At
+02:53:52Z it had 37 required observations, 37 captured and zero missing. The
+partial August 24 cohort is warm-up; August 25–26 are training, August 27 is
+held out, so the earliest review is **2026-08-28T00:00Z**, and later if fewer
+than roughly 300 maker-filled observed orders exist then.
 
 ---
 

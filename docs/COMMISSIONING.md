@@ -1,26 +1,28 @@
-# One-contract commissioning
+# Liquidity commissioning
 
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
 ## Fixed execution envelope
 
-- join every executable active sports market to its liquidity rewards, but
-  expose the account to only one selected rewarded market at a time;
-- refresh selection every 15 minutes, deeply evaluate at most 25 books per
+- join every executable active sports market to its liquidity rewards and
+  expose the account to at most 20 selected rewarded markets at a time;
+- refresh selection every 15 minutes, deeply evaluate at most 100 books per
   pass through the shared governor, and round-robin deferred lower-ranked
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 10 contracts per quote across at most 20 concurrently bound markets (one bid
-  and one offer may rest per market while flat) -- 5 -> 10 on 2026-08-20;
-  `commissioning.py` is the authority;
+- 5 contracts per quote across at most 20 concurrently bound markets by
+  default (one bid and one offer may rest per market while flat). Size is a
+  restart-scoped whole number from 5 through 10; it returned 10 -> 5 on
+  2026-08-24 without reducing the 20-slot breadth. `commissioning.py` is the
+  authority;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
-- quote a venue-eligible side only when its 30-second normalized-score reward,
-  after a 50% haircut and no-fill survival factor, exceeds twice the stressed
-  immediate-exit cost weighted by a conservative first-fill probability;
+- continue computing the 30-second normalized-score reward model with a 50%
+  haircut and conservative first-fill probability, but do not enforce that
+  experimental cost gate for entry;
 - report the venue's $1 aggregate payout floor, but never apply it to one
   market or one order;
 - use no projected spread or maker rebate until live evidence supports it;
@@ -31,15 +33,15 @@ strategy is profitable and not permission to scale.
   comes first, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
-  An early cross costing more than $8 is refused and the position keeps resting
+  An early cross costing more than `0.8 × quote size` ($4 at size 5) is refused
+  and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
-- end maker quoting after the first taker exit in a session, with a separate
-  $0.02 positive execution-fee ceiling, so an unmatched-fill cost cannot become
-  a repeating cycle;
-- $40 per-market soft stop, $40 marked-account-equity session stop, and $45
-  emergency marked-account-equity hard stop (corrected 2026-08-16; this read
-  $2/$5/$15). Both soft tiers sit at $40 so exactly one threshold can fire;
+- allow at most 20 taker exits, with a session fee cap of `0.30 × quote size`
+  ($1.50 at size 5), so the cap continues to cover twenty peak-fee exits;
+- $40 per-market realized-loss stop, $50 realized session stop, and $60
+  emergency marked-account-equity hard stop. These account-level loss limits
+  do not scale down with quote size;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account
@@ -58,7 +60,8 @@ The command refuses before order entry unless all of these are true:
 3. Either an explicit market is named, or automatic discovery selects an open
    rewarded market in a documented lifecycle applying now and before event
    start.
-4. One contract is aligned to the current venue tick and minimum quantity.
+4. The configured quantity is a whole 5-10 contracts and meets the current
+   venue minimum.
 5. The whole account has no open order, nonzero position, unresolved mutation,
    or unowned state.
 6. The balance schema is complete and marked equity is known.
@@ -126,9 +129,16 @@ Start, inspect, and stop:
 ```bash
 ./scripts/start_commissioning.sh
 ./scripts/start_commissioning.sh MARKET-SLUG
+./scripts/start_commissioning.sh auto 7
 ./scripts/status_commissioning.sh
 ./scripts/stop_commissioning.sh
 ```
+
+The optional second argument is quote size. It must be a whole number from 5
+through 10 and is persisted in `data/commissioning_quote_size`. Omitting it
+reuses the persisted value, or 5 if the file does not exist. The launcher
+refuses while a runner or supervisor exists, so size can change only between
+flat sessions. The supervisor and diagnostics read the same persisted value.
 
 The launcher reads the existing sibling `../maker-lab/credentials.py` as
 literal data. The credential file, environment files, databases, locks, and

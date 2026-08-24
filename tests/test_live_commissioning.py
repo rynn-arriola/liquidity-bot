@@ -6231,6 +6231,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
+            "--quote-size", "7",
             "--arm-live",
             "--accept-one-contract-risk",
             "--exclusive-api-key",
@@ -6246,6 +6247,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         args = mocked.await_args.args[0]
         self.assertTrue(args.auto_select_rewards)
         self.assertIsNone(args.market_slug)
+        self.assertEqual(args.quote_size, 7)
+
+    def test_cli_rejects_quote_size_outside_the_reviewed_range(self):
+        argv = [
+            "live_commissioning",
+            "--auto-select-rewards",
+            "--quote-size", "4",
+        ]
+        with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 2)
 
     async def test_ambiguous_place_is_adopted_instead_of_unowned(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
@@ -6301,6 +6313,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             exclusive_api_key=True,
             maker_lab_stopped=True,
             arm_live=False,
+            quote_size=5,
             lock_file=Path("unused.lock"),
             database=Path("unused.db"),
         )

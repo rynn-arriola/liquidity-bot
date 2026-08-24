@@ -43,10 +43,12 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
+from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.reward_calendar import (  # noqa: E402
     reward_day, reward_day_bounds)
 
-MAX_MARKETS = 20
+CONFIG = CommissioningConfig.diagnostic_defaults()
+MAX_MARKETS = CONFIG.max_markets
 LOG = Path("logs/commissioning.log")
 DB = "data/commissioning.db"
 W = 70
@@ -607,9 +609,8 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
     tight = rewarded = 0
     if args.markets and gateway is not None:
         try:
-            from liquidity_bot.market_selector import (
-                RewardMarketSelector, RewardSelectionPolicy)
-            policy = RewardSelectionPolicy()
+            from liquidity_bot.market_selector import RewardMarketSelector
+            policy = CONFIG.reward_selection_policy()
             selection = await RewardMarketSelector(
                 gateway, policy=policy).select(now=now)
             viable = len([o for o in selection.opportunities if o.viable_sides])

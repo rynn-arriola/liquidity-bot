@@ -8,7 +8,14 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is RUNNING** and healthy: rotation unblocked, no risk stops, resting
+- **Bot is STOPPED and proved flat at 2026-08-24T15:52:48Z** for the reviewed
+  10 -> 5 contract rollback. Do not restart an older build. Quote size is now
+  one persistent restart-scoped setting, bounded to whole values 5-10; its
+  early-exit, per-market exposure and fee caps derive automatically. The
+  change keeps 20 slots and the six-hour horizon and makes selector diagnostics
+  use the runner's exact policy and persisted size.
+  The pre-deployment production-environment suite passes all 551 tests.
+  Before this stop, rotation was unblocked with no risk stops and resting
   fraction **~54%** span-weighted over a full UTC day (2026-08-22).
   The **85.6%** this block used to carry is a *different statistic* --
   `resting_fraction.py --coverage 0.8` over a 3h41m window, which keeps only
@@ -57,7 +64,7 @@ from fact rather than from the last thing someone remembers.
    `BUGFIXES.md`. Measured fact → `FINDINGS.md`. Both are standing rules.
 4. **Decide from THIS bot's data, not maker-lab's.** Operator rule, set
    2026-08-22. maker-lab is a different system: quote size 10-25 against our
-   10, thirty markets, the **live** period included, and
+   5, thirty markets, the **live** period included, and
    `FLATTEN_NEVER_AT_A_LOSS` on. Its outcome splits measure the configuration
    it ran, not the better policy -- its 60-to-1 passive-exit win rate is that
    basis floor, which it documented itself as *"79% losers BY CONSTRUCTION"*.
@@ -177,6 +184,10 @@ machine's SSH key.
 
 Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `stop_commissioning.sh` (graceful; waits up to 300s for a flat proof).
+`start_commissioning.sh auto SIZE` changes the persistent restart-scoped quote
+size; allowed whole values are 5-10 and the current/default value is 5. It
+automatically derives early-exit, per-market exposure and execution-fee caps.
+Never change size by editing those derived limits or while a runner is live.
 `scripts/resting_fraction.py` measures what share of time each side actually
 holds a live order — the quantity that maps to reward.
 

@@ -6,6 +6,11 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 TARGET=${1:-auto}
+QUOTE_SIZE=${2:-5}
+case "$QUOTE_SIZE" in
+    5|6|7|8|9|10) ;;
+    *) echo "[supervisor] refused invalid quote size: $QUOTE_SIZE"; exit 2 ;;
+esac
 
 PY=.venv/bin/python
 MAX_FAST_CRASHES=3
@@ -23,8 +28,8 @@ else
     MARKET_ARGS=(--market-slug "$TARGET")
 fi
 
-echo "[supervisor] one-contract commissioning target=$TARGET"
-alert "Liquidity Bot supervisor started for one-contract commissioning."
+echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE"
+alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote."
 
 while true; do
     STARTED=$(date -u +%s)
@@ -39,7 +44,8 @@ while true; do
         --arm-live \
         --accept-one-contract-risk \
         --exclusive-api-key \
-        --maker-lab-stopped >> logs/commissioning.log 2>&1
+        --maker-lab-stopped \
+        --quote-size "$QUOTE_SIZE" >> logs/commissioning.log 2>&1
     CODE=$?
     RAN=$(( $(date -u +%s) - STARTED ))
 

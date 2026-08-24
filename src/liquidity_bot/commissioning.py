@@ -10,11 +10,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
+DEFAULT_QUOTE_SIZE = Decimal("5")
+MIN_QUOTE_SIZE = Decimal("5")
+MAX_QUOTE_SIZE = Decimal("10")
+RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
 
 
 class CommissioningRefused(RuntimeError):
@@ -54,7 +59,7 @@ def next_six_am_new_york(now: datetime) -> datetime:
 
 @dataclass(frozen=True)
 class CommissioningConfig:
-    """Non-scalable one-contract experimental authorization.
+    """Non-scalable, bounded experimental authorization.
 
     Three loss limits. ``max_market_loss_usd`` and ``max_session_loss_usd``
     are both stops -- they appear in ``runtime_safety.blockers()`` and halt
@@ -86,22 +91,21 @@ class CommissioningConfig:
     # share is size-linear, so size 1 earns a rounding error. Worst case is
     # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
     # stop below is set to.
-    # Raised 5 -> 10 on 2026-08-20, by operator decision. Size is leverage,
-    # not edge: FINDINGS measured reward and unwind BOTH scaling linearly
-    # (25x size -> 24.4x reward, gate_ratio 0.0310 -> 0.0305), so doubling
-    # doubles what a qualifying book pays and doubles what a bad fill costs,
-    # leaving the ratio untouched. It was taken deliberately on that basis.
+    # Raised 5 -> 10 on 2026-08-20, then returned to 5 on 2026-08-24 by
+    # operator decision. Size is leverage, not edge: FINDINGS measured reward
+    # and unwind BOTH scaling linearly (25x size -> 24.4x reward, gate_ratio
+    # 0.0310 -> 0.0305), so doubling pays more reward when a quote qualifies
+    # but also doubles what a bad fill costs without improving the ratio. The
+    # rollback reduces fill exposure while preserving market breadth.
     #
     # Everything derived from contract count moves with it or the config stops
     # being coherent -- the exposure budget below, and `max_early_exit_loss_usd`
     # above all, whose $4 was calibrated on size-5 crossed losses.
     #
     # The LOSS STOPS deliberately do NOT move. They protect the account, not
-    # the position, and equity did not double: $40 is 9% of ~$467, $80 would be
-    # 18%. Measured headroom says they still work -- matched-pair trading is
-    # -47.24 over seven days, about -6.75/day at size 5, so ~-13.50/day here
-    # against a $40 stop. Three times the typical day rather than six.
-    quote_size: Decimal = Decimal("10")
+    # the position. The size-dependent limits that move back with quote size
+    # are the early-exit cap and the per-market exposure budget below.
+    quote_size: Decimal = DEFAULT_QUOTE_SIZE
     # Eight is the measured ceiling, not a preference. The private
     # WebSocket accepts 10 subscriptions per connection; positions must be
     # scoped one market per subscription because positionSubscription
@@ -173,7 +177,7 @@ class CommissioningConfig:
     # and a cap defers a loss rather than avoiding it, so buying that trade
     # needs mean-reversion evidence between the inventory clock and kickoff
     # that we do not have yet. See FINDINGS.
-    # Doubled with quote_size on 2026-08-20 so it keeps its MEANING. The $4
+    # Doubled with quote_size on 2026-08-20 so it kept its MEANING. The $4
     # was chosen from 17 crossed losses at size 5 (median $2.32, p75 $3.23,
     # p90 $6.15) to block the three worst while leaving the median exit alone.
     # At size 10 those same trades are median $4.64 and p75 $6.46, so a $4 cap
@@ -181,8 +185,8 @@ class CommissioningConfig:
     # silently converting the exit policy into "ride to the kickoff flatten".
     # FINDINGS measures P&L degrading monotonically with holding time
     # (+23.8c under 300s, -23.5c past an hour), so that would have been a real
-    # cost taken by accident rather than by decision.
-    max_early_exit_loss_usd: Decimal = Decimal("8")
+    # cost taken by accident rather than by decision. Returned to $4 with
+    # quote size 5 on 2026-08-24.
     # How many CONSECUTIVE UTC days may hit a loss stop before it stops being
     # a pause and becomes terminal.
     #
@@ -208,13 +212,11 @@ class CommissioningConfig:
     # worst-case exposure and are sized to the $385.88 balance with a ~10%
     # buffer, following maker-lab's CAPITAL_BUFFER_PCT.
     #
-    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20: worst case on
-    # one market is `size x p + size x (1 - p)` = $10 at ten contracts, and the
-    # budget keeps the same multiple of it. The PORTFOLIO budget stays at $340
-    # -- it is sized to the account, not to the position, and 20 markets at $10
-    # is $200, still comfortably inside it. Raising it too would have loosened
-    # the one cap that bounds total open risk, which nothing here argues for.
-    max_market_exposure_usd: Decimal = Decimal("90")
+    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20, then returned
+    # to $45 with quote size 5 on 2026-08-24. Worst case on one market is
+    # `size x p + size x (1 - p)` = $5 at five contracts, so this preserves
+    # the same nine-times headroom. The PORTFOLIO budget stays at $340 -- it is
+    # sized to the account, not to the position, and 20 markets at $5 is $100.
     max_portfolio_exposure_usd: Decimal = Decimal("340")
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3
@@ -283,7 +285,6 @@ class CommissioningConfig:
     # at p = 0.5: $0.075 per exit at five contracts. $1.50 is the same twenty
     # exits. The old $0.25 was calibrated for one contract and would have
     # tripped before twenty exits could ever be collected.
-    max_session_execution_fees_usd: Decimal = Decimal("1.50")
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -296,6 +297,67 @@ class CommissioningConfig:
     minimum_entry_price: Decimal = Decimal("0.10")
     manual_stop_only: bool = True
 
+    @property
+    def max_early_exit_loss_usd(self) -> Decimal:
+        """Scale the size-5 $4 early-cross calibration with quantity."""
+
+        return self.quote_size * Decimal("0.8")
+
+    @property
+    def max_market_exposure_usd(self) -> Decimal:
+        """Keep nine quote-notionals of headroom in each market."""
+
+        return self.quote_size * Decimal("9")
+
+    @property
+    def max_session_execution_fees_usd(self) -> Decimal:
+        """Fund twenty peak-fee taker exits at the configured quantity."""
+
+        return self.quote_size * Decimal("0.30")
+
+    @classmethod
+    def diagnostic_defaults(
+        cls,
+        *,
+        quote_size: Decimal | None = None,
+        runtime_quote_size_path: Path = RUNTIME_QUOTE_SIZE_PATH,
+    ) -> CommissioningConfig:
+        """Return current defaults for read-only operator diagnostics.
+
+        The false authorization flags make this object impossible to arm.
+        Keeping diagnostics on the same dataclass defaults as the runner
+        prevents quote size, horizon, and candidate-budget drift.
+        """
+
+        if quote_size is None:
+            quote_size = configured_quote_size(runtime_quote_size_path)
+        return cls(
+            market_slug=AUTO_REWARD_MARKET,
+            economic_risk_accepted=False,
+            exclusive_api_key_confirmed=False,
+            maker_lab_stopped_confirmed=False,
+            quote_size=quote_size,
+        )
+
+    def reward_selection_policy(self):
+        """Build the selector policy shared by live and diagnostic flows."""
+
+        from .market_selector import RewardSelectionPolicy
+
+        return RewardSelectionPolicy(
+            quote_size=float(self.quote_size),
+            projection_horizon_seconds=(
+                self.reward_projection_horizon_seconds),
+            projection_haircut=float(self.reward_projection_haircut),
+            exit_depth_haircut=.5,
+            exit_cost_safety_multiple=float(
+                self.reward_cost_safety_multiple),
+            max_book_candidates=self.max_selection_book_candidates,
+            minimum_entry_spread=float(self.minimum_entry_spread),
+            minimum_entry_price=float(self.minimum_entry_price),
+            enforce_reward_cost_gate=self.enforce_reward_cost_gate,
+        )
+
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
@@ -303,7 +365,7 @@ class CommissioningConfig:
         if not self.arm_live:
             problems.append("live arming flag is absent")
         if not self.economic_risk_accepted:
-            problems.append("one-contract economic risk is not accepted")
+            problems.append("commissioning economic risk is not accepted")
         if not self.exclusive_api_key_confirmed:
             problems.append("exclusive API-key use is not confirmed")
         if not self.maker_lab_stopped_confirmed:
@@ -320,15 +382,21 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        if self.quote_size != 10 or self.max_markets != 20:
+        size_is_valid = (
+            isinstance(self.quote_size, Decimal)
+            and self.quote_size.is_finite()
+            and self.quote_size == self.quote_size.to_integral_value()
+            and MIN_QUOTE_SIZE <= self.quote_size <= MAX_QUOTE_SIZE
+        )
+        if not size_is_valid:
             problems.append(
-                "commissioning is hard-locked to ten contracts per quote "
-                "across at most twenty markets")
-        if (self.max_market_exposure_usd != 90
-                or self.max_portfolio_exposure_usd != 340):
+                "commissioning quote size must be a whole number from 5 to 10")
+        if self.max_markets != 20:
             problems.append(
-                "commissioning exposure budgets must remain $90 per market "
-                "and $340 across the portfolio")
+                "commissioning is hard-locked to at most twenty markets")
+        if self.max_portfolio_exposure_usd != 340:
+            problems.append(
+                "commissioning portfolio exposure budget must remain $340")
         if self.max_portfolio_exposure_usd < self.max_market_exposure_usd:
             problems.append(
                 "the portfolio exposure budget must cover a single market")
@@ -368,11 +436,10 @@ class CommissioningConfig:
                 "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
         if (self.max_taker_exit_orders != 20
-                or self.max_session_execution_fees_usd != Decimal("1.50")
                 or self.earnings_refresh_seconds != 900):
             problems.append(
                 "commissioning loss learning must stop after 20 taker exits, "
-                "cap execution fees at $1.50, and refresh earnings every 900 seconds")
+                "and refresh earnings every 900 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300):
             problems.append(
@@ -396,3 +463,24 @@ class CommissioningConfig:
         problems = self.blockers(now=now)
         if problems:
             raise CommissioningRefused("; ".join(problems))
+
+
+def configured_quote_size(
+    path: Path = RUNTIME_QUOTE_SIZE_PATH,
+) -> Decimal:
+    """Read the restart-scoped quote size used by operator diagnostics."""
+
+    if not path.exists():
+        return DEFAULT_QUOTE_SIZE
+    raw = path.read_text(encoding="utf-8").strip()
+    try:
+        size = Decimal(raw)
+    except Exception as exc:
+        raise CommissioningRefused(
+            f"runtime quote size is invalid: {raw!r}") from exc
+    if (not size.is_finite()
+            or size != size.to_integral_value()
+            or not MIN_QUOTE_SIZE <= size <= MAX_QUOTE_SIZE):
+        raise CommissioningRefused(
+            "runtime quote size must be a whole number from 5 to 10")
+    return size

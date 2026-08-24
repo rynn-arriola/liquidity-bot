@@ -5,8 +5,9 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 TARGET=${1:-auto}
-if [ "$#" -gt 1 ]; then
-    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto]"
+QUOTE_SIZE=${2:-}
+if [ "$#" -gt 2 ]; then
+    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE]"
     exit 2
 fi
 
@@ -30,6 +31,22 @@ if [ -n "$(runner_pids)" ] || [ -n "$(supervisor_pids)" ]; then
     echo "REFUSED: liquidity commissioning is already running"
     exit 2
 fi
+
+mkdir -p data logs
+if [ -z "$QUOTE_SIZE" ]; then
+    if [ -f data/commissioning_quote_size ]; then
+        QUOTE_SIZE=$(tr -d '[:space:]' < data/commissioning_quote_size)
+    else
+        QUOTE_SIZE=5
+    fi
+fi
+case "$QUOTE_SIZE" in
+    5|6|7|8|9|10) ;;
+    *)
+        echo "REFUSED: quote size must be a whole number from 5 to 10"
+        exit 2
+        ;;
+esac
 if [ ! -x .venv/bin/python ]; then
     echo "REFUSED: .venv/bin/python is missing"
     exit 2
@@ -40,11 +57,11 @@ if [ ! -f ../maker-lab/credentials.py ] \
     exit 2
 fi
 
-mkdir -p data logs
-setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" \
+printf '%s\n' "$QUOTE_SIZE" > data/commissioning_quote_size
+setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" \
     >> logs/supervisor.log 2>&1 < /dev/null &
 
-echo "starting one-contract commissioning target=$TARGET"
+echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE"
 for _ in $(seq 1 20); do
     sleep 1
     [ -n "$(runner_pids)" ] && break

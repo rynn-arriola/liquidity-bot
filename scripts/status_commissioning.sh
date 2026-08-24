@@ -15,6 +15,11 @@ maker=$(ps -eo pid=,comm=,args= \
     || echo "liquidity supervisor: stopped"
 [ -n "$runner" ] && echo "liquidity runner: $runner" \
     || echo "liquidity runner: stopped"
+if [ -f data/commissioning_quote_size ]; then
+    echo "configured quote size: $(tr -d '[:space:]' < data/commissioning_quote_size)"
+else
+    echo "configured quote size: 5 (default)"
+fi
 
 echo
 echo "--- commissioning log ---"

@@ -61,8 +61,9 @@ Gate: a multi-hour dry run produces no path where unmatched inventory can outliv
 - Whole-account flat and open-order reconciliation before arming
 - One local process lease and fresh private-stream state
 - All executable sports markets joined to their rewards; one selected market at a time for commissioning
-- 10 contracts per quote across at most 20 bound markets for commissioning
-  (5 -> 10 on 2026-08-20; earlier text read "exactly one contract per quote")
+- 5 contracts per quote by default across at most 20 bound markets for
+  commissioning. Size is restart-scoped and bounded to whole values 5-10;
+  its early-exit, market-exposure and execution-fee caps derive automatically.
 - Pregame only
 - Detached supervision, persisted recovery-only restart, and graceful operator
   stop

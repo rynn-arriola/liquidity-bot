@@ -20,14 +20,14 @@ These are implementation requirements, not suggestions.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
-    maker-lab stopped. Size and breadth are **10 contracts per quote across at
-    most 20 concurrently bound markets** (5 -> 10 on 2026-08-20 by operator
-    decision; earlier text read one contract and eight markets).
-    `max_early_exit_loss_usd` doubled 4 -> 8 alongside it so the early-cross
-    cap keeps its meaning in contract terms, and the loss stops deliberately
-    did NOT move -- they bound the account, not the position. Both are enforced by `CommissioningConfig`,
-    which refuses to arm if they are changed, so raising either remains a
-    deliberate authorization rather than a config edit.
+    maker-lab stopped. Size and breadth are **5 contracts per quote by default
+    across at most 20 concurrently bound markets**. Quote size is a whole,
+    restart-scoped value bounded to 5-10; it returned 10 -> 5 on 2026-08-24.
+    Breadth and the six-hour selection horizon did not change. Early-exit loss
+    (`0.8 × size`), per-market exposure (`9 × size`) and the session execution-
+    fee cap (`0.30 × size`) are computed properties, not independent knobs, so
+    they cannot drift from quantity. The account loss stops deliberately do
+    not move -- they bound the account, not the position.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
     invariant 57 but was **disproved** -- 29 subscriptions were later sustained
@@ -196,7 +196,7 @@ These are implementation requirements, not suggestions.
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
 57. **Superseded 2026-08-16 — kept because it was used as grounds not to
-    investigate.** The live limits are 20 markets and 10 contracts per quote
+    investigate.** The live limits are 20 markets and currently 5 contracts per quote
     (invariant 13). The per-connection reasoning below is still correct; what
     was wrong is treating one connection's cap as the account's. Connections
     are independent and each carries its own quota, and 29 subscriptions were

@@ -1,9 +1,10 @@
-"""Explicitly armed one-contract commissioning runner.
+"""Explicitly armed liquidity commissioning runner.
 
 The economic evidence gate remains red. This runner exists only for the
-operator-accepted experiment and is mechanically constrained to one selected
-rewarded market at a time, one contract per quote, an operator-controlled stop, a $5
-normal session stop, and a $15 emergency hard stop.
+operator-accepted experiment and is mechanically constrained to 20 selected
+rewarded markets, a restart-scoped whole quote size from 5 to 10 contracts, an
+operator-controlled stop, a $50 normal session stop, and a $60 emergency hard
+stop.
 
 Importing this module has no side effect. Exchange access is possible only
 through ``main()`` with all explicit arming acknowledgements.
@@ -58,7 +59,6 @@ from .market_state import MarketState, RetiredMarket
 from .market_selector import (
     RewardMarketSelection,
     RewardMarketSelector,
-    RewardSelectionPolicy,
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
@@ -171,7 +171,7 @@ RECOVERABLE_STRATEGY_CRITICALS = frozenset({
     # The exit book was too thin to cross before the kickoff deadline. Holding
     # is the correct response and the pre-kickoff flatten still forces the
     # position out, so ending the session here would trade a bounded
-    # one-contract hold for hours of lost quoting across every other market.
+    # one-owner hold for hours of lost quoting across every other market.
     "hard_exit_deferred_thin_book",
     # Reachable only while flat, and repaired by refetching the book and
     # rebinding the singleton stream scope. Every remaining critical implies
@@ -265,22 +265,7 @@ class CommissioningRunner:
         if self.reward_selector is None and config.auto_select_reward_markets:
             self.reward_selector = RewardMarketSelector(
                 self.gateway,
-                RewardSelectionPolicy(
-                    quote_size=float(config.quote_size),
-                    projection_horizon_seconds=(
-                        config.reward_projection_horizon_seconds),
-                    projection_haircut=float(config.reward_projection_haircut),
-                    exit_depth_haircut=.5,
-                    exit_cost_safety_multiple=float(
-                        config.reward_cost_safety_multiple),
-                    max_book_candidates=(
-                        config.max_selection_book_candidates),
-                    minimum_entry_spread=float(
-                        config.minimum_entry_spread),
-                    minimum_entry_price=float(config.minimum_entry_price),
-                    enforce_reward_cost_gate=(
-                        config.enforce_reward_cost_gate),
-                ),
+                config.reward_selection_policy(),
                 fill_hazard_model=self.fill_hazard_model,
             )
         self.account = AsyncAccountSnapshotGateway(
@@ -5283,6 +5268,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         maker_lab_stopped_confirmed=args.maker_lab_stopped,
         arm_live=args.arm_live,
         auto_select_reward_markets=auto_select,
+        quote_size=Decimal(args.quote_size),
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
@@ -5318,7 +5304,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="One-contract Polymarket liquidity commissioning runner")
+        description="Polymarket liquidity commissioning runner")
     market = parser.add_mutually_exclusive_group(required=True)
     market.add_argument("--market-slug")
     market.add_argument(
@@ -5334,6 +5320,10 @@ def main() -> int:
     parser.add_argument("--accept-one-contract-risk", action="store_true")
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
+    parser.add_argument(
+        "--quote-size", type=int, choices=range(5, 11), default=5,
+        help="whole contracts per quote; size-coupled risk limits derive automatically",
+    )
     args = parser.parse_args()
     try:
         result = asyncio.run(_run(args))

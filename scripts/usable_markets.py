@@ -34,12 +34,14 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.market_selector import (  # noqa: E402
     SUPPORTED_EVENT_PERIODS, RewardMarketSelector, RewardSelectionPolicy)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.rewards import select_applicable_period  # noqa: E402
 
-MAX_MARKETS = 20          # pinned by assert_authorized; see commissioning.py
+CONFIG = CommissioningConfig.diagnostic_defaults()
+MAX_MARKETS = CONFIG.max_markets
 
 
 async def main() -> int:
@@ -50,7 +52,7 @@ async def main() -> int:
 
     now = datetime.now(timezone.utc)
     gateway = AsyncReadOnlyGateway(client_from_environment())
-    policy = RewardSelectionPolicy()
+    policy = CONFIG.reward_selection_policy()
     selection = await RewardMarketSelector(gateway, policy=policy).select(now=now)
 
     horizon_h = policy.selection_horizon_seconds / 3600.0

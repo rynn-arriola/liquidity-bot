@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from tempfile import TemporaryDirectory
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from liquidity_bot.commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
     CommissioningRefused,
+    configured_quote_size,
     next_six_am_new_york,
 )
 
@@ -36,15 +39,11 @@ class CommissioningTests(unittest.TestCase):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
         self.assertIsNone(self.authorized().assert_authorized(now=now))
         self.assertTrue(self.authorized().manual_stop_only)
-        # Ten from 2026-08-20. What this test guards is that the envelope is
-        # LOCKED, not any particular value: `assert_authorized` refuses to arm
-        # if these move, so a size change is a deliberate authorization rather
-        # than a config edit.
-        self.assertEqual(str(self.authorized().quote_size), "10")
-        # Doubled with size so it keeps its meaning -- a $4 cap at ten
-        # contracts sits below the median crossed loss and would refuse almost
-        # every early exit. See commissioning.py.
-        self.assertEqual(str(self.authorized().max_early_exit_loss_usd), "8")
+        # Five is the restart-scoped default after the 2026-08-24 rollback.
+        self.assertEqual(str(self.authorized().quote_size), "5")
+        # Returned with size so it keeps its contract-level meaning.
+        self.assertEqual(
+            self.authorized().max_early_exit_loss_usd, Decimal("4.0"))
         # Operator decision 2026-08-23, alongside restoring the six-hour
         # selection horizon: session $40 -> $50, ceiling $45 -> $60. The
         # per-market stop deliberately stayed at $40, so it now binds before
@@ -60,7 +59,7 @@ class CommissioningTests(unittest.TestCase):
         # losing $40" and "never hold more than $40 of worst case" are
         # different statements and cannot share a number once size grows.
         self.assertEqual(
-            str(self.authorized().max_market_exposure_usd), "90")
+            str(self.authorized().max_market_exposure_usd), "45")
         self.assertEqual(
             str(self.authorized().max_portfolio_exposure_usd), "340")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
@@ -116,6 +115,11 @@ class CommissioningTests(unittest.TestCase):
             self.authorized(
                 minimum_entry_spread=Decimal("0.01")).assert_authorized(
                     now=overnight)
+        for invalid_size in (Decimal("4"), Decimal("11"), Decimal("5.5")):
+            with self.subTest(invalid_size=invalid_size), self.assertRaisesRegex(
+                    CommissioningRefused, "whole number from 5 to 10"):
+                self.authorized(quote_size=invalid_size).assert_authorized(
+                    now=overnight)
 
     def test_auto_selection_caps_markets_at_the_measured_ceiling(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -133,9 +137,9 @@ class CommissioningTests(unittest.TestCase):
         # because a held position must stay exitable -- N/4 seconds against a
         # 5s staleness bound puts 20 at the limit.
         self.assertEqual(config.max_markets, 20)
-        # Size per quote is unchanged. Breadth expands, exposure per market
-        # does not.
-        self.assertEqual(config.quote_size, Decimal("10"))
+        # Size per quote is independent of breadth. The 20-slot ceiling stays
+        # unchanged by the five-contract rollback.
+        self.assertEqual(config.quote_size, Decimal("5"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
         # Only ~33 markets survive the day_of and catalog-spread filters, so
         # 25 left a blind spot for no reason. 100 covers the whole pool.
@@ -157,6 +161,52 @@ class CommissioningTests(unittest.TestCase):
                 auto_select_reward_markets=True,
                 market_selection_refresh_seconds=60,
             ).assert_authorized(now=now)
+
+    def test_live_and_diagnostic_selection_share_the_authorized_policy(self):
+        live = self.authorized().reward_selection_policy()
+        diagnostic_config = CommissioningConfig.diagnostic_defaults(
+            quote_size=Decimal("5"))
+        diagnostic = diagnostic_config.reward_selection_policy()
+
+        self.assertEqual(diagnostic, live)
+        self.assertEqual(diagnostic.quote_size, 5.0)
+        self.assertEqual(diagnostic.selection_horizon_seconds, 21600.0)
+        self.assertEqual(diagnostic.max_book_candidates, 100)
+        self.assertEqual(diagnostic.exit_cost_safety_multiple, 1.0)
+        self.assertTrue(diagnostic_config.blockers(now=datetime(
+            2026, 8, 13, 5, 0, tzinfo=timezone.utc)))
+
+    def test_size_coupled_limits_derive_for_every_authorized_size(self):
+        for size in range(5, 11):
+            with self.subTest(size=size):
+                config = self.authorized(quote_size=Decimal(size))
+                config.assert_authorized(now=datetime(
+                    2026, 8, 13, 5, 0, tzinfo=timezone.utc))
+                self.assertEqual(
+                    config.max_early_exit_loss_usd, Decimal(size) * Decimal("0.8"))
+                self.assertEqual(
+                    config.max_market_exposure_usd, Decimal(size) * Decimal("9"))
+                self.assertEqual(
+                    config.max_session_execution_fees_usd,
+                    Decimal(size) * Decimal("0.30"))
+                self.assertEqual(
+                    config.reward_selection_policy().quote_size, float(size))
+                self.assertEqual(config.max_markets, 20)
+
+    def test_runtime_size_file_drives_diagnostics_and_rejects_bad_values(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "quote_size"
+            path.write_text("7\n", encoding="utf-8")
+            self.assertEqual(configured_quote_size(path), Decimal("7"))
+            self.assertEqual(
+                CommissioningConfig.diagnostic_defaults(
+                    runtime_quote_size_path=path).quote_size,
+                Decimal("7"),
+            )
+            path.write_text("11\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                    CommissioningRefused, "whole number from 5 to 10"):
+                configured_quote_size(path)
 
 
 if __name__ == "__main__":

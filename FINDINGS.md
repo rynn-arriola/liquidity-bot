@@ -20,6 +20,77 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Five contracts reduces fill exposure without reducing the twenty-slot scheduler
+
+Established from the size-scaling analysis already recorded below, the live
+configuration dependency graph, and the 2026-08-24 pre-deployment test run.
+The operator chose to return quote size from 10 to 5 contracts because size is
+leverage, not edge: the prior measurement found reward and unwind cost both
+scaling approximately linearly. Smaller orders therefore reduce the dollars at
+risk in a fill but are not expected to improve the reward-to-loss ratio by
+themselves.
+
+The current size-dependent values are now:
+
+| setting | before | after | reason |
+|---|---:|---:|---|
+| `quote_size` | 10 | 5 | halve each resting order and fill |
+| `max_early_exit_loss_usd` | $8 | $4 | preserve the size-5 crossed-loss calibration |
+| `max_market_exposure_usd` | $90 | $45 | preserve nine-times per-market headroom |
+| `max_session_execution_fees_usd` | $1.50 | $1.50 | old size-10 value was not scaled; now `0.30 × size` |
+
+The initial patch still represented those first three values as independently
+editable fields. The operator's follow-up requested one dynamic setting, which
+exposed a fourth dependency: the execution-fee cap was documented as enough
+for 20 peak-fee exits but had stayed $1.50 at size 10, enough for only 10. Quote
+size is now the only setting. Whole values 5-10 are accepted at startup, and
+the other three values are computed properties (`0.8 ×`, `9 ×`, `0.30 ×`).
+The current persisted/default size is 5. It cannot hot-change inside a session.
+
+The account-level limits remain $40 per market, $50 per session and $60 marked
+equity because they protect the account rather than one order. Portfolio
+exposure remains $340 for the same reason.
+
+**The twenty-slot flow does not change.** `max_markets` remains 20, the private
+stream remains split 8 + 8 + 4, the REST ceiling remains 4 requests/second,
+and the selection horizon remains 21,600 seconds (six hours). The regression
+test asserts both `max_markets == 20` and `quote_size == 5`; the isolated
+production-environment suite exercised all twenty recovery owners and passed
+551 tests after the final change.
+
+One deliberate selector consequence must not be misdiagnosed as a scheduler
+failure: catalog admission requires `minimum_trade_qty <= quote_size`. A market
+whose venue minimum is 6-10 contracts qualified at size 10 and will not qualify
+at size 5. That can reduce the viable universe, but it cannot reduce the slot
+ceiling. Diagnose the distinction with `scripts/usable_markets.py`: compare its
+viable count with the venue's distinct quoted markets and the configured 20.
+
+The bot was gracefully stopped before this change. Its final record at
+2026-08-24T15:52:48Z reported `flat: true`, and neither runner nor supervisor
+remained alive.
+
+## The slot diagnostics were selecting with different parameters than the live runner
+
+Established by tracing all `RewardSelectionPolicy` constructors during the
+five-contract review. The live runner built its selector from
+`CommissioningConfig`, but `scripts/usable_markets.py`, `scripts/dashboard.py
+--markets`, and `scripts/period_mix.py` called the generic constructor. Before
+this fix that meant diagnostics used 1 contract, 25 detailed books and a 2x
+cost multiple while production used the configured size, 100 books and 1x.
+The economic gate is currently disabled, so the 2x difference did not remove
+live opportunities, but quote-size minimum-quantity admission and the 25-book
+cap could make the diagnostic funnel disagree with the runner.
+
+`CommissioningConfig.reward_selection_policy()` now owns this mapping. The
+runner and all three operator diagnostics call it, while
+`diagnostic_defaults()` deliberately carries false authorization flags and
+cannot arm trading. The launcher persists the chosen restart-scoped size under
+`data/`, and diagnostics read it. Regression tests prove the live and
+diagnostic policies are equal and pin the chosen size, six-hour horizon, 100
+candidates and the 1x factor.
+
+---
+
 ## Private recovery resumes the process but mass-cancelled owners time out and remain barred for 30 minutes
 
 Established from the live 2026-08-24 runner, its ledger and the exact two

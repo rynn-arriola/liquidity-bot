@@ -38,14 +38,15 @@ config overrides, so the dataclass defaults are what execute):
 
 | limit | value |
 |---|---|
-| quote size | 10 contracts |
+| quote size | 5 contracts (restart-scoped, allowed 5-10) |
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
-| session loss stop | $40 |
-| emergency hard stop | $45 marked equity |
+| session loss stop | $50 |
+| emergency hard stop | $60 marked equity |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
-| early-exit cross cap | $8 |
+| early-exit cross cap | $4 at size 5 (`0.8 × size`) |
+| per-market open exposure | $45 at size 5 (`9 × size`) |
 | REST budget | 4 requests/second |
 
 Plus an operator-controlled graceful stop. **These numbers have moved several
@@ -170,7 +171,7 @@ Do not run this with another process using the same API key. A future controlled
 trial requires an exclusive handoff: maker-lab stopped, one local process lease,
 and a whole-account flat/open-order reconciliation before any new risk.
 
-## One-contract commissioning
+## Liquidity commissioning
 
 Automatic selection is the default. It bulk-loads active sports metadata,
 requires the venue's `SPORTS_MARKET_TYPE_MONEYLINE` structure enum, filters to
@@ -189,11 +190,16 @@ an inventory-reducing quote or emergency exit. Catalog best bid/ask values are
 only a read-saving prefilter; the fresh full book is authoritative.
 
 The server launcher remains deliberately explicit and also retains a static
-market diagnostic mode:
+market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
+10; when supplied as the second argument it is persisted under `data/` so the
+supervisor and read-only diagnostics use the same value. Size never changes
+under live orders. The early-exit cap, per-market exposure and session fee cap
+derive automatically from it:
 
 ```bash
 ./scripts/start_commissioning.sh
 ./scripts/start_commissioning.sh MARKET-SLUG
+./scripts/start_commissioning.sh auto 7       # persist and start at size 7
 ./scripts/status_commissioning.sh
 ./scripts/stop_commissioning.sh
 ```

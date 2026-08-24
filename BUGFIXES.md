@@ -31,6 +31,39 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
+### FIXED — slot diagnostics drifted from the live selector configuration
+
+**Symptom.** The operator command intended to answer why fewer than twenty
+slots were quoting could report a different viable universe than the runner.
+That is especially dangerous during a quote-size change: a venue minimum
+quantity can pass one model and fail the other, making healthy slot behavior
+look like another scheduler defect.
+
+**Mechanism.** The live runner explicitly copied selection settings from
+`CommissioningConfig`, while `usable_markets.py`, dashboard `--markets`, and
+`period_mix.py` silently used `RewardSelectionPolicy` defaults: size 1, 25 book
+candidates and a 2x cost factor instead of the live size, 100 candidates and
+1x. In addition, authorization locked quote size and market exposure but did
+not reject drift in `max_early_exit_loss_usd`, despite the safety documentation
+claiming the whole size tuple was locked. A second mismatch existed in the
+execution-fee cap: $1.50 covers twenty peak-fee exits at size 5 but only ten at
+size 10, although `max_taker_exit_orders` remained 20.
+
+**Fix.** `CommissioningConfig.reward_selection_policy()` is now the single
+mapping used by production and read-only diagnostics. Its diagnostic factory
+has false live-authorization flags, so sharing configuration cannot arm it.
+Quote size is now one persistent, restart-scoped setting bounded to whole
+values 5-10. Early-exit loss, per-market exposure and the execution-fee cap are
+computed from it, so there are no independent values left to drift. The
+launcher persists the chosen size for the supervisor and diagnostics; it
+refuses a change while a runner already exists. Tests cover every allowed
+size, both invalid boundaries, a fractional size, persistence, twenty slots,
+six hours, 100 candidates and identical live/diagnostic policy. Mutating each
+derived formula fails its regression, and the isolated server suite passes all
+551 tests.
+
+---
+
 ### FIXED AND DEPLOYED — daily P&L joined UTC trading to ET reward dates
 
 **Symptom.** The API's `2026-08-22` pending reward was presented beside the

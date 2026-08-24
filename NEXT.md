@@ -1,5 +1,25 @@
 # Next session — outstanding fixes
 
+## REVIEWED, AWAITING DEPLOYMENT: dynamic quote size, currently 5, without changing twenty slots
+
+The bot was gracefully stopped and proved flat at 15:52:48Z. The authorized
+current size is 5 contracts, producing a $4 maximum early-exit loss, $45
+per-market exposure and $1.50 execution-fee cap. Quote size is now a single
+persistent, restart-scoped whole setting from 5-10; those three limits derive
+automatically. `max_markets=20`, the 8 + 8 + 4 private-stream layout, six-hour
+selection horizon, 4 requests/second and $40/$50/$60 loss limits are unchanged.
+
+The review also fixed a diagnostic discrepancy: the runner and the three
+read-only selector tools now build policy from the same commissioning config.
+This matters because lowering size can deliberately exclude a venue market
+whose `minimum_trade_qty` is above 5; the diagnostic must apply the same rule
+before calling an empty slot defective. Each of the three derived formulas
+fails its mutation check, 52 focused tests pass locally, and all 551 tests pass
+in an isolated copy using the production environment. Deployment and a flat-gated
+restart remain. Start at another reviewed size with
+`./scripts/start_commissioning.sh auto SIZE`; never change size under live
+orders.
+
 ## FIXED AND DEPLOYED WITHOUT RESTART: reward dates are ET, not UTC
 
 The earnings API groups reward at midnight America/New_York. Daily ledger

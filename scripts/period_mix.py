@@ -42,7 +42,7 @@ sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
-from liquidity_bot.market_selector import RewardSelectionPolicy  # noqa: E402
+from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 
 LEAGUE = re.compile(r"^aec-([a-z0-9]+)-")
@@ -60,7 +60,7 @@ EARNING_SHARE = {
 
 async def main() -> int:
     gateway = AsyncReadOnlyGateway(client_from_environment())
-    policy = RewardSelectionPolicy()
+    policy = CommissioningConfig.diagnostic_defaults().reward_selection_policy()
     now = datetime.now(timezone.utc)
     window = now + timedelta(seconds=policy.selection_horizon_seconds)
 

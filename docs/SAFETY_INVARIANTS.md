@@ -249,8 +249,9 @@ These are implementation requirements, not suggestions.
     distinct retirements than `max_markets` is systemic, not unlucky, and stops
     the session.
 64. Stream visibility and order ambiguity have different scope. A private
-    reconnect may resume unaffected markets only after complete REST order and
-    position snapshots plus fresh private state. An unresolved intent,
+    reconnect, or a both-stream recovery after a failed active-set bind, may
+    resume unaffected markets only after complete REST order and position
+    snapshots plus fresh private state. An unresolved intent,
     `UNKNOWN_ABSENT` row, or failed order read positively owned by one market
     keeps that market's execution gate closed until terminal proof; it does not
     make unrelated owners unknown or require their individual reads on a
@@ -261,8 +262,11 @@ These are implementation requirements, not suggestions.
     remain mandatory on their normal cadence. Absence is never cancellation.
     Missing,
     conflicting, unowned, or out-of-scope ownership remains account-wide
-    terminal. A bounded reconnect failure never proves flat: only shutdown's
-    independent whole-account proof may authorize restartable exit `5`.
+    terminal. Normal active-set changes remain account-wide strict; scoped
+    order reads are a recovery-only exception after global cancellation has
+    already been requested. Private and both-stream reconnect loops are
+    bounded, but exhaustion never proves flat: only shutdown's independent
+    whole-account proof may authorize restartable exit `5`.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST

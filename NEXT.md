@@ -1,5 +1,38 @@
 # Next session — outstanding fixes
 
+## READY TO DEPLOY: dual-stream recovery must not wait on one absent cancel
+
+The 2026-08-24 21:31Z top-up bind failed while five owned GET-by-ID reads
+returned NotFound. Both streams closed as designed, but the recovery path then
+required terminal proof for every cancel and retried indefinitely. Four
+acknowledged CANCEL intents remained `UNKNOWN_ABSENT`; two position rows were
+nonzero. The process was alive but all twenty bound markets were dark.
+
+The local repair brings this sibling path in line with private recovery:
+cancel all positively-known working orders, apply complete account snapshots,
+rebind both streams with scoped order reads, and let the existing per-market
+gate hold only ambiguous owners. Ordinary binds remain strict. Genuine bind
+failure is capped at 12 attempts and never grants flatness or restartability.
+
+Review is complete: the production-shape ambiguous-cancel regression, the
+12-attempt failure regression, normal strict-bind coverage, prior private
+recovery tests, and all twenty-slot tests pass. Full local suite: **573 tests
+in 36.801s**. Terminal quarantine, ignored scoped reads and an omitted retry
+bound were each mutation-tested and each made its regression fail.
+
+Before deployment, prove the live account state independently. The last
+inspection had nonzero positions and unresolved cancels, so do not treat zero
+working orders or process disappearance as flat. Deploy/restart only through
+the existing shutdown safety path, then accept on:
+
+1. deployed commit/hash and all production tests;
+2. fresh private and market streams with 20 bound slots;
+3. either zero ambiguous owners, or a
+   `[bound-stream-recovery] resumed=yes scoped_ambiguous=N` line followed by
+   actions from unaffected markets only;
+4. no new building order for any unresolved/`UNKNOWN_ABSENT` owner;
+5. venue/ledger agreement on positions, working orders and unresolved state.
+
 ## DEPLOYED AND RESTARTED: size 10 with $70/$80 account stops
 
 The operator authorized quote size 10, a $70 realized session stop and an $80

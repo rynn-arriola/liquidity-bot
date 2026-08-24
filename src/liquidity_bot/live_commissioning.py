@@ -116,6 +116,7 @@ MAX_RECOVERY_ATTEMPTS = 12
 # process dormant forever. Shutdown still decides whether this is restartable:
 # flat -> exit 5, ambiguous/open state -> exit 3. Never infer flat from the cap.
 MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
+MAX_BOUND_STREAM_RECOVERY_ATTEMPTS = 12
 
 RETIRED_EXIT_RETRY_SECONDS = 60
 
@@ -3854,8 +3855,16 @@ class CommissioningRunner:
             blockers.append("whole-account execution state is not known")
         return tuple(blockers)
 
-    async def _open_streams_for_active_market(self) -> None:
-        """Bind fresh public/private streams and re-prove account state."""
+    async def _open_streams_for_active_market(
+        self, *, strict_order_markets: frozenset[str] | None = None,
+    ) -> None:
+        """Bind fresh public/private streams and re-prove account state.
+
+        Normal active-set changes remain account-wide strict. Recovery may
+        pass an empty set after it has already requested cancellation for all
+        known quotes: fresh account snapshots then restore the session while
+        each unresolved order's existing per-market gate contains its owner.
+        """
 
         # Close what we are about to drop. `_rotate_reward_market_inner` closes
         # the old pair itself, but the top-up path did not, so every top-up
@@ -3880,7 +3889,8 @@ class CommissioningRunner:
             await private.start(list(self.active_slugs))
             self.gate.on_connect()
             await market.start(list(self.active_slugs))
-            await self._rest_reconcile(self._now())
+            await self._rest_reconcile(
+                self._now(), strict_order_markets=strict_order_markets)
             await self._wait_for_initial_private_state()
         except Exception:
             self.gate.on_disconnect()
@@ -4355,11 +4365,40 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
-                await self._quarantine_working_orders()
-                await self._open_streams_for_active_market()
+                # Terminal proof can lag for one cancelled quote even after a
+                # complete snapshot stops listing it. That ambiguity is owned
+                # by one market; requiring it here held every market dormant
+                # after the 2026-08-24 failed top-up bind. Request every known
+                # cancel, then restore both streams with non-strict order reads.
+                # The fresh private-state gate still blocks each ambiguous
+                # owner, while unaffected markets become safe to quote again.
+                await self._quarantine_working_orders(require_terminal=False)
+                await self._open_streams_for_active_market(
+                    strict_order_markets=frozenset())
+                ambiguous_markets = sorted({
+                    str(row["market_slug"])
+                    for row in (
+                        *self.ledger.unresolved_intents(),
+                        *self.ledger.absent_orders(),
+                    )
+                    if str(row["market_slug"] or "").strip()
+                })
+                if ambiguous_markets:
+                    print(
+                        f"[bound-stream-recovery] at={self._now().isoformat()} "
+                        f"resumed=yes scoped_ambiguous={len(ambiguous_markets)} "
+                        f"markets={','.join(ambiguous_markets)}",
+                        flush=True,
+                    )
                 await self.notifier.send_async(
                     "✅ Liquidity Bot rebound both streams; REST and fresh "
-                    "private state passed. Quoting may resume.")
+                    "private state passed. "
+                    + (
+                        "Quoting may resume on unaffected markets; "
+                        f"{len(ambiguous_markets)} market(s) remain scoped "
+                        "until terminal order proof."
+                        if ambiguous_markets else "Quoting may resume."
+                    ))
                 self._runtime_error_counts.pop("bound_streams", None)
                 return None
             except RuntimeInvariantViolation as invariant:
@@ -4371,6 +4410,17 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
+                if attempt >= MAX_BOUND_STREAM_RECOVERY_ATTEMPTS:
+                    exhausted = AdapterError(
+                        "bound stream recovery exhausted "
+                        f"{MAX_BOUND_STREAM_RECOVERY_ATTEMPTS} attempts: "
+                        f"{type(recovery_exc).__name__}: {recovery_exc}")
+                    await self._report_runtime_error(
+                        "bound_streams_terminal", exhausted, attempt)
+                    # Shutdown determines restartability only after proving the
+                    # whole account flat. This cap never converts ambiguity or
+                    # inventory into a restartable result.
+                    return "runner_failure:bound_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
     async def _reconcile_pending_hard_exit(

@@ -20,6 +20,53 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## A failed top-up bind can look like a healthy twenty-slot process while every slot is stopped
+
+Established from the live 2026-08-24 21:31Z incident by comparing the process
+tree, commissioning log, and read-only ledger. The supervisor and runner were
+both alive, so process health alone was a false signal. The decisive sequence
+was:
+
+1. `[top-up]` changed the active set;
+2. `_open_streams_for_active_market` failed during REST reconciliation and
+   deliberately closed both newly-created streams;
+3. `[runtime-recovery] component=bound_streams attempt=N` kept increasing;
+4. `[quarantine] called_by=_recover_bound_streams` repeated, with no later
+   `[bound-stream-recovery] ... resumed=yes` and no new `[action]` lines;
+5. the ledger contained acknowledged CANCEL intents joined to
+   `UNKNOWN_ABSENT / missing_from_complete_snapshot` orders.
+
+That combination means the 20-slot scheduler is not merely between orders:
+the whole active set is waiting inside dual-stream recovery. `Working orders =
+0` does not disprove it and must not be read as flat; the same inspection found
+two nonzero position rows (+2.7700 and +0.3200). `Viable now`, slot count and
+process PID likewise cannot distinguish this state.
+
+For the next investigation, use this compact signature first:
+
+```text
+[top-up] or failed active-set bind
+component=bound_streams attempt increasing
+[quarantine] called_by=_recover_bound_streams
+ACKNOWLEDGED CANCEL + UNKNOWN_ABSENT/missing_from_complete_snapshot
+no [bound-stream-recovery] resumed=yes and no later [action]
+```
+
+The cause was not the queue-depletion measurement. Its isolated public-trade
+socket was absent from the failing stack; the failure ran through top-up,
+dual-stream bind, REST reconcile and terminal quarantine. It was also not a
+reduction from 20 slots: twenty markets remained bound, but none could pass an
+account visibility gate while both trading streams were closed.
+
+The reviewed repair makes `[bound-stream-recovery] resumed=yes
+scoped_ambiguous=N markets=...` the positive recovery marker. After that line,
+each listed owner must remain `state_known=False` until positive terminal
+proof, while other owners may produce `[action]` lines. If attempts reach 12
+without that marker, the runner returns a bounded failure; shutdown still has
+to prove the entire account flat before a supervisor restart is authorized.
+
+---
+
 ## Ten contracts and the $70/$80 account stops do not alter the twenty-slot flow
 
 Established from the 2026-08-24 operator-authorized configuration review and

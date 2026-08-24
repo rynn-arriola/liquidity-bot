@@ -31,6 +31,54 @@ Ground rules that came out of these:
 
 ## 2026-08-24
 
+### FIXED LOCALLY — failed active-set bind repeated strict quarantine and held every slot dark
+
+**Symptom.** At 21:31:29Z a normal top-up released an expired market and
+attempted to bind the replacement active set. At 21:32:06Z five owned order
+reads returned `NotFoundError`; the replacement bind closed both old streams,
+failed, and set the existing rebind flag. The supervisor and runner remained
+alive, but no market could quote. `[runtime-recovery] component=bound_streams`
+kept increasing (observed through attempt 12) while working-order count fell
+to zero. The ledger still held four acknowledged CANCEL intents whose orders
+were `UNKNOWN_ABSENT / missing_from_complete_snapshot`, plus two nonzero
+positions. Zero venue working orders was therefore not flat proof.
+
+**Mechanism.** The 2026-08-23 private-stream repair already reconnects fresh
+visibility without requiring every positively-owned cancel to become terminal;
+the unresolved owner alone stays behind its per-market execution gate. The
+separate `_recover_bound_streams` path still called terminal global quarantine
+and then a default-strict active-set bind. A complete order snapshot correctly
+does not interpret absence as cancellation, so one lagging GET-by-ID answer
+made both steps fail forever. This was an uncovered sibling path, not a
+regression in the twenty-slot scheduler or the measurement-only queue socket.
+
+**Fix.** Both-stream recovery now requests cancellation for every order with
+positive working evidence, applies complete account order and position
+snapshots, and opens fresh private and market streams using explicitly scoped
+order reads. Fresh private session state is still mandatory. Each unresolved
+or `UNKNOWN_ABSENT` owner remains unable to build risk; unaffected owners may
+resume. Normal top-ups, rotation, startup, shutdown and default reconciliation
+remain account-wide strict. Missing, conflicting, unowned or out-of-scope
+ownership remains terminal, and absence is never cancellation.
+
+A permanently failing dual bind is now capped at 12 attempts. Exhaustion
+returns `runner_failure:bound_stream_recovery_exhausted`; only shutdown's
+independent whole-account flat proof can make that restartable. An ambiguous
+order or position therefore cannot be converted into a flat claim by the cap.
+
+**Review and proof.** The production-shape regression cancels an OPEN order,
+hides it from a complete snapshot, makes GET-by-ID return NotFound, and proves
+that its owner stays unknown while a neighboring market becomes known after
+both streams rebind. It also proves zero new order creation and zero foreign-ID
+reads on that scoped bind. A second test proves exactly 12 failed rebinds end
+without claiming flat; an existing test plus a new assertion prove normal
+active-set binds remain strict. All **573 tests pass locally in 36.801s**.
+Three deliberate mutations were killed: terminal-only quarantine, discarding
+the scoped-bind argument, and removing the retry cap each fails its dedicated
+regression. Deployment and live restart acceptance are still pending.
+
+---
+
 ### FIXED AND DEPLOYED — slot diagnostics drifted from the live selector configuration
 
 **Symptom.** The operator command intended to answer why fewer than twenty

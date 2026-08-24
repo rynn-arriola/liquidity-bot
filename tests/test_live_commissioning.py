@@ -23,6 +23,7 @@ from liquidity_bot.discord_summary import GRAY, RED
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
+    MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
     MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS,
     MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
@@ -4401,6 +4402,96 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_bound_recovery_resumes_other_markets_while_cancel_is_ambiguous(self):
+        """A failed active-set bind must not make one absent cancel global.
+
+        This is the 2026-08-24 live failure: both sockets were deliberately
+        closed for a top-up, the replacement bind failed while GET-by-id
+        lagged, and strict quarantine then held all twenty markets dark.
+        """
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self._complete_neighbour_frame(runner)
+        runner.ledger.apply_order_event(
+            "ws", "owned-before-failed-bind",
+            OrderState(
+                client_order_id="liquidity-before-failed-bind",
+                exchange_order_id="exchange-before-failed-bind",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        client.orders.rows["exchange-before-failed-bind"] = {
+            "id": "exchange-before-failed-bind",
+            "clientOrderId": "liquidity-before-failed-bind",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+        hidden: set[str] = set()
+
+        async def accepted_but_not_terminal(order_id, payload):
+            client.orders.cancel_calls.append((order_id, payload))
+            hidden.add(order_id)
+
+        async def active_orders(_params):
+            return {"orders": [
+                row for order_id, row in client.orders.rows.items()
+                if order_id not in hidden
+            ]}
+
+        client.orders.cancel = accepted_but_not_terminal
+        client.orders.list = active_orders
+        original_retrieve = client.orders.retrieve
+        lagged_reads = 0
+
+        async def retrieve_with_consistency_lag(order_id):
+            nonlocal lagged_reads
+            if order_id in hidden:
+                lagged_reads += 1
+                raise AdapterError(
+                    f"GET /v1/order/{order_id} failed: NotFoundError")
+            return await original_retrieve(order_id)
+
+        client.orders.retrieve = retrieve_with_consistency_lag
+        runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+
+        # Keep the pre-fix infinite retry from hanging the regression test.
+        async def stop_after_failed_attempt(_seconds):
+            runner.request_stop("regression_retry")
+
+        runner.sleep = stop_after_failed_attempt
+        stop = await runner._recover_bound_streams(
+            AdapterError("active-set bind failed"))
+
+        self.assertIsNone(stop)
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertEqual(len(runner.ledger.unresolved_intents("market-one")), 1)
+        self.assertEqual(len(runner.ledger.absent_orders("market-one")), 1)
+        self.assertFalse(runner._frame(runner._now(), "market-one").state_known)
+        self.assertTrue(runner._frame(runner._now(), "market-two").state_known)
+        self.assertTrue(runner.gate.session_ready(
+            runner.ledger, now=runner._now()))
+        self.assertEqual(
+            lagged_reads, 0,
+            "bound recovery must scope the owner without waiting on its id")
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_private_reconnect_failures_are_bounded_without_claiming_flat(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -4415,6 +4506,36 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner._runtime_error_counts["private_stream"],
             MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS,
         )
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_bound_reconnect_failures_are_bounded_without_claiming_flat(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.private_stream_factory = FailingPrivateStream
+
+        # If the bound is removed, fail quickly instead of hanging this test.
+        sleeps = 0
+
+        async def reject_an_extra_retry(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps >= MAX_BOUND_STREAM_RECOVERY_ATTEMPTS:
+                runner.request_stop("unbounded_bound_stream_recovery")
+
+        runner.sleep = reject_an_extra_retry
+        stop = await runner._recover_bound_streams(
+            AdapterError("active-set bind failed"))
+
+        self.assertEqual(
+            stop, "runner_failure:bound_stream_recovery_exhausted")
+        self.assertEqual(
+            runner._runtime_error_counts["bound_streams"],
+            MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
+        )
+        self.assertEqual(
+            sleeps, MAX_BOUND_STREAM_RECOVERY_ATTEMPTS - 1)
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -6563,10 +6684,18 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         runner = await self.armed(replacements=("market-three",))
         runner._streams_need_rebind = True
 
-        await runner._open_streams_for_active_market()
+        original_reconcile = runner._rest_reconcile
+        with patch.object(
+                runner, "_rest_reconcile",
+                new=AsyncMock(wraps=original_reconcile)) as reconcile:
+            await runner._open_streams_for_active_market()
 
         self.assertFalse(runner._streams_need_rebind)
         self.assertTrue(runner.gate.connected)
+        self.assertIsNone(
+            reconcile.await_args.kwargs["strict_order_markets"],
+            "ordinary active-set binds must retain account-wide strict reads",
+        )
         await runner.private_stream.close()
         await runner.market_stream.close()
 

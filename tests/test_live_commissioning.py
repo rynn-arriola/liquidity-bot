@@ -39,7 +39,9 @@ from liquidity_bot.market_selector import (
     SideOpportunity,
 )
 from liquidity_bot.market_state import MarketState
-from liquidity_bot.models import BookLevel, BookSnapshot, MarketIncentive, MarketMetadata
+from liquidity_bot.models import (
+    BookLevel, BookSnapshot, MarketIncentive, MarketMetadata, TradePrint,
+)
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 from liquidity_bot.reconciler import ActionKind, PlanAction, WorkingOrder
@@ -465,6 +467,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             observation[0]["client_order_id"], intent["client_order_id"])
         self.assertEqual(intent["quote_observation_required"], 1)
         self.assertIsNone(observation[0]["trade_volume_30s"])
+        queue_rows = runner.ledger.query(
+            "SELECT client_order_id,status,coverage_gaps "
+            "FROM execution_queue_measurements")
+        self.assertEqual(len(queue_rows), 1)
+        self.assertEqual(queue_rows[0]["client_order_id"], intent["client_order_id"])
+        self.assertEqual(queue_rows[0]["status"], "ACTIVE")
+        # This unit path does not start the isolated trade collector. The
+        # order still places, but the sample is visibly invalid rather than
+        # silently pretending it had public-trade coverage.
+        self.assertEqual(queue_rows[0]["coverage_gaps"], 1)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -490,6 +502,88 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "SELECT * FROM execution_quote_observations"), [])
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_queue_measurement_failure_cannot_suppress_or_duplicate_an_order(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+
+        class BrokenMeasurement:
+            def sync_orders(self, **_kwargs):
+                raise RuntimeError("optional queue telemetry failed")
+
+            def on_book(self, *_args, **_kwargs):
+                raise RuntimeError("optional queue telemetry failed")
+
+        runner._queue_measurement = BrokenMeasurement()
+        outcome, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 0)
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertEqual(len(runner.ledger.query(
+            "SELECT * FROM execution_intents WHERE operation='PLACE'")), 1)
+        self.assertEqual(runner.config.max_markets, 20)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_queue_trade_collector_is_isolated_and_records_its_own_health(self):
+        runner, client, _ = self.build_runner()
+
+        class OneTradeStream:
+            def __init__(self):
+                self.started = None
+                self.closed = False
+                self.sent = False
+                self.timeouts = 0
+                self.dropped_trades = 0
+                self.decode_failures = 0
+
+            async def start(self, slugs):
+                self.started = tuple(slugs)
+
+            async def next_trade(self, *, timeout=None):
+                if not self.sent:
+                    self.sent = True
+                    return TradePrint(
+                        "market-one", .49, 2, "ORDER_SIDE_BUY", NOW,
+                        request_id="public-one")
+                self.timeouts += 1
+                if self.timeouts <= 3:
+                    await asyncio.sleep(0)
+                    raise asyncio.TimeoutError
+                await asyncio.Future()
+
+            async def close(self):
+                self.closed = True
+
+        stream = OneTradeStream()
+        runner.trade_stream_factory = lambda _client: stream
+        health_updates = 0
+        original_update = runner._queue_measurement.update_stream_session
+
+        def counted_update(*args, **kwargs):
+            nonlocal health_updates
+            health_updates += 1
+            return original_update(*args, **kwargs)
+
+        runner._queue_measurement.update_stream_session = counted_update
+        task = asyncio.create_task(runner._queue_measurement_loop())
+        for _ in range(12):
+            await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        self.assertEqual(stream.started, ("market-one",))
+        self.assertTrue(stream.closed)
+        sessions = runner.ledger.query(
+            "SELECT status,trades_received,scope_size "
+            "FROM execution_queue_stream_sessions")
+        self.assertEqual([tuple(row) for row in sessions], [("STOPPED", 1, 1)])
+        self.assertEqual(health_updates, 1)
+        # The collector has no path to either the trading gateway or REST.
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(runner.gateway.limiter.calls, 0)
 
     async def test_decision_sweep_skips_only_the_market_with_an_unresolved_intent(self):
         runner, _, _ = self.build_runner()

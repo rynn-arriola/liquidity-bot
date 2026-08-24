@@ -158,6 +158,89 @@ CREATE TABLE IF NOT EXISTS execution_quote_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_quote_observations_market_at
     ON execution_quote_observations(market_slug, observed_at);
+CREATE INDEX IF NOT EXISTS idx_execution_quote_observations_observed_at
+    ON execution_quote_observations(observed_at);
+CREATE TABLE IF NOT EXISTS execution_queue_measurements (
+    client_order_id TEXT PRIMARY KEY,
+    intent_id TEXT NOT NULL UNIQUE,
+    market_slug TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quote_price TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    initial_queue_ahead REAL NOT NULL,
+    initial_better_depth REAL NOT NULL,
+    initial_same_price_depth REAL NOT NULL,
+    queue_lower_bound REAL NOT NULL,
+    queue_upper_bound REAL NOT NULL,
+    better_depth REAL NOT NULL,
+    same_price_lower_bound REAL NOT NULL,
+    same_price_upper_bound REAL NOT NULL,
+    last_same_price_depth REAL NOT NULL,
+    baseline_book_seen INTEGER NOT NULL DEFAULT 0,
+    baseline_book_at TEXT,
+    baseline_same_price_depth REAL,
+    trade_at_price_qty REAL NOT NULL DEFAULT 0,
+    trade_better_price_qty REAL NOT NULL DEFAULT 0,
+    trade_through_qty REAL NOT NULL DEFAULT 0,
+    ambiguous_removed_qty REAL NOT NULL DEFAULT 0,
+    same_price_added_qty REAL NOT NULL DEFAULT 0,
+    relevant_book_events INTEGER NOT NULL DEFAULT 0,
+    relevant_trade_events INTEGER NOT NULL DEFAULT 0,
+    coverage_gaps INTEGER NOT NULL DEFAULT 0,
+    queue_band TEXT NOT NULL,
+    last_filled_qty REAL NOT NULL DEFAULT 0,
+    last_book_at TEXT,
+    last_trade_at TEXT,
+    last_persisted_at TEXT NOT NULL,
+    would_reset_at TEXT,
+    would_reset_queue_lower_bound REAL,
+    would_reset_queue_upper_bound REAL,
+    status TEXT NOT NULL,
+    terminal_status TEXT,
+    closed_at TEXT,
+    close_queue_lower_bound REAL,
+    close_queue_upper_bound REAL,
+    measurement_version INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY(intent_id) REFERENCES execution_intents(intent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_queue_measurements_market_status
+    ON execution_queue_measurements(market_slug, status, started_at);
+CREATE TABLE IF NOT EXISTS execution_queue_measurement_events (
+    id INTEGER PRIMARY KEY,
+    client_order_id TEXT NOT NULL,
+    event_at TEXT NOT NULL,
+    event_kind TEXT NOT NULL,
+    queue_lower_bound REAL NOT NULL,
+    queue_upper_bound REAL NOT NULL,
+    better_depth REAL NOT NULL,
+    same_price_lower_bound REAL NOT NULL,
+    same_price_upper_bound REAL NOT NULL,
+    event_price REAL,
+    event_quantity REAL,
+    queue_band TEXT NOT NULL,
+    details_json TEXT,
+    FOREIGN KEY(client_order_id)
+        REFERENCES execution_queue_measurements(client_order_id)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_queue_events_order_at
+    ON execution_queue_measurement_events(client_order_id, event_at);
+CREATE TABLE IF NOT EXISTS execution_queue_stream_sessions (
+    id INTEGER PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    scope_json TEXT NOT NULL,
+    scope_size INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    trades_received INTEGER NOT NULL DEFAULT 0,
+    dropped_trades INTEGER NOT NULL DEFAULT 0,
+    decode_failures INTEGER NOT NULL DEFAULT 0,
+    last_trade_at TEXT,
+    last_updated_at TEXT NOT NULL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_execution_queue_stream_started
+    ON execution_queue_stream_sessions(started_at);
 """
 
 

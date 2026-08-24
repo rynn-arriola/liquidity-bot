@@ -70,9 +70,15 @@ flowchart LR
     G -. no strategy feedback while collecting .-> H[Held-out review]
 ```
 
-The public commissioning stream currently supplies books only. Trade-volume
-fields therefore remain explicitly unknown rather than being inferred from
-the bot's own fills, and no league grouping or filtering is part of this path.
+The strategy-authorizing commissioning stream continues to supply books only.
+An optional measurement branch uses a separate bounded public-trade socket to
+maintain conservative lower/upper queue-ahead bounds for the exact building
+client order ID. Stream health and coverage gaps are durable. Its 60-second,
+upper-bound-at-most-one-order shadow signal has no edge back into the planner
+or action driver and cannot cancel or replace an order. Decision-time
+trade-volume fields remain explicitly unknown rather than being inferred from
+the bot's own fills, and no league grouping or filtering is part of either
+observation path.
 
 ## Current boundary
 

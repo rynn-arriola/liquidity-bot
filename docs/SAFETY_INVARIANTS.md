@@ -289,3 +289,15 @@ These are implementation requirements, not suggestions.
     stops remain baselined on the durable UTC day: changing their reset instant
     can grant a fresh loss budget and is a live-risk policy change, never an
     incidental consequence of correcting a report.
+68. Queue-depletion measurement is observation only. Public trades use a
+    separate bounded socket and may never share the book/private recovery path
+    or the REST limiter. A drop, decode error, reconnect or persistence error
+    creates a coverage gap and suppresses that order's shadow signal; it may
+    not cancel, replace, delay, duplicate or veto an order. Books and trades
+    have no shared delivery order, so a trade already reflected by a full book
+    must not be subtracted twice. `WOULD_QUEUE_RESET` is evaluated only from a
+    fresh full-book boundary after the first post-acknowledgement baseline and
+    has no mutation path. The older decision-time queue cannot cap orders that
+    joined during PLACE latency. A shadow signal also requires positive OPEN
+    or PARTIAL order state and no unresolved CANCEL for that client order.
+    Reducers and exits are excluded, and slot capacity remains 20.

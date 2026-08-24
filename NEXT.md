@@ -199,6 +199,45 @@ unfilled and 29 still open; 105 observations already distinguish actual queue
 from the current model queue. The report verdict remains `COLLECTING` and no
 strategy rule is authorized yet.
 
+### READY LOCALLY, NOT DEPLOYED: queue-depletion measurement
+
+The measurement-only prerequisite from WATCHLIST 4b is implemented locally.
+It adds a separate public-trade WebSocket with a bounded 4,096-print queue;
+the live book/private streams and 4 req/s REST limiter are unchanged. Each
+building order retains its exact decision-time better-plus-same-price queue
+for comparison, then establishes the conservative lifetime baseline from the
+first full book received after PLACE acknowledgement. Reducers and exits are
+excluded. A 60-second,
+upper-bound <= 1.0x-order-size condition records `WOULD_QUEUE_RESET` only; no
+cancel or replacement code exists.
+
+Do not deploy casually into the current runner. The change needs a normal
+reviewed restart because startup installs additive ledger tables and starts
+the collector automatically. After deployment, require:
+
+1. the existing 20-slot/quote-size/stops acceptance remains unchanged;
+2. `[queue-measurement] ... status=collecting markets=20` (or the current
+   bound count), with zero degraded messages;
+3. `execution_queue_stream_sessions` shows a collecting session, public
+   trades, zero drops and zero decode failures;
+4. book/private freshness, REST rate and working-order convergence remain at
+   their existing bounds;
+5. ledger-growth slope remains acceptable; history is banded and summary
+   rows persist at most every five minutes rather than once per book.
+
+Read-only verification:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -B scripts/queue_measurement_report.py --database data/commissioning.db
+```
+
+Collect three full days and roughly 300 maker-filled measured orders with a
+post-ACK baseline and zero coverage gaps. `READY_FOR_REVIEW` authorizes held-out analysis only, never an
+automatic reset. All 571 local tests pass. Mutation checks prove that removing
+post-PLACE registration loses the integration row and that double-counting a
+trade already reflected by the independent book socket is caught.
+
 ---
 
 ## CURRENT: monitor deployed cancel-confirmed priority replan

@@ -134,6 +134,18 @@ Start, inspect, and stop:
 ./scripts/stop_commissioning.sh
 ```
 
+After the queue-measurement build is deliberately deployed and the runner is
+restarted, verify its isolated public-trade coverage locally on the server:
+
+```bash
+PYTHONPATH=src python -B scripts/queue_measurement_report.py \
+  --database data/commissioning.db
+```
+
+This report is SQLite read-only. The collector never cancels or re-places an
+order; `WOULD_QUEUE_RESET` is a shadow label only. Any drops, decode failures
+or stream errors invalidate affected order coverage but do not stop quoting.
+
 The optional second argument is quote size. It must be a whole number from 5
 through 10 and is persisted in `data/commissioning_quote_size`. Omitting it
 reuses the persisted value, or 5 if the file does not exist. The launcher

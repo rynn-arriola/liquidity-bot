@@ -204,6 +204,21 @@ derive automatically from it:
 ./scripts/stop_commissioning.sh
 ```
 
+The optional almost-front queue study is measurement-only and starts with the
+normal runner once its reviewed code is deployed. It uses a separate bounded
+public-trade socket and has no cancel/repost path. Inspect its coverage without
+venue calls:
+
+```bash
+PYTHONPATH=src python -B scripts/queue_measurement_report.py \
+  --database data/commissioning.db
+```
+
+`COLLECTING` is the expected result until three full days, roughly 300 maker
+fills with post-ACK baselines and zero coverage gaps exist. Even
+`READY_FOR_REVIEW` does not enable an
+automatic queue reset.
+
 Automatic rotation first cancels owned quotes and requires whole-account REST
 proof of zero working orders, zero positions, known ownership, and zero
 unresolved intents. Only then is the singleton private/public stream scope

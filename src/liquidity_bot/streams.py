@@ -140,6 +140,119 @@ class MarketReadOnlyStream:
             self._pending_books.clear()
 
 
+class TradeReadOnlyStream:
+    """Isolated, bounded public-trade feed for optional telemetry.
+
+    This adapter is deliberately separate from :class:`MarketReadOnlyStream`.
+    A failed trade subscription, a malformed print, or a slow telemetry
+    consumer must not disconnect the full-book stream that authorizes live
+    orders.  The queue is bounded so observation can lose coverage, but can
+    never grow memory without limit and thereby affect trading.
+    """
+
+    MAX_PENDING_TRADES = 4096
+
+    def __init__(self, client: Any, *, max_pending: int | None = None):
+        capacity = self.MAX_PENDING_TRADES if max_pending is None else int(max_pending)
+        if capacity <= 0:
+            raise ValueError("max_pending must be positive")
+        self._socket = client.ws.markets()
+        self._queue: asyncio.Queue[TradePrint | Exception] = asyncio.Queue(
+            maxsize=capacity)
+        self._slugs: set[str] = set()
+        self._started = False
+        self._dropped_trades = 0
+        self._decode_failures = 0
+        self._last_drop: str | None = None
+        self._socket.on("trade", self._on_trade)
+        self._socket.on("error", self._on_error)
+        self._socket.on("close", self._on_close)
+
+    @property
+    def dropped_trades(self) -> int:
+        return self._dropped_trades
+
+    @property
+    def decode_failures(self) -> int:
+        return self._decode_failures
+
+    def _put(self, item: TradePrint | Exception) -> None:
+        try:
+            self._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            if isinstance(item, Exception):
+                # A disconnect must remain visible even if telemetry is
+                # already behind. Sacrifice one observation, never the error.
+                try:
+                    self._queue.get_nowait()
+                    self._dropped_trades += 1
+                except asyncio.QueueEmpty:  # pragma: no cover - race guard
+                    pass
+                self._queue.put_nowait(item)
+            else:
+                self._dropped_trades += 1
+                self._last_drop = item.slug
+
+    def _on_trade(self, message: Any) -> None:
+        try:
+            item = parse_trade_response(message)
+        except AdapterError as exc:
+            # Public telemetry is best effort. One malformed venue print is a
+            # measurable coverage gap, not permission to disturb live books.
+            self._decode_failures += 1
+            self._last_drop = str(exc)
+            return
+        except Exception as exc:
+            self._put(AdapterError(f"trade stream decode failed: {exc}"))
+            return
+        if item.slug not in self._slugs:
+            self._put(AdapterError(
+                f"received trade for unsubscribed slug {item.slug}"))
+            return
+        self._put(item)
+
+    def _on_error(self, error: Any) -> None:
+        self._put(AdapterError(f"trade WebSocket error: {error}"))
+
+    def _on_close(self, *_: Any) -> None:
+        self._put(AdapterError("trade WebSocket disconnected"))
+
+    async def start(self, slugs: Iterable[str]) -> None:
+        if self._started:
+            raise RuntimeError("trade stream is already started")
+        clean = list(dict.fromkeys(str(slug).strip() for slug in slugs
+                                   if str(slug).strip()))
+        if not clean:
+            raise ValueError("at least one market slug is required")
+        self._slugs = set(clean)
+        try:
+            await self._socket.connect()
+            await self._socket.subscribe_trades(
+                f"liquidity-queue-trades-{uuid.uuid4().hex}", clean)
+        except Exception as exc:
+            self._slugs.clear()
+            try:
+                await self._socket.close()
+            except Exception:
+                pass
+            raise AdapterError(f"trade WebSocket startup failed: {exc}") from exc
+        self._started = True
+
+    async def next_trade(self, *, timeout: float | None = None) -> TradePrint:
+        item = (await self._queue.get() if timeout is None
+                else await asyncio.wait_for(self._queue.get(), timeout))
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        try:
+            await self._socket.close()
+        finally:
+            self._started = False
+            self._slugs.clear()
+
+
 class PrivateReadOnlyStream:
     """Authenticated order, position, and balance state events."""
 

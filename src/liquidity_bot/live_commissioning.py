@@ -84,7 +84,8 @@ from .risk import OpportunityEconomics
 from .runtime_safety import SessionRiskGuard, SingleInstanceLease
 from .runtime_secrets import load_runtime_secrets
 from .shadow_math import cross_exit
-from .streams import MarketReadOnlyStream, PrivateStreamPool
+from .queue_measurement import QueueMeasurementTracker
+from .streams import MarketReadOnlyStream, PrivateStreamPool, TradeReadOnlyStream
 from .venue_state import PrivateLedgerProjector
 
 
@@ -248,6 +249,7 @@ class CommissioningRunner:
         sleep: Callable[[float], Any] = asyncio.sleep,
         market_stream_factory: Callable[[Any], Any] = MarketReadOnlyStream,
         private_stream_factory: Callable[[Any], Any] = PrivateStreamPool,
+        trade_stream_factory: Callable[[Any], Any] = TradeReadOnlyStream,
         reward_selector: RewardMarketSelector | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
     ):
@@ -311,6 +313,16 @@ class CommissioningRunner:
         self._unresolved_reconcile_cursor = 0
         self.market_stream_factory = market_stream_factory
         self.private_stream_factory = private_stream_factory
+        # Public trades are measurement-only and use their own socket. They
+        # never share the book/private recovery path or the REST limiter that
+        # authorizes mutations. A failed study therefore loses coverage, not
+        # orders or reward time.
+        self.trade_stream_factory = trade_stream_factory
+        self._queue_measurement = QueueMeasurementTracker(
+            ledger, collection_started_at=self._now())
+        self._queue_measurement_error_count = 0
+        self._queue_measurement_last_error_at: datetime | None = None
+        self._queue_measurement_stream_healthy = False
         self.market_stream = market_stream_factory(client)
         self.private_stream = private_stream_factory(client)
         self._markets: dict[str, MarketState] = {}
@@ -740,6 +752,8 @@ class CommissioningRunner:
         state.book_observed_at = self._now()
         state.observe_book_touch(
             state.book, observed_at=state.book_observed_at)
+        self._queue_measurement_book(
+            state.book, observed_at=state.book_observed_at)
         if state.market is None:
             raise RuntimeError("market metadata is unavailable")
         # Validate both possible passive wire payloads before the first
@@ -768,6 +782,266 @@ class CommissioningRunner:
         state.observe_book_touch(book, observed_at=observed_at)
         state.book = book
         state.book_observed_at = observed_at
+        self._queue_measurement_book(book, observed_at=observed_at)
+
+    def _queue_measurement_safe(
+        self, component: str, operation: Callable[[], Any],
+    ) -> Any | None:
+        """Run optional telemetry without letting it affect live decisions."""
+
+        try:
+            result = operation()
+            self._queue_measurement_error_count = 0
+            return result
+        except Exception as exc:
+            self._queue_measurement_error_count += 1
+            now = self._now()
+            due = (self._queue_measurement_last_error_at is None
+                   or (now - self._queue_measurement_last_error_at
+                       ).total_seconds() >= 60)
+            if due:
+                self._queue_measurement_last_error_at = now
+                print(
+                    f"[queue-measurement] at={now.isoformat()} "
+                    f"status=degraded component={component} "
+                    f"errors={self._queue_measurement_error_count} "
+                    f"error={type(exc).__name__}:{str(exc)[:160]}",
+                    flush=True,
+                )
+            return None
+
+    def _queue_measurement_sync(self, *, observed_at: datetime) -> None:
+        def apply() -> None:
+            self._queue_measurement.sync_orders(observed_at=observed_at)
+            if not self._queue_measurement_stream_healthy:
+                self._queue_measurement.mark_coverage_gap(
+                    observed_at=observed_at, dropped=1,
+                    reason="trade_stream_unavailable", only_clean=True)
+        self._queue_measurement_safe("order_sync", apply)
+
+    def _queue_measurement_book(
+        self, book: BookSnapshot, *, observed_at: datetime,
+    ) -> None:
+        self._queue_measurement_safe(
+            "book",
+            lambda: self._queue_measurement.on_book(
+                book, observed_at=observed_at))
+
+    async def _queue_measurement_loop(self) -> None:
+        """Maintain the isolated public-trade study, reconnecting fail-open."""
+
+        stream: Any | None = None
+        scope: tuple[str, ...] = ()
+        failures = 0
+        dropped_seen = 0
+        decode_seen = 0
+        stream_session_id: int | None = None
+        trades_received = 0
+        last_trade_at: datetime | None = None
+        last_health_update_at: datetime | None = None
+        first_trade_persisted = False
+        try:
+            while True:
+                desired = tuple(self.active_slugs)
+                if not desired:
+                    if stream is not None:
+                        if stream_session_id is not None:
+                            now = self._now()
+                            self._queue_measurement_safe(
+                                "stream_health",
+                                lambda now=now: self._queue_measurement.finish_stream_session(
+                                    stream_session_id, observed_at=now,
+                                    status="REBOUND", trades_received=trades_received,
+                                    dropped_trades=dropped_seen,
+                                    decode_failures=decode_seen,
+                                    last_trade_at=last_trade_at))
+                        try:
+                            await stream.close()
+                        except Exception:
+                            pass
+                        stream = None
+                        scope = ()
+                        stream_session_id = None
+                        self._queue_measurement_stream_healthy = False
+                    await asyncio.sleep(1)
+                    continue
+                if stream is None or desired != scope:
+                    if stream is not None:
+                        if stream_session_id is not None:
+                            now = self._now()
+                            self._queue_measurement_safe(
+                                "stream_health",
+                                lambda now=now: self._queue_measurement.finish_stream_session(
+                                    stream_session_id, observed_at=now,
+                                    status="REBOUND", trades_received=trades_received,
+                                    dropped_trades=dropped_seen,
+                                    decode_failures=decode_seen,
+                                    last_trade_at=last_trade_at))
+                        try:
+                            await stream.close()
+                        except Exception:
+                            pass
+                    scope = desired
+                    dropped_seen = 0
+                    decode_seen = 0
+                    trades_received = 0
+                    last_trade_at = None
+                    first_trade_persisted = False
+                    stream_session_id = None
+                    self._queue_measurement_stream_healthy = False
+                    try:
+                        stream = self.trade_stream_factory(self.client)
+                        await stream.start(list(scope))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        failures += 1
+                        failed_at = self._now()
+                        failed_session = self._queue_measurement_safe(
+                            "stream_health",
+                            lambda failed_at=failed_at: (
+                                self._queue_measurement.start_stream_session(
+                                    observed_at=failed_at, slugs=scope)))
+                        if failed_session is not None:
+                            self._queue_measurement_safe(
+                                "stream_health",
+                                lambda failed_session=failed_session,
+                                failed_at=failed_at, exc=exc: (
+                                    self._queue_measurement.finish_stream_session(
+                                        failed_session, observed_at=failed_at,
+                                        status="ERROR", trades_received=0,
+                                        dropped_trades=0, decode_failures=0,
+                                        last_trade_at=None,
+                                        error=f"startup:{type(exc).__name__}:{exc}")))
+                        self._queue_measurement_safe(
+                            "trade_stream_start",
+                            lambda exc=exc: (_ for _ in ()).throw(exc))
+                        self._queue_measurement_safe(
+                            "coverage_gap",
+                            lambda: self._queue_measurement.mark_coverage_gap(
+                                observed_at=self._now(), dropped=1,
+                                reason="trade_stream_start_failed",
+                                only_clean=True))
+                        if stream is not None:
+                            try:
+                                await stream.close()
+                            except Exception:
+                                pass
+                        stream = None
+                        await asyncio.sleep(min(2 ** min(failures - 1, 5), 30))
+                        continue
+                    failures = 0
+                    self._queue_measurement_stream_healthy = True
+                    started_at = self._now()
+                    stream_session_id = self._queue_measurement_safe(
+                        "stream_health",
+                        lambda started_at=started_at: (
+                            self._queue_measurement.start_stream_session(
+                                observed_at=started_at, slugs=scope)))
+                    last_health_update_at = started_at
+                    print(
+                        f"[queue-measurement] at={self._now().isoformat()} "
+                        f"status=collecting markets={len(scope)} "
+                        f"active_orders={self._queue_measurement.active_count}",
+                        flush=True,
+                    )
+                try:
+                    trade = await stream.next_trade(timeout=1)
+                except asyncio.TimeoutError:
+                    trade = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._queue_measurement_safe(
+                        "trade_stream",
+                        lambda exc=exc: (_ for _ in ()).throw(exc))
+                    self._queue_measurement_safe(
+                        "coverage_gap",
+                        lambda exc=exc: self._queue_measurement.mark_coverage_gap(
+                            observed_at=self._now(), dropped=1,
+                            reason=f"stream:{type(exc).__name__}"))
+                    if stream_session_id is not None:
+                        failed_at = self._now()
+                        self._queue_measurement_safe(
+                            "stream_health",
+                            lambda failed_at=failed_at, exc=exc: (
+                                self._queue_measurement.finish_stream_session(
+                                    stream_session_id, observed_at=failed_at,
+                                    status="ERROR", trades_received=trades_received,
+                                    dropped_trades=dropped_seen,
+                                    decode_failures=decode_seen,
+                                    last_trade_at=last_trade_at,
+                                    error=f"{type(exc).__name__}:{exc}")))
+                    stream_session_id = None
+                    self._queue_measurement_stream_healthy = False
+                    try:
+                        await stream.close()
+                    except Exception:
+                        pass
+                    stream = None
+                    failures += 1
+                    await asyncio.sleep(min(2 ** min(failures - 1, 5), 30))
+                    continue
+                dropped = int(getattr(stream, "dropped_trades", 0))
+                decoded = int(getattr(stream, "decode_failures", 0))
+                gap = max(0, dropped - dropped_seen) + max(0, decoded - decode_seen)
+                if gap:
+                    self._queue_measurement_safe(
+                        "coverage_gap",
+                        lambda gap=gap: self._queue_measurement.mark_coverage_gap(
+                            observed_at=self._now(), dropped=gap,
+                            reason="bounded_queue_or_decode"))
+                dropped_seen = dropped
+                decode_seen = decoded
+                if trade is not None:
+                    observed_at = self._now()
+                    trades_received += 1
+                    last_trade_at = observed_at
+                    self._queue_measurement_safe(
+                        "trade",
+                        lambda trade=trade, observed_at=observed_at:
+                            self._queue_measurement.on_trade(
+                                trade, observed_at=observed_at))
+                health_now = self._now()
+                if (stream_session_id is not None
+                        and ((trades_received > 0 and not first_trade_persisted)
+                             or last_health_update_at is None
+                             or (health_now - last_health_update_at
+                                 ).total_seconds() >= 300)):
+                    self._queue_measurement_safe(
+                        "stream_health",
+                        lambda health_now=health_now: (
+                            self._queue_measurement.update_stream_session(
+                                stream_session_id, observed_at=health_now,
+                                trades_received=trades_received,
+                                dropped_trades=dropped_seen,
+                                decode_failures=decode_seen,
+                                last_trade_at=last_trade_at)))
+                    if trades_received > 0:
+                        first_trade_persisted = True
+                    last_health_update_at = health_now
+        finally:
+            self._queue_measurement_stream_healthy = False
+            if stream_session_id is not None:
+                stopped_at = self._now()
+                self._queue_measurement_safe(
+                    "stream_health",
+                    lambda stopped_at=stopped_at: (
+                        self._queue_measurement.finish_stream_session(
+                            stream_session_id, observed_at=stopped_at,
+                            status="STOPPED", trades_received=trades_received,
+                            dropped_trades=dropped_seen,
+                            decode_failures=decode_seen,
+                            last_trade_at=last_trade_at)))
+            if stream is not None:
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
+            self._queue_measurement_safe(
+                "flush",
+                lambda: self._queue_measurement.flush(
+                    observed_at=self._now()))
 
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
@@ -1126,6 +1400,7 @@ class CommissioningRunner:
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
         self._record_resolved_cancel_owners(unresolved_cancels)
+        self._queue_measurement_sync(observed_at=received_at)
 
     def _take_priority_replans(self) -> tuple[str, ...]:
         """Take cancel-confirmed markets in stable active-slot order."""
@@ -2887,6 +3162,7 @@ class CommissioningRunner:
                 actions, market=state.market,
                 position=position, now=now,
                 quote_observation=quote_observation)
+            self._queue_measurement_sync(observed_at=self._now())
         except Exception as exc:
             stop = await self._handle_action_failure(exc, slug)
             if stop:
@@ -4870,6 +5146,7 @@ class CommissioningRunner:
     async def run(self) -> CommissioningResult:
         market_task: asyncio.Task | None = None
         private_task: asyncio.Task | None = None
+        queue_measurement_task: asyncio.Task | None = None
         stop_reason = "unknown"
         preflight_complete = False
         preflight_error: Exception | None = None
@@ -4907,6 +5184,8 @@ class CommissioningRunner:
                 else datetime.max.replace(tzinfo=timezone.utc))
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
+            queue_measurement_task = asyncio.create_task(
+                self._queue_measurement_loop())
             while True:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
@@ -5238,6 +5517,10 @@ class CommissioningRunner:
                 await asyncio.gather(*stream_tasks, return_exceptions=True)
             if preflight_complete:
                 await self._shutdown(stop_reason)
+            if queue_measurement_task is not None:
+                queue_measurement_task.cancel()
+                await asyncio.gather(
+                    queue_measurement_task, return_exceptions=True)
             await self.private_stream.close()
             await self.market_stream.close()
         if preflight_error is not None:

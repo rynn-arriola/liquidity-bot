@@ -13,6 +13,7 @@ from liquidity_bot.streams import (
     MarketReadOnlyStream,
     PrivateReadOnlyStream,
     ShadowMarketStream,
+    TradeReadOnlyStream,
 )
 
 
@@ -371,6 +372,42 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(
             [call[0] for call in client.market_socket.calls],
             ["connect", "market_data", "trades", "close"])
+
+    def test_trade_stream_is_separate_bounded_and_trade_only(self):
+        async def scenario():
+            client = FakeClient()
+            stream = TradeReadOnlyStream(client, max_pending=1)
+            await stream.start(["market-one"])
+            client.market_socket.emit("trade", fixture("trade.json"))
+            client.market_socket.emit("trade", fixture("trade.json"))
+            try:
+                event = await stream.next_trade(timeout=.1)
+                return client, stream, event
+            finally:
+                await stream.close()
+
+        client, stream, event = self.run_async(scenario())
+        self.assertIsInstance(event, TradePrint)
+        self.assertEqual(stream.dropped_trades, 1)
+        self.assertEqual(
+            [call[0] for call in client.market_socket.calls],
+            ["connect", "trades", "close"])
+
+    def test_bad_trade_is_a_coverage_gap_not_a_stream_failure(self):
+        async def scenario():
+            client = FakeClient()
+            stream = TradeReadOnlyStream(client)
+            await stream.start(["market-one"])
+            client.market_socket.emit("trade", {"trade": {}})
+            client.market_socket.emit("trade", fixture("trade.json"))
+            try:
+                return stream, await stream.next_trade(timeout=.1)
+            finally:
+                await stream.close()
+
+        stream, event = self.run_async(scenario())
+        self.assertIsInstance(event, TradePrint)
+        self.assertEqual(stream.decode_failures, 1)
 
     def test_empty_subscription_is_rejected_before_connect(self):
         async def scenario():

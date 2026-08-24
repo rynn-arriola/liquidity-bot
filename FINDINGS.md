@@ -389,6 +389,79 @@ recommendation.
 
 ---
 
+## Almost-front queue measurement — built locally, not deployed (2026-08-24)
+
+Exact exchange queue rank remains unavailable, but a conservative interval is
+measurable. The local implementation starts each acknowledged building order
+from the already-recorded `depth_better_than_quote + depth_at_quote`. Better
+displayed depth is always ahead; public trades at our price definitely consume
+same-price priority; new same-price orders are behind us; and cancellations
+remain ambiguous, widening lower versus upper bounds. Reducers, IOC exits and
+cancels never enter the study.
+
+One edge defect was found during review before deployment: books and trades
+arrive on separate sockets and have no shared delivery order. Subtracting a
+trade from a full book that already reflected it counted consumption twice and
+could falsely declare `almost_front`. The reviewed estimator instead retains
+the decision-time queue as descriptive context, then establishes its
+conservative lifetime baseline from the first full book received after
+acknowledgement. From there, same-price upper depth is a nonincreasing full-book
+cap: later same-price additions are behind us, while drops may be ahead or
+behind. Public prints remain definite consumption labels but are not subtracted
+independently from that cap. Better-price depth also comes from the current
+full book. The shadow trigger is evaluated only on a full-book boundary, never
+on an independently ordered trade callback. A dedicated reordering test fails
+if double subtraction is restored.
+
+A second pre-deployment review defect was also removed: the condition used to
+persist the first public trade stayed true while the count remained exactly
+one, so a quiet market could rewrite stream health after every one-second
+timeout. The collector now latches that first proof once and returns to its
+five-minute health cadence. Its integration test forces repeated timeouts and
+requires exactly one first-trade update.
+
+The review also found two placement-latency boundaries. A book can be received by
+the live socket while the POST is in flight, then remain held by the runner's
+task until after acknowledgement registers the tracker. Applying that older
+book would describe a time when our order was not resting. Queue books are now
+ignored when their socket receipt precedes the acknowledged measurement start;
+a focused regression test pins this ordering. Also, same-price orders can join
+during POST latency and stand ahead of us; therefore the older decision queue
+cannot cap the acknowledged order. A second test grows same-price depth from
+200 to 260 during that window and requires the first post-ACK full book to
+retain the larger conservative upper bound.
+
+Business isolation is explicit:
+
+- the collector uses a separate WebSocket and no REST call;
+- its queue is bounded at 4,096 prints; overflow/decode/reconnect gaps are
+  persisted and suppress shadow signals for affected orders;
+- failures are logged and swallowed outside the planner/action path;
+- there is no cancel/repost method and no observation feeds the scheduler;
+- history appends only START, post-ACK baseline, relevant trades, queue-band transitions,
+  coverage gaps, shadow signals, fills and CLOSE; summary rows checkpoint no
+  more often than every five minutes;
+- a local 40-active-order no-change benchmark processed 100,000 book callbacks
+  in 0.7000s, about 7.00 microseconds per callback. This is a local CPU sizing
+  number, not production latency acceptance.
+
+The predeclared shadow candidate is minimum dwell 60 seconds and conservative
+queue-ahead upper bound <= one order quantity. It emits
+`WOULD_QUEUE_RESET`; it does not touch the order. Stream sessions separately
+persist scope, trades received, drops, decode failures, reconnect/error status
+and health timestamps so a quiet or failed collector cannot masquerade as
+clean coverage. `scripts/queue_measurement_report.py` opens SQLite `mode=ro`
+and remains league-neutral.
+
+All 571 local tests pass. A fail-open integration test proves a broken tracker
+does not suppress or duplicate the authorized PLACE and leaves `max_markets`
+at 20. A second integration test proves the collector makes zero trading/REST
+calls. Mutation checks specifically kill post-PLACE registration and the
+cross-socket ordering protection. No production bug is claimed fixed and no
+production code has been deployed or restarted for this study yet.
+
+---
+
 ## Current status — 2026-08-15
 
 **`max_markets` is 16** across two private connections -- set by the REST

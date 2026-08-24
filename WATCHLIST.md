@@ -213,8 +213,8 @@ problem; it previously rejected nearly the whole universe.
 
 ## 4b. Should an almost-front resting order cancel and re-place at the same price?
 
-**Feasible as a bounded estimate, not an exact queue rank. Not currently
-instrumented in the live runner.** Under price-time priority, canceling and
+**Feasible as a bounded estimate, not an exact queue rank. Measurement is
+built and reviewed locally but is not deployed.** Under price-time priority, canceling and
 re-placing at the same price puts our replacement behind the quantity already
 resting there while preserving the same reward ticks whenever the price
 remains eligible. This could reduce fills without paying the typical 70% score
@@ -234,22 +234,26 @@ price is ahead of us; `observed_queue_ahead` captures that. After placement:
 Therefore the tracker must retain lower and upper bounds for queue ahead. It
 may declare `almost_front` only when the conservative bound is small; it must
 never present an exact rank the venue does not publish. The installed market
-SDK supports public `subscribe_trades`, and `ShadowMarketStream` already has
-trade-at-price queue-consumption arithmetic. The live commissioning stream
-subscribes only to books today, so the current three-day observation will not
-answer queue depletion over an order's lifetime. Its `trade_volume_30s` and
-`trade_volume_120s` fields deliberately remain NULL.
+SDK supports public `subscribe_trades`. The reviewed measurement uses a
+separate bounded trade socket so telemetry failure cannot disconnect the live
+book stream. Because books and trades have no shared delivery order, the
+conservative upper bound never subtracts the same trade from both feeds; the
+shadow trigger is evaluated only at a full-book boundary. The original
+decision-time `trade_volume_30s` and `trade_volume_120s` fields remain NULL;
+lifetime queue evidence lives in separate measurement tables.
 
-**Measurement-only prerequisite:** separately review adding public trades on
-an isolated stream path, persist each resting order's initial queue, definite
-trade consumption, ambiguous book-depth removals, new same-price depth and the
-resulting queue interval. It must add no REST calls, must not delay book or
-private processing, and requires stream-throughput, ledger-growth and coverage
-acceptance before any automatic cancellation exists.
+**Measurement-only prerequisite:** locally complete, pending deployment and
+live acceptance. It persists the decision-time queue, establishes a safe
+lifetime baseline from the first post-acknowledgement full book, and records
+definite trade consumption, ambiguous book-depth removals, new same-price
+depth and the resulting interval. It adds no REST calls or mutation path. Before trusting the
+sample, require zero stream gaps plus acceptable throughput, freshness and
+ledger growth on the server.
 
-**Candidate, shadow only:** when an order has rested a minimum dwell and the
-conservative queue-ahead bound falls below a predeclared threshold, emit
-`would_queue_reset`. Simulate cancel confirmation plus same-price replacement,
+**Candidate, shadow only:** after 60 seconds, when the conservative queue-ahead
+upper bound is at most one order quantity, emit `WOULD_QUEUE_RESET`. This is
+implemented as a durable signal only. After enough data, simulate cancel
+confirmation plus same-price replacement,
 including measured dark time and the actual priority-replan delay. Add a
 cooldown and hysteresis so one level cannot churn repeatedly.
 

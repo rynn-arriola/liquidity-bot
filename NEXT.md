@@ -199,9 +199,9 @@ unfilled and 29 still open; 105 observations already distinguish actual queue
 from the current model queue. The report verdict remains `COLLECTING` and no
 strategy rule is authorized yet.
 
-### READY LOCALLY, NOT DEPLOYED: queue-depletion measurement
+### DEPLOYED AND COLLECTING: queue-depletion measurement
 
-The measurement-only prerequisite from WATCHLIST 4b is implemented locally.
+The measurement-only prerequisite from WATCHLIST 4b is deployed as `6085ca5`.
 It adds a separate public-trade WebSocket with a bounded 4,096-print queue;
 the live book/private streams and 4 req/s REST limiter are unchanged. Each
 building order retains its exact decision-time better-plus-same-price queue
@@ -211,19 +211,25 @@ excluded. A 60-second,
 upper-bound <= 1.0x-order-size condition records `WOULD_QUEUE_RESET` only; no
 cancel or replacement code exists.
 
-Do not deploy casually into the current runner. The change needs a normal
-reviewed restart because startup installs additive ledger tables and starts
-the collector automatically. After deployment, require:
+The reviewed restart completed at 2026-08-24T18:49:40Z after the old runner
+flattened its one size-10 position and proved `flat: true`. Server acceptance
+found:
 
-1. the existing 20-slot/quote-size/stops acceptance remains unchanged;
-2. `[queue-measurement] ... status=collecting markets=20` (or the current
-   bound count), with zero degraded messages;
-3. `execution_queue_stream_sessions` shows a collecting session, public
-   trades, zero drops and zero decode failures;
-4. book/private freshness, REST rate and working-order convergence remain at
-   their existing bounds;
-5. ledger-growth slope remains acceptable; history is banded and summary
-   rows persist at most every five minutes rather than once per book.
+1. the runner stayed at quote size 10 and resumed normal PLACE actions;
+2. `[queue-measurement] ... status=collecting markets=20` appeared with zero
+   degraded messages;
+3. `execution_queue_stream_sessions` shows one collecting session with zero
+   drops, decode failures or errors; no public trade occurred during the short
+   checkpoint, so first-print delivery remains a natural-event watch;
+4. all 38 source and 29 test files matched the server byte-for-byte, and all
+   571 production tests passed;
+5. 38 measured orders and 38 post-ACK baselines at the acceptance checkpoint,
+   with two clean `WOULD_QUEUE_RESET` signals and zero coverage gaps, drops,
+   decode failures or errored stream sessions.
+
+Continue watching book/private freshness, REST rate and ledger-growth slope;
+history is banded and summary rows persist at most every five minutes rather
+than once per book.
 
 Read-only verification:
 
@@ -234,7 +240,7 @@ python -B scripts/queue_measurement_report.py --database data/commissioning.db
 
 Collect three full days and roughly 300 maker-filled measured orders with a
 post-ACK baseline and zero coverage gaps. `READY_FOR_REVIEW` authorizes held-out analysis only, never an
-automatic reset. All 571 local tests pass. Mutation checks prove that removing
+automatic reset. All 571 local and production tests pass. Mutation checks prove that removing
 post-PLACE registration loses the integration row and that double-counting a
 trade already reflected by the independent book socket is caught.
 

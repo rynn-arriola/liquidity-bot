@@ -389,7 +389,7 @@ recommendation.
 
 ---
 
-## Almost-front queue measurement — built locally, not deployed (2026-08-24)
+## Almost-front queue measurement — deployed and collecting (2026-08-24)
 
 Exact exchange queue rank remains unavailable, but a conservative interval is
 measurable. The local implementation starts each acknowledged building order
@@ -453,12 +453,21 @@ and health timestamps so a quiet or failed collector cannot masquerade as
 clean coverage. `scripts/queue_measurement_report.py` opens SQLite `mode=ro`
 and remains league-neutral.
 
-All 571 local tests pass. A fail-open integration test proves a broken tracker
+All 571 local and production tests pass. A fail-open integration test proves a broken tracker
 does not suppress or duplicate the authorized PLACE and leaves `max_markets`
 at 20. A second integration test proves the collector makes zero trading/REST
 calls. Mutation checks specifically kill post-PLACE registration and the
-cross-socket ordering protection. No production bug is claimed fixed and no
-production code has been deployed or restarted for this study yet.
+cross-socket ordering protection. No production bug is claimed fixed.
+
+Deployment acceptance: commit `6085ca5` restarted at 18:49:40Z after the old
+runner flattened one size-10 position and emitted `flat: true`. The collector
+announced `status=collecting markets=20`. At the acceptance checkpoint it had
+38 measured orders, all 38 with post-ACK baselines, two clean shadow reset
+signals and one active stream session, with zero coverage gaps, dropped prints,
+decode failures, errored sessions or `[queue-measurement] status=degraded`
+lines. No public trade happened in that short checkpoint, so trade-label
+coverage remains a natural-live-event watch, not yet a proved production
+observation.
 
 ---
 

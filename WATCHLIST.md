@@ -214,7 +214,7 @@ problem; it previously rejected nearly the whole universe.
 ## 4b. Should an almost-front resting order cancel and re-place at the same price?
 
 **Feasible as a bounded estimate, not an exact queue rank. Measurement is
-built and reviewed locally but is not deployed.** Under price-time priority, canceling and
+deployed as `6085ca5` and collecting automatically.** Under price-time priority, canceling and
 re-placing at the same price puts our replacement behind the quantity already
 resting there while preserving the same reward ticks whenever the price
 remains eligible. This could reduce fills without paying the typical 70% score
@@ -242,8 +242,10 @@ shadow trigger is evaluated only at a full-book boundary. The original
 decision-time `trade_volume_30s` and `trade_volume_120s` fields remain NULL;
 lifetime queue evidence lives in separate measurement tables.
 
-**Measurement-only prerequisite:** locally complete, pending deployment and
-live acceptance. It persists the decision-time queue, establishes a safe
+**Measurement-only prerequisite:** deployed and initial live acceptance passed.
+The 18:49:40Z restart bound all 20 markets; the acceptance checkpoint had 38
+measured orders, all 38 with post-ACK baselines, and zero coverage gaps, dropped
+prints, decode failures or errored sessions. It persists the decision-time queue, establishes a safe
 lifetime baseline from the first post-acknowledgement full book, and records
 definite trade consumption, ambiguous book-depth removals, new same-price
 depth and the resulting interval. It adds no REST calls or mutation path. Before trusting the

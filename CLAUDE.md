@@ -8,16 +8,19 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **An almost-front queue study is built and reviewed locally but is NOT
-  deployed.** It adds only an isolated bounded public-trade socket, durable
+- **The almost-front queue study is deployed as `6085ca5` and collecting.**
+  It adds only an isolated bounded public-trade socket, durable
   lower/upper queue bounds and a `WOULD_QUEUE_RESET` shadow signal after 60s
   when the conservative upper bound is at most one order quantity. It has no
   cancel/repost path and does not alter selection, 20 slots, REST, order
-  payloads or exits. All 571 local tests and two deliberate mutation checks
-  pass. Deployment requires a reviewed restart and server acceptance; see
-  NEXT "queue-depletion measurement" and FINDINGS.
+  payloads or exits. All 571 local and production tests and two deliberate
+  mutation checks pass. The 18:49:40Z restart bound exactly 20 measurement
+  markets; the acceptance checkpoint held 38 measured orders with 38 post-ACK
+  baselines and zero coverage gaps, drops, decode failures or errored stream
+  sessions. See NEXT
+  "queue-depletion measurement" and FINDINGS.
 
-- **Bot is RUNNING on `13bf261` since 2026-08-24T16:56:06Z at quote size 10.**
+- **Bot is RUNNING on `6085ca5` since 2026-08-24T18:49:40Z at quote size 10.**
   The first process safely recovered one residual size-5 position, proved flat
   and exited `startup_recovery_only`; the supervisor then started the normal
   runner. Live acceptance found all open orders at quantity 10, 20 bound

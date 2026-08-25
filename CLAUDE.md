@@ -8,7 +8,17 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is RUNNING on `feba761` since 2026-08-25T12:18:56Z at quote size 10.**
+- **Bot is RUNNING on `73d5c73` since 2026-08-25T12:53:40Z at quote size 10.**
+  The free-capacity top-up repair is deployed. All six hashes matched and all
+  585 tests passed locally and on the stopped droplet; three deliberate
+  mutants were killed. Startup bound 20 healthy markets directly and
+  `[queue-measurement]` reported `markets=20`. The first converged checkpoint
+  held 18 working orders across nine markets, all quantity 10, with 20 new
+  placements across 11 markets and zero unresolved, unknown-absent or position
+  state. Raw working-order count is not slot count; use the newest FINDINGS
+  20-slot capacity audit.
+
+- **Historical maintenance run: `feba761` started at 12:18:56Z.**
   The previous runner stopped at 2026-08-25T11:14:26Z with
   `runner_failure:bound_stream_recovery_exhausted`, `flat:false`, after
   `GET /v1/orders/open` returned `InternalServerError` during Polymarket US
@@ -23,15 +33,16 @@ from fact rather than from the last thing someone remembers.
   awaits a natural outage; do not induce one. See the newest NEXT, FINDINGS,
   BUGFIXES and invariant 69 entries.
 
-- **A free-capacity top-up repair is locally complete and awaiting deploy.**
+- **The free-capacity top-up repair is deployed as `73d5c73`.**
   The current startup safely dropped two candidates that became non-open and
   bound 18, but a live-policy diagnostic still found 97 viable markets. The
   top-up scheduler only recognized expired-flat markets, not
   `len(active_slugs) < max_markets`, so free startup slots could persist. The
-  repair makes under-capacity immediate top-up work, retains every existing
+  The repair makes under-capacity immediate top-up work, retains every existing
   order/market, caps additions at exactly 20, and preserves the inventory
-  deadline/ownership/stream safety gates. All 585 tests and three deliberate
-  mutation checks pass. See the newest FINDINGS, BUGFIXES and NEXT entries.
+  deadline/ownership/stream safety gates. All 585 local and production tests
+  and three deliberate mutation checks pass. See the newest FINDINGS,
+  BUGFIXES and NEXT entries.
   Do not run another heavy authenticated supply probe beside the live runner;
   its final extra read already caused one isolated Cloudflare 1015.
 

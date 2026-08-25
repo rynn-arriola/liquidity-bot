@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED LOCALLY — startup validation could leave free slots invisible to top-up
+### FIXED AND DEPLOYED — startup validation could leave free slots invisible to top-up
 
 **Symptom.** The size-10 runner selected 20 markets, correctly rejected two
 that became non-open during startup validation, and then stayed bound to 18
@@ -70,8 +70,19 @@ no-replacement/no-rebind, full-capacity/no-scan and immediate startup timing,
 alongside the existing expired-market, position-deadline, empty-set and failed
 stream-bind cases. All **585 local tests pass**. Three mutations each failed
 their specific regression: expired-only triggering, delayed initial refill,
-and an uncapped replacement count. Production deployment and live 20-slot
-acceptance are pending.
+and an uncapped replacement count.
+
+Commit `73d5c73` was pushed and all six deployed hashes matched. Before
+deployment, the operator manually flattened and one direct complete account
+snapshot proved zero open orders and zero positions. The old shutdown runner
+was nevertheless stuck on twelve canceled IDs whose individual GETs returned
+NotFound; with the supervisor stopped and venue flat positively proved, that
+exact stale PID was terminated. The stopped droplet then passed all **585
+tests in 54.013s**. The size-10 supervisor/runner restarted at
+12:53:39Z/12:53:40Z. Startup bound 20 directly and queue measurement reported
+`markets=20`; the first acceptance checkpoint held 18 working size-10 orders
+across nine markets, 20 new PLACE intents across 11 markets, and zero
+unresolved intents, `UNKNOWN_ABSENT` orders or positions.
 
 ---
 

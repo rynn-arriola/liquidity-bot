@@ -102,6 +102,17 @@ Local proof before deployment: all 585 tests pass. Three deliberate mutants
 were killed: restoring the expired-only trigger, restoring the 15-minute
 startup delay, and allowing the replacement slice to exceed free capacity.
 
+Production acceptance on commit `73d5c73`: all six deployed hashes matched,
+the stopped droplet passed all 585 tests in 54.013 seconds, and the size-10
+supervisor/runner started at 12:53:39Z/12:53:40Z. Startup itself found 20
+healthy candidates, so no refill was needed; the independent
+`[queue-measurement]` marker reported `markets=20` at 12:54:56Z. By 12:56:26Z
+the ledger had 20 PLACE intents across 11 markets, 18 working orders across
+nine markets, all original quantity 10, and zero unresolved intents,
+`UNKNOWN_ABSENT` orders or positions. This is the intended distinction: the
+active/subscribed scheduler is full at 20 while the instantaneous economically
+resting subset is smaller.
+
 ---
 
 ## A failed top-up bind can look like a healthy twenty-slot process while every slot is stopped

@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## READY TO DEPLOY: refill capacity rejected during startup validation
+## DEPLOYED AND RESTARTED: refill capacity rejected during startup validation
 
 The 2026-08-25 run proved 97 viable markets under the live six-hour policy but
 bound 18/20 because two selected candidates became non-open during preflight.
@@ -30,6 +30,18 @@ Future keyword/prompt: **“run a liquidity-bot 20-slot capacity audit”** and
 use the exact-layer checklist in the newest FINDINGS entry. Do not rerun the
 heavy authenticated viable-market diagnostic while the funded runner is live;
 the current result is already 97 viable for 20.
+
+Deployment is complete as commit `73d5c73`. All six file hashes matched and
+all 585 tests passed on the stopped droplet in 54.013 seconds. A single direct
+venue snapshot proved zero open orders and zero positions after the operator
+manually flattened; the stale shutdown PID was then terminated because twelve
+canceled GET-by-ID reads remained NotFound despite that complete flat proof.
+The size-10 supervisor/runner started at 12:53:39Z/12:53:40Z. Startup bound 20
+without needing a refill and `[queue-measurement]` independently reported
+`markets=20`. At the first converged checkpoint: 20 PLACE intents across 11
+markets, 18 working orders across nine markets (all quantity 10), zero
+unresolved intents, zero `UNKNOWN_ABSENT`, and zero positions. No risk stop,
+runner failure or stream-rebind loop appeared.
 
 ## DEPLOYED AND RESTARTED: maintenance-aware automatic recovery
 

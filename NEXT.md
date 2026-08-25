@@ -1,5 +1,26 @@
 # Next session — outstanding fixes
 
+## FIXED LOCALLY, REVIEWED: make one-slot top-up transactional before restart
+
+The 2026-08-25 21:04Z top-up committed one replacement and closed both healthy
+streams before strict GET-by-ID proof. Three owned NotFound responses then
+forced correct global recovery, which canceled 32 orders and retired 18 owners.
+
+The prepared fix strictly reconciles and asserts ownership before changing the
+active tuple or streams, then uses complete post-bind snapshots and fresh
+private state with per-owner ambiguity containment. A failed preflight retains
+the exact old tuple, old open streams, connected gate and all resting orders.
+It also checks operator stop between markets so a sweep already underway cannot
+continue placing after SIGTERM. All three deliberate mutants fail their new
+regressions; all 621 local tests pass.
+
+Before restart: push the reviewed source/tests/docs, deploy the changed source
+and tests, match hashes, run the full suite on the stopped droplet, update
+`DEPLOYED_COMMIT`, and re-read the venue. Current positive proof is zero venue
+open orders and positions; `C3ECBFZWAFSR` explicitly returned CANCELED and the
+normal projector reduced ledger unresolved/working/unknown-absent counts to
+zero. Do not restart from a later absence-only observation.
+
 ## DEPLOYED ON DISK, NEXT RESTART: restart-persistent ET-day score-hours
 
 LIVE Discord now renders `Score-hours today` from a durable ET calendar-day

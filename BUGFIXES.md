@@ -31,6 +31,51 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIXED LOCALLY, REVIEWED — top-up committed before strict proof and retired eighteen owners
+
+**Symptom.** At 21:04Z a one-slot top-up was followed by dual-stream recovery,
+32 acknowledged cancels/unknown-absent orders and eighteen
+`unresolved_mutation_timeout` retirements. The process remained alive and two
+owners kept four orders, but eighteen of the configured twenty slots were
+barred.
+
+**Mechanism.** `_top_up_active_markets` called `_bind_markets` and then
+`_open_streams_for_active_market`. That helper closed both healthy streams,
+started replacements, and only then ran its default-strict REST reconcile.
+Three positively-owned GET-by-ID calls returned the venue's transient
+`NotFound`. The failure therefore arrived after the active-set and stream
+commit. Both-stream recovery had no safe old session to resume and correctly
+quarantined every known working order; terminal lag then converted the mass
+cancels into per-owner timeout retirements.
+
+**Fix.** Incremental top-up now performs strict whole-account reconciliation
+and the runtime ownership assertion while the old scope and streams are intact.
+Failure aborts without rebinding or canceling. With that proof complete and no
+intervening order mutation, top-up commits the selected tuple and uses complete
+post-bind snapshots plus fresh private state with attributed order reads
+scoped: a race belonging to one known owner bars that owner only. Unowned,
+conflicting and out-of-scope state remains terminal. Ordinary binds remain
+strict, and absence remains non-terminal. A separate stop-boundary regression
+now prevents the remainder of an in-progress twenty-market sweep from placing
+after SIGTERM; shutdown retains all cancellation/flatten authority.
+
+**Proof.** The two top-up regressions pin the transaction ordering, unchanged
+stream identities/connected gate/no cancels on preflight failure, and exact
+reconcile scopes `[None, frozenset()]`. They failed against the old ordering.
+A stop regression pins one planned owner and no second owner after the stop
+flag. Deliberately removing each of the three protections makes its regression
+fail. All 621 local tests pass. Venue restart state was positively proven:
+zero open orders and positions, and the sole acknowledged PLACE returned
+`ORDER_STATE_CANCELED`; normal reconciliation left zero unresolved, working or
+unknown-absent ledger rows.
+
+**Cost.** A top-up adds one strict reconciliation before socket replacement.
+Top-up is already a bounded, infrequent selection transition. Healthy resting
+orders remain at the venue and continue earning; market capacity stays 20 and
+the shared REST limit stays 4 requests/second.
+
+---
+
 ### DEPLOYED ON DISK, NEXT RESTART — LIVE Discord score reset on every process run
 
 **Symptom.** The LIVE summary reported raw `Score-seconds` accumulated only by

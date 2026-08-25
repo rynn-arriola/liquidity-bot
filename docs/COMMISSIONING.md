@@ -106,6 +106,13 @@ and enter cancel/flatten shutdown; they are not downgraded to warnings. A
 first- or second-consecutive ET loss-stop day pauses new risk in-process while
 exits remain active; the third consecutive day is terminal.
 
+Incremental slot top-up proves the whole account strictly before it changes the
+active tuple or closes healthy streams. A failed proof leaves the old tuple,
+streams and resting venue orders untouched. After that pre-commit proof, the
+socket handoff still requires complete account snapshots and fresh private
+state; ambiguity positively owned by one market remains behind that market's
+gate, while missing/conflicting/unowned/out-of-scope state stays terminal.
+
 Shutdown carries its own three-attempt flatten budget, independent of whatever
 the quoting loop already spent, so reaching the runtime ceiling can never stop
 the terminal path from trying. While it cannot prove flat it repeats a critical

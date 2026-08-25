@@ -644,6 +644,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_operator_stop_interrupts_an_in_progress_decision_sweep(self):
+        """A delivered SIGTERM must bar the next ordinary venue mutation.
+
+        The outer run loop checks the stop flag, but a twenty-market sweep can
+        already be in progress when the signal callback sets it.  The live
+        2026-08-25 stop placed several fresh orders before that sweep returned.
+        Shutdown owns cancellation and flattening after this boundary.
+        """
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        planned: list[str] = []
+
+        async def decide(slug, now):
+            planned.append(slug)
+            runner.request_stop("operator_sigterm")
+            return None, 0.0
+
+        with patch.object(runner, "_decide_for_market", side_effect=decide), \
+                patch.object(
+                    runner, "_refresh_equity_for_decision",
+                    new=AsyncMock()):
+            outcome = await runner._decision_sweep()
+
+        self.assertEqual(outcome, "operator_sigterm")
+        self.assertEqual(planned, ["market-one"])
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_all_twenty_slots_are_planned_and_equity_refreshes_mid_sweep(self):
         moment = [NOW]
         runner, _, _ = self.build_runner(clock=lambda: moment[0])
@@ -7223,6 +7254,63 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         # ...and this is the part that was missing: a standing request to
         # rebind, so the loop does not sit in the quarantine loop forever.
         self.assertTrue(runner._streams_need_rebind)
+
+    async def test_top_up_proves_state_before_changing_scope_or_streams(self):
+        """A known order ambiguity must abort while the old session is live.
+
+        Live 2026-08-25: top-up committed its replacement and closed both
+        streams, then strict GET-by-ID returned NotFound. Recovery consequently
+        cancelled the whole slate and retired eighteen otherwise healthy
+        owners. The strict read belongs before that irreversible boundary.
+        """
+
+        runner = await self.armed(replacements=("market-three",))
+        await self._one_dead_slot(runner)
+        before_slugs = runner.active_slugs
+        before_private = runner.private_stream
+        before_market = runner.market_stream
+
+        with patch.object(
+                runner, "_rest_reconcile", new=AsyncMock(
+                    side_effect=AdapterError(
+                        "GET /v1/order/exchange-lagged failed: NotFoundError"))):
+            with self.assertRaisesRegex(AdapterError, "NotFoundError"):
+                await runner._top_up_active_markets(runner._now())
+
+        self.assertEqual(runner.active_slugs, before_slugs)
+        self.assertIs(runner.private_stream, before_private)
+        self.assertIs(runner.market_stream, before_market)
+        self.assertFalse(before_private.closed)
+        self.assertFalse(before_market.closed)
+        self.assertTrue(runner.gate.connected)
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_top_up_scopes_only_the_post_preflight_bind_read(self):
+        """A race after strict preflight may bar its owner, not all slots."""
+
+        runner = await self.armed(replacements=("market-three",))
+        await self._one_dead_slot(runner)
+        original_reconcile = runner._rest_reconcile
+
+        with patch.object(
+                runner, "_rest_reconcile",
+                new=AsyncMock(wraps=original_reconcile)) as reconcile:
+            self.assertTrue(
+                await runner._top_up_active_markets(runner._now()))
+
+        scopes = [call.kwargs.get("strict_order_markets")
+                  for call in reconcile.await_args_list]
+        self.assertEqual(scopes, [None, frozenset()])
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "market-three"))
+        self.assertTrue(runner.gate.connected)
+        self.assertFalse(runner._streams_need_rebind)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_a_successful_bind_clears_the_rebind_request(self):
         """Otherwise the loop would rebind on every single pass."""

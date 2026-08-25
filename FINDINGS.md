@@ -20,6 +20,65 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## One failed one-slot top-up destroyed eighteen healthy owners because proof came after commit
+
+Established from the live 2026-08-25 21:04Z incident by joining the exact log
+timeline, read-only ledger state, process tree and venue state.
+
+At `21:04:09Z`, incremental top-up released one market, retained nineteen and
+selected one replacement. The path committed that new active tuple and closed
+both healthy streams before running strict REST reconciliation. Three existing
+owned order IDs then returned `NotFound`. The bind failed after the old scope
+and sockets were already gone, so `_recover_bound_streams` correctly treated
+the account as globally unobserved and quarantined the slate. That produced 32
+acknowledged CANCEL intents / `UNKNOWN_ABSENT` orders across 18 owners; at about
+21:06Z all eighteen were retired for `unresolved_mutation_timeout`. The two
+owners outside that cancel set continued with four orders. This was therefore
+not low viable supply, a smaller slot cap, the six-hour horizon, or the dormant
+score-hours deployment.
+
+The exact causal signature is:
+
+```text
+[top-up] released=1 kept=19 added=1
+GET /v1/order/<owned-id> ... NotFound during the bind reconcile
+component=bound_streams + [quarantine] called_by=_recover_bound_streams
+many ACKNOWLEDGED CANCEL + UNKNOWN_ABSENT owners
+many unresolved_mutation_timeout retirements roughly one timeout later
+```
+
+The transaction boundary was backwards. Strict whole-account proof belongs
+immediately before changing the active tuple or closing either healthy stream.
+If that proof fails, the old tuple, stream objects, connected gate and resting
+orders must remain unchanged. After a successful strict proof, the socket
+handoff still needs complete order/position snapshots and fresh private state,
+but a newly ambiguous order with one positive owner is contained by that
+owner's existing per-market gate rather than failing all twenty again. Missing,
+conflicting, unowned or out-of-scope ownership remains account-wide terminal,
+and absence still never means cancellation.
+
+Three deliberate mutations prove the regressions are sensitive: removing the
+pre-commit strict proof changes the active tuple and closes streams before the
+injected NotFound; restoring a second account-wide strict read after commit
+breaks the scoped-handoff assertion; removing the mid-sweep stop boundary lets
+a second market be planned after SIGTERM. The complete local suite passes 621
+tests. No size, horizon, market count, selector, economics, order payload, exit,
+risk, REST-rate or WebSocket-layout setting changed.
+
+The stop itself exposed a separate timing edge. SIGTERM set the operator-stop
+flag while a twenty-market decision sweep was already running, and the sweep
+placed several fresh orders before returning to the outer loop. The corrected
+sweep checks the stop flag between owners and immediately hands control to the
+existing shutdown path, which alone cancels and flattens. Shutdown and a final
+positive venue read proved zero open orders and zero positions. The one ledger
+PLACE left acknowledged, exchange ID `C3ECBFZWAFSR`, was not cleared from
+absence: `GET /v1/order/C3ECBFZWAFSR` explicitly returned
+`ORDER_STATE_CANCELED`, and applying that terminal event through the normal
+projector left zero unresolved intents, working orders and `UNKNOWN_ABSENT`
+rows.
+
+---
+
 ## A daily Discord score requires durable ET-day accounting, not just division by 3,600
 
 Established 2026-08-25 by tracing the LIVE summary value from

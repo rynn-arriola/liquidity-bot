@@ -3299,6 +3299,14 @@ class CommissioningRunner:
         state_refresh_failed = False
         planned_slugs = self.active_slugs if slugs is None else slugs
         for slug in planned_slugs:
+            # SIGTERM is delivered by an event-loop callback.  The outer run
+            # loop cannot see it while this twenty-market sweep is already in
+            # progress, so without this boundary the remaining slots can place
+            # fresh risk after an operator has asked the bot to stop.  Observed
+            # live 2026-08-25.  Return to the shutdown path; it alone owns the
+            # cancellation and flattening work that follows a stop.
+            if self._stop_requested:
+                return self._stop_requested
             if slug not in self._markets:
                 continue
             if self.ledger.market_has_unresolved_intent(slug):
@@ -3992,6 +4000,9 @@ class CommissioningRunner:
         pass an empty set after it has already requested cancellation for all
         known quotes: fresh account snapshots then restore the session while
         each unresolved order's existing per-market gate contains its owner.
+        Incremental top-up is the other bounded exception: it first completes
+        an account-wide strict proof while the old scope and streams remain
+        intact, then uses this scoped read only for the socket handoff.
         """
 
         # Close what we are about to drop. `_rotate_reward_market_inner` closes
@@ -4263,13 +4274,32 @@ class CommissioningRunner:
             # the current subscriptions intact and retry only on the normal
             # bounded selection cadence.
             return False
+        # Transaction boundary: prove the current account while the old active
+        # set and both healthy streams are still intact. On 2026-08-25 this
+        # strict read happened only after `_bind_markets` and after both
+        # streams had been closed. Three attributable GET-by-ID NotFound reads
+        # therefore turned a harmless one-slot top-up refusal into global
+        # recovery, which cancelled 32 orders and retired 18 owners. Failing
+        # here leaves the caller able to resume its old stream tasks without a
+        # scope change, cancellation or rebind.
+        await self._rest_reconcile(self._now())
+        self._assert_runtime_scope()
         if not replacements:
             # Still worth releasing: a dead market costs a REST refresh every
             # service cycle and reports `book_stale` every time.
             self._bind_markets(keep)
         else:
             self._bind_markets(keep + replacements)
-        await self._open_streams_for_active_market()
+        # Strictness was established immediately before committing the new
+        # scope, with no order mutation in between. During the short socket
+        # handoff a resting order can still fill or disappear. The complete
+        # post-bind snapshots and fresh private state capture that change;
+        # any positively-owned ambiguity then closes only its market's gate.
+        # Unowned, conflicting or out-of-scope state remains terminal through
+        # `_assert_runtime_scope`. Requiring every attributed GET again would
+        # recreate the same account-wide failure after the safe preflight.
+        await self._open_streams_for_active_market(
+            strict_order_markets=frozenset())
         return True
 
     async def _rotate_reward_market(self, now: datetime) -> bool:

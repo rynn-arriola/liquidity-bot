@@ -8,6 +8,21 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
+- **STOPPED, FLAT, FIX REVIEWED — do not restart from the old top-up path.** At
+  21:04Z one incremental replacement committed its new active tuple and closed
+  both healthy streams before strict REST proof. Three owned order reads then
+  returned NotFound; global recovery canceled 32 orders and eighteen owners
+  retired for `unresolved_mutation_timeout`. The local repair moves strict
+  whole-account proof before the tuple/stream commit and scopes only the
+  complete post-bind handoff, so a preflight failure preserves all old streams,
+  scope and orders. A delivered operator stop now interrupts the remaining
+  owners in an in-progress decision sweep. Three mutants are killed and all
+  621 local tests pass. Server processes are stopped. The venue reported zero
+  open orders/positions; the final acknowledged PLACE was reconciled only after
+  its exchange ID explicitly returned CANCELED, leaving zero unresolved,
+  working and unknown-absent ledger rows. Push/deploy/server-test and a fresh
+  venue-flat check are still required before restart.
+
 - **DEPLOYED ON DISK, NEXT RESTART — ET-day score-hours.** The LIVE Discord
   slots field now uses a durable `America/New_York` reward-day total and
   displays `Score-hours today`; orderly restarts no longer reset it. SHADOW is

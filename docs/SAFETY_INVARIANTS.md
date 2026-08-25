@@ -268,13 +268,19 @@ These are implementation requirements, not suggestions.
     request remains governed by the shared 4 req/s limiter, so one NotFound
     retry ladder cannot serialize the other owners. Complete account snapshots
     remain mandatory on their normal cadence. Absence is never cancellation.
-    Missing,
-    conflicting, unowned, or out-of-scope ownership remains account-wide
-    terminal. Normal active-set changes remain account-wide strict; scoped
-    order reads are a recovery-only exception after global cancellation has
-    already been requested. Private and both-stream reconnect loops are
-    bounded, but exhaustion never proves flat: only shutdown's independent
-    whole-account proof may authorize restartable exit `5`.
+    Missing, conflicting, unowned, or out-of-scope ownership remains
+    account-wide terminal. Normal active-set changes remain account-wide
+    strict. Incremental top-up is a bounded exception only after an immediately
+    preceding strict whole-account reconcile and scope assertion succeeds while
+    the old active tuple and both old streams remain intact, with no order
+    mutation between proof and commit. Its post-bind reconcile still requires
+    complete account order/position snapshots and fresh private state, while a
+    newly ambiguous positively-owned order closes only its owner's market gate.
+    A failed pre-commit proof may not change scope, close a stream or cancel an
+    order. Other scoped order reads are a recovery-only exception after global
+    cancellation has already been requested. Private and both-stream reconnect
+    loops are bounded, but exhaustion never proves flat: only shutdown's
+    independent whole-account proof may authorize restartable exit `5`.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST
@@ -362,3 +368,8 @@ These are implementation requirements, not suggestions.
     reward/economics gate or modify any risk baseline. It adds no venue REST
     request or WebSocket subscription. Aggregate score-hours sum concurrent
     eligible sides and may exceed 24.
+73. Operator stop is a mutation boundary, not merely an outer-loop condition.
+    A stop delivered while a multi-market decision sweep is in progress must
+    prevent the next owner from entering the ordinary plan/apply path. The
+    existing shutdown routine alone owns subsequent cancellation and
+    flattening; prompt stop may not skip its positive whole-account flat proof.

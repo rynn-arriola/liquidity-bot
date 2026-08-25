@@ -29,6 +29,52 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-25
+
+### FIXED LOCALLY — startup validation could leave free slots invisible to top-up
+
+**Symptom.** The size-10 runner selected 20 markets, correctly rejected two
+that became non-open during startup validation, and then stayed bound to 18
+despite 97 markets passing the live six-hour/reward/book policy. The
+instantaneous venue result later showed 16 working orders across 10 markets,
+which looked like another broad order-placement failure but contained two
+different layers: only 18 markets were subscribed, and only 10 happened to be
+resting at that checkpoint.
+
+**Mechanism.** `_refresh_bound_books` intentionally re-bound only healthy
+startup candidates. `_top_up_active_markets` and its run-loop caller both
+required at least one bound market to be past kickoff and flat. Free capacity
+by itself was not a trigger. The normal full-rotation path did not rescue the
+slate because active quoting makes `_safe_to_scan()` false by design. Thus a
+correct candidate-lifecycle rejection created an underfilled set that could
+persist until an unrelated market expired.
+
+**Fix.** Incremental top-up now runs when either an expired-flat market is
+releasable or `len(active_slugs) < max_markets`. It keeps every existing
+non-expired market and venue order, calculates the exact number of free slots,
+and cannot bind more than the configured 20. Underfilled startup makes the
+first selection due immediately. If discovery finds no replacement, the
+existing streams are not rebound. Inventory near its forced-flatten deadline
+still defers the scan; failed rebind recovery and strict ownership checks are
+unchanged.
+
+**Cost and false lead.** No trading-loss amount is attributed to the two free
+slots. They reduced possible reward coverage, but working-order count is not
+equal to bound capacity and the counterfactual reward was not measured. The
+six-hour horizon was not the cause: the live-policy diagnostic found 97 viable
+markets. That diagnostic's final extra account read did cause one Cloudflare
+1015 outside the runner, so it must not be stacked with the live process again.
+
+**Review and proof.** Dedicated regressions cover free-slot refill, exact cap,
+no-replacement/no-rebind, full-capacity/no-scan and immediate startup timing,
+alongside the existing expired-market, position-deadline, empty-set and failed
+stream-bind cases. All **585 local tests pass**. Three mutations each failed
+their specific regression: expired-only triggering, delayed initial refill,
+and an uncapped replacement count. Production deployment and live 20-slot
+acceptance are pending.
+
+---
+
 ## 2026-08-24
 
 ### FIXED AND DEPLOYED — failed active-set bind repeated strict quarantine and held every slot dark

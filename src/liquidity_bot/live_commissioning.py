@@ -4026,8 +4026,34 @@ class CommissioningRunner:
                 return True
         return False
 
+    def _active_set_needs_top_up(self, now: datetime) -> bool:
+        """True when safe, incremental discovery has useful work to do.
+
+        A slot can be free for two different reasons: a bound market reached
+        kickoff and became releasable, or startup validation rejected a
+        selected market before it was ever bound.  The second case used to be
+        invisible to the scheduler, leaving (for example) 18 active markets
+        despite a fresh scan proving that far more than 20 were viable.
+        """
+
+        return (
+            len(self.active_slugs) < self.config.max_markets
+            or any(self._expired_and_flat(slug, now)
+                   for slug in self.active_slugs)
+        )
+
+    def _initial_market_selection_due(self, now: datetime) -> datetime:
+        """Schedule an immediate refill when startup bound fewer than 20."""
+
+        if not self.config.auto_select_reward_markets:
+            return datetime.max.replace(tzinfo=timezone.utc)
+        if self._active_set_needs_top_up(now):
+            return now
+        return now + timedelta(
+            seconds=self.config.market_selection_refresh_seconds)
+
     async def _top_up_active_markets(self, now: datetime) -> bool:
-        """Replace kicked-off markets without disturbing the ones still resting.
+        """Fill free slots without disturbing markets that are still resting.
 
         Full rotation requires a whole-account flat state (`_rotation_blockers`,
         `_discovery_is_free`) because it quarantines every resting order and
@@ -4040,11 +4066,11 @@ class CommissioningRunner:
 
         This path is deliberately narrower. It releases ONLY markets that are
         past kickoff and flat, keeps every other market and its resting orders
-        exactly where they are, and never quarantines. Streams are restarted
-        because they cannot subscribe incrementally, but a stream restart does
-        not touch resting orders -- those live on the venue and keep earning
-        through it. That is the whole difference from full rotation, which
-        cancels them.
+        exactly where they are, fills any capacity startup validation left
+        free, and never quarantines. Streams are restarted because they cannot
+        subscribe incrementally, but a stream restart does not touch resting
+        orders -- those live on the venue and keep earning through it. That is
+        the whole difference from full rotation, which cancels them.
         """
 
         if not self.config.auto_select_reward_markets:
@@ -4055,9 +4081,10 @@ class CommissioningRunner:
             return False
         expired = [slug for slug in self.active_slugs
                    if self._expired_and_flat(slug, now)]
-        if not expired:
-            return False
         keep = tuple(slug for slug in self.active_slugs if slug not in expired)
+        free = max(0, self.config.max_markets - len(keep))
+        if not expired and free == 0:
+            return False
         scan_started = time.monotonic()
         try:
             selection = await self.reward_selector.select(now=self._now())
@@ -4065,7 +4092,6 @@ class CommissioningRunner:
             self._selection_scan_seconds_last = time.monotonic() - scan_started
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
-        free = self.config.max_markets - len(keep)
         exclude = self._barred_slugs() | set(keep) | set(expired)
         replacements = tuple(
             item.market.slug
@@ -4088,6 +4114,11 @@ class CommissioningRunner:
                 f"expired={len(expired)}",
                 flush=True,
             )
+            return False
+        if not replacements and not expired:
+            # Capacity is free, but this scan found nothing safe to add. Keep
+            # the current subscriptions intact and retry only on the normal
+            # bounded selection cadence.
             return False
         if not replacements:
             # Still worth releasing: a dead market costs a REST refresh every
@@ -5459,11 +5490,7 @@ class CommissioningRunner:
             next_state_reconcile = now + timedelta(seconds=10)
             next_earnings = now + timedelta(
                 seconds=self.config.earnings_refresh_seconds)
-            next_selection = (
-                now + timedelta(
-                    seconds=self.config.market_selection_refresh_seconds)
-                if self.config.auto_select_reward_markets
-                else datetime.max.replace(tzinfo=timezone.utc))
+            next_selection = self._initial_market_selection_due(now)
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
             queue_measurement_task = asyncio.create_task(
@@ -5614,13 +5641,13 @@ class CommissioningRunner:
                 # twenty markets almost never happens -- measured 2026-08-16,
                 # it ran twice, both at startup, while markets kicked off and
                 # were never replaced. When it cannot run, still reclaim the
-                # slots held by markets that have kicked off and are flat.
-                # That path keeps every resting order where it is.
+                # slots held by markets that have kicked off and are flat, or
+                # fill capacity that startup validation left free. That path
+                # keeps every resting order where it is.
                 if (self.config.auto_select_reward_markets
                         and now >= next_selection
                         and not self._safe_to_scan()
-                        and any(self._expired_and_flat(slug, now)
-                                for slug in self.active_slugs)):
+                        and self._active_set_needs_top_up(now)):
                     stream_tasks = (market_task, private_task)
                     for task in stream_tasks:
                         task.cancel()

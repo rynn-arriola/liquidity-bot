@@ -1,5 +1,36 @@
 # Next session — outstanding fixes
 
+## READY TO DEPLOY: refill capacity rejected during startup validation
+
+The 2026-08-25 run proved 97 viable markets under the live six-hour policy but
+bound 18/20 because two selected candidates became non-open during preflight.
+That safe drop exposed a scheduler hole: incremental top-up required an
+expired-flat bound market and did not consider free capacity itself.
+
+The local repair makes under-capacity an immediate top-up trigger, retains all
+existing markets and resting orders, adds only the exact free count, and does
+nothing to streams when no replacement exists. The 20 cap, 4 req/s limiter,
+quote-size/risk economics, ownership gates and near-flatten-deadline inventory
+guard are unchanged. All 585 tests pass; three deliberate mutations prove the
+free-capacity trigger, immediate startup timing and exact cap.
+
+Deployment acceptance must prove:
+
+1. graceful shutdown reports/proves flat before files are replaced;
+2. deployed hashes match and all 585 tests pass on the stopped droplet;
+3. restart remains `auto 10` with configured `max_markets=20`;
+4. startup or immediate `[top-up]` reaches an exact ordered 20-market active
+   and subscribed set when viable supply remains sufficient;
+5. no position, unresolved/unknown-absent ownership defect, risk stop or
+   stream-rebind loop is introduced;
+6. newly added slugs reach ordinary `[action]` planning. Working order count
+   may legitimately remain below 20 and is not acceptance by itself.
+
+Future keyword/prompt: **“run a liquidity-bot 20-slot capacity audit”** and
+use the exact-layer checklist in the newest FINDINGS entry. Do not rerun the
+heavy authenticated viable-market diagnostic while the funded runner is live;
+the current result is already 97 viable for 20.
+
 ## DEPLOYED AND RESTARTED: maintenance-aware automatic recovery
 
 The 2026-08-25 maintenance incident exhausted the 12-attempt both-stream

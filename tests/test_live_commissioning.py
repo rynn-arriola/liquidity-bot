@@ -6888,6 +6888,76 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_free_startup_capacity_is_filled_without_releasing_markets(self):
+        """Rejected startup candidates used to leave 18/20 forever."""
+
+        runner = await self.armed(replacements=(
+            "market-three", "market-four", "market-five"))
+        runner.config = replace(runner.config, max_markets=3)
+        runner._bind_markets(("market-one", "market-two"))
+        for slug in runner.active_slugs:
+            runner.state_for(slug).market = SimpleNamespace(
+                game_start=runner._now() + timedelta(hours=2))
+
+        before = runner.active_slugs
+        self.assertTrue(runner._active_set_needs_top_up(runner._now()))
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(runner.active_slugs,
+                         before + ("market-three",))
+        self.assertEqual(len(runner.active_slugs), 3)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_free_capacity_with_no_replacement_keeps_streams_intact(self):
+        runner = await self.armed(replacements=())
+        runner.config = replace(runner.config, max_markets=3)
+        runner._bind_markets(("market-one", "market-two"))
+        for slug in runner.active_slugs:
+            runner.state_for(slug).market = SimpleNamespace(
+                game_start=runner._now() + timedelta(hours=2))
+        before_private = runner.private_stream
+        before_market = runner.market_stream
+
+        self.assertFalse(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(runner.active_slugs,
+                         ("market-one", "market-two"))
+        self.assertIs(runner.private_stream, before_private)
+        self.assertIs(runner.market_stream, before_market)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_full_capacity_without_expiry_does_not_scan(self):
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        for slug in runner.active_slugs:
+            runner.state_for(slug).market = SimpleNamespace(
+                game_start=runner._now() + timedelta(hours=2))
+        runner.reward_selector.select = AsyncMock(
+            side_effect=AssertionError("full capacity must not scan"))
+
+        self.assertFalse(runner._active_set_needs_top_up(runner._now()))
+        self.assertFalse(await runner._top_up_active_markets(runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_underfilled_startup_schedules_immediate_top_up(self):
+        runner = await self.armed(replacements=())
+        runner.config = replace(runner.config, max_markets=2)
+        now = runner._now()
+
+        self.assertEqual(runner._initial_market_selection_due(now), now)
+
+        runner.config = replace(runner.config, max_markets=1)
+        self.assertEqual(
+            runner._initial_market_selection_due(now),
+            now + timedelta(
+                seconds=runner.config.market_selection_refresh_seconds))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_recovery_rebinds_both_streams_and_resumes(self):
         """`_recover_bound_streams` must fix BOTH sides. The two existing
         recoveries each repair one and assume the other is healthy, which is

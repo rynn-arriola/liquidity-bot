@@ -23,6 +23,18 @@ from fact rather than from the last thing someone remembers.
   awaits a natural outage; do not induce one. See the newest NEXT, FINDINGS,
   BUGFIXES and invariant 69 entries.
 
+- **A free-capacity top-up repair is locally complete and awaiting deploy.**
+  The current startup safely dropped two candidates that became non-open and
+  bound 18, but a live-policy diagnostic still found 97 viable markets. The
+  top-up scheduler only recognized expired-flat markets, not
+  `len(active_slugs) < max_markets`, so free startup slots could persist. The
+  repair makes under-capacity immediate top-up work, retains every existing
+  order/market, caps additions at exactly 20, and preserves the inventory
+  deadline/ownership/stream safety gates. All 585 tests and three deliberate
+  mutation checks pass. See the newest FINDINGS, BUGFIXES and NEXT entries.
+  Do not run another heavy authenticated supply probe beside the live runner;
+  its final extra read already caused one isolated Cloudflare 1015.
+
 - **The dual-stream recovery repair is deployed as `bec8a83`.**
   At 21:31Z a top-up bind closed both streams, then owned GET-by-ID NotFound
   lag left four acknowledged cancels `UNKNOWN_ABSENT`; strict

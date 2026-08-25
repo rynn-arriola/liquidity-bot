@@ -20,6 +20,90 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Fewer orders can mean an underfilled active set even when viable supply is abundant
+
+Established from the live 2026-08-25 size-10 run without mutating venue state.
+The startup log showed that the selector chose 20 candidates, then preflight
+correctly dropped two that had become non-open and bound 18. The queue
+measurement independently reported `markets=18`. At 12:30:52Z the read-only
+ledger held 16 working orders across 10 markets, three unresolved intents
+across three markets, one 6.04-contract position, and zero `UNKNOWN_ABSENT`
+orders. Those order counts were an instantaneous execution result; the
+separate capacity fact was 18 bound markets under a configured maximum of 20.
+
+Supply was disproved as the cause by one live-policy selector diagnostic:
+
+```text
+catalog                         12,466
+inside the six-hour horizon        193
+carrying rewards                   193
+refused for tight book              83
+eligible pregame                    110
+books read                          100
+deferred by scan cap                 10
+VIABLE                               97 of 20 slots
+```
+
+The diagnostic's final, separate authenticated open-order read received one
+Cloudflare 1015 because it competed with the funded runner. The runner stayed
+alive and completed a CANCEL mutation at 12:31:31Z. Do not repeat
+`usable_markets.py` beside a live runner merely to re-prove supply; use its
+existing result, commissioning logs and read-only SQLite. This is another
+example of why stacked authenticated diagnostics are prohibited.
+
+The scheduler defect was exact: `_refresh_bound_books` may safely drop a
+startup candidate, but the periodic incremental top-up branch was entered only
+when an already-bound market was past kickoff and flat. Merely having
+`len(active_slugs) < max_markets` was not work, so the two free slots could
+remain empty until some different market expired. The six-hour horizon,
+selector, quote size and venue supply were all functioning.
+
+The reviewed repair treats either a releasable expired market or free capacity
+as top-up work. It retains every non-expired market and every resting venue
+order, excludes retained/expired/barred slugs, and slices replacements to
+exactly `max_markets - len(keep)`. An underfilled startup schedules this scan
+immediately instead of after the ordinary 900-second refresh. No replacement
+means no bind and no stream disturbance. The existing near-flatten-deadline
+inventory guard, strict stream rebind, 4 req/s limiter and 20-market hard cap
+remain unchanged.
+
+### Proper detection signature for the next 20-slot investigation
+
+Do not use raw order count as slot count. Run a **20-slot capacity audit** and
+correlate these layers from one run boundary:
+
+```text
+configured capacity     CommissioningConfig.max_markets (must be 20)
+bound/subscribed set    [queue-measurement] ... markets=N
+refill attempt          [top-up] released=R kept=K added=A free_slots=F
+scheduler reach         distinct market= slugs in later [action] lines
+instant venue result    working orders/markets, positions and unresolved state
+universe supply         one live-policy viable scan only when not already known
+```
+
+For a startup drop, the expected positive marker is
+`[top-up] released=0 kept=18 added=2 free_slots=2`, followed by a
+`[queue-measurement] ... markets=20` observation or an equivalent exact
+active/subscription tuple and actions across the newly added slugs. If supply
+is at least 20 but `markets=N<20` persists beyond a due top-up, inspect the
+top-up error/backoff and stream-rebind markers. If `markets=20` but working
+orders are 12-14, investigate per-market decisions, blockers, positions and
+in-flight mutations instead; the slot scheduler is full.
+
+A concise prompt for a future reviewer is: **“Run a liquidity-bot 20-slot
+capacity audit. From one exact run boundary, compare configured max, ordered
+active/subscribed slugs, queue-measurement market count, top-up released/kept/
+added/free values, distinct action markets, working-order markets, positions
+and unresolved owners. Use the existing viable-supply result before making
+another authenticated scan, and determine whether the loss is supply,
+capacity refill, stream bind, or per-market planning.”**
+
+Local proof before deployment: all 585 tests pass. Three deliberate mutants
+were killed: restoring the expired-only trigger, restoring the 15-minute
+startup delay, and allowing the replacement slice to exceed free capacity.
+
+---
+
 ## A failed top-up bind can look like a healthy twenty-slot process while every slot is stopped
 
 Established from the live 2026-08-24 21:31Z incident by comparing the process

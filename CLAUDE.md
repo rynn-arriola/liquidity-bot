@@ -8,21 +8,17 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is STOPPED and venue-backed flat.** The operator requested a stop while
-  the ET/$80 review finishes. The `2e3c677` size-10 runner exited at
-  `2026-08-25T17:48:00Z` with `flat:true` and `operator_sigterm`; both runner
-  and supervisor are down. Do not restart before the pending change is fully
-  reviewed. Before shutdown, the guarded reward-ended slot repair was deployed.
-  All 11 hashes matched and all 598 tests passed locally and on the stopped
-  droplet; seven
-  deliberate mutants were killed. The previous runner gracefully stopped with
-  `flat:true`. `[queue-measurement]` reported `markets=20`; at 13:38:41Z there
-  were 32 working orders across all 20 markets, all quantity 10, with zero
-  unresolved, unknown-absent or position state and no new critical fault. The
-  first natural `reward_ended=N` event still awaits observation. Raw working-
-  order count is not slot count; use the newest FINDINGS 20-slot audit.
+- **Bot is LIVE on reviewed commit `26b11b2`.** Before restart, all 15 changed
+  files matched the server and all 612 tests passed there in 59.027 seconds.
+  Whole-account preflight showed zero positions and open orders, and the ledger
+  showed zero unresolved and `UNKNOWN_ABSENT`. The unchanged `auto 10` runner
+  started at about 18:36Z under its supervisor. At 18:40Z it held 36 open
+  quantity-10 orders across all 20 markets, with zero positions, unresolved
+  intents or `UNKNOWN_ABSENT`, and no new critical fault marker. Raw order count
+  is not slot count; use queue `markets=20` plus distinct active owners when
+  auditing the scheduler.
 
-- **DEPLOYED BUT NOT ACTIVE: ET risk day and one $80 account threshold.** The
+- **DEPLOYED AND ACTIVE: ET risk day and one $80 account threshold.** The
   operator authorized both session and hard thresholds at
   $80 and moved their durable reset from UTC midnight to midnight
   `America/New_York`. Both sensors remain: realized loss pauses new risk;
@@ -30,9 +26,11 @@ from fact rather than from the last thing someone remembers.
   migration copies the baseline the UTC runner was already enforcing, so a
   restart cannot grant a second budget; if stopped across UTC midnight it uses
   the latest prior row, and later baselines are ET-only. The local
-  implementation passes all 609 tests and kills four deliberate safety
-  mutations. The reviewed files are deployed, but the bot remains stopped;
-  ET/$80 becomes active only on the next authorized restart.
+  implementation passes all 612 tests and kills the relevant deliberate safety
+  mutations. Live acceptance found the first ET row at `2026-08-25`, source
+  `legacy_utc_cutover`, exactly preserving legacy opening equity/cash
+  `478.6998` and realized `-207.39180000`. The dashboard now reports `ET DAY`
+  and both account limits as `$80`.
 
 - **DEPLOYED AND ACTIVE — visually accepted hourly reward table.** The first
   real post at `2026-08-25T18:06:15Z` proved delivery but its wide pipe table
@@ -42,7 +40,7 @@ from fact rather than from the last thing someone remembers.
   support and refuses more than seven days. The underlying report remains one
   account-wide earnings request plus a read-only SQLite scan; the separate
   wrapper retains its nonblocking lock, 90-second timeout and `nice -n 10`.
-  The trading bot remains stopped. The revised post at
+  The revised post at
   `2026-08-25T18:18:42Z` passed server tests, delivered successfully and was
   visually accepted by the operator; the minute-7 hourly crontab entry is
   active.
@@ -54,8 +52,9 @@ from fact rather than from the last thing someone remembers.
   post and remained intact at `0700/0600`.
   The pre-restart review found that unconditional validation of this report-
   only URL could block trading startup if the value were malformed. The
-  prepared isolation fix requires and validates it only in the hourly process;
-  include that fix in stopped-server verification before restarting.
+  deployed isolation fix requires and validates it only in the hourly process.
+  Trading subsequently passed its independent startup path and reached all 20
+  markets.
 
 - **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
@@ -156,10 +155,10 @@ from fact rather than from the last thing someone remembers.
   natural private disconnect, validate five-owner `[unresolved-repair]`
   progress and immediate flat-owner release using the newest FINDINGS entry;
   do not induce a disconnect merely to test a funded live account.
-- **Venue reward dates are ET, not UTC.** Daily reward/trading reports use
+- **Venue reward dates and active risk days are ET, not UTC.** Daily reward/trading reports use
   `America/New_York` and DST-aware boundaries. Reward totals never changed.
-  Historical deployed code kept risk on UTC deliberately; the operator's
-  2026-08-25 ET risk-day change is now prepared locally but is not live.
+  The operator's 2026-08-25 ET risk-day change is now live with its guarded
+  legacy-baseline cutover verified from the production ledger.
 - **Standalone dashboard risk bars are directional, not authoritative.** At
   16:13Z they displayed $60.97 for both SESSION and HARD, while the venue plus
   durable UTC baseline proved the actual cash/equity drawdown was $47.032.

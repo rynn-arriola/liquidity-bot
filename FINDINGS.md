@@ -35,6 +35,11 @@ into presence plus approved-Discord-URL validation. This does not relax the
 reporter's URL protection, and it does not change the validation of Polymarket
 or the normal/error Discord credentials used by trading.
 
+Deployment acceptance matched all 15 `26b11b2` files and passed all 612 tests
+on the stopped server. The normal trading process subsequently passed startup
+and reached 20 quoted markets, so the report-only validation is no longer on
+its required startup path.
+
 ---
 
 ## Discord needs fixed-width narrow tables; pipe tables are not visual tables
@@ -132,11 +137,20 @@ date reset failed at 00:30Z, bypassing the one-time legacy copy failed the
 cutover test, requiring an exact current UTC row failed the stopped-across-
 midnight test, and disallowing equal $80 limits failed the two-sensor test.
 
-This change is deployed but cannot be active while the bot is down. The funded
-`2e3c677` process stopped at
-`2026-08-25T17:48:00Z` with venue-backed `flat:true`; its supervisor and runner
-are down and were not restarted. All 26 deployed hashes matched and the complete
-609-test suite passed on the stopped server.
+The change became active at the reviewed restart at about 18:36Z. The first
+row in `execution_risk_day_baselines` is `2026-08-25`, opening equity/cash
+`478.6998`, opening realized `-207.39180000`, created from
+`legacy_utc_cutover`; every value exactly matches the legacy UTC row already in
+force. The dashboard labeled the result `ET DAY` and showed both live limits
+as `$80`. This proves the restart neither reset the loss nor retained UTC as
+the active calendar.
+
+The same acceptance proved the strategy envelope was unchanged: the queue
+measurement bound 20 markets, then the ledger held 36 open orders across 20
+distinct markets, every original quantity exactly 10. Recent intents had all
+reconciled; positions and `UNKNOWN_ABSENT` were zero, both supervised processes
+remained alive, and no new critical, private-recovery, mutation-timeout,
+retirement or traceback marker appeared.
 
 ---
 

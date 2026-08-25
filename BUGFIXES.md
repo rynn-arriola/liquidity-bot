@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIX PREPARED — malformed report-only webhook could block trading startup
+### FIXED, DEPLOYED AND ACTIVE — malformed report-only webhook could block trading startup
 
 **Symptom.** No live outage occurred because the installed rewards webhook is
 valid. However, a malformed future `DISCORD_REWARDS_WEBHOOK_URL` would make the
@@ -44,7 +44,7 @@ validation to `load_runtime_secrets()`. Every trading, probe, supervisor-alert,
 and dashboard caller uses that loader. Process separation, read-only SQLite,
 and a separate webhook route did not remove this startup dependency.
 
-**Prepared fix.** Rewards-webhook presence and URL validation are opt-in via
+**Fix.** Rewards-webhook presence and URL validation are opt-in via
 `require_rewards_webhook=True`, used only by the hourly reporter. Trading still
 loads and validates its Polymarket and normal/error Discord credentials, but
 retains the unused rewards value opaquely. The reporter fails its own process
@@ -55,6 +55,13 @@ malformed rewards URL and proves trading secret loading succeeds. Two reporter
 cases prove missing and malformed values fail. The reward-table regression
 also pins the reporter's opt-in. The malformed-value mutation fails the new
 tests.
+
+**Deployment acceptance.** Commit `26b11b2` matched the stopped server for all
+15 changed files and all 612 tests passed there in 59.027 seconds. Trading then
+started normally with the report-only URL present, proving the isolated loader
+did not disturb its startup path. At the 18:40Z acceptance checkpoint the
+supervised runner held 36 open size-10 orders across all 20 markets, with zero
+positions, unresolved intents or `UNKNOWN_ABSENT` orders.
 
 ---
 
@@ -85,7 +92,7 @@ operator. The minute-7 hourly cron was then restored.
 
 ---
 
-### POLICY CHANGE DEPLOYED, BOT STOPPED — daily loss budget reset was UTC
+### POLICY CHANGE DEPLOYED AND ACTIVE — daily loss budget reset was UTC
 
 **Symptom.** The bot's TODAY/hard-stop day reset at 00:00 UTC even though the
 operator reads rewards and daily trading on the venue's ET day. The two $80
@@ -115,10 +122,14 @@ strict `hard > session` validation was caught by the equal-limit sensor test.
 Requiring an exact legacy date was separately caught by the stopped-across-UTC-
 midnight regression.
 
-The reviewed files are deployed after all 26 hashes matched and all 609 tests
-passed on the stopped server. The `2e3c677` bot stopped gracefully at
-`2026-08-25T17:48:00Z` with `flat:true` and was not restarted, so the new ET
-calendar and $80/$80 limits are not active until the next authorized start.
+The final reviewed files were deployed as `26b11b2`; all 15 changed hashes
+matched and all 612 tests passed on the stopped server in 59.027 seconds. The
+size-10 runner restarted at about 18:36Z. Its first ET baseline row is
+`2026-08-25`, source `legacy_utc_cutover`, with opening equity/cash `478.6998`
+and opening realized `-207.39180000`, exactly matching the legacy UTC row. The
+live dashboard reported `ET DAY` and independent `$80` session/hard bars. At
+18:40Z it held 36 size-10 orders across all 20 markets, with zero positions,
+unresolved intents or `UNKNOWN_ABSENT` orders.
 
 ---
 

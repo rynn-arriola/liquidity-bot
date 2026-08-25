@@ -31,15 +31,15 @@ for wrong-webhook routing, the seven-day visual-layout cap and removal of the
 non-overlap lock. The exact-row-width assertion separately prevents the header
 misalignment found during local preview.
 
-The pre-restart dependency review found one remaining coupling: rewards URL
-validation ran for every shared-secret caller and could block trading startup
-on a malformed report-only value. The prepared isolation fix makes validation
-mandatory only for the reporter and has dedicated missing/malformed/trading-
-unaffected regressions. Deploy and include it in the full stopped-server suite
-before restarting.
+The pre-restart dependency review found and removed one remaining coupling:
+rewards URL validation ran for every shared-secret caller and could block
+trading startup on a malformed report-only value. Validation is now mandatory
+only for the reporter. Commit `26b11b2` matched all 15 deployed files, passed
+all 612 stopped-server tests, and the normal trading startup subsequently
+reached all 20 markets. No reporting-only dependency remains on that path.
 
 
-## DEPLOYED, BOT STOPPED, NOT YET ACTIVE: ET risk day and $80/$80 limits
+## DEPLOYED AND ACTIVE: ET risk day and $80/$80 limits
 
 The operator authorized midnight `America/New_York` as the durable reset for
 the per-market/session/hard loss budget and one $80 threshold for the two
@@ -64,12 +64,13 @@ test; requiring an exact current UTC row failed the stopped-across-midnight
 test; and rejecting equal session/hard limits failed the independent-sensor
 test.
 
-The funded `2e3c677` runner stopped gracefully at `2026-08-25T17:48:00Z` with
-venue-backed `flat:true`; its supervisor and runner are both down and it has not
-been restarted. All 26 deployed hashes matched and all 609 tests passed on the
-stopped server. Restart acceptance must show `$80 / $80`, `since 00:00 ET`, an
-ET risk-baseline row whose first source is
-`legacy_utc_cutover`, and unchanged 20-slot/size-10 behavior.
+The final `26b11b2` review matched all 15 changed server files and all 612 tests
+passed there in 59.027 seconds. The bot restarted at about 18:36Z. Its first ET
+row (`2026-08-25`, source `legacy_utc_cutover`) exactly preserves the legacy
+opening equity/cash `478.6998` and opening realized `-207.39180000`. The live
+dashboard reported `ET DAY` and `$80 / $80`. Acceptance then found 36 open
+orders across all 20 markets, every quantity 10, with zero positions,
+unresolved intents, `UNKNOWN_ABSENT` orders or new critical fault markers.
 
 
 ## 00. FIXED, DEPLOYED AND RESTARTED: replace flat markets whose reward period has positively ended

@@ -20,9 +20,11 @@ from fact rather than from the last thing someone remembers.
   matched and all 618 reduced-priority server tests passed in 72.378 seconds.
   Supervisor PID `1885250` and runner PID `1885453` were unchanged, so the
   current process still has the prior code loaded and this activates only on
-  its next restart.
+  its next restart. Immediately before the disk-only deployment,
+  `DEPLOYED_COMMIT` was `3c57d7e`.
 
-- **Bot is LIVE on reviewed commit `26b11b2`.** Before restart, all 15 changed
+- **Historical 20-slot acceptance on reviewed commit `26b11b2`.** Before
+  restart, all 15 changed
   files matched the server and all 612 tests passed there in 59.027 seconds.
   Whole-account preflight showed zero positions and open orders, and the ledger
   showed zero unresolved and `UNKNOWN_ABSENT`. The unchanged `auto 10` runner

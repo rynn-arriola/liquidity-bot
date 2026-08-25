@@ -3645,6 +3645,30 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_a_loss_stop_in_the_utc_midnight_gap_uses_the_et_date(self):
+        """The pause streak and baseline must never disagree on their day."""
+
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        # 00:30Z on August 14 is still August 13 in New York. A future refactor
+        # that changes only the stop-streak key back to UTC would make the
+        # pause persist across the ET baseline reset or corrupt the three-day
+        # consecutive-stop bound.
+        after_utc_midnight = datetime(
+            2026, 8, 14, 0, 30, tzinfo=timezone.utc)
+        runner.risk_guard.observe_equity(
+            runner.balance.marked_equity, observed_at=after_utc_midnight)
+        runner.risk_guard.observe_realized(
+            -runner.config.max_session_loss_usd)
+
+        self.assertIsNone(runner._stop_reason(after_utc_midnight))
+        rows = runner.ledger.query(
+            "SELECT risk_date FROM execution_risk_loss_stop_days")
+        self.assertEqual([row["risk_date"] for row in rows], ["2026-08-13"])
+        self.assertEqual(runner._loss_pause_pending[0], "2026-08-13")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_restart_inside_the_same_day_inherits_its_drawdown(self):
         """A restart must not hand the day's budget back.
 
@@ -3758,7 +3782,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         The day baseline resets at midnight, so a strategy that is
         systematically wrong rather than unlucky would lose its full budget
-        every day forever with nothing forcing anyone to look -- and the $45
+        every day forever with nothing forcing anyone to look -- and the $80
         emergency ceiling cannot catch it either, because that re-baselines
         each morning too. One bad day is variance; three in a row is a broken
         model.

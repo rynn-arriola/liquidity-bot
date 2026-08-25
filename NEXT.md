@@ -31,6 +31,13 @@ for wrong-webhook routing, the seven-day visual-layout cap and removal of the
 non-overlap lock. The exact-row-width assertion separately prevents the header
 misalignment found during local preview.
 
+The pre-restart dependency review found one remaining coupling: rewards URL
+validation ran for every shared-secret caller and could block trading startup
+on a malformed report-only value. The prepared isolation fix makes validation
+mandatory only for the reporter and has dedicated missing/malformed/trading-
+unaffected regressions. Deploy and include it in the full stopped-server suite
+before restarting.
+
 
 ## DEPLOYED, BOT STOPPED, NOT YET ACTIVE: ET risk day and $80/$80 limits
 

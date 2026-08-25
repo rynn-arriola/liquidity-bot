@@ -31,6 +31,33 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIX PREPARED — malformed report-only webhook could block trading startup
+
+**Symptom.** No live outage occurred because the installed rewards webhook is
+valid. However, a malformed future `DISCORD_REWARDS_WEBHOOK_URL` would make the
+shared secret loader raise while starting the trading bot, even though the bot
+never posts to that channel. A reporting-only configuration mistake could
+therefore prevent commissioning startup.
+
+**Mechanism.** Adding the fifth shared assignment also added unconditional URL
+validation to `load_runtime_secrets()`. Every trading, probe, supervisor-alert,
+and dashboard caller uses that loader. Process separation, read-only SQLite,
+and a separate webhook route did not remove this startup dependency.
+
+**Prepared fix.** Rewards-webhook presence and URL validation are opt-in via
+`require_rewards_webhook=True`, used only by the hourly reporter. Trading still
+loads and validates its Polymarket and normal/error Discord credentials, but
+retains the unused rewards value opaquely. The reporter fails its own process
+when the dedicated value is missing or malformed.
+
+**Proof.** A regression loads valid trading credentials beside a deliberately
+malformed rewards URL and proves trading secret loading succeeds. Two reporter
+cases prove missing and malformed values fail. The reward-table regression
+also pins the reporter's opt-in. The malformed-value mutation fails the new
+tests.
+
+---
+
 ### FIXED, DEPLOYED AND ACTIVE — Discord rendered the wide reward table as disorganized text
 
 **Symptom.** The first dedicated-channel acceptance post delivered

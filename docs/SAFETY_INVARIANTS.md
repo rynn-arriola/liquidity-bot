@@ -20,9 +20,10 @@ These are implementation requirements, not suggestions.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
-    maker-lab stopped. Size and breadth are **5 contracts per quote by default
+    maker-lab stopped. Size and breadth are **the persisted operator quantity
     across at most 20 concurrently bound markets**. Quote size is a whole,
-    restart-scoped value bounded to 5-10; it returned 10 -> 5 on 2026-08-24.
+    restart-scoped value bounded to 5-10; the persisted live setting is 10 and
+    5 is only the missing-file fallback.
     Breadth and the six-hour selection horizon did not change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`) and the session execution-
     fee cap (`0.30 × size`) are computed properties, not independent knobs, so
@@ -91,18 +92,20 @@ These are implementation requirements, not suggestions.
     reconciling and uses any remaining exit attempt when a safe exact-position
     IOC is available; it never holds a position while silent.
 33. Venue reward eligibility is necessary but not sufficient for entry. A live
-    side must also pass a normalized competing-score projection, a conservative
-    per-side pool allocation, a 50% reward haircut, and a 2x
-    probability-weighted stressed-exit-cost margin. The venue's $1 aggregate
-    settlement threshold is reporting-only, never a per-market gate. Missing
-    duration or economic evidence means zero orders, not an override sentinel.
+    side must also pass current lifecycle, structure, spread, target
+    depth/cutoff, freshness, exitability, exposure, ownership, and loss gates.
+    The normalized 30-second reward/no-fill/stressed-exit model remains
+    advisory telemetry while `enforce_reward_cost_gate` is false; its sign may
+    not veto an otherwise authorized quote. The venue's $1 aggregate settlement
+    threshold is reporting-only, never a per-market gate. Missing reward
+    duration or enforced safety evidence means zero orders.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published
     pool size is never substituted for the bot's proportional share.
-35. A session stops maker quoting after 20 confirmed taker exits or $0.25 of
-    session execution fees, whichever comes first, then cancels, reconciles and
-    proves flat. The budget exists to collect exit evidence; it is a ceiling,
-    not a target.
+35. A session stops maker quoting after 20 confirmed taker exits or
+    `0.30 × quote size` of session execution fees ($3 at the persisted live
+    size 10), whichever comes first, then cancels, reconciles and proves flat.
+    The budget exists to collect exit evidence; it is a ceiling, not a target.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.
@@ -110,12 +113,14 @@ These are implementation requirements, not suggestions.
     tick, minimum-quantity, and proven six-hour pregame clock gates in memory,
     then requests incentives only for those symbols. It must never retrieve
     metadata once per reward slug. All reads share the 4 requests/second
-    governor; books are capped at 25 per pass and a rotating window eventually
+    governor; books are capped at 100 per pass and a rotating window eventually
     inspects lower-ranked eligible pools.
 38. A market rotation is allowed only after bot quotes are canceled and a
     whole-account REST snapshot proves zero working orders, zero nonzero
     positions, no unresolved intent, and known ownership. Only then may the
-    singleton public/private stream subscription be rebound.
+    active public/private subscription set be rebound. Incremental top-up is
+    the later invariant-60/70 exception: it retains every healthy owner and
+    releases only a positively safe slot.
 39. An unsupported or undocumented incentive lifecycle is observable but
     cannot authorize an order. `daily` is documented but not yet implemented
     by the pregame executor; `tournament_with_cutoff` was observed live but has
@@ -141,16 +146,18 @@ These are implementation requirements, not suggestions.
     branch. The selector and live runner must use the same calibrated model and
     horizon.
 45. Historical paid reward yield may reorder current candidates but cannot
-    authorize entry. Current structure, spread, target depth, reward projection,
-    stressed exit depth, and positive expected value remain mandatory.
+    authorize entry. Current structure, spread, target depth, applicable reward
+    duration, and stressed exit depth remain mandatory. Positive expected value
+    is recorded but is not mandatory while the cost gate is advisory.
 46. Live score-seconds accrue only for an owned order observed working on a
-    side that remains reward-eligible and economically authorized. Candidate
+    side that remains reward-eligible and otherwise authorized. Candidate
     score from a side with no order, or a side now blocked for cancellation,
     is never reported as attributable resting exposure.
 47. Automatic selection returns an execution target only when at least one side
-    has positive lower-bound expected value. A zero-viable refresh keeps the
-    existing singleton stream scope and cannot rebind to a monitoring-only
-    market; a zero-viable startup refuses before order entry.
+    clears every enforced reward and safety gate. Advisory expected value may
+    rank or describe a side but may not exclude it. A zero-viable refresh keeps
+    the existing active set; a zero-viable startup waits flat and periodically
+    rescans rather than binding a monitoring-only market or exiting.
 48. Catalog BBO is advisory. A malformed, locked, or crossed catalog quote is
     normalized to unavailable metadata and cannot reject otherwise valid
     market metadata. Only a fresh full book may authorize or reject entry.
@@ -339,5 +346,7 @@ These are implementation requirements, not suggestions.
     credentials file, is excluded from repr/log output, and may never be
     committed. Discord output is capped at seven ET days and uses two narrow
     fixed-width monospaced tables whose row widths are regression-tested; it
-    must not depend on pipe-table rendering or color. Report failure cannot
-    stop, restart or alter the runner.
+    must not depend on pipe-table rendering or color. Presence and validation
+    of the report-only webhook are required by the hourly process alone; a
+    missing or malformed value may not block trading secret loading. Report
+    failure cannot stop, restart or alter the runner.

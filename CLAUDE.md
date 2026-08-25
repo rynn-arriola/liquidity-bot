@@ -52,6 +52,10 @@ from fact rather than from the last thing someone remembers.
   displaying its value, and directory/file modes were restored to `0700/0600`.
   Names and modes were validated immediately before and after the accepted
   post and remained intact at `0700/0600`.
+  The pre-restart review found that unconditional validation of this report-
+  only URL could block trading startup if the value were malformed. The
+  prepared isolation fix requires and validates it only in the hourly process;
+  include that fix in stopped-server verification before restarting.
 
 - **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
@@ -177,8 +181,9 @@ from fact rather than from the last thing someone remembers.
   can resolve (`scripts/resolve_orphan_places.py` is the stopgap), and the
   unresolved-mutation stop is still account-wide, so one stuck intent stops all
   twenty markets. Both are `NEXT.md` item 00.
-- **Both loss stops re-baseline on every restart.** 2026-08-19 saw ten
-  sessions, so the $40 budget was handed back ten times. Top of `NEXT.md`.
+- **The restart re-baseline defect is fixed but awaits live acceptance.** The
+  first ET-aware restart must create one `legacy_utc_cutover` row and retain
+  the prior opening marks; later restarts on that ET day must reuse it.
 
 ## Before you touch anything
 
@@ -314,7 +319,8 @@ machine's SSH key.
 Lifecycle: `scripts/status_commissioning.sh`, `start_commissioning.sh`,
 `stop_commissioning.sh` (graceful; waits up to 300s for a flat proof).
 `start_commissioning.sh auto SIZE` changes the persistent restart-scoped quote
-size; allowed whole values are 5-10 and the current/default value is 5. It
+size; allowed whole values are 5-10, the persisted operator setting is 10, and
+5 is only the fallback when the setting file does not exist. It
 automatically derives early-exit, per-market exposure and execution-fee caps.
 Never change size by editing those derived limits or while a runner is live.
 `scripts/resting_fraction.py` measures what share of time each side actually

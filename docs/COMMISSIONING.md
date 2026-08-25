@@ -27,8 +27,8 @@ strategy is profitable and not permission to scale.
   market or one order;
 - use no projected spread or maker rebate until live evidence supports it;
 - cancel the opposite building order immediately after the first fill;
-- work the exact reducing quantity passively at the active touch only when that
-  is no worse than basis; otherwise wait at the break-even basis price;
+- work the exact reducing quantity passively at the active touch with no
+  cost-basis floor; a basis floor selectively exits winners and strands losers;
 - at 900 seconds of inventory age, or 300 seconds before kickoff whichever
   comes first, confirm passive cancels and flatten the exact position with a
   stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
@@ -101,8 +101,10 @@ error enters a dormant recovery state instead of ending the process. The runner
 records the error and stack, cancels known quotes, reconnects, reconciles the
 whole account, backs off exponentially, and only then permits new risk. Unknown
 strategy conditions default to terminal. Ownership, cross-market identity,
-exact-position, planning, loss-stop, and unexitable-inventory failures end maker
-quoting and enter cancel/flatten shutdown; they are not downgraded to warnings.
+exact-position, planning, and unexitable-inventory failures end maker quoting
+and enter cancel/flatten shutdown; they are not downgraded to warnings. A
+first- or second-consecutive ET loss-stop day pauses new risk in-process while
+exits remain active; the third consecutive day is terminal.
 
 Shutdown carries its own three-attempt flatten budget, independent of whatever
 the quoting loop already spent, so reaching the runtime ceiling can never stop
@@ -168,8 +170,9 @@ logs are ignored by Git. Never copy secrets into this repository.
   restart, because restarting would re-enter a known-bad state;
 - `5`: unexpected runtime failure that still proved the whole account flat;
   the supervisor restarts it, since a fresh process re-runs the entire
-  flat/ownership preflight before any order. Loss stops never reach this
-  path — they exit `0` after proving flat;
+  flat/ownership preflight before any order. Daily loss stops never reach this
+  path: the first two consecutive ET days pause in-process, and the third is a
+  terminal flat-proved exit rather than an automatic restart;
 - any other unexpected process death: bounded supervisor restart so the
   persistent ledger can recover identified state, with at most three fast
   deaths before the supervisor gives up.

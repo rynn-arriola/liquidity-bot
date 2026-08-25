@@ -20,6 +20,23 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## A separate process was not enough to isolate report-only secret validation
+
+Established 2026-08-25 by tracing every `load_runtime_secrets()` caller during
+the pre-restart review. The hourly reporter is process-, API-, webhook-, lock-
+and database-isolated from trading, but the first implementation validated its
+new URL inside the shared loader for every caller. A malformed rewards-only URL
+could therefore refuse a future trading startup before the runner reached its
+account preflight.
+
+The dependency boundary must be explicit: normal trading callers do not
+require or validate `DISCORD_REWARDS_WEBHOOK_URL`; only the hourly report opts
+into presence plus approved-Discord-URL validation. This does not relax the
+reporter's URL protection, and it does not change the validation of Polymarket
+or the normal/error Discord credentials used by trading.
+
+---
+
 ## Discord needs fixed-width narrow tables; pipe tables are not visual tables
 
 Established 2026-08-25 by the first real dedicated-channel acceptance post and

@@ -228,7 +228,7 @@ class CommissioningRunner:
     # The two blockers that mean "this day lost too much", as opposed to
     # something being wrong with the account. Only these pause; ownership
     # violations, clock failures and named criticals stay terminal, and the
-    # $45 emergency equity ceiling is checked earlier and never reaches here.
+    # $80 emergency equity ceiling is checked earlier and never reaches here.
     LOSS_STOP_BLOCKERS = frozenset({
         "session loss limit reached",
         "market loss limit reached",

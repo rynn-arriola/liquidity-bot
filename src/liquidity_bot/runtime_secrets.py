@@ -120,8 +120,15 @@ def load_runtime_secrets(
     credentials_file: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
     require_polymarket: bool = False,
+    require_rewards_webhook: bool = False,
 ) -> RuntimeSecrets:
-    """Load environment overrides and then the shared maker-lab secret file."""
+    """Load environment overrides and then the shared credential file.
+
+    The hourly rewards webhook is a separate operational dependency. Trading
+    callers retain its opaque value but neither require nor validate it, so a
+    report-only configuration defect cannot prevent the runner from starting.
+    The hourly reporter opts into both presence and URL validation.
+    """
 
     environment = os.environ if environ is None else environ
     configured_path = str(environment.get(CREDENTIALS_FILE_ENV, "")).strip()
@@ -147,9 +154,13 @@ def load_runtime_secrets(
         raise RuntimeSecretError(
             "Polymarket credentials are not configured in the environment or "
             "shared maker-lab credential file")
+    if require_rewards_webhook and not discord_rewards:
+        raise RuntimeSecretError(
+            "the dedicated rewards Discord webhook is not configured")
     _validate_discord_url(discord, DISCORD_ENV)
     _validate_discord_url(discord_errors, DISCORD_ERRORS_ENV)
-    _validate_discord_url(discord_rewards, DISCORD_REWARDS_ENV)
+    if require_rewards_webhook:
+        _validate_discord_url(discord_rewards, DISCORD_REWARDS_ENV)
     source = "environment" if any(str(environment.get(name, "")).strip() for name in (
         KEY_ENV, SECRET_ENV, DISCORD_ENV, DISCORD_ERRORS_ENV,
         DISCORD_REWARDS_ENV)) else (

@@ -98,7 +98,8 @@ class CommissioningConfig:
     # and unwind BOTH scaling linearly (25x size -> 24.4x reward, gate_ratio
     # 0.0310 -> 0.0305), so doubling pays more reward when a quote qualifies
     # but also doubles what a bad fill costs without improving the ratio. The
-    # rollback reduces fill exposure while preserving market breadth.
+    # persisted operator setting is currently 10; 5 remains the safe fallback
+    # when no runtime setting file exists.
     #
     # Everything derived from contract count moves with it or the config stops
     # being coherent -- the exposure budget below, and `max_early_exit_loss_usd`
@@ -188,8 +189,9 @@ class CommissioningConfig:
     # silently converting the exit policy into "ride to the kickoff flatten".
     # FINDINGS measures P&L degrading monotonically with holding time
     # (+23.8c under 300s, -23.5c past an hour), so that would have been a real
-    # cost taken by accident rather than by decision. Returned to $4 with
-    # quote size 5 on 2026-08-24.
+    # cost taken by accident rather than by decision. It returned to $4 with
+    # quote size 5, then back to $8 when the operator restored size 10 later
+    # on 2026-08-24.
     # How many CONSECUTIVE ET risk days may hit a loss stop before it stops being
     # a pause and becomes terminal.
     #
@@ -215,11 +217,13 @@ class CommissioningConfig:
     # worst-case exposure and are sized to the $385.88 balance with a ~10%
     # buffer, following maker-lab's CAPITAL_BUFFER_PCT.
     #
-    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20, then returned
-    # to $45 with quote size 5 on 2026-08-24. Worst case on one market is
-    # `size x p + size x (1 - p)` = $5 at five contracts, so this preserves
-    # the same nine-times headroom. The PORTFOLIO budget stays at $340 -- it is
-    # sized to the account, not to the position, and 20 markets at $5 is $100.
+    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20, returned to
+    # $45 with size 5, then back to $90 when size 10 was restored. Worst case
+    # on one market is
+    # `size x p + size x (1 - p)` = one quote quantity, so this preserves the
+    # same nine-times headroom. The PORTFOLIO budget stays at $340 -- it is
+    # sized to the account, not to the position, and 20 size-10 markets are
+    # $200 of worst-case open exposure.
     max_portfolio_exposure_usd: Decimal = Decimal("340")
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3

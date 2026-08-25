@@ -120,6 +120,10 @@ class RewardTableTests(unittest.TestCase):
                 unbalanced_markets=0)
 
     def test_hourly_wrapper_is_bounded_locked_and_lower_priority(self):
+        report = (
+            Path(__file__).resolve().parents[1]
+            / "scripts" / "reward_table.py"
+        ).read_text(encoding="utf-8")
         wrapper = (
             Path(__file__).resolve().parents[1]
             / "scripts" / "post_hourly_reward_table.sh"
@@ -130,6 +134,7 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("nice -n 10", wrapper)
         self.assertIn("--days 7 --post-discord --quiet", wrapper)
         self.assertNotIn("discord.com/api/webhooks", wrapper)
+        self.assertIn("require_rewards_webhook=True", report)
 
 
 if __name__ == "__main__":

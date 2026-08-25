@@ -62,6 +62,34 @@ class RuntimeSecretTests(unittest.TestCase):
         self.assertEqual(secrets.key_id, "new")
         self.assertEqual(secrets.source, "environment")
 
+    def test_bad_report_only_webhook_cannot_block_trading_secret_load(self):
+        path = self.secret_file(
+            'KEY_ID="key-one"\n'
+            'SECRET_KEY="secret-one"\n'
+            'DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/1/status"\n'
+            'DISCORD_ERRORS_WEBHOOK_URL="https://discord.com/api/webhooks/2/error"\n'
+            'DISCORD_REWARDS_WEBHOOK_URL="https://example.com/not-discord"\n')
+
+        secrets = load_runtime_secrets(
+            credentials_file=path, environ={}, require_polymarket=True)
+
+        self.assertTrue(secrets.polymarket_configured)
+        self.assertTrue(secrets.discord_configured)
+
+    def test_hourly_report_requires_and_validates_its_own_webhook(self):
+        missing = self.secret_file('KEY_ID="key"\nSECRET_KEY="secret"\n')
+        with self.assertRaisesRegex(RuntimeSecretError, "rewards Discord"):
+            load_runtime_secrets(
+                credentials_file=missing, environ={},
+                require_rewards_webhook=True)
+
+        malformed = self.secret_file(
+            'DISCORD_REWARDS_WEBHOOK_URL="https://example.com/not-discord"\n')
+        with self.assertRaisesRegex(RuntimeSecretError, "not an approved"):
+            load_runtime_secrets(
+                credentials_file=malformed, environ={},
+                require_rewards_webhook=True)
+
     def test_file_is_parsed_as_data_and_executable_value_is_rejected(self):
         path = self.secret_file(
             'KEY_ID = __import__("os").getenv("KEY")\nSECRET_KEY="x"\n')

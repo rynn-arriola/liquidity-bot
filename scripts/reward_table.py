@@ -346,7 +346,8 @@ async def main() -> int:
         from liquidity_bot.notifications import DiscordNotifier
         from liquidity_bot.runtime_secrets import load_runtime_secrets
 
-        notifier = DiscordNotifier(load_runtime_secrets())
+        notifier = DiscordNotifier(load_runtime_secrets(
+            require_rewards_webhook=True))
         result = await notifier.send_payload_async(
             build_discord_payload(
                 days, pnl=pnl, paid=paid, pending=pending,

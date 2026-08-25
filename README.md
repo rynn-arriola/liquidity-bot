@@ -5,9 +5,9 @@ A clean, standalone Polymarket US liquidity-reward market maker.
 This project uses `D:\polybot\maker-lab` as a pinned code/evidence reference,
 not as an imported runtime. It does not copy maker-lab credentials, databases,
 logs, server overrides, or live-order state. A narrow secret handoff parses
-only four literal assignments from the sibling ignored `credentials.py` file:
-the Polymarket key pair and the normal/error Discord webhooks. No maker-lab
-module is executed.
+only five literal assignments from the sibling ignored `credentials.py` file:
+the Polymarket key pair plus normal, error, and hourly-reward Discord webhooks.
+No maker-lab module is executed.
 
 ## Current milestone
 
@@ -17,7 +17,7 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 - verify the full side reaches `targetSize`;
 - calculate whether an order lies inside the reward cutoff;
 - estimate the order's score using `discountFactor ^ ticks * size`;
-- require conservative reward economics to cover expected unwind loss;
+- calculate conservative reward-versus-unwind economics as advisory telemetry;
 - reject unsafe live configurations;
 - normalize paginated incentives, market metadata, full books, and earnings;
 - decode private order, position, and balance WebSocket state;
@@ -31,8 +31,8 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a non-scalable commissioning process. It joins the active sports
-catalog to reward programs and binds a single executor to one selected market at
-a time. The operative authorized limits are below. Quote size is read from the
+catalog to reward programs and binds one executor across at most 20 selected
+markets. The operative authorized limits are below. Quote size is read from the
 restart-scoped runtime setting; the account loss limits remain hard-locked by
 `CommissioningConfig`:
 
@@ -57,23 +57,25 @@ Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —
 one contract, eight markets, a 30-second inventory age, and $2/$5/$15 or
 $30/$35 stops are all stale. `commissioning.py` is the only authority; it
-validates these values at startup and refuses to arm if they are changed. Live entry is nevertheless fail-closed: a
-venue-eligible side must also pass a book-competition reward projection, a 50%
-reward haircut, and a 2x probability-weighted stressed-exit-cost margin. The
+validates these values at startup and refuses to arm if they are changed. Live
+entry is nevertheless fail-closed on lifecycle, structure, spread, target
+depth/cutoff, fresh state, exitability, exposure, ownership, and loss limits.
+The 30-second reward/no-fill/stressed-exit model is still calculated and logged,
+but its expected-value result is advisory and does not veto entry. The
 $1 venue payout floor is aggregate reporting policy and never a per-market
 entry gate. Fill risk uses the conservative upper bound of the applicable
 2026-08-10 maker-lab paid-market calibration cells; projected reward is also
 reduced by the no-fill probability. The
-process may remain healthy and intentionally place no orders when that economic
-proof is absent. It cannot be armed without four explicit command
+process may remain healthy and intentionally place no orders when the enforced
+reward or safety evidence is absent. It cannot be armed without four explicit command
 acknowledgements, an exclusive key handoff, a flat whole-account snapshot, and
 fresh private state.
 
-Authenticated earnings for the active market are snapshotted separately from
-execution P&L every 15 minutes. A passive reducer never locks in a loss: it
-rests at no worse than inventory basis. If the 30-second emergency path still
-needs a taker exit, the first such exit ends maker quoting so a one-cent test
-cost cannot repeat indefinitely.
+Authenticated earnings are snapshotted separately from execution P&L every 15
+minutes. A passive reducer rests the exact quantity at the active touch with no
+cost-basis floor. At 900 seconds of inventory age, or 300 seconds before
+kickoff, the bounded IOC path may cross; maker quoting ends after 20 confirmed
+taker exits or `0.30 × quote size` in session execution fees.
 
 Recoverable market/private adapter failures no longer terminate the process.
 The runner logs the stack, disables new risk, cancels known working quotes,
@@ -217,7 +219,7 @@ and a whole-account flat/open-order reconciliation before any new risk.
 Automatic selection is the default. It bulk-loads active sports metadata,
 requires the venue's `SPORTS_MARKET_TYPE_MONEYLINE` structure enum, filters to
 the proven six-hour pregame execution window, requests incentives for those
-symbols in batches, deeply evaluates at most 25 books per 15-minute pass,
+symbols in batches, deeply evaluates at most 100 books per 15-minute pass,
 and round-robins the lower-ranked remainder so small pools are not permanently
 hidden by the API budget. Lifecycle modes not yet
 implemented by the pregame executor—including documented `daily` and observed
@@ -262,12 +264,14 @@ automatic queue reset.
 
 Automatic rotation first cancels owned quotes and requires whole-account REST
 proof of zero working orders, zero positions, known ownership, and zero
-unresolved intents. Only then is the singleton private/public stream scope
-rebound. The launcher refuses to overlap maker-lab or another liquidity runner. Its
+unresolved intents. Only then is the active private/public subscription set
+rebound. Incremental top-up retains every healthy market/order and fills only
+safe free slots. The launcher refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
 orders enter recovery-only mode, where no new risk is allowed. Operator stop,
-startup refusal, caught terminal failure, non-flat exit, and risk-stop exits are
-never restarted. See [commissioning operations](docs/COMMISSIONING.md).
+startup refusal, caught terminal failure, and non-flat exit are never
+restarted. First- and second-consecutive ET loss-stop days pause in-process;
+the third becomes terminal. See [commissioning operations](docs/COMMISSIONING.md).
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md),
 [safety invariants](docs/SAFETY_INVARIANTS.md), and

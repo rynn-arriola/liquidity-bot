@@ -7,7 +7,7 @@ order, and an advertised pool is never treated as expected income.
 flowchart LR
     A[Bulk active sports catalog] --> D[Strict read-only adapters]
     B[Batched candidate incentives] --> D
-    C[At most 25 full books] --> D
+    C[At most 100 full books] --> D
     H[Paid reward history] --> D
     D --> DS[Reward-market selector]
     DS --> M{V2 moneyline and spread at least 2c?}
@@ -16,23 +16,19 @@ flowchart LR
     E -- No or unknown --> X[Reject candidate]
     E -- Yes --> F{Target depth and cutoff qualify?}
     F -- No --> X
-    F -- Yes --> G[Eligible score-seconds]
-    G --> I[Reward times no-fill probability]
-    I --> J[Subtract fill probability times exit cost and buffer]
-    J --> K{Lower-bound expected value positive?}
-    K -- No --> X
-    K -- Yes --> L[Shadow candidate]
-    L --> M{Reconciles with PAID rewards?}
-    M -- No --> X
-    M -- Yes after enough data --> N[Risk-sized desired quote]
-    N --> O{Exposure and exitability pass?}
+    F -- Yes --> G[Reward-eligible candidate]
+    G --> I[Compute score, no-fill reward, and stressed-exit EV telemetry]
+    I --> J[Rank with projected and historical reward evidence]
+    J --> K[Bind or safely top up at most 20 active markets]
+    K --> N[Risk-sized desired quote]
+    N --> O{Freshness, ownership, exposure, and exitability pass?}
     O -- No --> X
     O -- Yes --> P[Durable execution intent]
     P --> Q[Private order, fill, position, and balance stream]
     Q --> R{First fill?}
     R -- No --> S[Maintain eligible quote]
     R -- Yes --> T[Cancel building risk]
-    T --> U[Bounded-loss passive exit]
+    T --> U[Exact passive reducer at active touch]
     U --> V{Flat by measured hard age?}
     V -- Yes --> W[Return to reward mode]
     V -- No --> Y[Confirm cancel, then price-capped IOC]
@@ -41,10 +37,13 @@ flowchart LR
 ```
 
 The live selector bulk-joins executable sports metadata to incentive programs
-every 15 minutes while keeping only one execution scope. It performs a bounded
-25-book deep pass and round-robins deferred programs. Before changing the selected
-slug, the existing executor cancels its quotes and proves the whole account
-flat, order-free, resolved, and owned; only then are singleton streams rebound.
+every 15 minutes and maintains one executor across at most 20 selected markets.
+It performs a bounded 100-book deep pass and round-robins deferred programs.
+Full rotation still requires whole-account flat, order-free, resolved, and
+owned proof. Incremental top-up preserves healthy markets and resting orders,
+releases only flat/order-free/resolved expired or reward-ended owners, and
+cannot exceed the 20-slot cap. The EV model is measured and logged but remains
+advisory while `enforce_reward_cost_gate` is false.
 
 ### Observation-only branch
 

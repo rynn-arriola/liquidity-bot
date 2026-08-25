@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED LOCALLY, REVIEWED — top-up committed before strict proof and retired eighteen owners
+### FIXED, DEPLOYED AND ACTIVE — top-up committed before strict proof and retired eighteen owners
 
 **Symptom.** At 21:04Z a one-slot top-up was followed by dual-stream recovery,
 32 acknowledged cancels/unknown-absent orders and eighteen
@@ -74,9 +74,22 @@ Top-up is already a bounded, infrequent selection transition. Healthy resting
 orders remain at the venue and continue earning; market capacity stays 20 and
 the shared REST limit stays 4 requests/second.
 
+**Deployment acceptance.** Commit `466ef9c` is pushed and recorded in
+`DEPLOYED_COMMIT`. All eight changed-file SHA-256 hashes matched and all 621
+stopped-server tests passed in 54.037 seconds. The immediate pre-start gate
+proved zero venue orders/positions and zero ledger unresolved, working,
+unknown-absent or nonzero-position rows. The size-10 runner started under
+supervisor PID `187359` / runner PID `187549`. Its queue collector bound exactly
+20 markets; the scheduler reached 18 distinct owners, then held 18 working
+orders across those 18 markets with zero positions and unknown-absent rows.
+Six fresh acknowledged mutations were 0-19 seconds old and still progressing.
+No new bound-stream, quarantine, timeout-retirement, runner-failure or critical
+marker appeared. The fixed top-up branch awaits its next natural transition;
+do not induce one on the funded account.
+
 ---
 
-### DEPLOYED ON DISK, NEXT RESTART — LIVE Discord score reset on every process run
+### FIXED, DEPLOYED AND ACTIVE — LIVE Discord score reset on every process run
 
 **Symptom.** The LIVE summary reported raw `Score-seconds` accumulated only by
 the current process. A restart reset the number to zero, and crossing ET
@@ -106,12 +119,12 @@ reporting-only change killed two deliberate mutations: skipping the durable
 add failed the midnight/restart test, and allowing a score-write exception to
 escape failed the shutdown-isolation test. The running bot was not restarted.
 
-**Deployment acceptance.** Source commit `b052e62` is pushed and deployed on
-disk. All changed-file and complete source/test hashes matched, and all 618
-server tests passed under reduced CPU priority in 72.378 seconds. Supervisor
-PID `1885250` and runner PID `1885453` remained unchanged. The current process
-therefore still runs its previously loaded code; this fix activates on the
-next restart.
+**Deployment acceptance.** Source commit `b052e62` was pushed and deployed on
+disk with all source/test hashes matching and all 618 server tests passing at
+reduced priority. The later reviewed `466ef9c` restart at 21:51Z loaded that
+code, so daily ET score accounting is now active. The first activation day is
+partial by design; complete-day persistence begins at the following ET
+midnight.
 
 ---
 

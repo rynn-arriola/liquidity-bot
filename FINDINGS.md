@@ -77,6 +77,19 @@ absence: `GET /v1/order/C3ECBFZWAFSR` explicitly returned
 projector left zero unresolved intents, working orders and `UNKNOWN_ABSENT`
 rows.
 
+Deployment acceptance used commit `466ef9c`. All eight changed hashes matched
+and all 621 stopped-server tests passed in 54.037 seconds. A fresh atomic
+restart gate again proved zero venue orders/positions and zero ledger risk.
+The size-10 runner started under supervisor `187359` / runner `187549`, bound
+exactly 20 queue-measurement markets, produced 23 placements across 18 distinct
+owners and held 18 working orders across those owners. Positions and
+`UNKNOWN_ABSENT` stayed zero. The six unresolved rows at the final checkpoint
+were fresh acknowledged mutations created within the preceding 19 seconds,
+not the historical timeout state. No new bound-stream, quarantine,
+timeout-retirement, runner-failure or critical marker appeared. This proves the
+20-slot scheduler and ordinary confirmation path survived the deployment; the
+transactional top-up itself awaits a natural replacement event.
+
 ---
 
 ## A daily Discord score requires durable ET-day accounting, not just division by 3,600
@@ -105,12 +118,10 @@ increment since the preceding five-minute summary; an orderly shutdown flushes
 again. The change adds no venue request, WebSocket, order decision, scheduler
 gate or risk input. A forced score-write failure proves the summary still
 sends, the increment stays buffered for retry and shutdown cannot be stranded
-by this telemetry. It is prepared locally, passes all 618 tests, and has not
-been activated. Source commit `b052e62` is pushed and deployed on disk; all
-source/test hashes matched and all 618 reduced-priority server tests passed in
-72.378 seconds. The existing supervisor PID `1885250` and runner PID `1885453`
-were unchanged, so the running process still has the prior code loaded. The
-daily accounting becomes active only on the next restart.
+by this telemetry. Source commit `b052e62` passed all 618 local and
+reduced-priority server tests. The reviewed `466ef9c` restart at 21:51Z loaded
+it, so daily accounting is now active. The activation date is partial by
+design; the first complete persisted day begins at the following ET midnight.
 
 ---
 

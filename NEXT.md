@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## FIXED LOCALLY, REVIEWED: make one-slot top-up transactional before restart
+## FIXED, DEPLOYED AND RESTARTED: make one-slot top-up transactional
 
 The 2026-08-25 21:04Z top-up committed one replacement and closed both healthy
 streams before strict GET-by-ID proof. Three owned NotFound responses then
@@ -14,14 +14,16 @@ It also checks operator stop between markets so a sweep already underway cannot
 continue placing after SIGTERM. All three deliberate mutants fail their new
 regressions; all 621 local tests pass.
 
-Before restart: push the reviewed source/tests/docs, deploy the changed source
-and tests, match hashes, run the full suite on the stopped droplet, update
-`DEPLOYED_COMMIT`, and re-read the venue. Current positive proof is zero venue
-open orders and positions; `C3ECBFZWAFSR` explicitly returned CANCELED and the
-normal projector reduced ledger unresolved/working/unknown-absent counts to
-zero. Do not restart from a later absence-only observation.
+Commit `466ef9c` is pushed and deployed; all eight hashes matched and all 621
+production tests passed. Immediately before start, both venue and ledger were
+clean. The size-10 restart reached queue scope 20 and actions in 18 distinct
+markets, then 18 working orders across 18 markets with zero positions and
+unknown-absent rows. Six acknowledged mutations at the checkpoint were fresh
+and progressing. No new bound-stream/quarantine/retirement/runner-failure
+marker appeared. Observe the next natural top-up for a preflight refusal or a
+successful replacement; do not induce stream failure on a funded account.
 
-## DEPLOYED ON DISK, NEXT RESTART: restart-persistent ET-day score-hours
+## DEPLOYED AND ACTIVE: restart-persistent ET-day score-hours
 
 LIVE Discord now renders `Score-hours today` from a durable ET calendar-day
 total instead of displaying the current process's raw score-seconds. Accrual
@@ -29,13 +31,11 @@ uses the same `America/New_York`/DST day splitter as reward reporting, is
 flushed at the existing five-minute summary boundary and on orderly shutdown,
 and continues across restarts. SHADOW is still run-scoped and says so.
 
-All 618 tests pass, including a forced persistence failure that remains
+All 618 original tests pass, including a forced persistence failure that remains
 reporting-only and cannot interrupt shutdown. No order, selection, 20-slot,
 risk, REST or WebSocket path was added or changed. Source commit `b052e62` is
-pushed and deployed on disk. All source/test hashes matched and all 618 server
-tests passed at reduced priority in 72.378 seconds. The bot was not restarted:
-supervisor PID `1885250` and runner PID `1885453` remained unchanged, so this
-activates on the next restart. The first activation date will be partial
+pushed and deployed. The reviewed `466ef9c` restart loaded it at 21:51Z after
+621 stopped-server tests passed. The first activation date is partial
 because prior processes did not store daily score; complete days begin at the
 following ET midnight. Aggregate score-hours sum concurrent eligible sides and
 can exceed 24. A hard kill can omit only the increment since the preceding

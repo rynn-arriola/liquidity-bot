@@ -8,7 +8,7 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **STOPPED, FLAT, FIX REVIEWED — do not restart from the old top-up path.** At
+- **DEPLOYED AND ACTIVE — transactional top-up repair.** At
   21:04Z one incremental replacement committed its new active tuple and closed
   both healthy streams before strict REST proof. Three owned order reads then
   returned NotFound; global recovery canceled 32 orders and eighteen owners
@@ -17,13 +17,16 @@ from fact rather than from the last thing someone remembers.
   complete post-bind handoff, so a preflight failure preserves all old streams,
   scope and orders. A delivered operator stop now interrupts the remaining
   owners in an in-progress decision sweep. Three mutants are killed and all
-  621 local tests pass. Server processes are stopped. The venue reported zero
-  open orders/positions; the final acknowledged PLACE was reconciled only after
-  its exchange ID explicitly returned CANCELED, leaving zero unresolved,
-  working and unknown-absent ledger rows. Push/deploy/server-test and a fresh
-  venue-flat check are still required before restart.
+  621 local tests pass. Commit `466ef9c` is pushed and deployed; all eight
+  hashes matched and all 621 server tests passed in 54.037 seconds. A fresh
+  venue/ledger gate proved completely clean immediately before the size-10
+  restart. Supervisor `187359` / runner `187549` reached queue scope 20, actions
+  in 18 distinct owners and 18 working orders across 18 markets with zero
+  positions or unknown-absent rows. Six acknowledged mutations were fresh and
+  progressing; no new bound-stream/quarantine/timeout/runner-failure marker
+  appeared. Observe the next natural top-up; do not induce one.
 
-- **DEPLOYED ON DISK, NEXT RESTART — ET-day score-hours.** The LIVE Discord
+- **DEPLOYED AND ACTIVE — ET-day score-hours.** The LIVE Discord
   slots field now uses a durable `America/New_York` reward-day total and
   displays `Score-hours today`; orderly restarts no longer reset it. SHADOW is
   explicitly run-scoped. The first activation day is partial, aggregate
@@ -33,10 +36,9 @@ from fact rather than from the last thing someone remembers.
   strategy, scheduler, order, risk, REST or WebSocket path changed. Source
   commit `b052e62` is pushed and deployed on disk; complete source/test hashes
   matched and all 618 reduced-priority server tests passed in 72.378 seconds.
-  Supervisor PID `1885250` and runner PID `1885453` were unchanged, so the
-  current process still has the prior code loaded and this activates only on
-  its next restart. Immediately before the disk-only deployment,
-  `DEPLOYED_COMMIT` was `3c57d7e`.
+  The reviewed `466ef9c` restart loaded this code at 21:51Z. The current ET date
+  is intentionally partial; the first complete persisted day begins at the
+  following ET midnight.
 
 - **Historical 20-slot acceptance on reviewed commit `26b11b2`.** Before
   restart, all 15 changed

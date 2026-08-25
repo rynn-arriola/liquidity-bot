@@ -26,19 +26,19 @@ from fact rather than from the last thing someone remembers.
   progressing; no new bound-stream/quarantine/timeout/runner-failure marker
   appeared. Observe the next natural top-up; do not induce one.
 
-- **DEPLOYED AND ACTIVE — ET-day score-hours.** The LIVE Discord
-  slots field now uses a durable `America/New_York` reward-day total and
-  displays `Score-hours today`; orderly restarts no longer reset it. SHADOW is
-  explicitly run-scoped. The first activation day is partial, aggregate
-  score-hours can exceed 24, and a hard kill can omit at most the increment
-  since the prior five-minute summary. A forced score-write failure remains
-  buffered and cannot break the summary or shutdown. All 618 tests pass. No
-  strategy, scheduler, order, risk, REST or WebSocket path changed. Source
-  commit `b052e62` is pushed and deployed on disk; complete source/test hashes
-  matched and all 618 reduced-priority server tests passed in 72.378 seconds.
-  The reviewed `466ef9c` restart loaded this code at 21:51Z. The current ET date
-  is intentionally partial; the first complete persisted day begins at the
-  following ET midnight.
+- **FIXED AND LOCALLY VERIFIED — LIVE must show resting side-hours, not
+  reward-score hours.** The requested number was the `Resting side-hours`
+  column from `scripts/reward_table.py`. At 22:06Z that exact calculation was
+  416.65 hours / 23.01 average sides for the current ET day, while Discord
+  showed 17.82 because it divided contract-weighted reward score by 3,600 and
+  had only begun persisting at the 21:51Z restart. The fix moves the table's
+  merged `(market, side)` interval calculation into shared code and runs it
+  read-only on a worker thread at the existing five-minute summary boundary.
+  It makes no venue request and cannot place, cancel, select or reprice. LIVE
+  renders `Resting side-hours`; SHADOW retains modeled score-hours. Two focused
+  integration tests prove the exact value and failure isolation; all 623 local
+  tests pass. The currently running process still has the old display until a
+  future reviewed restart.
 
 - **Historical 20-slot acceptance on reviewed commit `26b11b2`.** Before
   restart, all 15 changed

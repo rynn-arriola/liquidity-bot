@@ -5579,8 +5579,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             field["value"]
             for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
             if "Slots" in field["name"])
-        self.assertIn("Score-hours today", slots)
-        self.assertIn("0.01", slots)
+        self.assertIn("Resting side-hours", slots)
+        self.assertIn("0.00", slots)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_live_summary_uses_seven_day_table_resting_hours(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        with patch(
+                "liquidity_bot.live_commissioning.resting_side_hours_by_day",
+                return_value=({risk_day(runner._now()): 416.65}, {})):
+            await runner._send_summary(runner._now())
+
+        slots = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Slots" in field["name"])
+        self.assertIn("Resting side-hours", slots)
+        self.assertIn("416.65", slots)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_resting_hours_read_failure_cannot_break_summary(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        with patch(
+                "liquidity_bot.live_commissioning.resting_side_hours_by_day",
+                side_effect=RuntimeError("read-only resting report failed")):
+            await runner._send_summary(runner._now())
+
+        self.assertEqual(
+            runner._runtime_error_counts["resting_time_summary"], 1)
+        slots = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Slots" in field["name"])
+        self.assertIn("Resting side-hours", slots)
+        self.assertIn("0.00", slots)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

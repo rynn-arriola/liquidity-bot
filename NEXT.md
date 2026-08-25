@@ -1,5 +1,22 @@
 # Next session — outstanding fixes
 
+## FIXED LOCALLY; NOT YET ACTIVE: Discord uses seven-day-table resting hours
+
+The operator meant the `Resting side-hours` column from the seven-day reward
+table, not contract-weighted reward score divided by 3,600. A live read at
+2026-08-25T22:06Z proved the difference: 416.65 resting side-hours / 23.01
+average sides for the current ET day, versus the displayed 17.82 score-hours.
+
+The prepared change shares the exact report calculation with LIVE Discord,
+where it runs in a worker thread against SQLite `mode=ro` at the existing
+five-minute summary boundary. It adds no venue/API request and has no order,
+selection, scheduler, stream or risk input. LIVE says `Resting side-hours`;
+SHADOW continues saying `score-hours this run`. A read failure is reported and
+falls back to 0 without breaking summary or shutdown. All 623 local tests pass.
+The current runner has not been restarted with this correction.
+
+---
+
 ## FIXED, DEPLOYED AND RESTARTED: make one-slot top-up transactional
 
 The 2026-08-25 21:04Z top-up committed one replacement and closed both healthy
@@ -23,7 +40,13 @@ and progressing. No new bound-stream/quarantine/retirement/runner-failure
 marker appeared. Observe the next natural top-up for a preflight refusal or a
 successful replacement; do not induce stream failure on a funded account.
 
-## DEPLOYED AND ACTIVE: restart-persistent ET-day score-hours
+## HISTORICAL: restart-persistent ET-day score-hours (LIVE display superseded)
+
+This deployment correctly repaired session reset and ET-day splitting for the
+reward-score diagnostic, but the operator later clarified that LIVE Discord
+should show the seven-day table's resting side-hours instead. The durable score
+accounting remains telemetry; the prepared replacement above supersedes it as
+the LIVE display.
 
 LIVE Discord now renders `Score-hours today` from a durable ET calendar-day
 total instead of displaying the current process's raw score-seconds. Accrual

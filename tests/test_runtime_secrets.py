@@ -200,19 +200,20 @@ class DiscordTests(unittest.TestCase):
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
 
-    def test_live_summary_shows_daily_score_hours_not_session_seconds(self):
+    def test_live_summary_shows_daily_resting_side_hours(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
             active_markets=20, resting_markets=20,
-            score_seconds=17_296.93)
+            score_seconds=17_296.93, resting_side_hours_today=416.65)
         slots = next(
             field["value"]
             for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
             if "Slots" in field["name"])
 
-        self.assertIn("Score-hours today", slots)
-        self.assertIn("4.80", slots)
+        self.assertIn("Resting side-hours", slots)
+        self.assertIn("416.65", slots)
+        self.assertNotIn("Score-hours today", slots)
         self.assertNotIn("Score-seconds", slots)
         self.assertNotIn("17,296.93", slots)
 

@@ -70,6 +70,7 @@ class LiquiditySummary:
     idle_market_reasons: tuple[tuple[str, int], ...] = ()
     reward_eligible_sides: int = 0
     score_seconds: float = 0.0
+    resting_side_hours_today: float = 0.0
     entry_fills: int = 0
     exit_samples: int = 0
     exit_completion_rate: float = 0.0
@@ -164,7 +165,8 @@ class LiquiditySummary:
                 raise ValueError(f"{name} cannot be negative")
         if not 0 <= self.exit_completion_rate <= 1:
             raise ValueError("exit completion rate must be within [0, 1]")
-        if min(self.score_seconds, self.max_inventory_age_seconds,
+        if min(self.score_seconds, self.resting_side_hours_today,
+               self.max_inventory_age_seconds,
                self.rest_requests_per_second) < 0:
             raise ValueError("summary measurements cannot be negative")
         for value in (
@@ -374,7 +376,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
            if len(summary.idle_market_reasons) > 3 else "")
         + (_row("  free, no supply", free) if summary.slot_capacity else "")
         + _row("Eligible sides", summary.reward_eligible_sides)
-        + _row("Score-hours today", f"{summary.score_seconds / 3600:,.2f}"))
+        + _row("Resting side-hours", f"{summary.resting_side_hours_today:,.2f}"))
     if summary.slot_capacity:
         # The funnel, so "why only three?" is answerable from the message
         # itself rather than needing `scripts/usable_markets.py` on the

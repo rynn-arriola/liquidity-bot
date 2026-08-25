@@ -64,6 +64,7 @@ from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadat
 from .notifications import DiscordNotifier
 from .readiness import ReadinessVerdict
 from .reward_calendar import reward_day, risk_day, split_reward_day_interval
+from .resting_time import resting_side_hours_by_day
 from .reconciler import (
     ActionKind,
     DesiredStateReconciler,
@@ -3551,6 +3552,19 @@ class CommissioningRunner:
             # normal bounded recovery channel.
             score_seconds_today = self._daily_score_fallback(now)
             await self._report_runtime_error("daily_score_persistence", exc)
+        today = date.fromisoformat(reward_day(now))
+        try:
+            resting_hours, _ = await asyncio.to_thread(
+                resting_side_hours_by_day, str(self.ledger.path), [today],
+                now=now)
+            resting_side_hours_today = resting_hours.get(today.isoformat(), 0.0)
+            self._runtime_error_counts.pop("resting_time_summary", None)
+        except Exception as exc:
+            # This is the same read-only ledger calculation used by the
+            # seven-day reward table. It must never delay order work on the
+            # event loop or turn an observational failure into a bot stop.
+            resting_side_hours_today = 0.0
+            await self._report_runtime_error("resting_time_summary", exc)
         # Whole-account, not the primary market. Reporting only slot zero
         # meant a position on any other slot showed as open_positions 0 and an
         # inventory age of 0 -- the two numbers an operator watches to decide
@@ -3624,6 +3638,7 @@ class CommissioningRunner:
                 len(self.state_for(slug).reward_eligible)
                 for slug in self.active_slugs),
             score_seconds=score_seconds_today,
+            resting_side_hours_today=resting_side_hours_today,
             entry_fills=entry_fills,
             exit_samples=exit_fills,
             exit_completion_rate=(

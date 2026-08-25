@@ -31,6 +31,34 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIXED LOCALLY; NOT YET ACTIVE — LIVE Discord showed reward-score hours instead of resting hours
+
+**Symptom.** Discord showed 17.82 `Score-hours today` even though the seven-day
+reward table showed hundreds of hours for the same ET day.
+
+**Mechanism.** The field divided contract-weighted reward score-seconds by
+3,600. That metric can accrue ten units per real second for one fully scoring
+size-10 side, and its durable daily row had only started at the 21:51Z restart.
+The operator meant the report's quantity-independent wall-clock duration of
+actual resting orders. The two values used different units and time coverage.
+
+**Fix.** The seven-day table and LIVE summary now share one merged
+`(market, side)` interval calculation. LIVE renders `Resting side-hours` for the
+current ET day. It performs the SQLite `mode=ro` calculation on a worker thread
+at the existing summary cadence, with no venue/API call. SHADOW continues to
+show modeled score-hours.
+
+**Proof.** The live ledger produced 416.65 side-hours and 23.01 average resting
+sides at 22:06Z, while the old daily score row contained 64,134.56 seconds =
+17.82 score-hours. Rendering and runner integration tests pin the 416.65 value;
+a forced read exception proves the summary still sends and trading cannot be
+stopped by this observation. The targeted 292 tests and all 623 local tests
+pass. Replacing the renderer with the old score-hours line and discarding the
+shared helper result each independently fail their focused regression. The
+running process remains on the prior display until restart.
+
+---
+
 ### FIXED, DEPLOYED AND ACTIVE — top-up committed before strict proof and retired eighteen owners
 
 **Symptom.** At 21:04Z a one-slot top-up was followed by dual-stream recovery,
@@ -89,7 +117,11 @@ do not induce one on the funded account.
 
 ---
 
-### FIXED, DEPLOYED AND ACTIVE — LIVE Discord score reset on every process run
+### HISTORICAL — LIVE Discord score reset on every process run
+
+This fix remains valid for durable reward-score telemetry. Its choice of metric
+for LIVE Discord was later superseded when the operator clarified that the
+desired value is the seven-day table's resting side-hours.
 
 **Symptom.** The LIVE summary reported raw `Score-seconds` accumulated only by
 the current process. A restart reset the number to zero, and crossing ET

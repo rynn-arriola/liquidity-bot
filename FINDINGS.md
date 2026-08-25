@@ -20,6 +20,40 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The requested "hours" are resting side-hours, not reward-score hours
+
+Established 2026-08-25 by comparing the running Discord value with the exact
+read-only calculation used by `scripts/reward_table.py`.
+
+At `2026-08-25T22:06:31Z`, the current ET day contained **416.65 resting
+side-hours** over 18.11 elapsed hours, or **23.01 sides resting on average**.
+The new LIVE field displayed **17.82** because its persisted row held
+64,134.56 reward score-seconds and divided that by 3,600. The runner had begun
+that row only at 21:51:48Z; its first 21:58:19Z checkpoint therefore represented
+about 164 score units per real second, consistent with roughly 16.4 fully
+scoring size-10 sides. The arithmetic was sound, but it answered a different
+question.
+
+The seven-day table's number merges overlapping durable order intervals per
+`(market, side)`, splits them at ET midnight and sums their wall-clock duration.
+It is independent of quote quantity and reward discount. Reward score-hours
+instead weight every second by the side's reward score, so a size-10 side can
+add up to ten score-seconds per real second. Both can exceed 24 because many
+sides coexist, but they are not interchangeable.
+
+LIVE Discord must therefore use the table calculation and label it `Resting
+side-hours`. The shared calculation opens SQLite with `mode=ro`, runs on a
+worker thread only at the existing five-minute summary boundary, and makes no
+venue request. Its failure is observational: the summary still sends and no
+order, selector, scheduler, WebSocket, risk or mutation path consumes it.
+SHADOW retains modeled score-hours because it has no real resting orders. The
+targeted 292 tests and complete 623-test local suite pass, including exact
+416.65 rendering and forced read-failure isolation. Two deliberate mutations—
+restoring the old renderer and ignoring the helper result—are each killed by
+their focused regression.
+
+---
+
 ## One failed one-slot top-up destroyed eighteen healthy owners because proof came after commit
 
 Established from the live 2026-08-25 21:04Z incident by joining the exact log
@@ -92,7 +126,12 @@ transactional top-up itself awaits a natural replacement event.
 
 ---
 
-## A daily Discord score requires durable ET-day accounting, not just division by 3,600
+## Historical: daily reward-score accounting required an ET-day ledger
+
+This finding remains correct for reward-score telemetry, but the operator later
+clarified that LIVE Discord should display resting side-hours from the
+seven-day table. The newer finding above supersedes its conclusion about which
+metric belongs in the LIVE message.
 
 Established 2026-08-25 by tracing the LIVE summary value from
 `CommissioningRunner._score_seconds` into `LiquiditySummary`. The old counter

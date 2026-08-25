@@ -20,6 +20,38 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The seven-day reward table is bounded and safe to run beside the live bot
+
+The standalone command is:
+
+```text
+.venv/bin/python -B scripts/reward_table.py --days 7
+```
+
+It makes exactly one account-wide `GET /v1/incentives/earnings` request. It
+does not call market discovery, books, orders, positions, balances, or any
+mutation endpoint. Trading P&L and resting-order history come from
+`data/commissioning.db`, opened with SQLite `mode=ro`. Resting side-hours are
+computed by merging overlapping PLACE-to-terminal intervals per market/side,
+then splitting them at America/New_York midnight; this prevents replacement
+orders on the same side from double-counting time.
+
+Live acceptance was measured on 2026-08-25 from 15:07:16Z through 15:07:19Z
+while supervisor PID 2053004 and runner PID 2053174 remained continuously
+alive. The command completed in about three seconds. The commissioning log
+after invocation contained no HTTP 429, rate-limit, `runner_failure`,
+`risk_stop`, `bound_streams`, or `market_top_up` fault marker. Neither process
+was stopped or restarted. The reporting-only deployment deliberately left
+`DEPLOYED_COMMIT` at runtime commit `2e3c677`.
+
+Verification: all 600 local tests pass, the six focused report/daily-P&L tests
+also pass on the server, and deliberate mutations proved that the tests reject
+both counting incomplete rewards in finalized net and double-counting
+overlapping resting intervals. Do not loop the command: one manual run is the
+bounded, verified operating pattern.
+
+---
+
 ## Reward periods can end while markets still occupy all twenty slots
 
 Established from the live `73d5c73` run at 2026-08-25T13:07Z using only the

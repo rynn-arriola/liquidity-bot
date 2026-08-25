@@ -20,6 +20,48 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Twenty slots were live while instantaneous orders moved between 24 and 29
+
+Established from the running `2e3c677` session on 2026-08-25, without stopping
+or restarting the bot. The low-order observation was not a recurrence of the
+cross-slot starvation defect.
+
+The active queue-measurement session started at 15:18:45Z with an exact
+`scope_size=20`, status `COLLECTING`, zero dropped trades, zero decode failures
+and no stream error. From the current runner start at 13:34:04Z, **all 20 of
+those exact subscribed slugs reached the per-market book/planning path**. Of
+them, 19 produced live `[action]` records; the remaining
+`aec-setkameua-kasdan-kozden-2026-08-25` was reached three times and correctly
+produced no mutation. Its most recent visible offer state was
+`outside_reward_cutoff`; its prior bid state was `target_not_met`.
+
+The raw order count moved as the same healthy slate rotated and repriced:
+
+```text
+15:00:58Z queue rebind       20 markets   24 active orders
+15:18:45Z queue rebind       20 markets   29 active orders
+15:23Z venue snapshot        18 markets   29 open orders
+15:27:26Z ledger snapshot    18 markets   28 open orders
+```
+
+At the 15:27:26Z checkpoint there were zero `UNKNOWN_ABSENT` orders, zero
+unresolved intents and zero positions. A prior instantaneous sample caught one
+temporary unknown order and three acknowledged cancels; they all resolved
+without intervention. Priority replan batches continued completing in
+3.0-18.8 seconds. No current-session runner failure, risk stop, private-stream
+recovery or bound-stream recovery was present.
+
+The lower count was a mix of deliberate one-sided reward gates and ordinary
+cancel/repost gaps. Visible examples included `target_not_met` on the UUST
+offer and Didand/Pondmy bid, and `outside_reward_cutoff` on the Dota2,
+Mitshe/Jelsar and Zsovel/Zacvii offers. Other temporarily missing sides were in
+the existing touch-cancel/priority-replan cycle. Therefore **20 slots working
+does not imply 40 orders, or even the usual 34-38 at every instant**. The
+decisive capacity evidence is the exact 20-market subscribed scope plus
+per-market planning coverage, not raw order count.
+
+---
+
 ## The seven-day reward table is bounded and safe to run beside the live bot
 
 The standalone command is:

@@ -18,6 +18,15 @@ from fact rather than from the last thing someone remembers.
   state. Raw working-order count is not slot count; use the newest FINDINGS
   20-slot capacity audit.
 
+- **A second slot-lifecycle gap is diagnosed but not fixed.** At 13:00Z ten
+  bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
+  held no orders while nine other markets held 18 size-10 orders. Capacity was
+  still 20, viable alternatives were 96, and positions/unresolved/absent state
+  were zero. Top-up replaces free or past-kickoff slots, not flat pregame
+  markets whose reward period ended. No code or process change was made. See
+  the newest FINDINGS, BUGFIXES and NEXT entries before designing the guarded
+  reward-ended lifecycle repair.
+
 - **Historical maintenance run: `feba761` started at 12:18:56Z.**
   The previous runner stopped at 2026-08-25T11:14:26Z with
   `runner_failure:bound_stream_recovery_exhausted`, `flat:false`, after

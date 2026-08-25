@@ -31,6 +31,24 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### PENDING — ended reward periods occupy slots until game kickoff
+
+**Symptom.** The repaired runner remained bound to 20 markets but held only 18
+orders across nine. At the 13:00Z reward boundary, ten distinct bound markets
+transitioned to `no_incentive`; all ten were absent from the working-order set
+while selector evidence still showed 96 viable alternatives.
+
+**Mechanism.** Free-capacity refill sees only `len(active_slugs) <
+max_markets`, and lifecycle release sees only past-kickoff, flat markets. A
+pregame market whose reward period has ended satisfies neither condition, so
+it continues consuming one of the 20 slots. Full rotation remains blocked by
+healthy resting orders elsewhere.
+
+**Status.** Diagnosed only; no code or process change was made during the
+check. A fix must distinguish a positively ended reward period from transient
+missing reward metadata, and may release only a flat, order-free and
+unresolved-free owner. See the newest FINDINGS entry for the exact signature.
+
 ### FIXED AND DEPLOYED — startup validation could leave free slots invisible to top-up
 
 **Symptom.** The size-10 runner selected 20 markets, correctly rejected two

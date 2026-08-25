@@ -20,6 +20,55 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Reward periods can end while markets still occupy all twenty slots
+
+Established from the live `73d5c73` run at 2026-08-25T13:07Z using only the
+existing commissioning log and read-only ledger. The capacity repair was
+working: the runner and supervisor were alive, queue measurement had reported
+`markets=20`, and no top-up or stream-recovery failure had reduced the set.
+The account state was also healthy: zero positions, zero unresolved intents
+and zero `UNKNOWN_ABSENT` orders. Yet only 18 working orders across nine
+markets remained.
+
+The gap reconciled exactly. At 13:00Z, **10 distinct bound markets** changed
+from `eligible` or `target_not_met` to `no_incentive`; most transitions had
+held their prior state for 320.7 seconds, matching selection shortly before
+12:55Z followed by the reward boundary at 13:00Z. None of those ten appeared
+in the current working-order set. Nine other markets each held a bid and offer
+(18 orders total). The remaining bound market was cycling through
+`target_not_met` and `resting_price_left_the_touch`. The most recent selector
+evidence still showed 96 viable opportunities, so replacement supply was not
+the constraint.
+
+This is distinct from the free-capacity bug fixed in `73d5c73`. That repair
+detects `len(active_slugs) < max_markets`; here the length remains exactly 20.
+`_top_up_active_markets` releases only markets that are past game kickoff and
+flat. A pregame market whose reward period ends is economically dead but still
+counts as bound, so it can occupy a slot until kickoff while viable rewarded
+alternatives remain outside the set. Full rotation still cannot normally run
+because resting orders make `_safe_to_scan()` false.
+
+Detection signature:
+
+```text
+[queue-measurement] markets=20
+working-order markets materially below 20
+many [eligibility] ... to=no_incentive at one reward boundary
+those no_incentive slugs absent from the working-order set
+positions=0, unresolved=0, UNKNOWN_ABSENT=0
+viable alternatives >= 20
+no later [top-up] replacing the no_incentive slugs
+```
+
+This check made no code, configuration, process or venue mutation. A repair
+needs a separate safety review: reward data can disappear transiently, so a
+single `no_incentive` observation must not cause immediate churn. Any future
+implementation should require fresh reward metadata and a stable terminal
+reward-period condition, release only flat/order-free/unresolved-free owners,
+keep the near-flatten-deadline guard, and cap additions at the exact free count.
+
+---
+
 ## Fewer orders can mean an underfilled active set even when viable supply is abundant
 
 Established from the live 2026-08-25 size-10 run without mutating venue state.

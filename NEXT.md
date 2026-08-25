@@ -1,5 +1,24 @@
 # Next session — outstanding fixes
 
+## 00. Replace flat markets whose reward period has positively ended
+
+The live `73d5c73` run proved the remaining low-order state is not 20-slot
+capacity loss: 20 remained bound, but ten markets changed to `no_incentive` at
+13:00Z and held no orders. Nine other markets held two orders each; one was
+temporarily blocked by target/price movement. There were 96 viable alternatives
+and zero position, unresolved or unknown-absent state.
+
+The free-capacity repair cannot see this because `len(active_slugs)` is still
+20. Extend incremental lifecycle replacement only after proving current reward
+metadata is fresh and the applicable period has ended, and only for a market
+that is flat, order-free and unresolved-free. Preserve all retained venue
+orders, the exact 20 cap, selection cadence/backoff, strict stream rebind and
+near-flatten-deadline guard. Add regressions for transient reward API omission,
+period-boundary stability, held inventory, working/unresolved ownership, no
+replacement, exact cap and failed stream bind before deployment.
+
+No code, configuration, process or venue mutation was made during diagnosis.
+
 ## DEPLOYED AND RESTARTED: refill capacity rejected during startup validation
 
 The 2026-08-25 run proved 97 viable markets under the live six-hour policy but

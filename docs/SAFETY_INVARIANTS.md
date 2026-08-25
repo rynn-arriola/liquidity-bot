@@ -319,3 +319,14 @@ These are implementation requirements, not suggestions.
     same in-process pause rather than spending the supervisor's fast-crash
     budget. Operator stop remains prompt, no pause proves flatness, and the
     active market tuple and authorized 20-slot capacity must remain unchanged.
+70. Reward-program expiry may reclaim a slot only from positive, owner-specific
+    proof. The runner must remember the exact program ID that authorized entry;
+    a later successful incentive response must contain that same ID with an
+    explicit elapsed `ends_at`. A missing row, different program or failed
+    refresh is not proof. Even after confirmation, a nonzero position, working
+    order or unresolved intent retains the market in the active ownership
+    scope. Incremental replacement preserves every healthy venue order, obeys
+    the near-flatten-deadline guard and cannot exceed the configured 20 slots.
+    Reward projection must intersect the nominal day-of clock with explicit
+    program bounds so selection and runtime authorization value the same
+    interval.

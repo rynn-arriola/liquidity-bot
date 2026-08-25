@@ -19,7 +19,9 @@ NOW = datetime(2026, 8, 12, 20, 0, tzinfo=UTC)
 
 def period(name: str, *, status: str = "active", target: float = 5000,
            pool: float = 35, discount: float = 0.5,
-           program_id: str | None = None) -> IncentivePeriod:
+           program_id: str | None = None,
+           starts_at: datetime | None = None,
+           ends_at: datetime | None = None) -> IncentivePeriod:
     return IncentivePeriod(
         program_id=program_id or name,
         period=name,
@@ -27,6 +29,8 @@ def period(name: str, *, status: str = "active", target: float = 5000,
         reward_pool=pool,
         discount_factor=discount,
         target_size=target,
+        starts_at=starts_at,
+        ends_at=ends_at,
     )
 
 
@@ -160,6 +164,52 @@ class RewardScoreTests(unittest.TestCase):
         )
         self.assertFalse(result.eligible)
         self.assertEqual(result.reason, "period_duration_unproven")
+
+    def test_projection_uses_explicit_reward_program_bounds(self):
+        """A short program must not be valued as if it lasted six hours."""
+
+        result = project_order_reward(
+            side="bid",
+            price=0.50,
+            size=1,
+            levels=[(0.50, 99)],
+            incentive=period(
+                "day_of", target=100, pool=20_000,
+                starts_at=NOW - timedelta(minutes=5),
+                ends_at=NOW + timedelta(minutes=5)),
+            tick_size=0.01,
+            event_start=NOW + timedelta(hours=2),
+            now=NOW,
+            horizon_seconds=30,
+            haircut=0.5,
+            minimum_payout=0,
+        )
+
+        self.assertTrue(result.eligible)
+        self.assertAlmostEqual(
+            result.maximum_remaining_reward,
+            result.projected_reward * 10,
+        )
+
+    def test_projection_stops_at_explicit_reward_program_end(self):
+        result = project_order_reward(
+            side="bid",
+            price=0.50,
+            size=1,
+            levels=[(0.50, 99)],
+            incentive=period(
+                "day_of", target=100, pool=20_000,
+                starts_at=NOW - timedelta(minutes=10),
+                ends_at=NOW),
+            tick_size=0.01,
+            event_start=NOW + timedelta(hours=2),
+            now=NOW,
+            horizon_seconds=30,
+            minimum_payout=0,
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertEqual(result.reason, "outside_projection_period")
 
     def test_eligibility_does_not_flip_on_our_own_resting_order(self):
         """The place/cancel churn of 2026-08-14, isolated.

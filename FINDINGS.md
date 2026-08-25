@@ -69,15 +69,41 @@ viable alternatives >= 20
 no later [top-up] replacing the no_incentive slugs
 ```
 
-This check made no code, configuration, process or venue mutation. A repair
-needs a separate safety review: reward data can disappear transiently, so a
-single `no_incentive` observation must not cause immediate churn. Any future
-implementation should require fresh reward metadata and a stable terminal
-reward-period condition, release only flat/order-free/unresolved-free owners,
-keep the near-flatten-deadline guard, and cap additions at the exact free count.
-Selection should also project against the effective reward end
-`min(game_start, incentive.ends_at)` when an explicit end exists, rather than
-only repairing the slot after expiry.
+The local repair now preserves the identity of the exact reward program that
+authorized a slot. A missing incentive row, a different ended program, or an
+ordinary refresh failure is not release proof. Only a successful fresh
+incentive response that contains that same program ID with an explicit elapsed
+`ends_at` confirms the terminal reward boundary. The market immediately stops
+being economically authorized through the existing evaluator, but its slot is
+released only after its position, working orders and unresolved intents are all
+zero. A position near its forced-flatten deadline still defers discovery.
+
+Confirmed reward end requests an incremental top-up immediately instead of
+waiting for the normal selection interval. The top-up retains every healthy
+bound market and its venue orders, excludes released/barred/retained slugs,
+and slices additions to the exact free count. The selector and live evaluator
+now both use the effective reward interval:
+
+```text
+start = max(game_start - 6h, explicit starts_at)
+end   = min(game_start, explicit ends_at)
+```
+
+This fixes the false duration used to value a soon-ending program; it does not
+add a league filter, reduce the six-hour candidate horizon, change quote size,
+or change the 20-market cap. The repaired log identifies the lifecycle split
+directly as `[top-up] ... expired=N reward_ended=N ...`.
+
+Local proof: all 598 tests pass. Dedicated regressions cover explicit program
+bounds at both pure reward and integrated selector layers, missing/different
+program data, one-time exact-program confirmation, immediate scheduling,
+working-order/position/unresolved ownership, exact-cap replacement and the
+existing empty-set, no-replacement, near-deadline and failed-bind cases. Five
+deliberate mutants were killed: ignoring explicit end, failing to record the
+authorizing ID, omitting reward-ended capacity, accepting a different program
+ID, removing immediate scheduling, diverting ordinary safe full rotation and
+removing unresolved-intent ownership. Production deployment and live
+acceptance remain pending.
 
 ---
 

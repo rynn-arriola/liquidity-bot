@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## 00. Replace flat markets whose reward period has positively ended
+## 00. FIXED LOCALLY; DEPLOY AND ACCEPT: replace flat markets whose reward period has positively ended
 
 The live `73d5c73` run proved the remaining low-order state is not 20-slot
 capacity loss: 20 remained bound, but ten markets changed to `no_incentive` at
@@ -8,22 +8,29 @@ capacity loss: 20 remained bound, but ten markets changed to `no_incentive` at
 temporarily blocked by target/price movement. There were 96 viable alternatives
 and zero position, unresolved or unknown-absent state.
 
-The free-capacity repair cannot see this because `len(active_slugs)` is still
-20. Extend incremental lifecycle replacement only after proving current reward
-metadata is fresh and the applicable period has ended, and only for a market
-that is flat, order-free and unresolved-free. Preserve all retained venue
-orders, the exact 20 cap, selection cadence/backoff, strict stream rebind and
-near-flatten-deadline guard. Add regressions for transient reward API omission,
-period-boundary stability, held inventory, working/unresolved ownership, no
-replacement, exact cap and failed stream bind before deployment.
+The local implementation records the exact authorizing program ID, confirms
+end only from a successful response carrying that same ID and an explicit
+elapsed `ends_at`, requests immediate incremental top-up, and releases only a
+flat/order-free/unresolved-free owner. Missing rows and different program IDs
+cannot release. The existing near-flatten-deadline guard, retained orders,
+strict stream rebind/backoff and exact 20 cap are unchanged.
 
-Also correct selection-time value: `select_applicable_period` honors explicit
-`ends_at`, but the 30-second reward projection assumes day-of ends at kickoff
-and the final sort has no remaining-reward-time key. Use the effective end
-`min(game_start, ends_at)` in projection/ranking so a program with five minutes
-left cannot outrank one that remains available for hours on a false duration.
+Projection now intersects the nominal day-of interval with explicit program
+bounds at both selector and live evaluation call sites. This corrects the false
+duration without adding a remaining-time ranking preference, league filter or
+shorter horizon.
 
-No code, configuration, process or venue mutation was made during diagnosis.
+All 598 local tests pass and seven deliberate mutants were killed. Deployment
+acceptance must prove:
+
+1. graceful stop obtains venue-backed flat proof before files change;
+2. deployed hashes match and the complete droplet suite passes stopped;
+3. restart is still `auto 10`, `max_markets=20`, six-hour horizon and 4 req/s;
+4. an elapsed reward row logs `reward_ended=1`, retains healthy slugs and adds
+   no more than its exact free count;
+5. the replacement active/subscribed tuple remains at 20 when supply permits;
+6. no ownership, unknown-absent, recovery-loop, loss-stop or position defect
+   appears. Raw working-order count may still be below 20.
 
 ## DEPLOYED AND RESTARTED: refill capacity rejected during startup validation
 

@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### PENDING — ended reward periods occupy slots until game kickoff
+### FIXED LOCALLY; DEPLOYMENT PENDING — ended reward periods occupy slots until game kickoff
 
 **Symptom.** The repaired runner remained bound to 20 markets but held only 18
 orders across nine. At the 13:00Z reward boundary, ten distinct bound markets
@@ -47,11 +47,28 @@ selection instant; reward projection uses game kickoff as the day-of period
 end and final ranking has no explicit reward-time-remaining key. It can
 therefore rank a program with minutes left as though it pays until kickoff.
 
-**Status.** Diagnosed only; no code or process change was made during the
-check. A fix must distinguish a positively ended reward period from transient
-missing reward metadata, and may release only a flat, order-free and
-unresolved-free owner. It must also project/rank against an explicit earlier
-reward end. See the newest FINDINGS entry for the exact signature.
+**Fix.** Each bound state retains the exact program ID that last authorized
+entry. A later successful incentive read confirms reward end only when it
+contains that same ID with an explicit elapsed `ends_at`; missing rows,
+different programs and refresh errors fail closed. Confirmation requests an
+immediate incremental top-up. Release still requires zero position, zero
+working orders and zero unresolved intents, and the existing near-flatten
+deadline guard remains. Healthy markets and resting venue orders are retained,
+and replacements are sliced to the exact configured capacity.
+
+Reward projection now intersects the nominal six-hour day-of period with
+explicit `starts_at`/`ends_at`, so selection no longer values five remaining
+minutes as though they run until kickoff. No league filter, quote-size, risk,
+REST-rate, candidate horizon or 20-slot change is included.
+
+**Review and proof.** All 598 local tests pass. New tests cover both projection
+layers, exact/transient/different program responses, immediate refill,
+working-order/position/unresolved ownership and exact-cap replacement. Five
+deliberate mutants each failed the intended regression, including removal of
+the active refresh's authorizing-program capture and diversion of the existing
+safe full-rotation path. Deployment and live
+acceptance are still pending; the running bot remains on `73d5c73` until a
+safe stop proves venue state.
 
 ### FIXED AND DEPLOYED — startup validation could leave free slots invisible to top-up
 

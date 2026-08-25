@@ -6807,6 +6807,235 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         runner.reward_selector = Selector()
         return runner
 
+    def mark_reward_ended(self, runner, slug):
+        """Record the proof `_refresh_contracts` owns in production."""
+
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.market = SimpleNamespace(
+            game_start=now + timedelta(hours=2))
+        state.reward_program_id = f"reward-{slug}"
+        state.reward_program_ends_at = now - timedelta(seconds=1)
+        state.reward_period_ended_at = now - timedelta(seconds=1)
+        state.reward_period_end_confirmed_at = now
+        return state
+
+    def metadata(self, slug, now):
+        return MarketMetadata(
+            slug=slug,
+            game_start=now + timedelta(hours=2),
+            tick_size=0.01,
+            active=True,
+            closed=False,
+            status="MARKET_STATUS_OPEN",
+            minimum_trade_qty=1,
+            sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE",
+        )
+
+    def ended_incentive(self, slug, now, *, program_id=None):
+        return MarketIncentive(slug=slug, periods=(IncentivePeriod(
+            program_id=program_id or f"reward-{slug}",
+            period="day_of",
+            status="active",
+            reward_pool=100,
+            discount_factor=0.5,
+            target_size=10,
+            starts_at=now - timedelta(hours=1),
+            ends_at=now - timedelta(seconds=1),
+        ),))
+
+    async def test_confirmed_reward_end_replaces_only_that_slot_at_exact_cap(self):
+        runner = await self.armed(replacements=(
+            "market-three", "market-four"))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=2))
+        self.mark_reward_ended(runner, "market-two")
+
+        self.assertTrue(runner._active_set_needs_top_up(runner._now()))
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(runner.active_slugs,
+                         ("market-one", "market-three"))
+        self.assertEqual(len(runner.active_slugs), 2)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_end_requests_top_up_before_normal_scan_deadline(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        now = runner._now()
+        next_selection = now + timedelta(hours=1)
+
+        self.assertFalse(runner._incremental_top_up_due(
+            now, next_selection))
+        runner._reward_end_top_up_requested = True
+        self.assertTrue(runner._incremental_top_up_due(
+            now, next_selection))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_normal_safe_scan_is_left_for_full_rotation(self):
+        """The lifecycle fix must not divert the existing rotation path."""
+
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        now = runner._now()
+        self.assertTrue(runner._safe_to_scan())
+
+        self.assertFalse(runner._incremental_top_up_due(
+            now, now - timedelta(seconds=1)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_missing_incentive_row_does_not_confirm_reward_end(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.reward_program_id = f"reward-{slug}"
+        state.reward_program_ends_at = runner._now() + timedelta(minutes=5)
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.metadata(slug, runner._now()))
+        runner.gateway.fetch_incentives = AsyncMock(return_value={})
+
+        with self.assertRaisesRegex(
+                CommissioningUnavailable, "no liquidityProgram"):
+            await runner._refresh_contracts(runner._now(), slug)
+
+        self.assertIsNone(state.reward_period_end_confirmed_at)
+        self.assertFalse(runner._reward_end_top_up_requested)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_exact_elapsed_program_confirms_reward_end_only_once(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.reward_program_id = f"reward-{slug}"
+        state.reward_program_ends_at = now + timedelta(minutes=5)
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.metadata(slug, now))
+        runner.gateway.fetch_incentives = AsyncMock(return_value={
+            slug: self.ended_incentive(slug, now),
+        })
+
+        await runner._refresh_contracts(now, slug)
+
+        self.assertIsNotNone(state.reward_period_end_confirmed_at)
+        self.assertTrue(runner._reward_end_top_up_requested)
+        runner._reward_end_top_up_requested = False
+        await runner._refresh_contracts(now, slug)
+        self.assertFalse(runner._reward_end_top_up_requested)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_active_refresh_records_the_exact_authorizing_program(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        now = runner._now()
+        end = now + timedelta(minutes=5)
+        reward = MarketIncentive(slug=slug, periods=(IncentivePeriod(
+            program_id="authorizing-program",
+            period="day_of",
+            status="active",
+            reward_pool=100,
+            discount_factor=0.5,
+            target_size=10,
+            starts_at=now - timedelta(minutes=5),
+            ends_at=end,
+        ),))
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.metadata(slug, now))
+        runner.gateway.fetch_incentives = AsyncMock(
+            return_value={slug: reward})
+
+        await runner._refresh_contracts(now, slug)
+
+        state = runner.state_for(slug)
+        self.assertEqual(state.reward_program_id, "authorizing-program")
+        self.assertEqual(state.reward_program_ends_at, end)
+        self.assertIsNone(state.reward_period_end_confirmed_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_different_elapsed_program_cannot_release_current_owner(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.reward_program_id = f"reward-{slug}"
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.metadata(slug, now))
+        runner.gateway.fetch_incentives = AsyncMock(return_value={
+            slug: self.ended_incentive(
+                slug, now, program_id="some-other-program"),
+        })
+
+        with self.assertRaisesRegex(
+                CommissioningUnavailable, "no applicable pregame"):
+            await runner._refresh_contracts(now, slug)
+
+        self.assertIsNone(state.reward_period_end_confirmed_at)
+        self.assertFalse(runner._reward_end_top_up_requested)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_working_order_blocks_reward_ended_slot_release(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        runner.ledger.apply_order_event(
+            "ws", "reward-ended-open-order",
+            OrderState(
+                client_order_id="reward-ended-client",
+                exchange_order_id="reward-ended-exchange",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._reward_ended_and_flat(
+            slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_position_blocks_reward_ended_slot_release(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        runner.ledger.apply_position_event(
+            "ws", "reward-ended-position",
+            PositionState(slug, Decimal("1"), runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._reward_ended_and_flat(
+            slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unresolved_intent_blocks_reward_ended_slot_release(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        runner.ledger.prepare_intent(
+            "reward-ended-intent", "CANCEL", slug,
+            "reward-ended-client", {}, created_at=runner._now())
+
+        self.assertFalse(runner._reward_ended_and_flat(
+            slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_top_up_never_binds_an_empty_active_set(self):
         """`_bind_markets(())` leaves `market_slug` raising and kills the loop."""
 

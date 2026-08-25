@@ -18,14 +18,18 @@ from fact rather than from the last thing someone remembers.
   state. Raw working-order count is not slot count; use the newest FINDINGS
   20-slot capacity audit.
 
-- **A second slot-lifecycle gap is diagnosed but not fixed.** At 13:00Z ten
+- **The second slot-lifecycle gap is fixed locally; deployment is pending.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
   held no orders while nine other markets held 18 size-10 orders. Capacity was
   still 20, viable alternatives were 96, and positions/unresolved/absent state
   were zero. Top-up replaces free or past-kickoff slots, not flat pregame
-  markets whose reward period ended. No code or process change was made. See
-  the newest FINDINGS, BUGFIXES and NEXT entries before designing the guarded
-  reward-ended lifecycle repair.
+  markets whose reward period ended. The reviewed repair confirms only the
+  exact previously-authorizing program's explicit elapsed end, fails closed on
+  missing/different reward data, releases only flat/order-free/unresolved-free
+  owners and immediately tops up the exact free count. Projection now uses the
+  explicit reward interval. All 598 local tests pass and seven mutants were
+  killed. The live process is still unchanged on `73d5c73`; see the newest
+  FINDINGS, BUGFIXES and NEXT entries before deployment.
 
 - **Historical maintenance run: `feba761` started at 12:18:56Z.**
   The previous runner stopped at 2026-08-25T11:14:26Z with

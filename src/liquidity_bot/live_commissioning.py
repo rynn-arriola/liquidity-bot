@@ -298,6 +298,11 @@ class CommissioningRunner:
         # ever retries -- observed live 2026-08-16, 24 minutes of silent
         # downtime before an operator noticed. See BUGFIXES 2026-08-16.
         self._streams_need_rebind = False
+        # Set once when fresh reward metadata positively proves that the exact
+        # program which authorized a bound slot has ended. The run loop spends
+        # it on one immediate incremental top-up attempt; a failed attempt then
+        # uses the ordinary bounded backoff instead of retrying every pass.
+        self._reward_end_top_up_requested = False
         # "Up, healthy, and resting nothing" -- see `_alarm_if_quoting_nothing`.
         self._quiet_since: datetime | None = None
         self._quiet_alarm_sent = False
@@ -750,9 +755,29 @@ class CommissioningRunner:
         except AmbiguousIncentiveError as exc:
             raise CommissioningUnavailable(
                 f"{slug} has ambiguous incentive periods") from exc
+        if period is None:
+            ended = next((
+                item for item in state.incentive.periods
+                if item.program_id == state.reward_program_id
+                and item.ends_at is not None
+                and item.ends_at <= now
+            ), None)
+            if ended is not None:
+                newly_confirmed = (
+                    state.reward_period_ended_at != ended.ends_at
+                    or state.reward_period_end_confirmed_at is None)
+                state.reward_period_ended_at = ended.ends_at
+                state.reward_period_end_confirmed_at = self._now()
+                if newly_confirmed:
+                    self._reward_end_top_up_requested = True
+                return
         if period is None or period.period == "live":
             raise CommissioningUnavailable(
                 f"{slug} has no applicable pregame liquidity period")
+        state.reward_program_id = period.program_id
+        state.reward_program_ends_at = period.ends_at
+        state.reward_period_ended_at = None
+        state.reward_period_end_confirmed_at = None
 
     async def _refresh_book(
         self, now: datetime, slug: str | None = None,
@@ -3998,6 +4023,33 @@ class CommissioningRunner:
                 and not any(str(row["market_slug"]) == slug
                             for row in self.ledger.unresolved_intents()))
 
+    def _reward_ended_and_flat(self, slug: str, now: datetime) -> bool:
+        """True only after fresh metadata proves this slot's program ended.
+
+        Missing reward rows are not proof: a partial/transient incentive
+        response must make the market idle, never release its ownership scope.
+        `_refresh_contracts` records confirmation only when a later complete
+        response contains the exact program that previously authorized entry
+        and its explicit `ends_at` has elapsed.
+        """
+
+        state = self._markets.get(slug)
+        if (state is None
+                or state.reward_period_end_confirmed_at is None
+                or state.reward_period_ended_at is None
+                or state.reward_period_ended_at > now):
+            return False
+        market = state.market
+        if (market is None or market.game_start is None
+                or market.game_start <= now):
+            # Past kickoff belongs to `_expired_and_flat`, whose separate
+            # lifecycle rule is already covered and logged.
+            return False
+        return (self.ledger.position(slug) == 0
+                and not self.ledger.working_orders(slug)
+                and not any(str(row["market_slug"]) == slug
+                            for row in self.ledger.unresolved_intents()))
+
     def _position_near_its_flatten_deadline(self, now: datetime) -> bool:
         """True when held inventory is close enough to kickoff that a scan hurts.
 
@@ -4040,6 +4092,8 @@ class CommissioningRunner:
             len(self.active_slugs) < self.config.max_markets
             or any(self._expired_and_flat(slug, now)
                    for slug in self.active_slugs)
+            or any(self._reward_ended_and_flat(slug, now)
+                   for slug in self.active_slugs)
         )
 
     def _initial_market_selection_due(self, now: datetime) -> datetime:
@@ -4051,6 +4105,20 @@ class CommissioningRunner:
             return now
         return now + timedelta(
             seconds=self.config.market_selection_refresh_seconds)
+
+    def _incremental_top_up_due(
+        self, now: datetime, next_selection: datetime,
+    ) -> bool:
+        """Whether the run loop should perform an incremental discovery scan."""
+
+        return (
+            self.config.auto_select_reward_markets
+            and (now >= next_selection or self._reward_end_top_up_requested)
+            and (self._reward_end_top_up_requested
+                 or not self._safe_to_scan())
+            and not self._position_near_its_flatten_deadline(now)
+            and self._active_set_needs_top_up(now)
+        )
 
     async def _top_up_active_markets(self, now: datetime) -> bool:
         """Fill free slots without disturbing markets that are still resting.
@@ -4065,12 +4133,14 @@ class CommissioningRunner:
         much as for the retirement ban.
 
         This path is deliberately narrower. It releases ONLY markets that are
-        past kickoff and flat, keeps every other market and its resting orders
-        exactly where they are, fills any capacity startup validation left
-        free, and never quarantines. Streams are restarted because they cannot
-        subscribe incrementally, but a stream restart does not touch resting
-        orders -- those live on the venue and keep earning through it. That is
-        the whole difference from full rotation, which cancels them.
+        past kickoff and flat, or whose exact reward program is positively
+        confirmed ended and which are flat with no order ownership left. It
+        keeps every other market and its resting orders exactly where they
+        are, fills any capacity startup validation left free, and never
+        quarantines. Streams are restarted because they cannot subscribe
+        incrementally, but a stream restart does not touch resting orders --
+        those live on the venue and keep earning through it. That is the whole
+        difference from full rotation, which cancels them.
         """
 
         if not self.config.auto_select_reward_markets:
@@ -4081,9 +4151,14 @@ class CommissioningRunner:
             return False
         expired = [slug for slug in self.active_slugs
                    if self._expired_and_flat(slug, now)]
-        keep = tuple(slug for slug in self.active_slugs if slug not in expired)
+        reward_ended = [
+            slug for slug in self.active_slugs
+            if slug not in expired and self._reward_ended_and_flat(slug, now)]
+        released = expired + reward_ended
+        keep = tuple(slug for slug in self.active_slugs
+                     if slug not in released)
         free = max(0, self.config.max_markets - len(keep))
-        if not expired and free == 0:
+        if not released and free == 0:
             return False
         scan_started = time.monotonic()
         try:
@@ -4092,16 +4167,17 @@ class CommissioningRunner:
             self._selection_scan_seconds_last = time.monotonic() - scan_started
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
-        exclude = self._barred_slugs() | set(keep) | set(expired)
+        exclude = self._barred_slugs() | set(keep) | set(released)
         replacements = tuple(
             item.market.slug
             for item in selection.top_viable(self.config.max_markets,
                                              exclude=exclude))[:free]
         print(
             f"[top-up] at={self._now().isoformat()} "
-            f"released={len(expired)} kept={len(keep)} "
+            f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} free_slots={free} "
-            f"released_slugs={','.join(sorted(expired))}",
+            f"expired={len(expired)} reward_ended={len(reward_ended)} "
+            f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )
         if not replacements and not keep:
@@ -4111,11 +4187,11 @@ class CommissioningRunner:
             # `_refresh_book(now)` among them -- takes the run loop down.
             print(
                 f"[top-up] at={self._now().isoformat()} skipped=nothing_retained "
-                f"expired={len(expired)}",
+                f"expired={len(expired)} reward_ended={len(reward_ended)}",
                 flush=True,
             )
             return False
-        if not replacements and not expired:
+        if not replacements and not released:
             # Capacity is free, but this scan found nothing safe to add. Keep
             # the current subscriptions intact and retry only on the normal
             # bounded selection cadence.
@@ -5644,10 +5720,7 @@ class CommissioningRunner:
                 # slots held by markets that have kicked off and are flat, or
                 # fill capacity that startup validation left free. That path
                 # keeps every resting order where it is.
-                if (self.config.auto_select_reward_markets
-                        and now >= next_selection
-                        and not self._safe_to_scan()
-                        and self._active_set_needs_top_up(now)):
+                if self._incremental_top_up_due(now, next_selection):
                     stream_tasks = (market_task, private_task)
                     for task in stream_tasks:
                         task.cancel()
@@ -5655,9 +5728,11 @@ class CommissioningRunner:
                         *stream_tasks, return_exceptions=True)
                     try:
                         await self._top_up_active_markets(now)
+                        self._reward_end_top_up_requested = False
                         next_selection = self._now() + timedelta(
                             seconds=self.config.market_selection_refresh_seconds)
                     except Exception as exc:
+                        self._reward_end_top_up_requested = False
                         await self._report_runtime_error(
                             "market_top_up", exc)
                         # Back off exactly as the rotation path does. Without

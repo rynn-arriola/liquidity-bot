@@ -50,6 +50,8 @@ def incentive(
     pool: float,
     target: float = 10,
     phase: str = "day_of",
+    starts_at: datetime | None = None,
+    ends_at: datetime | None = None,
 ) -> MarketIncentive:
     return MarketIncentive(slug=slug, periods=(IncentivePeriod(
         program_id=f"reward-{slug}",
@@ -58,6 +60,8 @@ def incentive(
         reward_pool=pool,
         discount_factor=0.5,
         target_size=target,
+        starts_at=starts_at,
+        ends_at=ends_at,
     ),))
 
 
@@ -123,6 +127,27 @@ class FixedFillHazard:
 
 
 class OpportunityTests(unittest.TestCase):
+    def test_opportunity_projection_is_bounded_by_explicit_program_end(self):
+        reward = incentive(
+            "short", pool=20_000,
+            starts_at=NOW - timedelta(minutes=5),
+            ends_at=NOW + timedelta(minutes=5))
+        item = evaluate_market_opportunity(
+            market("short", starts_in_hours=2),
+            reward,
+            book("short"),
+            period=reward.periods[0],
+            now=NOW,
+            policy=RewardSelectionPolicy(),
+        )
+
+        for side in item.sides:
+            self.assertTrue(side.projection.eligible)
+            self.assertAlmostEqual(
+                side.projection.maximum_remaining_reward,
+                side.projection.projected_reward * 10,
+            )
+
     def test_exact_live_economics_are_applied_to_both_sides(self):
         item = evaluate_market_opportunity(
             market("high"),

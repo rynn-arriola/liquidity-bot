@@ -76,6 +76,13 @@ class MarketState:
     # the others through the shared request governor.
     next_book_refresh: datetime | None = None
     next_contract_refresh: datetime | None = None
+    # The exact reward program that last authorized entry for this slot.
+    # Replacement after reward expiry is allowed only when a later complete
+    # incentive response contains this same id with an explicit elapsed end.
+    reward_program_id: str | None = None
+    reward_program_ends_at: datetime | None = None
+    reward_period_ended_at: datetime | None = None
+    reward_period_end_confirmed_at: datetime | None = None
 
     def clear_economics(self) -> None:
         """Drop every derived per-side value before a fresh evaluation.
@@ -108,6 +115,10 @@ class MarketState:
         self.last_touch = None
         self.last_touch_changed_at = None
         self.last_touch_observed_at = None
+        self.reward_program_id = None
+        self.reward_program_ends_at = None
+        self.reward_period_ended_at = None
+        self.reward_period_end_confirmed_at = None
         self.clear_economics()
 
     def observe_book_touch(

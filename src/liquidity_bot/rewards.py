@@ -300,8 +300,19 @@ def project_order_reward(
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,
             "period_duration_unproven")
+    nominal_start = event_start - timedelta(hours=6)
+    period_start = nominal_start
     period_end = event_start
-    period_start = event_start - timedelta(hours=6)
+    if incentive.starts_at is not None:
+        _require_aware(incentive.starts_at, "incentive.starts_at")
+        period_start = max(period_start, incentive.starts_at)
+    if incentive.ends_at is not None:
+        _require_aware(incentive.ends_at, "incentive.ends_at")
+        period_end = min(period_end, incentive.ends_at)
+    if period_end <= period_start:
+        return RewardProjection(
+            False, score.score, 0.0, 0.0, 0.0, 0.0,
+            "period_duration_unproven")
     if not period_start <= now < period_end:
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,

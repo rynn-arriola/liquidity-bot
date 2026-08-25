@@ -1,8 +1,11 @@
-"""Polymarket reward-day boundaries.
+"""Polymarket Eastern operating-day boundaries.
 
 The earnings API groups rewards by midnight-to-midnight America/New_York,
 including daylight-saving changes.  Reporting code must put trading events in
 that same calendar before comparing a day's trading with a day's reward.
+
+The commissioned bot's daily risk budget uses the same wall-clock boundary.
+Keeping both conversions here prevents either one from drifting at DST.
 """
 
 from __future__ import annotations
@@ -31,6 +34,12 @@ def reward_day(value: datetime | str) -> str:
     """Return the venue reward date for a timezone-aware instant."""
 
     return _aware_datetime(value).astimezone(NEW_YORK).date().isoformat()
+
+
+def risk_day(value: datetime | str) -> str:
+    """Return the commissioned bot's ET loss-budget date."""
+
+    return reward_day(value)
 
 
 def reward_day_bounds(value: date | str) -> tuple[datetime, datetime]:

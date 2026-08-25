@@ -39,8 +39,10 @@ strategy is profitable and not permission to scale.
   (corrected 2026-08-16; this read "at 30 seconds");
 - allow at most 20 taker exits, with a session fee cap of `0.30 × quote size`
   ($3 at live size 10), so the cap continues to cover twenty peak-fee exits;
-- $40 per-market realized-loss stop, $70 realized session stop, and $80
-  emergency marked-account-equity hard stop. These account-level loss limits
+- $40 per-market realized-loss stop and one $80 account threshold measured by
+  two sensors: realized session loss pauses new risk, while marked-account-
+  equity loss is the emergency hard stop. The daily risk day resets at
+  midnight `America/New_York`, including DST. These account-level loss limits
   do not scale down with quote size;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;

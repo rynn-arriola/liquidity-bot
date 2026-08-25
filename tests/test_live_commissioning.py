@@ -49,6 +49,7 @@ from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 from liquidity_bot.reconciler import ActionKind, PlanAction, WorkingOrder
 from liquidity_bot.rewards import IncentivePeriod, RewardProjection
+from liquidity_bot.reward_calendar import risk_day
 
 
 NOW = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -3562,13 +3563,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_a_new_utc_day_absorbs_every_earlier_loss(self):
+    async def test_a_new_et_day_absorbs_every_earlier_loss(self):
         """The stop is a guardrail for today, not a lifetime tally.
 
         Measured 2026-08-15: once the fill back-fill let the stop see real
         closed round trips, it totalled several days of losses and the runner
         halted 73 seconds after every start. A stop that can never be
-        satisfied is not a safety measure, it is an outage. A NEW UTC day must
+        satisfied is not a safety measure, it is an outage. A NEW ET day must
         therefore open with a fresh budget however bad the history is.
         """
         runner, _client, _ = self.build_runner()
@@ -3589,7 +3590,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_baseline_is_never_written_without_a_balance(self):
         """A zero opening equity would disable the hard stop until midnight.
 
-        `INSERT OR IGNORE` makes the first write of a UTC date permanent, so a
+        `INSERT OR IGNORE` makes the first write of a risk date permanent, so a
         zero stored here could not be corrected for the rest of the day -- and
         `starting_equity - current_equity` would then be negative, so the
         emergency ceiling could never fire. Skipping is safe because both
@@ -3607,9 +3608,42 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._roll_realized_baseline()
 
         stored = runner.ledger.query(
-            "SELECT utc_date FROM execution_day_baselines")
-        self.assertEqual([r["utc_date"] for r in stored], [NOW.date().isoformat()])
+            "SELECT risk_date FROM execution_risk_day_baselines")
+        self.assertEqual(
+            [r["risk_date"] for r in stored], [risk_day(NOW)])
         self.assertEqual(runner.risk_guard.starting_equity, opening)
+
+    async def test_the_risk_budget_does_not_reset_at_utc_midnight(self):
+        """Only midnight America/New_York grants a new daily budget."""
+
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        original = runner._baseline_day
+
+        # 00:30Z is still 20:30 on the same ET date in August.
+        after_utc_midnight = datetime(
+            2026, 8, 14, 0, 30, tzinfo=timezone.utc)
+        runner._now = lambda: after_utc_midnight
+        runner._roll_realized_baseline()
+        self.assertEqual(runner._baseline_day, original)
+        rows = runner.ledger.query(
+            "SELECT risk_date FROM execution_risk_day_baselines")
+        self.assertEqual([r["risk_date"] for r in rows], ["2026-08-13"])
+
+        # 04:00Z is midnight EDT, so this is the first instant allowed to
+        # establish the next day's marks.
+        at_et_midnight = datetime(2026, 8, 14, 4, 0, tzinfo=timezone.utc)
+        runner._now = lambda: at_et_midnight
+        runner._roll_realized_baseline()
+        self.assertEqual(runner._baseline_day.isoformat(), "2026-08-14")
+        rows = runner.ledger.query(
+            "SELECT risk_date FROM execution_risk_day_baselines "
+            "ORDER BY risk_date")
+        self.assertEqual(
+            [r["risk_date"] for r in rows],
+            ["2026-08-13", "2026-08-14"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_a_restart_inside_the_same_day_inherits_its_drawdown(self):
         """A restart must not hand the day's budget back.
@@ -3640,7 +3674,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-        # Restart: same ledger, same venue, same UTC day.
+        # Restart: same ledger, same venue, same ET day.
         restarted, _client2, _ = self.build_runner(
             ledger=runner.ledger, client=client)
         await restarted.preflight()
@@ -3662,7 +3696,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         """Re-baselining must not blind the stop to real losses.
 
         Since 2026-08-22 the loss stop PAUSES rather than ending the session --
-        it blocks new risk and clears itself at the next UTC day. What this
+        it blocks new risk and clears itself at the next ET day. What this
         test guards is unchanged: the loss must still be SEEN. A re-baseline
         that hid it would leave the bot quoting straight through the budget.
         """
@@ -3692,7 +3726,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         The old behaviour ended the process, which was at least loud. Pausing
         leaves the bot up, flat and quiet -- without an alert the first anyone
-        would know is a day of missing reward. Once per UTC day, because the
+        would know is a day of missing reward. Once per ET day, because the
         blocker stands all day and `_stop_reason` runs every pass.
         """
         runner, _client, notifier = self.build_runner()
@@ -3711,6 +3745,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         body = str(sent[0])
         self.assertIn("PAUSED", body)
         self.assertIn("loss limit", body)
+        self.assertIn("next ET midnight", body)
 
         # Every later pass on the same day is silent.
         runner._stop_reason(NOW + timedelta(seconds=5))
@@ -3768,7 +3803,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             runner.ledger.consecutive_loss_stop_days(today.isoformat()), 0)
 
-    async def test_single_stop_fires_at_forty_then_the_ceiling(self):
+    async def test_one_eighty_dollar_threshold_keeps_both_sensors(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         start = Decimal("100")
@@ -3778,7 +3813,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # stopping on that would end sessions that never lost a trade. Paper
         # movement is assetNotional; cash is untouched by it.
         await runner._refresh_balance(NOW)
-        client.account.asset_notional = -runner.config.max_session_loss_usd
+        client.account.asset_notional = -(
+            runner.config.hard_stop_loss_usd - Decimal("1"))
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
@@ -3788,15 +3824,20 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         client.account.asset_notional = Decimal("0")
         client.account.current_balance = (
             start - runner.config.max_session_loss_usd)
+        # Keep marked equity $1 inside the equally-sized hard stop. This
+        # proves the realized sensor still pauses independently even though
+        # both protections now use the same $80 threshold.
+        client.account.asset_notional = Decimal("1")
         await runner._refresh_balance(NOW)
         # Since 2026-08-22 a first-day loss stop PAUSES: it blocks new risk and
-        # clears at the next UTC day rather than ending the session. What must
+        # clears at the next ET day rather than ending the session. What must
         # still hold is that the loss is seen and quoting stops.
         self.assertIsNone(runner._stop_reason(NOW))
         self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
         self.assertIn("loss limit",
                       " ".join(runner.risk_guard.blockers(now=NOW)))
         client.account.current_balance = start
+        client.account.asset_notional = Decimal("0")
 
         # The ceiling is the one thing that still reads marked equity, because
         # its job is to catch what the ledger cannot explain.

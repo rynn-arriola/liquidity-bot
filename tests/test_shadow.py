@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from liquidity_bot.models import BookLevel, BookSnapshot, MarketMetadata, TradePrint
-from liquidity_bot.reward_calendar import NEW_YORK, reward_day, reward_day_bounds
+from liquidity_bot.reward_calendar import (
+    NEW_YORK, reward_day, reward_day_bounds, risk_day)
 from liquidity_bot.rewards import IncentivePeriod
 from liquidity_bot.shadow_engine import ShadowEngine, ShadowPolicy
 from liquidity_bot.shadow_math import cross_exit, split_reward_day_interval
@@ -54,6 +55,14 @@ class ShadowMathTests(unittest.TestCase):
             "2026-08-21")
         self.assertEqual(
             reward_day(datetime(2026, 8, 22, 4, 0, 0, tzinfo=UTC)),
+            "2026-08-22")
+
+    def test_risk_day_uses_the_same_et_boundary(self):
+        self.assertEqual(
+            risk_day(datetime(2026, 8, 22, 3, 59, 59, tzinfo=UTC)),
+            "2026-08-21")
+        self.assertEqual(
+            risk_day(datetime(2026, 8, 22, 4, 0, 0, tzinfo=UTC)),
             "2026-08-22")
 
     def test_reward_day_bounds_follow_daylight_saving(self):

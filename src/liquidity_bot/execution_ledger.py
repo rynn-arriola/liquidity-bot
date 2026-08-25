@@ -128,6 +128,20 @@ CREATE TABLE IF NOT EXISTS execution_day_baselines (
     opening_cash TEXT,
     created_at TEXT NOT NULL
 );
+-- The two UTC-keyed tables above are retained for audit and for the guarded
+-- one-time cutover. New risk state is written only to the ET-keyed tables.
+CREATE TABLE IF NOT EXISTS execution_risk_loss_stop_days (
+    risk_date TEXT PRIMARY KEY,
+    first_tripped_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
+    risk_date TEXT PRIMARY KEY,
+    opening_equity TEXT NOT NULL,
+    opening_realized TEXT NOT NULL,
+    opening_cash TEXT,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_quote_observations (
     intent_id TEXT PRIMARY KEY,
     client_order_id TEXT NOT NULL UNIQUE,
@@ -499,10 +513,10 @@ class ExecutionLedger:
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return list(self.connection.execute(sql, params).fetchall())
 
-    def record_loss_stop(self, utc_date: str, *, at: datetime) -> None:
-        """Note that a loss stop tripped on this UTC day. Idempotent.
+    def record_loss_stop(self, risk_date: str, *, at: datetime) -> None:
+        """Note that a loss stop tripped on this ET risk day. Idempotent.
 
-        Kept in its own table rather than a column on `execution_day_baselines`
+        Kept in its own table rather than a column on the baseline table
         so a loss stop can never disturb the equity marks the stops themselves
         read. Only the FIRST trip of a day is stored: the guard re-evaluates
         every pass while tripped, and what matters is the day, not the count.
@@ -510,12 +524,12 @@ class ExecutionLedger:
 
         with self.connection:
             self.connection.execute(
-                "INSERT OR IGNORE INTO execution_loss_stop_days"
-                "(utc_date,first_tripped_at) VALUES (?,?)",
-                (str(utc_date), _time(at, "at")))
+                "INSERT OR IGNORE INTO execution_risk_loss_stop_days"
+                "(risk_date,first_tripped_at) VALUES (?,?)",
+                (str(risk_date), _time(at, "at")))
 
-    def consecutive_loss_stop_days(self, utc_date: str) -> int:
-        """How many days in a row, ending at ``utc_date``, hit a loss stop.
+    def consecutive_loss_stop_days(self, risk_date: str) -> int:
+        """How many ET risk days in a row hit a loss stop.
 
         A loss stop that pauses until the next day is convenient and, on its
         own, unbounded: the day baseline resets at midnight, so a strategy that
@@ -528,10 +542,10 @@ class ExecutionLedger:
         caller escalates to a terminal stop at that point.
         """
 
-        rows = {str(row["utc_date"]) for row in self.connection.execute(
-            "SELECT utc_date FROM execution_loss_stop_days")}
+        rows = {str(row["risk_date"]) for row in self.connection.execute(
+            "SELECT risk_date FROM execution_risk_loss_stop_days")}
         try:
-            day = date.fromisoformat(str(utc_date))
+            day = date.fromisoformat(str(risk_date))
         except ValueError:
             return 0
         streak = 0
@@ -542,14 +556,15 @@ class ExecutionLedger:
 
     def day_baseline(
         self,
-        utc_date: str,
+        risk_date: str,
         *,
         opening_equity: Decimal,
         opening_realized: Decimal,
         opening_cash: Decimal | None,
         created_at: datetime,
+        legacy_utc_date: str | None = None,
     ) -> tuple[Decimal, Decimal, Decimal | None]:
-        """Return the UTC day's opening marks, writing them only if absent.
+        """Return the ET risk day's opening marks, writing only if absent.
 
         The loss stops used to baseline per PROCESS. Ten sessions started on
         2026-08-18, so the day's $40 budget was handed back ten times, and the
@@ -561,25 +576,56 @@ class ExecutionLedger:
         `INSERT OR IGNORE` is the whole mechanism: the first process of the
         day writes the marks and every later one reads them back, so a restart
         inherits the day's drawdown instead of being handed a fresh budget. A
-        new UTC date has no row and therefore does get a fresh one, which is
-        the intended reset.
+        A new ET date has no row and therefore gets a fresh one, which is the
+        intended reset.
+
+        The first ET-aware process must not grant a fresh budget merely because
+        older deployments stored only UTC keys. If the ET table is completely
+        empty, ``legacy_utc_date`` identifies the baseline the old process was
+        actively enforcing. That row, or the latest prior legacy row when the
+        bot remained stopped across UTC midnight, is copied once. After the
+        first ET row exists, legacy rows are never consulted again, so every
+        later reset is taken at ET midnight rather than UTC midnight.
 
         Returns the stored values, which are the caller's baseline whether or
         not this call is the one that wrote them.
         """
 
-        date_key = str(utc_date)
+        date_key = str(risk_date)
         with self.connection:
+            values = (
+                str(opening_equity),
+                str(opening_realized),
+                None if opening_cash is None else str(opening_cash),
+                _time(created_at, "created_at"),
+                "fresh_et_day",
+            )
+            et_rows = self.connection.execute(
+                "SELECT COUNT(*) n FROM execution_risk_day_baselines"
+            ).fetchone()["n"]
+            if et_rows == 0 and legacy_utc_date is not None:
+                legacy = self.connection.execute(
+                    "SELECT opening_equity,opening_realized,opening_cash,"
+                    "created_at FROM execution_day_baselines "
+                    "WHERE utc_date<=? ORDER BY utc_date DESC LIMIT 1",
+                    (str(legacy_utc_date),),
+                ).fetchone()
+                if legacy is not None:
+                    values = (
+                        str(legacy["opening_equity"]),
+                        str(legacy["opening_realized"]),
+                        legacy["opening_cash"],
+                        str(legacy["created_at"]),
+                        "legacy_utc_cutover",
+                    )
             self.connection.execute(
-                "INSERT OR IGNORE INTO execution_day_baselines"
-                "(utc_date,opening_equity,opening_realized,opening_cash,"
-                "created_at) VALUES (?,?,?,?,?)",
-                (date_key, str(opening_equity), str(opening_realized),
-                 None if opening_cash is None else str(opening_cash),
-                 _time(created_at, "created_at")))
+                "INSERT OR IGNORE INTO execution_risk_day_baselines"
+                "(risk_date,opening_equity,opening_realized,opening_cash,"
+                "created_at,source) VALUES (?,?,?,?,?,?)",
+                (date_key, *values))
         row = self.connection.execute(
             "SELECT opening_equity,opening_realized,opening_cash "
-            "FROM execution_day_baselines WHERE utc_date=?",
+            "FROM execution_risk_day_baselines WHERE risk_date=?",
             (date_key,)).fetchone()
         if row is None:  # pragma: no cover - the insert above guarantees it
             return opening_equity, opening_realized, opening_cash

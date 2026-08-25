@@ -57,9 +57,10 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. Losses have three distinct thresholds: a **$40** per-market realized-loss
-    stop, a **$70** realized session stop, and an **$80** emergency marked-
-    account-equity hard stop (`currentBalance` plus `assetNotional`). The
+25. Losses have a **$40** per-market realized-loss threshold and one **$80**
+    account threshold observed by two independent sensors: realized session
+    loss pauses new risk, while marked-account-equity loss (`currentBalance`
+    plus `assetNotional`) is the emergency hard stop. The
     market stop remains the first bound for one bad market; only losses spread
     across markets can reach the session stop. Buying power is never treated
     as P&L or marked equity. `CommissioningConfig` validates all three at
@@ -286,13 +287,12 @@ These are implementation requirements, not suggestions.
     reconciliation, scheduler priority, slot capacity or risk policy until a
     separately reviewed rule passes a prospective held-out cohort and first
     runs in would-refuse shadow mode.
-67. Reward attribution and risk authority use explicitly different calendars.
-    The venue earnings `date` is midnight-to-midnight `America/New_York`, so a
-    daily trading/reward join must bucket ledger instants into that ET day and
-    must honor DST. Reward totals are timezone-independent. Session and hard
-    stops remain baselined on the durable UTC day: changing their reset instant
-    can grant a fresh loss budget and is a live-risk policy change, never an
-    incidental consequence of correcting a report.
+67. Reward attribution and daily risk authority use midnight-to-midnight
+    `America/New_York` and must honor DST. Changing the risk reset instant is a
+    live-risk policy change, not an accounting side effect. The UTC-to-ET
+    cutover must inherit the exact baseline already being enforced rather than
+    stamp current equity and forgive the day's drawdown; only the following ET
+    midnight may establish a fresh baseline.
 68. Queue-depletion measurement is observation only. Public trades use a
     separate bounded socket and may never share the book/private recovery path
     or the REST limiter. A drop, decode error, reconnect or persistence error

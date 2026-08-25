@@ -3,7 +3,7 @@
 The economic evidence gate remains red. This runner exists only for the
 operator-accepted experiment and is mechanically constrained to 20 selected
 rewarded markets, a restart-scoped whole quote size from 5 to 10 contracts, an
-operator-controlled stop, a $70 normal session stop, and an $80 emergency hard
+operator-controlled stop, an $80 normal session stop, and an $80 emergency hard
 stop.
 
 Importing this module has no side effect. Exchange access is possible only
@@ -63,6 +63,7 @@ from .market_selector import (
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
 from .readiness import ReadinessVerdict
+from .reward_calendar import risk_day
 from .reconciler import (
     ActionKind,
     DesiredStateReconciler,
@@ -390,7 +391,7 @@ class CommissioningRunner:
         # apply -- cash does not move on paper price changes.
         self._cash_baseline: Decimal | None = None
         self._day_opening_equity: Decimal | None = None
-        # (utc_date, blockers, streak) set by `_stop_reason` when a loss stop
+        # (ET risk date, blockers, streak) set by `_stop_reason` when a loss stop
         # pauses, consumed once by `_announce_loss_stop_pause`.
         self._loss_pause_pending: tuple[str, list[str], int] | None = None
         self._loss_pause_announced_day: str | None = None
@@ -1738,7 +1739,7 @@ class CommissioningRunner:
             self.balance.marked_equity, observed_at=now)
         # Before any order can be placed. `SessionRiskGuard` stamped
         # `starting_equity` from this instant, which measures the process; this
-        # re-points it at the UTC day's opening equity from the ledger, so a
+        # re-points it at the ET day's opening equity from the ledger, so a
         # restart inherits the day's drawdown instead of resetting it.
         self._roll_realized_baseline()
         self.driver = ControlledActionDriver(
@@ -2522,7 +2523,7 @@ class CommissioningRunner:
                 + self._bot_era_rewards.get("PAID", Decimal("0")))
 
     def _roll_realized_baseline(self) -> None:
-        """Adopt the UTC day's opening marks, from the ledger, not this process.
+        """Adopt the ET risk day's opening marks from the durable ledger.
 
         Both stops used to baseline per PROCESS, which is what "a restart
         forgives the day's drawdown" means. Ten sessions ran on 2026-08-18, so
@@ -2532,18 +2533,18 @@ class CommissioningRunner:
         walks away.
 
         The marks now live in the ledger, which survives a restart. The first
-        process of a UTC day writes them and every later one reads them back,
-        so a mid-day restart inherits the day's loss. A new UTC date has no row
+        process of an ET day writes them and every later one reads them back,
+        so a mid-day restart inherits the day's loss. A new ET date has no row
         and gets a genuinely fresh budget, which is the only reset intended.
         """
 
         now = self._now()
-        today = now.date()
+        today = date.fromisoformat(risk_day(now))
         if self._baseline_day == today:
             return
         if self.balance is None:
             # Never write a baseline we cannot measure. `INSERT OR IGNORE`
-            # makes the first write of a UTC date permanent, so a zero stored
+            # makes the first write of a risk date permanent, so a zero stored
             # here could not be corrected for the rest of that day -- and a
             # zero opening equity makes `starting_equity - current_equity`
             # negative, which disables the emergency stop silently until
@@ -2558,7 +2559,11 @@ class CommissioningRunner:
                 opening_equity=equity,
                 opening_realized=realized,
                 opening_cash=cash,
-                created_at=now))
+                created_at=now,
+                # One-time safe migration: preserve whatever opening marks
+                # the UTC-based process was already enforcing. Once any ET
+                # row exists, the ledger ignores legacy rows forever.
+                legacy_utc_date=now.astimezone(timezone.utc).date().isoformat()))
         self._baseline_day = today
         self._realized_baseline = opening_realized
         self._realized_baseline_by_market = dict(
@@ -2609,7 +2614,7 @@ class CommissioningRunner:
         # the supervisor never restarts, so one bad day cost every hour after
         # it until a human noticed.
         #
-        # Pausing works only because the stops now baseline on the UTC day. New
+        # Pausing works only because the stops now baseline on the ET day. New
         # risk is blocked while the blocker stands, exits and the pre-kickoff
         # flatten keep working so nothing rides to settlement, and at midnight
         # `_roll_realized_baseline` writes a fresh day and the blocker clears
@@ -2623,7 +2628,7 @@ class CommissioningRunner:
         # terminal and a human is required.
         loss_hit = self.LOSS_STOP_BLOCKERS.intersection(blockers)
         if loss_hit:
-            today = now.date().isoformat()
+            today = risk_day(now)
             self.ledger.record_loss_stop(today, at=now)
             streak = self.ledger.consecutive_loss_stop_days(today)
             if streak < self.config.max_consecutive_loss_stop_days:
@@ -2631,7 +2636,7 @@ class CommissioningRunner:
                 print(f"[loss-stop-pause] at={now.isoformat()} "
                       f"blockers={sorted(loss_hit)} day={today} "
                       f"consecutive={streak} "
-                      f"resumes=next UTC day", flush=True)
+                      f"resumes=next ET day", flush=True)
                 # Announced from an async caller: this method is sync, and a
                 # pause that nobody is told about is the failure mode the
                 # whole change risks -- the bot sits flat and silent instead
@@ -2651,7 +2656,7 @@ class CommissioningRunner:
         day of missing reward. Sent critical: it is money, and it means the
         day's budget is spent.
 
-        Once per UTC day. The blocker stands for the rest of the day by
+        Once per ET day. The blocker stands for the rest of the day by
         design, and `_stop_reason` runs every pass, so an unguarded send would
         be thousands of messages.
         """
@@ -2668,7 +2673,7 @@ class CommissioningRunner:
             f"🛑 Liquidity Bot hit a loss stop and has PAUSED trading "
             f"for {day} ({', '.join(blockers)}). New risk is blocked; exits "
             f"and the pre-kickoff flatten still run, so nothing rides to "
-            f"settlement. It resumes on its own at the next UTC midnight. "
+            f"settlement. It resumes on its own at the next ET midnight. "
             f"Consecutive loss-stop days: {streak} -- "
             f"{remaining} more and it stops for good and needs a human.",
             critical=True)

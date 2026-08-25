@@ -438,6 +438,7 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("TODAY  $+3.00", description)
         self.assertIn("BOT OVERALL  $-91.20", description)
         self.assertIn("ACCOUNT-WIDE", description)
+        self.assertIn("since 00:00 ET", description)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound

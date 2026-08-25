@@ -41,13 +41,17 @@ restart-scoped runtime setting; the account loss limits remain hard-locked by
 | quote size | 10 contracts (restart-scoped, allowed 5-10) |
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
-| session loss stop | $70 |
+| session loss stop | $80 realized trading loss |
 | emergency hard stop | $80 marked equity |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
 | per-market open exposure | $90 at size 10 (`9 × size`) |
 | REST budget | 4 requests/second |
+
+The daily loss budget resets at midnight `America/New_York`, including DST.
+The two $80 rows are one dollar threshold with different sensors and responses,
+not duplicate calculations.
 
 Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —

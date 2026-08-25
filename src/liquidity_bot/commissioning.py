@@ -64,12 +64,14 @@ class CommissioningConfig:
     Three loss limits. ``max_market_loss_usd`` and ``max_session_loss_usd``
     are both stops -- they appear in ``runtime_safety.blockers()`` and halt
     quoting. ``hard_stop_loss_usd`` is the emergency ceiling on marked account
-    equity and is required to exceed the normal stop.
+    equity. It may share the session stop's dollar threshold because the two
+    sensors still cover different losses and trigger different responses.
 
     They sat at $40/$40/$45 until 2026-08-23, deliberately equal so exactly one
     number could fire. The operator raised the session/hard limits to $50/$60
-    that day, then to $70/$80 on 2026-08-24, while leaving the per-market stop
-    at $40. A single market losing $40 therefore still pauses trading before
+    that day, then to $70/$80 on 2026-08-24 and $80/$80 on 2026-08-25, while
+    leaving the per-market stop at $40. A single market losing $40 therefore
+    still pauses trading before
     the session budget is spent; the session limit is reachable only through
     losses spread across several markets. "Which stop fired" is a real
     question, and the alert names it.
@@ -148,7 +150,8 @@ class CommissioningConfig:
     # exactly one threshold could fire.
     #
     # **Operator decisions: session/hard $40/$45 -> $50/$60 on 2026-08-23,
-    # then $70/$80 on 2026-08-24.** The per-market stop was NOT raised, so it
+    # then $70/$80 on 2026-08-24 and $80/$80 on 2026-08-25.** The per-market
+    # stop was NOT raised, so it
     # remains binding for a single bad market and the session budget is only
     # reachable across several -- see the class docstring.
     #
@@ -160,7 +163,7 @@ class CommissioningConfig:
     # Quote size returned to 10 by operator decision on 2026-08-24. Loss stops
     # remain account budgets and do not derive from quote size.
     max_market_loss_usd: Decimal = Decimal("40")
-    max_session_loss_usd: Decimal = Decimal("70")
+    max_session_loss_usd: Decimal = Decimal("80")
     hard_stop_loss_usd: Decimal = Decimal("80")
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
@@ -187,7 +190,7 @@ class CommissioningConfig:
     # (+23.8c under 300s, -23.5c past an hour), so that would have been a real
     # cost taken by accident rather than by decision. Returned to $4 with
     # quote size 5 on 2026-08-24.
-    # How many CONSECUTIVE UTC days may hit a loss stop before it stops being
+    # How many CONSECUTIVE ET risk days may hit a loss stop before it stops being
     # a pause and becomes terminal.
     #
     # A loss stop used to flatten, prove flat and exit 0 -- which the
@@ -202,7 +205,7 @@ class CommissioningConfig:
     # session budget daily forever with nothing forcing attention -- and the
     # emergency ceiling cannot catch it either, because that re-baselines each
     # morning too. One bad day is variance; three in a row is a broken model.
-    # At the current $70 session limit, the bound is about $210.
+    # At the current $80 session limit, the bound is about $240.
     max_consecutive_loss_stop_days: int = 3
     # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
     # one pair of numbers served as both, which is incoherent once size grows:
@@ -402,17 +405,17 @@ class CommissioningConfig:
                 "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 70 or self.max_market_loss_usd != 40
+        if (self.max_session_loss_usd != 80 or self.max_market_loss_usd != 40
                 or self.hard_stop_loss_usd != 80):
             problems.append(
-                "commissioning must keep a $40 per-market stop, a $70 session "
-                "stop, and an $80 emergency equity ceiling above them")
+                "commissioning must keep a $40 per-market stop and one $80 "
+                "threshold for both session loss and emergency equity loss")
         if self.max_consecutive_loss_stop_days != 3:
             problems.append(
                 "a paused loss stop must become terminal after three "
                 "consecutive days")
-        if self.hard_stop_loss_usd <= self.max_session_loss_usd:
-            problems.append("hard stop must exceed the normal session stop")
+        if self.hard_stop_loss_usd < self.max_session_loss_usd:
+            problems.append("hard stop cannot be below the normal session stop")
         if self.rest_requests_per_second > 4:
             problems.append("commissioning REST budget cannot exceed 4 requests/second")
         if (self.max_hard_exit_attempts != 3

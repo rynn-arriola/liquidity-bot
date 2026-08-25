@@ -644,3 +644,101 @@ class VenueBasisFallbackTests(unittest.TestCase):
         self.snapshot(led, "5", "2.50", again)
 
         self.assertEqual(led.inventory_basis("market-one").opened_at, again)
+
+
+class RiskDayBaselineTests(unittest.TestCase):
+    def ledger(self):
+        root = Path(tempfile.mkdtemp(prefix="risk-day-"))
+        led = ExecutionLedger(root / "l.db")
+        self.addCleanup(led.close)
+        return led
+
+    def test_first_et_day_preserves_the_baseline_enforced_at_cutover(self):
+        """Changing calendars must not hand the account a fresh loss budget."""
+
+        led = self.ledger()
+        with led.connection:
+            led.connection.execute(
+                "INSERT INTO execution_day_baselines"
+                "(utc_date,opening_equity,opening_realized,opening_cash,created_at) "
+                "VALUES (?,?,?,?,?)",
+                ("2026-08-25", "478.6998", "-207.3918", "478.6998",
+                 "2026-08-25T00:00:02+00:00"))
+
+        baseline = led.day_baseline(
+            "2026-08-25",
+            opening_equity=Decimal("430"),
+            opening_realized=Decimal("-240"),
+            opening_cash=Decimal("430"),
+            created_at=datetime(2026, 8, 25, 15, tzinfo=UTC),
+            legacy_utc_date="2026-08-25")
+
+        self.assertEqual(
+            baseline,
+            (Decimal("478.6998"), Decimal("-207.3918"),
+             Decimal("478.6998")))
+        row = led.query(
+            "SELECT risk_date,source FROM execution_risk_day_baselines")[0]
+        self.assertEqual(dict(row), {
+            "risk_date": "2026-08-25", "source": "legacy_utc_cutover"})
+
+    def test_legacy_rows_are_ignored_after_the_one_time_cutover(self):
+        led = self.ledger()
+        led.day_baseline(
+            "2026-08-25",
+            opening_equity=Decimal("450"),
+            opening_realized=Decimal("-200"),
+            opening_cash=Decimal("450"),
+            created_at=datetime(2026, 8, 25, 15, tzinfo=UTC))
+        with led.connection:
+            led.connection.execute(
+                "INSERT INTO execution_day_baselines"
+                "(utc_date,opening_equity,opening_realized,opening_cash,created_at) "
+                "VALUES (?,?,?,?,?)",
+                ("2026-08-26", "999", "999", "999",
+                 "2026-08-26T00:00:00+00:00"))
+
+        baseline = led.day_baseline(
+            "2026-08-26",
+            opening_equity=Decimal("440"),
+            opening_realized=Decimal("-210"),
+            opening_cash=Decimal("440"),
+            created_at=datetime(2026, 8, 26, 4, tzinfo=UTC),
+            legacy_utc_date="2026-08-26")
+
+        self.assertEqual(
+            baseline, (Decimal("440"), Decimal("-210"), Decimal("440")))
+        source = led.query(
+            "SELECT source FROM execution_risk_day_baselines "
+            "WHERE risk_date='2026-08-26'")[0]["source"]
+        self.assertEqual(source, "fresh_et_day")
+
+    def test_stopped_bot_crossing_utc_midnight_keeps_latest_prior_baseline(self):
+        """Downtime in the UTC/ET gap must not grant a fresh risk budget."""
+
+        led = self.ledger()
+        with led.connection:
+            led.connection.execute(
+                "INSERT INTO execution_day_baselines"
+                "(utc_date,opening_equity,opening_realized,opening_cash,created_at) "
+                "VALUES (?,?,?,?,?)",
+                ("2026-08-25", "478.6998", "-207.3918", "478.6998",
+                 "2026-08-25T00:00:02+00:00"))
+
+        # The bot stopped on August 25 and therefore never created the legacy
+        # August 26 row. At 00:30Z it is still the August 25 ET risk day.
+        baseline = led.day_baseline(
+            "2026-08-25",
+            opening_equity=Decimal("430"),
+            opening_realized=Decimal("-240"),
+            opening_cash=Decimal("430"),
+            created_at=datetime(2026, 8, 26, 0, 30, tzinfo=UTC),
+            legacy_utc_date="2026-08-26")
+
+        self.assertEqual(
+            baseline,
+            (Decimal("478.6998"), Decimal("-207.3918"),
+             Decimal("478.6998")))
+        source = led.query(
+            "SELECT source FROM execution_risk_day_baselines")[0]["source"]
+        self.assertEqual(source, "legacy_utc_cutover")

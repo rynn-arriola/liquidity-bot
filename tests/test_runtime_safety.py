@@ -46,6 +46,18 @@ class SessionRiskGuardTests(unittest.TestCase):
         self.assertTrue(guard.can_add_new_risk(now=NOW + timedelta(seconds=9)))
         self.assertFalse(guard.can_add_new_risk(now=NOW + timedelta(seconds=11)))
 
+    def test_session_and_hard_sensors_may_share_one_dollar_limit(self):
+        guard = SessionRiskGuard(
+            started_at=NOW, starting_equity=Decimal("100"),
+            max_session_loss=Decimal("80"), max_market_loss=Decimal("40"),
+            max_duration_seconds=1800, max_equity_age_seconds=10,
+            hard_stop_loss=Decimal("80"))
+        guard.observe_equity("20", observed_at=NOW)
+        guard.observe_realized(Decimal("-80"))
+
+        self.assertIn("session loss limit reached", guard.blockers(now=NOW))
+        self.assertTrue(guard.hard_stop_reached(now=NOW))
+
     def test_session_market_time_and_critical_limits_trip_independently(self):
         guard = self.guard()
         # The session stop reads REALISED P&L now. Marked equity moving is

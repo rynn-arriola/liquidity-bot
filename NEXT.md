@@ -1,5 +1,38 @@
 # Next session — outstanding fixes
 
+## LOCAL, REVIEW REQUIRED, NOT DEPLOYED: ET risk day and $80/$80 limits
+
+The operator authorized midnight `America/New_York` as the durable reset for
+the per-market/session/hard loss budget and one $80 threshold for the two
+account sensors. The realized sensor still pauses new risk; the marked-equity
+sensor remains the emergency hard stop and wins when both fire together. The
+$40 per-market limit is unchanged.
+
+This is not a string-only timezone change. Baselines, pause dates,
+three-consecutive-stop-day tracking, logs, alerts and the dashboard summary
+label now share the DST-aware ET calendar. New ET-keyed ledger tables leave the
+old UTC rows intact for audit. On the first ET-aware startup only, the bot
+copies the baseline the UTC process was already enforcing; it does not stamp
+current equity and cannot forgive cutover-day drawdown. If the bot remains
+stopped across UTC midnight, the latest prior UTC baseline is copied rather
+than granting a fresh budget during the UTC/ET gap. Every later day ignores
+legacy rows and opens at the first balance after ET midnight.
+
+Verification is complete locally: all 606 tests pass. Four deliberate
+mutations were killed: restoring the UTC date reset failed the midnight
+boundary test; removing the legacy-baseline copy failed the cutover-budget
+test; requiring an exact current UTC row failed the stopped-across-midnight
+test; and rejecting equal session/hard limits failed the independent-sensor
+test.
+
+The funded `2e3c677` runner stopped gracefully at `2026-08-25T17:48:00Z` with
+venue-backed `flat:true`; its supervisor and runner are both down. Nothing has
+been deployed or restarted. Deployment still requires the stopped-server full
+suite and hash verification before restart; acceptance must show `$80 / $80`,
+`since 00:00 ET`, an ET risk-baseline row whose first source is
+`legacy_utc_cutover`, and unchanged 20-slot/size-10 behavior.
+
+
 ## 00. FIXED, DEPLOYED AND RESTARTED: replace flat markets whose reward period has positively ended
 
 The live `73d5c73` run proved the remaining low-order state is not 20-slot
@@ -695,6 +728,10 @@ says whether any change in earnings is the size or the slate.
 (`execution_day_baselines`), so a mid-day restart inherits the drawdown and
 only a new UTC date grants a fresh budget. The hard stop's ratchet is closed
 with it. Full write-up and the two mutation checks in `BUGFIXES.md`.
+
+Historical note: this was the correct deployed state at the time. The newest
+NEXT item contains the operator-authorized ET policy and guarded cutover; it is
+not active until that item is deployed and restarted.
 
 **Needs a deploy and a restart to take effect** -- it is runner code.
 

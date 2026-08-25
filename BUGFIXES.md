@@ -31,6 +31,41 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### POLICY CHANGE PREPARED, NOT DEPLOYED — daily loss budget reset was UTC
+
+**Symptom.** The bot's TODAY/hard-stop day reset at 00:00 UTC even though the
+operator reads rewards and daily trading on the venue's ET day. The two $80
+loss sensors would therefore describe a different daily window from the reward
+table.
+
+**Mechanism.** `_roll_realized_baseline` and `_stop_reason` used the UTC
+`datetime.date()` directly. Baselines and stop-day streaks were stored in
+UTC-keyed tables, and the summary and pause alert explicitly said UTC. Merely
+changing the displayed label would leave the safety authority unchanged.
+
+**Prepared change.** All risk-day decisions now use the same DST-aware
+`America/New_York` conversion as reward reporting. New ET-keyed baseline and
+loss-stop-day tables prevent collisions with historical UTC rows. The one-time
+cutover copies the UTC baseline already in force instead of using current
+equity, so deployment cannot hand back losses. If a stopped bot crosses UTC
+midnight before deployment, it copies the latest prior UTC row rather than
+granting a fresh budget in the UTC/ET gap. Once one ET row exists, legacy rows
+are ignored forever. The operator also set both account thresholds to
+$80; realized and marked-equity sensors remain independent, with the emergency
+hard stop evaluated first.
+
+**Review and proof.** All 606 tests pass. Four deliberate mutations were
+killed: a UTC-date reset was caught at 00:30Z, removing the guarded legacy copy
+was caught because it granted a fresh cutover budget, and restoring the old
+strict `hard > session` validation was caught by the equal-limit sensor test.
+Requiring an exact legacy date was separately caught by the stopped-across-UTC-
+midnight regression.
+
+This is local only. The `2e3c677` bot stopped gracefully at
+`2026-08-25T17:48:00Z` with `flat:true`; it was not modified or restarted.
+
+---
+
 ### FIXED, DEPLOYED AND RESTARTED — ended reward periods occupy slots until game kickoff
 
 **Symptom.** The repaired runner remained bound to 20 markets but held only 18
@@ -813,9 +848,12 @@ dangerous one. The mutation test prints it exactly:
 `equity_change` was already computed two lines away and passed to the summary
 as `trading_realized_usd`; the meter simply never used it.
 
-**Fix.** A `today_pnl_usd` field carries marked equity against the UTC day's
+**Historical fix.** A `today_pnl_usd` field carried marked equity against the UTC day's
 opening equity -- the exact input to `hard_stop_reached` -- and the HARD meter
 reads it. The session and worst-market bars are unchanged.
+
+The 2026-08-25 prepared policy moves that same authoritative computation to
+the ET risk-day baseline; the two-sensor requirement remains unchanged.
 
 Mutation-checked: pointing the meter back at `session_loss` fails
 `test_the_hard_meter_reads_equity_not_the_session_number`.
@@ -871,6 +909,10 @@ writes the marks and every later one reads them back. A new UTC date has no
 row and does get a fresh budget, which is the only reset intended.
 `SessionRiskGuard.adopt_day_baseline` re-points the hard stop at the stored
 opening equity, and preflight calls it before any order can be placed.
+
+This section records the original UTC deployment. The 2026-08-25 prepared
+policy retains these restart/ratchet guarantees in a new ET-keyed table and
+uses the old row once as a no-budget-reset cutover source.
 
 **A test was deleted on purpose.**
 `test_losses_from_earlier_sessions_do_not_spend_this_budget` asserted the old

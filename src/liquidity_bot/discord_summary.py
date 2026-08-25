@@ -94,7 +94,7 @@ class LiquiditySummary:
     # independently of the session one, so a meter for the session alone can
     # read comfortable while a market is one fill from stopping.
     worst_market_realized_pnl_usd: Decimal = Decimal("0")
-    # Marked equity against the UTC day's OPENING equity. Negative is a loss.
+    # Marked equity against the ET risk day's OPENING equity. Negative is a loss.
     # This is the quantity `hard_stop_reached` fires on, so it is the only one
     # the HARD meter may be drawn from, and it is also the honest answer to
     # "how is today going" -- it picks up reward the moment it lands.
@@ -312,7 +312,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             f"# {_mark(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
             f"**BOT OVERALL  ${bot_pnl:+,.2f}**\n"
             f"-# bot overall = this ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}\n"
-            f"-# today = marked account equity since 00:00 UTC, ACCOUNT-WIDE · up {uptime / 3600:,.1f}h\n")
+            f"-# today = marked account equity since 00:00 ET, ACCOUNT-WIDE · up {uptime / 3600:,.1f}h\n")
     # The embed's left strip, which is the first thing read on a phone. It
     # carried operational state alone, so "am I making money today" was not
     # answerable at a glance.

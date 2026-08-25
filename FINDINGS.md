@@ -20,6 +20,50 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## ET risk-day cutover must preserve the UTC baseline already in force
+
+Established 2026-08-25 from the live read-only ledger and the loss-stop call
+graph. The deployed runner uses the UTC date in baseline, pause and streak
+decisions. Its six durable rows were created near UTC midnight; the current
+row is `2026-08-25`, opening equity/cash `478.6998`, created at
+`2026-08-25T00:00:02Z`. The loss-stop-day table is empty.
+
+At August's UTC offset, ET midnight is 04:00Z. No durable marked-equity sample
+exists at the historical 04:00Z boundary, so replacing the current day's
+baseline with equity at deployment would forgive every loss between ET
+midnight and restart. Reusing a plain date key would also collide with the
+existing UTC row and silently keep the wrong reset time.
+
+The safe transition is a separate ET-keyed baseline table. On the first
+ET-aware startup only, it copies the baseline the UTC runner is already
+enforcing (`source=legacy_utc_cutover`). That preserves rather than expands
+the available budget. A bot stopped across UTC midnight has no new UTC row, so
+the cutover selects the latest prior legacy row; using only an exact-date lookup
+would incorrectly grant a fresh budget between 00:00Z and ET midnight. Once
+any ET row exists, legacy UTC rows are never read again; the following baseline
+can therefore be created only after ET midnight.
+The same ET date keys the loss-stop pause and consecutive-day bound. Historical
+UTC tables remain untouched for audit.
+
+The operator chose one **$80** account threshold but retained two sensors.
+Realized trading loss can reach $80 while marked equity is less negative due
+to rewards or other account value, so it still pauses new risk. Marked equity
+can reach -$80 before a loss is realized, so it remains the terminal emergency
+hard stop. Equal thresholds simplify the limit; deleting either sensor would
+remove coverage. The $40 per-market stop is unchanged.
+
+Local verification ran the complete 606-test suite successfully. Four
+deliberate mutations proved the protections are test-sensitive: using the UTC
+date reset failed at 00:30Z, bypassing the one-time legacy copy failed the
+cutover test, requiring an exact current UTC row failed the stopped-across-
+midnight test, and disallowing equal $80 limits failed the two-sensor test.
+
+This change is prepared locally only. The funded `2e3c677` process stopped at
+`2026-08-25T17:48:00Z` with venue-backed `flat:true`; its supervisor and runner
+are down, and no code was deployed or restarted.
+
+---
+
 ## Twenty slots were live while instantaneous orders moved between 24 and 29
 
 Established from the running `2e3c677` session on 2026-08-25, without stopping
@@ -3347,11 +3391,15 @@ this file that explicitly say `UTC day` retain their original measurement but
 must not be used as exact reward-versus-trading daily joins; rerun the ET-aware
 reports for that decision.
 
-The **risk day remains UTC intentionally and was not changed**. Session and
-hard stops consume a durable safety budget between UTC midnights; they do not
+The **risk day remained UTC intentionally in that deployed revision**. Session
+and hard stops consumed a durable safety budget between UTC midnights; they did not
 attribute venue reward. Moving that reset would change live risk authority and
 could grant a fresh budget at a different instant, so correcting an accounting
 calendar does not authorize it.
+
+**Superseded by operator decision 2026-08-25:** the prepared risk policy now
+uses midnight America/New_York with the guarded legacy-baseline cutover
+described in the newest finding. It is not active until deployment/restart.
 
 ### Also settled 2026-08-18: pending reward does pay
 

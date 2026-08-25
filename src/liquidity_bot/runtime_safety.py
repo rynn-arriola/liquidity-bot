@@ -110,15 +110,15 @@ class SessionRiskGuard:
         if min(self.max_session_loss, self.max_market_loss) <= 0:
             raise ValueError("loss limits must be positive")
         if (self.hard_stop_loss is not None
-                and self.hard_stop_loss <= self.max_session_loss):
-            raise ValueError("hard stop must exceed the normal session loss limit")
+                and self.hard_stop_loss < self.max_session_loss):
+            raise ValueError("hard stop cannot be below the session loss limit")
         if self.max_duration_seconds <= 0 or self.max_equity_age_seconds <= 0:
             raise ValueError("duration and equity freshness must be positive")
 
     def adopt_day_baseline(
         self, equity: Decimal | str | int | float,
     ) -> None:
-        """Re-point the hard stop at the UTC day's opening equity.
+        """Re-point the hard stop at the ET risk day's opening equity.
 
         `starting_equity` is stamped at preflight, which makes the emergency
         stop measure THIS PROCESS rather than the day. That is the ratchet

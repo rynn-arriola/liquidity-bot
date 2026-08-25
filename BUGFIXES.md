@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED LOCALLY; DEPLOYMENT PENDING — ended reward periods occupy slots until game kickoff
+### FIXED, DEPLOYED AND RESTARTED — ended reward periods occupy slots until game kickoff
 
 **Symptom.** The repaired runner remained bound to 20 markets but held only 18
 orders across nine. At the 13:00Z reward boundary, ten distinct bound markets
@@ -63,12 +63,19 @@ REST-rate, candidate horizon or 20-slot change is included.
 
 **Review and proof.** All 598 local tests pass. New tests cover both projection
 layers, exact/transient/different program responses, immediate refill,
-working-order/position/unresolved ownership and exact-cap replacement. Five
+working-order/position/unresolved ownership and exact-cap replacement. Seven
 deliberate mutants each failed the intended regression, including removal of
 the active refresh's authorizing-program capture and diversion of the existing
-safe full-rotation path. Deployment and live
-acceptance are still pending; the running bot remains on `73d5c73` until a
-safe stop proves venue state.
+safe full-rotation path.
+
+**Deployment acceptance.** Commit `2e3c677` was pushed and all 11 deployed
+hashes matched. The prior runner gracefully stopped with `flat:true`; the
+stopped droplet passed all 598 tests in 56.392 seconds. The unchanged `auto 10`
+runner restarted at about 13:34:05Z, queue telemetry proved 20 bound markets,
+and the 13:38:41Z checkpoint held 32 working size-10 orders across all 20,
+with zero unresolved, unknown-absent or position state and no new critical
+fault marker. The first natural `reward_ended=N` production transition is
+still pending observation and was deliberately not induced.
 
 ### FIXED AND DEPLOYED — startup validation could leave free slots invisible to top-up
 

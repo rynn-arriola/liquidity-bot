@@ -8,17 +8,17 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is RUNNING on `73d5c73` since 2026-08-25T12:53:40Z at quote size 10.**
-  The free-capacity top-up repair is deployed. All six hashes matched and all
-  585 tests passed locally and on the stopped droplet; three deliberate
-  mutants were killed. Startup bound 20 healthy markets directly and
-  `[queue-measurement]` reported `markets=20`. The first converged checkpoint
-  held 18 working orders across nine markets, all quantity 10, with 20 new
-  placements across 11 markets and zero unresolved, unknown-absent or position
-  state. Raw working-order count is not slot count; use the newest FINDINGS
-  20-slot capacity audit.
+- **Bot is RUNNING on `2e3c677` since about 2026-08-25T13:34:05Z at quote
+  size 10.** The guarded reward-ended slot repair is deployed. All 11 hashes
+  matched and all 598 tests passed locally and on the stopped droplet; seven
+  deliberate mutants were killed. The previous runner gracefully stopped with
+  `flat:true`. `[queue-measurement]` reported `markets=20`; at 13:38:41Z there
+  were 32 working orders across all 20 markets, all quantity 10, with zero
+  unresolved, unknown-absent or position state and no new critical fault. The
+  first natural `reward_ended=N` event still awaits observation. Raw working-
+  order count is not slot count; use the newest FINDINGS 20-slot audit.
 
-- **The second slot-lifecycle gap is fixed locally; deployment is pending.** At 13:00Z ten
+- **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
   held no orders while nine other markets held 18 size-10 orders. Capacity was
   still 20, viable alternatives were 96, and positions/unresolved/absent state
@@ -27,9 +27,9 @@ from fact rather than from the last thing someone remembers.
   exact previously-authorizing program's explicit elapsed end, fails closed on
   missing/different reward data, releases only flat/order-free/unresolved-free
   owners and immediately tops up the exact free count. Projection now uses the
-  explicit reward interval. All 598 local tests pass and seven mutants were
-  killed. The live process is still unchanged on `73d5c73`; see the newest
-  FINDINGS, BUGFIXES and NEXT entries before deployment.
+  explicit reward interval. The implementation and initial acceptance are on
+  `2e3c677`; the first natural reward-ended replacement remains to be observed.
+  See the newest FINDINGS, BUGFIXES and NEXT entries for the exact proof.
 
 - **Historical maintenance run: `feba761` started at 12:18:56Z.**
   The previous runner stopped at 2026-08-25T11:14:26Z with

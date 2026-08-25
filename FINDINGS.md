@@ -98,12 +98,24 @@ Local proof: all 598 tests pass. Dedicated regressions cover explicit program
 bounds at both pure reward and integrated selector layers, missing/different
 program data, one-time exact-program confirmation, immediate scheduling,
 working-order/position/unresolved ownership, exact-cap replacement and the
-existing empty-set, no-replacement, near-deadline and failed-bind cases. Five
+existing empty-set, no-replacement, near-deadline and failed-bind cases. Seven
 deliberate mutants were killed: ignoring explicit end, failing to record the
 authorizing ID, omitting reward-ended capacity, accepting a different program
 ID, removing immediate scheduling, diverting ordinary safe full rotation and
-removing unresolved-intent ownership. Production deployment and live
-acceptance remain pending.
+removing unresolved-intent ownership.
+
+Production deployment acceptance on commit `2e3c677`: all 11 deployed hashes
+matched and the stopped droplet passed all 598 tests in 56.392 seconds. The old
+runner stopped normally with `operator_sigterm` and `flat:true`; no force kill
+was used. The unchanged `auto 10` supervisor/runner restarted at about
+13:34:05Z. Independent queue telemetry reported `markets=20` at 13:35:18Z.
+At 13:38:41Z the read-only ledger had 32 working orders across all 20 markets,
+every working original quantity exactly 10, with zero unresolved intents, zero
+`UNKNOWN_ABSENT` orders and zero positions. No new risk stop, runner failure,
+maintenance pause, bound-stream recovery or top-up error appeared. A natural
+post-deployment reward-end boundary has not occurred yet, so the new
+`reward_ended=N` marker remains pending live observation; it was not forced on
+a funded runner.
 
 ---
 

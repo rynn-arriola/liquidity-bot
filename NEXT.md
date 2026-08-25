@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## 00. FIXED LOCALLY; DEPLOY AND ACCEPT: replace flat markets whose reward period has positively ended
+## 00. FIXED, DEPLOYED AND RESTARTED: replace flat markets whose reward period has positively ended
 
 The live `73d5c73` run proved the remaining low-order state is not 20-slot
 capacity loss: 20 remained bound, but ten markets changed to `no_incentive` at
@@ -31,6 +31,16 @@ acceptance must prove:
 5. the replacement active/subscribed tuple remains at 20 when supply permits;
 6. no ownership, unknown-absent, recovery-loop, loss-stop or position defect
    appears. Raw working-order count may still be below 20.
+
+Deployment is complete as `2e3c677`. All 11 hashes matched and all 598 tests
+passed on the stopped droplet in 56.392 seconds after a graceful `flat:true`
+shutdown. The unchanged size-10 runner restarted at about 13:34:05Z;
+`[queue-measurement]` reported `markets=20`, and by 13:38:41Z it held 32
+working orders across all 20 markets, all original quantity 10, with zero
+unresolved intents, zero `UNKNOWN_ABSENT` orders, zero positions and no new
+critical fault marker. Still observe the first natural `[top-up] ...
+reward_ended=N` event and confirm exact retained/added counts; do not induce a
+reward outage or boundary on the funded bot solely for acceptance.
 
 ## DEPLOYED AND RESTARTED: refill capacity rejected during startup validation
 

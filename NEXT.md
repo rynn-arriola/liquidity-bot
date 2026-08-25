@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## DEPLOYED AND ACTIVE: hourly seven-day reward Discord post
+## DEPLOYED PATH, CRON PAUSED: visually accept the hourly Discord table
 
 The dedicated report reuses `scripts/reward_table.py`; `--post-discord --quiet`
 routes the complete seven-day ET table to `DISCORD_REWARDS_WEBHOOK_URL` without
@@ -11,16 +11,24 @@ read-only apart from Discord: one account-wide earnings request, SQLite
 runner control path.
 
 Measured on the stopped live server and its 73 MB ledger: 2.86 seconds elapsed,
-28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The installed cron is
-minute 7 of every hour. The dedicated webhook is stored only in the existing
-server-side shared credentials file, now mode `0600`. All 26 deployed hashes
-matched, all 609 tests passed on the stopped server in 65.089 seconds, and a
-real acceptance post succeeded at `2026-08-25T18:06:15Z`. No bot restart is
-needed for this independent job.
+28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The first real post
+at `2026-08-25T18:06:15Z` proved routing but its wide pipe table was visually
+unacceptable. The revised embed uses two narrow fixed-width tables and asserts
+exact 53-character and 34-character rows. The hourly crontab entry is removed
+until one revised post is accepted; no bot restart is needed.
 
-Local review is complete: all 609 tests pass. Three deliberate mutations were
-killed by routing the report to the wrong Discord channel, allowing silent
-message truncation, and removing the non-overlap lock from the wrapper.
+During first acceptance, `/root/maker-lab` unexpectedly became absent; no
+cause was established. The four original credential assignments were restored
+from the local sibling copy, the reward webhook assignment was securely
+re-added, and modes were reset to directory `0700` and file `0600`. Before and
+after the next manual post, verify the directory, file mode and assignment name
+without printing any secret. Restore the minute-7 cron only after the operator
+accepts the visual result.
+
+Local review is complete: all 609 tests pass. Deliberate mutations were killed
+for wrong-webhook routing, the seven-day visual-layout cap and removal of the
+non-overlap lock. The exact-row-width assertion separately prevents the header
+misalignment found during local preview.
 
 
 ## DEPLOYED, BOT STOPPED, NOT YET ACTIVE: ET risk day and $80/$80 limits

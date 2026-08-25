@@ -139,8 +139,13 @@ The server can post the same table hourly to a dedicated Discord channel with
 `scripts/post_hourly_reward_table.sh`. The wrapper uses a nonblocking file lock,
 a 90-second timeout and reduced CPU priority; it is a separate process and has
 no order mutation path. Its `DISCORD_REWARDS_WEBHOOK_URL` lives only in the
-server-side shared credentials file. The installed cron schedule runs at minute
-7 of every hour and writes only redacted success/failure status to
+server-side shared credentials file. Discord receives an embed containing two
+narrow, fixed-width tables: daily P&L/rewards and daily liquidity supplied.
+Every header, separator and row has the same measured character width, so the
+columns do not depend on Discord's unsupported Markdown table rendering. The
+layout is deliberately capped at seven days. The hourly cron is currently
+paused pending visual acceptance of this revised format; when enabled it runs
+at minute 7 and writes only redacted success/failure status to
 `logs/reward-table-hourly.log`.
 
 ## Prospective building-quote observations

@@ -205,25 +205,107 @@ def render_table(
     return "\n".join(lines)
 
 
-def discord_message(
-    table: str, *, generated_at: datetime | None = None,
-    unbalanced_markets: int = 0,
-) -> str:
-    """Render the seven-day report legibly within Discord's 2,000-char cap."""
+def build_discord_payload(
+    days: list[date], *, pnl: dict, paid: dict, pending: dict,
+    resting_hours: dict[str, float], elapsed_hours: dict[str, float],
+    today: date, generated_at: datetime, unbalanced_markets: int,
+) -> dict:
+    """Build two narrow, aligned tables that Discord renders consistently."""
 
-    at = generated_at or datetime.now(timezone.utc)
-    if at.tzinfo is None or at.utcoffset() is None:
+    if generated_at.tzinfo is None or generated_at.utcoffset() is None:
         raise ValueError("generated_at must be timezone-aware")
-    stamp = at.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M %Z")
-    clean = str(table).strip().replace("**", "")
-    message = (
-        "**Liquidity Bot — 7-Day Reward Table (ET)**\n"
-        f"Generated {stamp}\n```text\n{clean}\n```\n"
-        f"Balanced-leg ledger P&L; {unbalanced_markets} unbalanced market(s) "
-        "and settled exits may be missing.")
-    if len(message) > 2000:
-        raise ValueError("Discord reward table exceeds the 2,000-character cap")
-    return message
+    if len(days) > 7:
+        raise ValueError("the Discord table layout supports at most 7 days")
+
+    pnl_lines = [
+        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  "
+        f"{'Pending':>8}  {'Net':>9}",
+        "-----------  ---------  --------  --------  ---------",
+    ]
+    resting_lines = [
+        "Date ET      Side-hours  Avg sides",
+        "-----------  ----------  ---------",
+    ]
+    complete_net = Decimal(0)
+    for day_value in days:
+        key = day_value.isoformat()
+        trade = pnl.get(key)
+        paid_reward = paid.get(key)
+        pending_reward = pending.get(key)
+        has_reward = paid_reward is not None or pending_reward is not None
+        complete = (
+            trade is not None and paid_reward is not None
+            and not pending_reward)
+        if complete:
+            net = trade + paid_reward
+            complete_net += net
+            net_text = f"${float(net):+,.2f}"
+        else:
+            net_text = "Pending"
+
+        trade_text = (f"${float(trade):+,.2f}"
+                      if trade is not None else "n/a")
+        if has_reward:
+            paid_text = _money(paid_reward, zero_if_missing=True)
+            pending_text = _money(pending_reward, zero_if_missing=True)
+        else:
+            paid_text = "--"
+            pending_text = "--"
+        resting = float(resting_hours.get(key, 0.0))
+        elapsed = float(elapsed_hours.get(key, 0.0))
+        average = resting / elapsed if elapsed > 0 else 0.0
+        label = f"{key}{'*' if day_value == today else ''}"
+        pnl_lines.append(
+            f"{label:<11}  {trade_text:>9}  {paid_text:>8}  "
+            f"{pending_text:>8}  {net_text:>9}")
+        resting_lines.append(
+            f"{label:<11}  {resting:>10.2f}  {average:>9.2f}")
+
+    trade_total = sum(
+        (pnl.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
+    paid_total = sum(
+        (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
+    pending_total = sum(
+        (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
+    resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
+    stamp = generated_at.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M %Z")
+    fields = [
+        {
+            "name": "Daily P&L and rewards",
+            "value": "```text\n" + "\n".join(pnl_lines) + "\n```",
+            "inline": False,
+        },
+        {
+            "name": "Liquidity supplied",
+            "value": "```text\n" + "\n".join(resting_lines) + "\n```",
+            "inline": False,
+        },
+    ]
+    embed = {
+        "title": "Liquidity Bot · Last 7 ET Days",
+        "description": (
+            f"**Trading P&L:** ${float(trade_total):+,.2f}\n"
+            f"**Paid rewards:** ${float(paid_total):,.2f}\n"
+            f"**Known pending:** ${float(pending_total):,.2f}\n"
+            f"**Finalized net:** ${float(complete_net):+,.2f}\n"
+            f"**Resting side-hours:** {resting_total:,.2f}"),
+        "fields": fields,
+        "footer": {"text": (
+            f"Generated {stamp} · * current ET day is partial · "
+            "-- reward not posted · Pending excluded from net · "
+            f"Balanced-leg only; {unbalanced_markets} unbalanced market(s) "
+            "and settled exits may be missing")},
+    }
+    total_chars = (
+        len(embed["title"]) + len(embed["description"])
+        + len(embed["footer"]["text"])
+        + sum(len(field["name"]) + len(field["value"])
+              for field in fields))
+    if total_chars > 6000:
+        raise ValueError("Discord reward embed exceeds the 6,000-character cap")
+    if any(len(field["value"]) > 1024 for field in fields):
+        raise ValueError("Discord reward table exceeds a field's 1,024-character cap")
+    return {"embeds": [embed]}
 
 
 async def main() -> int:
@@ -265,10 +347,11 @@ async def main() -> int:
         from liquidity_bot.runtime_secrets import load_runtime_secrets
 
         notifier = DiscordNotifier(load_runtime_secrets())
-        result = await notifier.send_async(
-            discord_message(
-                table, generated_at=now,
-                unbalanced_markets=unbalanced),
+        result = await notifier.send_payload_async(
+            build_discord_payload(
+                days, pnl=pnl, paid=paid, pending=pending,
+                resting_hours=resting, elapsed_hours=elapsed, today=today,
+                generated_at=now, unbalanced_markets=unbalanced),
             channel="rewards")
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",

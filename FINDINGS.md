@@ -20,6 +20,26 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Discord needs fixed-width narrow tables; pipe tables are not visual tables
+
+Established 2026-08-25 by the first real dedicated-channel acceptance post and
+an exact local line-width inspection. Delivery succeeded at 18:06:15Z, but the
+wide Markdown pipe table rendered as disorganized text in Discord. Discord does
+not provide dependable pipe-table layout for this message shape.
+
+The revised payload is one embed with two monospaced code-block tables. Daily
+P&L/rewards rows are exactly 53 characters; liquidity-supplied rows are exactly
+34. Splitting the measures prevents narrow-client wrapping, and using ASCII
+`--` for unavailable rewards avoids ambiguous Unicode glyph width. Color is
+not part of the layout. The payload refuses more than seven days rather than
+silently changing the accepted visual shape. A pre-deployment preview caught a
+51-character header over 53-character data rows; the equal-width regression
+would fail if that alignment drifts again.
+
+The hourly cron remains paused pending one visually accepted real post.
+
+---
+
 ## An hourly seven-day reward post is negligible and isolated from trading
 
 Established 2026-08-25 by timing the existing report on the stopped live
@@ -29,8 +49,9 @@ server against its 73 MB commissioning ledger. One complete seven-day run took
 opened the ledger read-only.
 
 The prepared hourly wrapper is a separate process with `nice -n 10`, a
-nonblocking `flock` and a 90-second timeout. At minute 7 each hour this adds one
-request per hour (0.00028 requests/second averaged), while the runner itself
+nonblocking `flock` and a 90-second timeout. When its currently paused minute-7
+cron is enabled, it adds one request per hour (0.00028 requests/second
+averaged), while the runner itself
 already samples earnings every 15 minutes. It does not use the runner's event
 loop, WebSockets, market selector, 20-slot scheduler or order API. The only
 shared resource is a short read-only SQLite scan; WAL permits it beside the
@@ -41,9 +62,18 @@ The destination is a third, dedicated secret named
 credentials file. The URL is never accepted as a command-line argument, shown
 in repr, written to a log or committed. All 26 deployed hashes matched and all
 609 stopped-server tests passed in 65.089 seconds. The credential file is mode
-`0600`; a real post succeeded at `2026-08-25T18:06:15Z`, and cron runs at minute
-7 hourly. Three deliberate mutations proved dedicated routing, full-message
-refusal and the non-overlap lock are test-sensitive.
+`0600`; a real post succeeded at `2026-08-25T18:06:15Z`. Three deliberate
+mutations proved dedicated routing, the bounded visual layout and the
+non-overlap lock are test-sensitive.
+
+During that acceptance sequence, `/root/maker-lab` was later observed absent.
+No command in the recorded deployment sequence was intended to remove it and
+no cause has been established, so none is asserted here. The four original
+credential assignments were recovered from the local sibling copy, the reward
+webhook assignment was securely restored, and the directory/file modes were
+reset to `0700/0600`. The cron was removed while this was investigated. The
+next manual post must verify the credential path and mode both before and after
+execution; never print values while doing so.
 
 ---
 

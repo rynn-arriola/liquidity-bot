@@ -31,6 +31,31 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIX PREPARED, CRON PAUSED — Discord rendered the wide reward table as disorganized text
+
+**Symptom.** The first dedicated-channel acceptance post delivered
+successfully, but its wide pipe-separated report did not look like a table in
+Discord. The scheduled delivery was therefore technically healthy and
+operationally unusable.
+
+**Mechanism.** The sender wrapped the terminal/Markdown report in one code
+block. Its many columns were wider than a narrow Discord client, while pipe
+characters supplied no native Discord table layout. The first replacement
+preview also exposed a two-character header/data width mismatch.
+
+**Prepared fix.** Send an embed containing two narrow monospaced tables: daily
+P&L/rewards and liquidity supplied. Build the headings with the same explicit
+widths as the rows, use ASCII missing-value markers, cap the visual contract at
+seven days and assert every row's exact width. The hourly cron remains removed
+until one revised real post is visually accepted. This changes reporting only;
+the trading bot remains stopped and no slot, order or risk path is touched.
+
+**Proof.** The complete 609-test suite passes locally. An exact local preview
+caught the initial 51/53-character mismatch before deployment; the test now
+requires 53-character P&L rows and 34-character liquidity rows.
+
+---
+
 ### POLICY CHANGE DEPLOYED, BOT STOPPED — daily loss budget reset was UTC
 
 **Symptom.** The bot's TODAY/hard-stop day reset at 00:00 UTC even though the

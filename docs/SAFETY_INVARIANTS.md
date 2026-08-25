@@ -337,4 +337,7 @@ These are implementation requirements, not suggestions.
     file lock prevents overlap and a 90-second timeout bounds runtime. Its
     dedicated Discord webhook is loaded only from the server-side shared
     credentials file, is excluded from repr/log output, and may never be
-    committed. Report failure cannot stop, restart or alter the runner.
+    committed. Discord output is capped at seven ET days and uses two narrow
+    fixed-width monospaced tables whose row widths are regression-tested; it
+    must not depend on pipe-table rendering or color. Report failure cannot
+    stop, restart or alter the runner.

@@ -34,19 +34,21 @@ from fact rather than from the last thing someone remembers.
   mutations. The reviewed files are deployed, but the bot remains stopped;
   ET/$80 becomes active only on the next authorized restart.
 
-- **DEPLOYED AND ACTIVE — hourly seven-day reward table.** The operator requested one
-  post per hour to a dedicated Discord webhook. The report is the existing
-  ET-dated, balanced-leg seven-day table: one account-wide earnings request and
-  a read-only SQLite ledger scan. The wrapper has a nonblocking lock, 90-second
-  timeout and `nice -n 10`; it cannot mutate or control the trading runner.
-  Live benchmarking on the 73 MB ledger took 2.86 seconds, 28% of one CPU and
-  45,516 KB peak RSS, producing 1,162 bytes. The secret is named
-  `DISCORD_REWARDS_WEBHOOK_URL` and belongs only in the shared server credential
-  file. One real acceptance post succeeded at `2026-08-25T18:06:15Z`; cron runs
-  at minute 7 of every hour and the credential file is mode `0600`. All 609
-  tests pass locally and on the stopped server; deliberate mutations prove the suite catches
-  misrouting into the status webhook, silent Discord truncation, and removal of
-  the non-overlap lock.
+- **DEPLOYED REPORT PATH; HOURLY CRON PAUSED FOR VISUAL ACCEPTANCE.** The first
+  real post at `2026-08-25T18:06:15Z` proved delivery but its wide pipe table
+  did not render as a usable Discord table. The replacement is an embed with
+  two narrow fixed-width monospaced tables whose headers, separators and rows
+  have exact equal widths. It does not rely on color or Discord Markdown table
+  support and refuses more than seven days. The underlying report remains one
+  account-wide earnings request plus a read-only SQLite scan; the separate
+  wrapper retains its nonblocking lock, 90-second timeout and `nice -n 10`.
+  The trading bot remains stopped. The hourly crontab entry was removed and
+  must not be restored until one revised test post is visually accepted.
+  During the first acceptance sequence `/root/maker-lab` was unexpectedly
+  absent. No cause was established. It was restored from the local sibling
+  credential copy, the dedicated reward assignment was re-added without
+  displaying its value, and directory/file modes were restored to `0700/0600`.
+  Validate names and modes immediately before and after the next post.
 
 - **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten

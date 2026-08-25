@@ -3,12 +3,12 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
 from scripts.reward_table import (
-    discord_message, render_table, resting_side_hours_by_day)
+    build_discord_payload, render_table, resting_side_hours_by_day)
 
 
 class RewardTableTests(unittest.TestCase):
@@ -76,9 +76,9 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("| 2026-08-25* | $-10.00 | Not posted | Not posted | Pending", output)
         self.assertIn("Finalized net (complete reward days only): **$+5.00**", output)
 
-    def test_discord_table_is_complete_and_within_the_message_limit(self):
+    def test_discord_embed_contains_two_aligned_visual_tables(self):
         days = [date(2026, 8, 19 + offset) for offset in range(7)]
-        table = render_table(
+        payload = build_discord_payload(
             days,
             pnl={day.isoformat(): Decimal("-10") for day in days},
             paid={day.isoformat(): Decimal("15") for day in days},
@@ -86,24 +86,38 @@ class RewardTableTests(unittest.TestCase):
             resting_hours={day.isoformat(): 24.0 for day in days},
             elapsed_hours={day.isoformat(): 24.0 for day in days},
             today=date(2026, 8, 25),
-        )
-
-        message = discord_message(
-            table,
             generated_at=datetime(2026, 8, 25, 17, tzinfo=timezone.utc),
             unbalanced_markets=30)
 
-        self.assertLessEqual(len(message), 2000)
-        self.assertIn("7-Day Reward Table (ET)", message)
-        self.assertIn("2026-08-19", message)
-        self.assertIn("2026-08-25*", message)
-        self.assertIn("Pending reward is never counted", message)
-        self.assertIn("Generated 2026-08-25 13:00 EDT", message)
-        self.assertIn("30 unbalanced market(s)", message)
+        embed = payload["embeds"][0]
+        self.assertEqual(embed["title"], "Liquidity Bot · Last 7 ET Days")
+        self.assertEqual(len(embed["fields"]), 2)
+        pnl_table = embed["fields"][0]["value"]
+        resting_table = embed["fields"][1]["value"]
+        self.assertIn("Date ET        Trading", pnl_table)
+        self.assertIn("2026-08-19     $-10.00", pnl_table)
+        self.assertIn("2026-08-25*", pnl_table)
+        self.assertIn("$+5.00", pnl_table)
+        self.assertIn("Side-hours  Avg sides", resting_table)
+        self.assertIn("2026-08-25*       24.00       1.00", resting_table)
+        self.assertNotIn("|", pnl_table)
+        pnl_lines = pnl_table.splitlines()[1:-1]
+        resting_lines = resting_table.splitlines()[1:-1]
+        self.assertEqual({len(line) for line in pnl_lines}, {53})
+        self.assertEqual({len(line) for line in resting_lines}, {34})
+        self.assertIn("**Finalized net:** $+35.00", embed["description"])
+        self.assertIn("Generated 2026-08-25 13:00 EDT", embed["footer"]["text"])
+        self.assertIn("30 unbalanced market(s)", embed["footer"]["text"])
 
-    def test_discord_post_refuses_to_silently_truncate_a_table(self):
-        with self.assertRaisesRegex(ValueError, "2,000-character cap"):
-            discord_message("x" * 2000)
+    def test_discord_post_refuses_more_days_than_the_visual_layout_allows(self):
+        days = [date(2026, 8, 18) + timedelta(days=offset)
+                for offset in range(8)]
+        with self.assertRaisesRegex(ValueError, "at most 7"):
+            build_discord_payload(
+                days, pnl={}, paid={}, pending={}, resting_hours={},
+                elapsed_hours={}, today=date(2026, 8, 25),
+                generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+                unbalanced_markets=0)
 
     def test_hourly_wrapper_is_bounded_locked_and_lower_priority(self):
         wrapper = (

@@ -16,7 +16,11 @@ from fact rather than from the last thing someone remembers.
   quantity-10 orders across all 20 markets, with zero positions, unresolved
   intents or `UNKNOWN_ABSENT`, and no new critical fault marker. Raw order count
   is not slot count; use queue `markets=20` plus distinct active owners when
-  auditing the scheduler.
+  auditing the scheduler. A subsequent snapshot briefly saw three positively
+  owned cancels in `UNKNOWN_ABSENT`; the automatic terminal-proof path cleared
+  all three without intervention and the next checkpoint held 38 open orders
+  across 20 markets. Treat age/progress as the signal: a new acknowledged
+  cancel missing from one complete snapshot is not the historical deadlock.
 
 - **DEPLOYED AND ACTIVE: ET risk day and one $80 account threshold.** The
   operator authorized both session and hard thresholds at

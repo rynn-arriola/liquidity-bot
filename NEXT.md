@@ -71,6 +71,11 @@ opening equity/cash `478.6998` and opening realized `-207.39180000`. The live
 dashboard reported `ET DAY` and `$80 / $80`. Acceptance then found 36 open
 orders across all 20 markets, every quantity 10, with zero positions,
 unresolved intents, `UNKNOWN_ABSENT` orders or new critical fault markers.
+Three later cancels briefly entered the expected acknowledged/absent proof gap;
+the automatic repair reconciled every one without intervention, returned
+absence to zero and left 38 open orders across 20 markets. Escalate only when
+the same rows fail to progress across reconcile cycles or reach
+`unresolved_mutation_timeout`, not from one instantaneous absent count.
 
 
 ## 00. FIXED, DEPLOYED AND RESTARTED: replace flat markets whose reward period has positively ended

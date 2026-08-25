@@ -152,6 +152,19 @@ reconciled; positions and `UNKNOWN_ABSENT` were zero, both supervised processes
 remained alive, and no new critical, private-recovery, mutation-timeout,
 retirement or traceback marker appeared.
 
+A later acceptance read caught the normal cancellation-proof interval rather
+than a recurrence of the old deadlock. Three just-acknowledged cancels became
+`UNKNOWN_ABSENT` after complete snapshots no longer listed them. They were
+positively attributed to three markets and had exchange IDs; positions stayed
+zero and the other owners continued quoting. Without intervention, the normal
+repair path reconciled all three and returned `UNKNOWN_ABSENT` to zero; the
+next ledger checkpoint held 38 open orders across all 20 markets. Diagnose this
+state by age and progress, not one instantaneous count: a fresh acknowledged
+cancel plus `missing_from_complete_snapshot` is an expected proof gap; repeated
+`[unresolved-repair] ... remaining=N` with no decrease, an
+`unresolved_mutation_timeout` retirement, or the same rows surviving later
+reconcile cycles is the defect signature.
+
 ---
 
 ## Twenty slots were live while instantaneous orders moved between 24 and 29

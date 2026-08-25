@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## DEPLOYED PATH, CRON PAUSED: visually accept the hourly Discord table
+## DEPLOYED AND ACTIVE: visually accepted hourly Discord table
 
 The dedicated report reuses `scripts/reward_table.py`; `--post-discord --quiet`
 routes the complete seven-day ET table to `DISCORD_REWARDS_WEBHOOK_URL` without
@@ -14,16 +14,17 @@ Measured on the stopped live server and its 73 MB ledger: 2.86 seconds elapsed,
 28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The first real post
 at `2026-08-25T18:06:15Z` proved routing but its wide pipe table was visually
 unacceptable. The revised embed uses two narrow fixed-width tables and asserts
-exact 53-character and 34-character rows. The hourly crontab entry is removed
-until one revised post is accepted; no bot restart is needed.
+exact 53-character and 34-character rows. A revised real post succeeded at
+`2026-08-25T18:18:42Z` and the operator visually accepted it. The minute-7
+hourly crontab entry is active; no bot restart was needed.
 
 During first acceptance, `/root/maker-lab` unexpectedly became absent; no
 cause was established. The four original credential assignments were restored
 from the local sibling copy, the reward webhook assignment was securely
 re-added, and modes were reset to directory `0700` and file `0600`. Before and
-after the next manual post, verify the directory, file mode and assignment name
-without printing any secret. Restore the minute-7 cron only after the operator
-accepts the visual result.
+after the accepted manual post, the directory, file mode and assignment name
+were verified without printing any secret and remained intact. Continue to
+avoid exposing credential values in diagnostics.
 
 Local review is complete: all 609 tests pass. Deliberate mutations were killed
 for wrong-webhook routing, the seven-day visual-layout cap and removal of the

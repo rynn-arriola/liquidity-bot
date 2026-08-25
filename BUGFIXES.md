@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIX PREPARED, CRON PAUSED — Discord rendered the wide reward table as disorganized text
+### FIXED, DEPLOYED AND ACTIVE — Discord rendered the wide reward table as disorganized text
 
 **Symptom.** The first dedicated-channel acceptance post delivered
 successfully, but its wide pipe-separated report did not look like a table in
@@ -43,16 +43,18 @@ block. Its many columns were wider than a narrow Discord client, while pipe
 characters supplied no native Discord table layout. The first replacement
 preview also exposed a two-character header/data width mismatch.
 
-**Prepared fix.** Send an embed containing two narrow monospaced tables: daily
+**Fix.** Send an embed containing two narrow monospaced tables: daily
 P&L/rewards and liquidity supplied. Build the headings with the same explicit
 widths as the rows, use ASCII missing-value markers, cap the visual contract at
-seven days and assert every row's exact width. The hourly cron remains removed
-until one revised real post is visually accepted. This changes reporting only;
-the trading bot remains stopped and no slot, order or risk path is touched.
+seven days and assert every row's exact width. This changes reporting only; the
+trading bot remains stopped and no slot, order or risk path is touched.
 
 **Proof.** The complete 609-test suite passes locally. An exact local preview
 caught the initial 51/53-character mismatch before deployment; the test now
 requires 53-character P&L rows and 34-character liquidity rows.
+The revised real post succeeded at `2026-08-25T18:18:42Z`, retained credential
+modes `0700/0600` before and after execution, and was visually accepted by the
+operator. The minute-7 hourly cron was then restored.
 
 ---
 

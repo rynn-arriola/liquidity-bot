@@ -36,7 +36,8 @@ silently changing the accepted visual shape. A pre-deployment preview caught a
 51-character header over 53-character data rows; the equal-width regression
 would fail if that alignment drifts again.
 
-The hourly cron remains paused pending one visually accepted real post.
+The revised real post succeeded at `2026-08-25T18:18:42Z` and the operator
+visually accepted it. The minute-7 hourly cron is active.
 
 ---
 
@@ -49,9 +50,8 @@ server against its 73 MB commissioning ledger. One complete seven-day run took
 opened the ledger read-only.
 
 The prepared hourly wrapper is a separate process with `nice -n 10`, a
-nonblocking `flock` and a 90-second timeout. When its currently paused minute-7
-cron is enabled, it adds one request per hour (0.00028 requests/second
-averaged), while the runner itself
+nonblocking `flock` and a 90-second timeout. Its minute-7 cron adds one request
+per hour (0.00028 requests/second averaged), while the runner itself
 already samples earnings every 15 minutes. It does not use the runner's event
 loop, WebSockets, market selector, 20-slot scheduler or order API. The only
 shared resource is a short read-only SQLite scan; WAL permits it beside the
@@ -72,8 +72,8 @@ no cause has been established, so none is asserted here. The four original
 credential assignments were recovered from the local sibling copy, the reward
 webhook assignment was securely restored, and the directory/file modes were
 reset to `0700/0600`. The cron was removed while this was investigated. The
-next manual post must verify the credential path and mode both before and after
-execution; never print values while doing so.
+accepted manual post verified the credential path and mode both before and
+after execution; they remained `0700/0600`. Never print values while checking.
 
 ---
 

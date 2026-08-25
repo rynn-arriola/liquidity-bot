@@ -34,7 +34,7 @@ from fact rather than from the last thing someone remembers.
   mutations. The reviewed files are deployed, but the bot remains stopped;
   ET/$80 becomes active only on the next authorized restart.
 
-- **DEPLOYED REPORT PATH; HOURLY CRON PAUSED FOR VISUAL ACCEPTANCE.** The first
+- **DEPLOYED AND ACTIVE — visually accepted hourly reward table.** The first
   real post at `2026-08-25T18:06:15Z` proved delivery but its wide pipe table
   did not render as a usable Discord table. The replacement is an embed with
   two narrow fixed-width monospaced tables whose headers, separators and rows
@@ -42,13 +42,16 @@ from fact rather than from the last thing someone remembers.
   support and refuses more than seven days. The underlying report remains one
   account-wide earnings request plus a read-only SQLite scan; the separate
   wrapper retains its nonblocking lock, 90-second timeout and `nice -n 10`.
-  The trading bot remains stopped. The hourly crontab entry was removed and
-  must not be restored until one revised test post is visually accepted.
+  The trading bot remains stopped. The revised post at
+  `2026-08-25T18:18:42Z` passed server tests, delivered successfully and was
+  visually accepted by the operator; the minute-7 hourly crontab entry is
+  active.
   During the first acceptance sequence `/root/maker-lab` was unexpectedly
   absent. No cause was established. It was restored from the local sibling
   credential copy, the dedicated reward assignment was re-added without
   displaying its value, and directory/file modes were restored to `0700/0600`.
-  Validate names and modes immediately before and after the next post.
+  Names and modes were validated immediately before and after the accepted
+  post and remained intact at `0700/0600`.
 
 - **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten

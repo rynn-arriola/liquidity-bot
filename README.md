@@ -144,8 +144,8 @@ narrow, fixed-width tables: daily P&L/rewards and daily liquidity supplied.
 Every header, separator and row has the same measured character width, so the
 columns do not depend on Discord's unsupported Markdown table rendering. The
 layout is deliberately capped at seven days. The hourly cron is currently
-paused pending visual acceptance of this revised format; when enabled it runs
-at minute 7 and writes only redacted success/failure status to
+active after visual acceptance of this revised format. It runs at minute 7 of
+every hour and writes only redacted success/failure status to
 `logs/reward-table-hourly.log`.
 
 ## Prospective building-quote observations

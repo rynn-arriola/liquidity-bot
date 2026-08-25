@@ -31,6 +31,39 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### PREPARED, NOT DEPLOYED — LIVE Discord score reset on every process run
+
+**Symptom.** The LIVE summary reported raw `Score-seconds` accumulated only by
+the current process. A restart reset the number to zero, and crossing ET
+midnight did not reset it, so it could not answer the operator's requested
+question: how many score-hours were supplied during the current reward day.
+
+**Mechanism.** `_score_seconds` is intentionally an in-memory session
+diagnostic. The summary consumed it directly; no ET date key or durable daily
+total existed. Converting that value from seconds to hours alone would retain
+both scope errors.
+
+**Fix.** Accrual is now also split across ET reward-day boundaries and buffered
+by date. The existing five-minute summary and orderly shutdown boundaries add
+those increments to `execution_score_days`, then LIVE Discord renders the
+current date's durable total as `Score-hours today`. SHADOW remains run-scoped
+and is explicitly labeled `score-hours this run`.
+
+**Proof.** Ledger tests prove additive decimal storage, independent dates,
+reopen persistence and invalid-input refusal. The runner test proves a
+twenty-second interval across August ET midnight splits evenly at a score rate
+of two and that a replacement runner continues the daily total. Rendering
+tests pin both LIVE and SHADOW labels and hour conversion. The targeted 318
+tests and complete 618-test suite pass. A forced score-ledger write failure also
+proves the summary still sends, the increment remains pending for retry and
+the error is recorded without escaping into the runner or shutdown. This
+reporting-only change killed two deliberate mutations: skipping the durable
+add failed the midnight/restart test, and allowing a score-write exception to
+escape failed the shutdown-isolation test. It has not been pushed, deployed or
+restarted.
+
+---
+
 ### FIXED, DEPLOYED AND ACTIVE — malformed report-only webhook could block trading startup
 
 **Symptom.** No live outage occurred because the installed rewards webhook is

@@ -448,6 +448,39 @@ class ExecutionLedgerTests(unittest.TestCase):
             "reward": "1.25",
         })
 
+    def test_daily_score_is_additive_and_survives_reopen(self):
+        first = self.ledger.add_score_seconds(
+            "2026-08-24", "3600.25", observed_at=T0)
+        second = self.ledger.add_score_seconds(
+            "2026-08-24", Decimal("1799.75"),
+            observed_at=T0 + timedelta(minutes=5))
+        self.ledger.add_score_seconds(
+            "2026-08-25", "12.5", observed_at=T0 + timedelta(days=1))
+
+        self.assertEqual(first, Decimal("3600.25"))
+        self.assertEqual(second, Decimal("5400.00"))
+        self.assertEqual(
+            self.ledger.score_seconds_for_day("2026-08-24"),
+            Decimal("5400.00"))
+        self.ledger.close()
+        self.ledger = ExecutionLedger(self.path)
+        self.assertEqual(
+            self.ledger.score_seconds_for_day("2026-08-24"),
+            Decimal("5400.00"))
+        self.assertEqual(
+            self.ledger.score_seconds_for_day("2026-08-25"),
+            Decimal("12.5"))
+
+    def test_daily_score_rejects_bad_day_negative_and_naive_time(self):
+        with self.assertRaises(ValueError):
+            self.ledger.score_seconds_for_day("not-a-day")
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            self.ledger.add_score_seconds(
+                "2026-08-24", "-0.01", observed_at=T0)
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            self.ledger.add_score_seconds(
+                "2026-08-24", "1", observed_at=T0.replace(tzinfo=None))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,37 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## A daily Discord score requires durable ET-day accounting, not just division by 3,600
+
+Established 2026-08-25 by tracing the LIVE summary value from
+`CommissioningRunner._score_seconds` into `LiquiditySummary`. The old counter
+started at zero with every process and never cut over at ET midnight. Merely
+renaming it or dividing by 3,600 would therefore show hours for the current
+run, not hours for the current reward day.
+
+The prepared implementation keeps the existing session and per-market
+diagnostics, but separately splits each accrual interval at
+`America/New_York` midnight and adds each piece to a durable
+`execution_score_days` ledger row. The five-minute summary flushes pending
+increments and reads the complete current ET-day total, so an orderly restart
+continues the same value. Existing reward-calendar tests prove the shared day
+split is 23 hours at spring DST and 25 hours at fall DST; a commissioning test
+also proves an interval spanning ET midnight is assigned to both dates and a
+new runner continues the second date rather than resetting it.
+
+`Score-hours today` is aggregate eligible score exposure across markets and
+sides, not wall-clock uptime, so it can exceed 24 hours. On the first activation
+day only, the total begins when this code first runs because earlier sessions
+did not persist score. A hard process kill can omit at most the unflushed
+increment since the preceding five-minute summary; an orderly shutdown flushes
+again. The change adds no venue request, WebSocket, order decision, scheduler
+gate or risk input. A forced score-write failure proves the summary still
+sends, the increment stays buffered for retry and shutdown cannot be stranded
+by this telemetry. It is prepared locally, passes all 618 tests, and has not
+been pushed, deployed or activated.
+
+---
+
 ## A separate process was not enough to isolate report-only secret validation
 
 Established 2026-08-25 by tracing every `load_runtime_secrets()` caller during

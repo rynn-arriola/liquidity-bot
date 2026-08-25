@@ -8,6 +8,16 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
+- **PREPARED LOCALLY, NOT DEPLOYED — ET-day score-hours.** The LIVE Discord
+  slots field now uses a durable `America/New_York` reward-day total and
+  displays `Score-hours today`; orderly restarts no longer reset it. SHADOW is
+  explicitly run-scoped. The first activation day is partial, aggregate
+  score-hours can exceed 24, and a hard kill can omit at most the increment
+  since the prior five-minute summary. A forced score-write failure remains
+  buffered and cannot break the summary or shutdown. All 618 tests pass. No
+  strategy, scheduler, order, risk, REST or WebSocket path changed, and the
+  running bot has not been restarted for this work.
+
 - **Bot is LIVE on reviewed commit `26b11b2`.** Before restart, all 15 changed
   files matched the server and all 612 tests passed there in 59.027 seconds.
   Whole-account preflight showed zero positions and open orders, and the ledger

@@ -187,9 +187,13 @@ enforcement.
 The shadow runner reuses maker-lab's normal and error webhooks. Every five
 minutes and at clean completion it posts a liquidity-specific one-glance
 summary: explicit SHADOW/DRY RUN/LIVE mode, readiness, reward-eligible sides,
-score-seconds, fill signals, exit completion, inventory age, exact state/risk,
-and stream/API health. Pending or unattributable rewards are visible but never
-included in accounted net.
+score-hours, fill signals, exit completion, inventory age, exact state/risk,
+and stream/API health. LIVE `Score-hours today` is persisted by
+midnight-to-midnight `America/New_York` reward date, including DST, and
+continues across orderly restarts. It aggregates concurrent eligible sides and
+markets, so it can exceed 24; the first day after installing this accounting is
+partial. SHADOW remains explicitly scoped to its current run. Pending or
+unattributable rewards are visible but never included in accounted net.
 
 Unexpected termination uses the error webhook. Discord HTTP runs outside the
 WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine

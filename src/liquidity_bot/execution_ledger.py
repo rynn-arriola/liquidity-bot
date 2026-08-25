@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS execution_reward_earnings (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_reward_market_observed
     ON execution_reward_earnings(market_slug, observed_at);
+CREATE TABLE IF NOT EXISTS execution_score_days (
+    reward_date TEXT PRIMARY KEY,
+    score_seconds TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_loss_stop_days (
     utc_date TEXT PRIMARY KEY,
     first_tripped_at TEXT NOT NULL
@@ -512,6 +517,52 @@ class ExecutionLedger:
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return list(self.connection.execute(sql, params).fetchall())
+
+    def score_seconds_for_day(self, reward_date: str) -> Decimal:
+        """Return the persisted aggregate score for one ET reward date."""
+
+        day = date.fromisoformat(str(reward_date)).isoformat()
+        row = self.connection.execute(
+            "SELECT score_seconds FROM execution_score_days "
+            "WHERE reward_date=?", (day,)).fetchone()
+        return (_decimal(row["score_seconds"], "score_seconds")
+                if row is not None else Decimal("0"))
+
+    def add_score_seconds(
+        self,
+        reward_date: str,
+        score_seconds: Decimal | str | int | float,
+        *,
+        observed_at: datetime,
+    ) -> Decimal:
+        """Durably add non-negative score to one ET reward date.
+
+        The runner flushes accumulated increments at summary boundaries. An
+        additive write, rather than replacing an in-memory total, lets a new
+        process continue the same ET day after a restart without double
+        counting the value already committed by the previous process.
+        """
+
+        day = date.fromisoformat(str(reward_date)).isoformat()
+        increment = _decimal(score_seconds, "score_seconds")
+        if increment < 0:
+            raise ValueError("score_seconds cannot be negative")
+        at = _time(observed_at, "observed_at")
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT score_seconds FROM execution_score_days "
+                "WHERE reward_date=?", (day,)).fetchone()
+            current = (_decimal(row["score_seconds"], "score_seconds")
+                       if row is not None else Decimal("0"))
+            total = current + increment
+            self.connection.execute(
+                "INSERT INTO execution_score_days"
+                "(reward_date,score_seconds,updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(reward_date) DO UPDATE SET "
+                "score_seconds=excluded.score_seconds,"
+                "updated_at=excluded.updated_at",
+                (day, _number(total, "score_seconds"), at))
+        return total
 
     def record_loss_stop(self, risk_date: str, *, at: datetime) -> None:
         """Note that a loss stop tripped on this ET risk day. Idempotent.

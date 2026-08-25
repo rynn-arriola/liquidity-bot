@@ -63,7 +63,7 @@ from .market_selector import (
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
 from .readiness import ReadinessVerdict
-from .reward_calendar import risk_day
+from .reward_calendar import reward_day, risk_day, split_reward_day_interval
 from .reconciler import (
     ActionKind,
     DesiredStateReconciler,
@@ -435,6 +435,11 @@ class CommissioningRunner:
         self._shutdown_proved_flat = True
         self._score_seconds = 0.0
         self._score_seconds_by_market: dict[str, float] = {}
+        # Unflushed ET-day increments. Unlike `_score_seconds`, which remains
+        # the historical session diagnostic, the Discord value is persisted
+        # by reward date so a restart cannot reset "today" to zero.
+        self._daily_score_pending: dict[str, float] = {}
+        self._daily_score_committed: dict[str, float] = {}
         self._score_observed_at: datetime | None = None
         self._earnings_observed_at: datetime | None = None
         self._earnings_by_status: dict[str, Decimal] = {}
@@ -1790,16 +1795,62 @@ class CommissioningRunner:
         """
 
         if self._score_observed_at is not None:
-            seconds = (now - self._score_observed_at).total_seconds()
+            started_at = self._score_observed_at
+            seconds = (now - started_at).total_seconds()
             if seconds < 0:
                 raise RuntimeError("commissioning score clock moved backwards")
+            day_pieces = split_reward_day_interval(started_at, now)
             for slug, state in self._markets.items():
-                earned = seconds * sum(state.score_by_side.values())
+                rate = sum(state.score_by_side.values())
+                earned = seconds * rate
                 if earned:
                     self._score_seconds += earned
                     self._score_seconds_by_market[slug] = (
                         self._score_seconds_by_market.get(slug, 0.0) + earned)
+                    for day, day_seconds in day_pieces:
+                        day_earned = day_seconds * rate
+                        self._daily_score_pending[day] = (
+                            self._daily_score_pending.get(day, 0.0)
+                            + day_earned)
         self._score_observed_at = now
+
+    def _flush_daily_score(self, now: datetime) -> float:
+        """Persist pending ET-day score and return today's complete total.
+
+        Flushing at the five-minute summary boundary keeps score persistence
+        out of the order-decision hot path. Graceful shutdown also sends a
+        summary, so the normal restart path loses no score. A hard process
+        kill can lose only the increment since the previous summary; it can
+        never erase the value a previous process already committed.
+        """
+
+        self._accrue_score(now)
+        for day, pending in tuple(self._daily_score_pending.items()):
+            if pending > 0:
+                total = self.ledger.add_score_seconds(
+                    day, pending, observed_at=now)
+                self._daily_score_committed[day] = float(total)
+            del self._daily_score_pending[day]
+        today = reward_day(now)
+        total = float(self.ledger.score_seconds_for_day(today))
+        self._daily_score_committed[today] = total
+        return total
+
+    def _daily_score_fallback(self, now: datetime) -> float:
+        """Best available daily score after reporting persistence fails.
+
+        This function never raises. Pending increments remain buffered for the
+        next summary; a reporting-only write fault cannot become a runner or
+        shutdown fault.
+        """
+
+        today = reward_day(now)
+        try:
+            committed = float(self.ledger.score_seconds_for_day(today))
+            self._daily_score_committed[today] = committed
+        except Exception:
+            committed = self._daily_score_committed.get(today, 0.0)
+        return committed + self._daily_score_pending.get(today, 0.0)
 
     @staticmethod
     def _furthest_resting_price(
@@ -3481,6 +3532,17 @@ class CommissioningRunner:
 
     async def _send_summary(self, now: datetime, *, critical: bool = False,
                             problems: tuple[str, ...] = ()) -> None:
+        try:
+            score_seconds_today = self._flush_daily_score(now)
+            self._runtime_error_counts.pop("daily_score_persistence", None)
+        except Exception as exc:
+            # This metric is observation only. In particular, `_send_summary`
+            # also runs inside shutdown, where escaping would be misread as a
+            # failure to prove flat. Retain pending score for a later retry,
+            # use the best available display value and report the fault on the
+            # normal bounded recovery channel.
+            score_seconds_today = self._daily_score_fallback(now)
+            await self._report_runtime_error("daily_score_persistence", exc)
         # Whole-account, not the primary market. Reporting only slot zero
         # meant a position on any other slot showed as open_positions 0 and an
         # inventory age of 0 -- the two numbers an operator watches to decide
@@ -3553,7 +3615,7 @@ class CommissioningRunner:
             reward_eligible_sides=sum(
                 len(self.state_for(slug).reward_eligible)
                 for slug in self.active_slugs),
-            score_seconds=self._score_seconds,
+            score_seconds=score_seconds_today,
             entry_fills=entry_fills,
             exit_samples=exit_fills,
             exit_completion_rate=(

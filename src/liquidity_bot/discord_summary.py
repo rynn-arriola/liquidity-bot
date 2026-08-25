@@ -304,7 +304,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     if summary.mode == "SHADOW":
         headline = (
             f"## {icon} SHADOW MEASUREMENT — NO EXCHANGE ORDERS\n"
-            f"_eligible score-seconds {summary.score_seconds:,.2f} · no venue "
+            f"_eligible score-hours this run "
+            f"{summary.score_seconds / 3600:,.2f} · no venue "
             "trading P&L is claimed_\n")
     else:
         headline = (
@@ -373,7 +374,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
            if len(summary.idle_market_reasons) > 3 else "")
         + (_row("  free, no supply", free) if summary.slot_capacity else "")
         + _row("Eligible sides", summary.reward_eligible_sides)
-        + _row("Score-seconds", f"{summary.score_seconds:,.2f}"))
+        + _row("Score-hours today", f"{summary.score_seconds / 3600:,.2f}"))
     if summary.slot_capacity:
         # The funnel, so "why only three?" is answerable from the message
         # itself rather than needing `scripts/usable_markets.py` on the

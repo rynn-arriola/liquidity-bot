@@ -2130,6 +2130,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_daily_score_splits_at_et_midnight_and_survives_restart(self):
+        runner, client, notifier = self.build_runner()
+        # 03:59:50Z is 23:59:50 ET during daylight time. A two-point score
+        # rate over twenty seconds belongs half to each ET reward date.
+        before_midnight = datetime(2026, 8, 25, 3, 59, 50, tzinfo=timezone.utc)
+        after_midnight = before_midnight + timedelta(seconds=20)
+        runner._score_by_side = {"bid": 2.0}
+        runner._score_observed_at = before_midnight
+
+        runner._accrue_score(after_midnight)
+
+        self.assertAlmostEqual(
+            runner._daily_score_pending["2026-08-24"], 20.0)
+        self.assertAlmostEqual(
+            runner._daily_score_pending["2026-08-25"], 20.0)
+        self.assertAlmostEqual(runner._flush_daily_score(after_midnight), 20.0)
+        self.assertEqual(
+            runner.ledger.score_seconds_for_day("2026-08-24"),
+            Decimal("20.0"))
+
+        # A new runner over the same durable ledger continues the same ET day
+        # instead of resetting today's display to zero.
+        restarted, _, _ = self.build_runner(
+            ledger=runner.ledger, client=client, notifier=notifier)
+        restarted._score_by_side = {"offer": 2.0}
+        restarted._score_observed_at = after_midnight
+        ten_seconds_later = after_midnight + timedelta(seconds=10)
+        restarted._accrue_score(ten_seconds_later)
+
+        self.assertAlmostEqual(
+            restarted._flush_daily_score(ten_seconds_later), 40.0)
+        self.assertEqual(
+            runner.ledger.score_seconds_for_day("2026-08-25"),
+            Decimal("40.0"))
+
     async def test_twenty_recovery_cancel_owners_all_gain_terminal_proof(self):
         """A disconnect-sized cancel set repairs in bounded fair batches."""
 
@@ -5487,6 +5522,34 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # "0/8 of capacity" makes obvious.
         self.assertIn(f"{'Quoting':<19}{'0/8':>10}", rendered)
         self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", rendered)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_daily_score_write_failure_cannot_break_summary_or_shutdown(self):
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        now = runner._now()
+        runner._score_by_side = {"bid": 2.0}
+        runner._score_observed_at = now - timedelta(seconds=10)
+
+        with patch.object(
+                runner.ledger, "add_score_seconds",
+                side_effect=RuntimeError("score disk write failed")):
+            # Must not raise: shutdown calls the same method after proving the
+            # account flat, so telemetry failure cannot strand the process.
+            await runner._send_summary(now)
+
+        self.assertTrue(notifier.payloads)
+        self.assertAlmostEqual(
+            runner._daily_score_pending[risk_day(now)], 20.0)
+        self.assertEqual(
+            runner._runtime_error_counts["daily_score_persistence"], 1)
+        slots = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Slots" in field["name"])
+        self.assertIn("Score-hours today", slots)
+        self.assertIn("0.01", slots)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

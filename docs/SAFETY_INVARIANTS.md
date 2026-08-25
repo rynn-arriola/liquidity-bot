@@ -350,3 +350,15 @@ These are implementation requirements, not suggestions.
     of the report-only webhook are required by the hourly process alone; a
     missing or malformed value may not block trading secret loading. Report
     failure cannot stop, restart or alter the runner.
+72. Daily score accounting is telemetry, never trading authority. LIVE score
+    must be split by midnight-to-midnight `America/New_York`, persisted as
+    additive increments and rendered in hours from the current reward date;
+    SHADOW remains explicitly run-scoped. A missing row starts at zero, never
+    infers historical score, and the first activation date is therefore
+    partial. Persistence may occur only at an existing reporting or orderly
+    shutdown boundary, not in an order-decision transaction. A score read,
+    write, conversion or reporting failure may not authorize, select, cancel,
+    replace, delay or resize an order, change the 20-slot capacity, alter a
+    reward/economics gate or modify any risk baseline. It adds no venue REST
+    request or WebSocket subscription. Aggregate score-hours sum concurrent
+    eligible sides and may exceed 24.

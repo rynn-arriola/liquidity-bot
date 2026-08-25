@@ -200,6 +200,32 @@ class DiscordTests(unittest.TestCase):
                 mode="LIVE", readiness_status="SCALE_ELIGIBLE",
                 observed_at=NOW, session_started_at=NOW, ledger_bytes=-1)
 
+    def test_live_summary_shows_daily_score_hours_not_session_seconds(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            active_markets=20, resting_markets=20,
+            score_seconds=17_296.93)
+        slots = next(
+            field["value"]
+            for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
+            if "Slots" in field["name"])
+
+        self.assertIn("Score-hours today", slots)
+        self.assertIn("4.80", slots)
+        self.assertNotIn("Score-seconds", slots)
+        self.assertNotIn("17,296.93", slots)
+
+    def test_shadow_summary_labels_score_hours_as_this_run(self):
+        summary = LiquiditySummary(
+            mode="SHADOW", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            score_seconds=7_200)
+        description = build_liquidity_summary(summary)["embeds"][0]["description"]
+
+        self.assertIn("score-hours this run 2.00", description)
+        self.assertNotIn("score-hours today", description)
+
     def test_broken_slots_are_counted_outright(self):
         """"Are the other slots working?" is the most-asked question about
         this bot, and a slot count alone cannot answer it.

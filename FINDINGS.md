@@ -5229,3 +5229,102 @@ the next same-market/same-side PLACE; report cancel-confirm and
 terminal-to-place distributions, same-price returns, `[priority-replan]`
 elapsed time, and verify all stream/equity/execution/economic gates run before
 replacement.”**
+
+---
+
+## Maintenance recovery must preserve the process, not restart an unproved account
+
+Established from the 2026-08-25 Polymarket US maintenance incident and the
+runner/supervisor control flow. The last runner stopped at
+`2026-08-25T11:14:26Z` with:
+
+```
+GET /v1/orders/open failed: InternalServerError
+stop_reason = runner_failure:bound_stream_recovery_exhausted
+flat = false
+```
+
+The durable ledger at that boundary still described 24 working orders across
+14 markets, one -4 position and 10 acknowledged CANCEL intents with exchange
+IDs. That was a stale incident record after the process stopped, not a current
+venue snapshot; the operator later cancelled and flattened manually. The
+important fact is that shutdown could not obtain the venue proof required to
+replace that ledger state, so returning `flat:false` and exit 3 was correct.
+
+### Why the previous recovery could not come back automatically
+
+The runner already bounded both-stream recovery at 12 attempts. Exhaustion
+entered shutdown. During maintenance, shutdown could neither confirm terminal
+orders nor prove positions flat, so it correctly produced exit 3. The
+supervisor never restarts exit 3 because a fresh process must not assume an
+unproved account is safe.
+
+Changing exit 3 to restart would be unsafe. Repeatedly restarting exit 5 would
+also not solve startup maintenance: three fast preflight failures consume the
+supervisor's crash allowance and it gives up. The safe recovery owner is the
+same process, which retains the authorized active set and ledger ownership
+context while taking no new risk.
+
+The global `status.polymarket.com` page is not a sufficient gate for this bot:
+the bot trades Polymarket US, and the incident's authenticated US endpoint was
+the direct failing dependency. Recovery is therefore measured against the
+actual authenticated account API, not an external status-page label.
+
+### Implemented boundary
+
+Only positively identified transport, WebSocket-disconnect or HTTP-5xx
+failures qualify. Three consecutive qualified startup failures, or 12 ordinary
+private/market/both-stream recovery failures whose final streak is qualified,
+enter a dormant maintenance pause. NotFound consistency lag, 429, malformed
+response/schema, ownership conflict and runtime invariants do not qualify.
+
+The pause performs only complete authenticated reads of open orders, positions
+and balance. It does not apply the order/position responses to the ledger and
+therefore cannot turn absence into cancellation. It requires three consecutive
+complete cycles one minute apart; a failed cycle resets the streak, giving a
+minimum stable period of about two minutes. After that, the original recovery
+path still must cancel known quotes, reconcile exact state, bind fresh streams
+and pass the private-state gate before any quote is possible.
+
+Startup uses the same in-process health gate, so a venue already down when the
+runner starts no longer spends the supervisor's fast-crash budget. SIGTERM is
+checked in five-second sleep pieces. A response-contract error during the
+health gate escapes rather than being hidden forever as maintenance.
+
+### The 20-slot scheduler is isolated
+
+No selector, active-set, market-state, reconciler, action-driver or slot-cap
+code changed. The maintenance path reads `active_slugs` and never writes it.
+A production-shape regression binds 20 distinct slugs, forces 12 private
+reconnect failures, passes the maintenance gate, and proves the replacement
+private stream subscribes to the identical ordered 20-tuple. It also proves no
+order create occurs during the pause. The complete local suite is 581 tests.
+
+### How to recognize and verify this next time
+
+From the current run boundary:
+
+```bash
+grep -aE '\[maintenance-pause\]|component=(startup_venue_unavailable|private_stream|market_stream|bound_streams)' logs/commissioning.log | tail -120
+grep -aE '\[bound-stream-recovery\]|\[private-recovery\]|\[action\]' logs/commissioning.log | tail -80
+./scripts/status_commissioning.sh
+```
+
+- `state=entered` means sustained service failure was classified and all new
+  quoting is dormant.
+- `health=success stable=N/3` means one complete read-only account cycle
+  passed. Any `health=failed stable=0/3` must erase prior progress.
+- `state=health_gate_passed` is not trading authority. It means only that the
+  original stream/reconciliation recovery may try again.
+- Acceptance requires the subsequent component recovery marker, then fresh
+  `[action]` lines across distinct markets. Verify the bound/subscribed set is
+  still 20 when viable supply permits; do not infer a slot defect from raw
+  order count alone.
+
+A concise prompt for another reviewer is: **“Audit liquidity-bot maintenance
+recovery from the current run boundary. Correlate `[maintenance-pause]`
+entered/failed/stable/health-gate markers with startup/private/market/bound
+attempt depth, exact authenticated endpoint errors, the subsequent normal
+stream-recovery marker, and distinct `[action]` markets. Verify no create in
+the pause, no absence treated as cancellation, and the ordered 20-market active
+set is unchanged before versus after recovery.”**

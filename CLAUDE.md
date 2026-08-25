@@ -3,10 +3,22 @@
 A live Polymarket US liquidity-reward market maker. **It trades real money on a
 real account.** Every change can lose it.
 
-## Where things stand — 2026-08-24
+## Where things stand — 2026-08-25
 
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
+
+- **Bot is STOPPED by operator instruction. Do not restart before the current
+  maintenance-recovery change is pushed, deployed, production-tested and
+  hash-verified.** The last runner stopped at 2026-08-25T11:14:26Z with
+  `runner_failure:bound_stream_recovery_exhausted`, `flat:false`, after
+  `GET /v1/orders/open` returned `InternalServerError` during Polymarket US
+  maintenance. The operator subsequently cancelled and flattened at the
+  venue; the local ledger remains a stale incident record, not venue truth.
+  Local code now has a maintenance-aware dormant health gate for startup and
+  all business streams. All 581 tests and three deliberate mutation checks
+  pass locally. It is not committed or deployed yet. See the newest NEXT,
+  FINDINGS, BUGFIXES and invariant 69 entries.
 
 - **The dual-stream recovery repair is deployed as `bec8a83`.**
   At 21:31Z a top-up bind closed both streams, then owned GET-by-ID NotFound
@@ -34,7 +46,8 @@ from fact rather than from the last thing someone remembers.
   sessions. See NEXT
   "queue-depletion measurement" and FINDINGS.
 
-- **Bot is RUNNING on `6085ca5` since 2026-08-24T18:49:40Z at quote size 10.**
+- **Historical acceptance: the bot ran on `6085ca5` from
+  2026-08-24T18:49:40Z at quote size 10.**
   The first process safely recovered one residual size-5 position, proved flat
   and exited `startup_recovery_only`; the supervisor then started the normal
   runner. Live acceptance found all open orders at quantity 10, 20 bound

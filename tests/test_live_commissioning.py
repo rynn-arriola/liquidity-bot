@@ -24,7 +24,9 @@ from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
 from liquidity_bot.live_commissioning import (
     MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
+    MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
     MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS,
+    MAINTENANCE_STABLE_READS,
     MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
     RETIREMENT_COOLDOWN_SECONDS,
@@ -228,6 +230,12 @@ class FailingPrivateStream(FakePrivateStream):
     async def start(self, slugs=None):
         self.started_with = slugs
         raise AdapterError("simulated private reconnect failure")
+
+
+class FailingMarketStream(FakeMarketStream):
+    async def start(self, slugs):
+        self.started_with = slugs
+        raise AdapterError("simulated market reconnect failure")
 
 
 class FakeNotifier:
@@ -4536,6 +4544,187 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             sleeps, MAX_BOUND_STREAM_RECOVERY_ATTEMPTS - 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    def test_maintenance_classifier_is_narrow(self):
+        runner, _, _ = self.build_runner()
+
+        class ServerFailure(Exception):
+            status_code = 503
+
+        wrapped = AdapterError("GET /v1/orders/open failed")
+        wrapped.__cause__ = ServerFailure("service restart")
+        self.assertTrue(runner._is_venue_unavailable(wrapped))
+        self.assertTrue(runner._is_venue_unavailable(
+            AdapterError("GET /v1/orders/open failed: InternalServerError")))
+        self.assertTrue(runner._is_venue_unavailable(
+            AdapterError("private WebSocket disconnected")))
+        self.assertTrue(runner._is_venue_unavailable(AdapterError(
+            "private WebSocket disconnected: missing close frame")))
+        self.assertTrue(runner._is_venue_unavailable(
+            TimeoutError("account read timed out")))
+        self.assertFalse(runner._is_venue_unavailable(
+            AdapterError("GET /v1/order/id failed: NotFoundError")))
+        self.assertFalse(runner._is_venue_unavailable(
+            AdapterError("open-order response has no orders list")))
+        self.assertFalse(runner._is_venue_unavailable(
+            AdapterError("simulated private reconnect failure")))
+        self.assertFalse(runner._is_venue_unavailable(
+            AdapterError("unresolved_mutation_timeout")))
+
+    async def test_private_maintenance_recovers_without_changing_twenty_slots(self):
+        runner, client, notifier = self.build_runner()
+        await runner.preflight()
+        slugs = tuple(f"market-{index:02d}" for index in range(20))
+        runner._bind_markets(slugs)
+        factory_calls = 0
+
+        def recovering_factory(fake_client):
+            nonlocal factory_calls
+            factory_calls += 1
+            stream = FakePrivateStream(fake_client)
+            if factory_calls <= MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS:
+                async def fail_for_maintenance(_slugs=None):
+                    raise AdapterError(
+                        "GET /v1/orders/open failed: InternalServerError")
+                stream.start = fail_for_maintenance
+            return stream
+
+        runner.private_stream_factory = recovering_factory
+        fetch_orders = runner.account.fetch_open_orders
+        fetch_positions = runner.account.fetch_positions
+        fetch_balance = runner.account.fetch_balance
+        runner.account.fetch_open_orders = AsyncMock(wraps=fetch_orders)
+        runner.account.fetch_positions = AsyncMock(wraps=fetch_positions)
+        runner.account.fetch_balance = AsyncMock(wraps=fetch_balance)
+
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(factory_calls, MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS + 1)
+        self.assertEqual(runner.active_slugs, slugs)
+        self.assertEqual(runner.private_stream.started_with, list(slugs))
+        self.assertGreaterEqual(
+            runner.account.fetch_open_orders.await_count,
+            MAINTENANCE_STABLE_READS)
+        self.assertGreaterEqual(
+            runner.account.fetch_positions.await_count,
+            MAINTENANCE_STABLE_READS)
+        self.assertGreaterEqual(
+            runner.account.fetch_balance.await_count,
+            MAINTENANCE_STABLE_READS)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertTrue(any(
+            "maintenance" in message.lower()
+            for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_maintenance_pause_honours_operator_stop(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        sleeps = 0
+
+        async def stop_on_first_poll(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            runner.request_stop("operator_requested")
+
+        runner.sleep = stop_on_first_poll
+        stop = await runner._wait_for_venue_recovery(
+            "private_stream",
+            AdapterError("GET /v1/orders/open failed: InternalServerError"),
+        )
+
+        self.assertEqual(stop, "operator_requested")
+        self.assertEqual(sleeps, 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_maintenance_health_requires_three_consecutive_complete_reads(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        outage = AdapterError(
+            "GET /v1/orders/open failed: ServiceUnavailable")
+        runner.account.fetch_open_orders = AsyncMock(
+            side_effect=[(), outage, (), (), ()])
+        runner.account.fetch_positions = AsyncMock(return_value=())
+        runner.account.fetch_balance = AsyncMock(
+            wraps=runner.account.fetch_balance)
+
+        stop = await runner._wait_for_venue_recovery(
+            "private_stream",
+            AdapterError("private WebSocket disconnected"),
+        )
+
+        self.assertIsNone(stop)
+        # One success was discarded by the intervening failure. The gate then
+        # required three new complete order/position/balance passes.
+        self.assertEqual(runner.account.fetch_open_orders.await_count, 5)
+        self.assertEqual(runner.account.fetch_positions.await_count, 4)
+        self.assertEqual(runner.account.fetch_balance.await_count, 4)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_maintenance_probe_contract_error_is_not_hidden(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.account.fetch_open_orders = AsyncMock(side_effect=AdapterError(
+            "open-order response has no orders list"))
+
+        with self.assertRaisesRegex(AdapterError, "no orders list"):
+            await runner._wait_for_venue_recovery(
+                "private_stream",
+                AdapterError(
+                    "GET /v1/orders/open failed: InternalServerError"),
+            )
+
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_waits_in_process_for_maintenance(self):
+        runner, client, _ = self.build_runner()
+        outage = AdapterError(
+            "GET /v1/orders/open failed: InternalServerError")
+        runner.preflight = AsyncMock(side_effect=[outage, outage, outage, "TRADE"])
+
+        mode = await runner.preflight_until_ready()
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner.preflight.await_count, 4)
+        self.assertEqual(client.orders.create_calls, [])
+
+    async def test_startup_does_not_call_schema_failure_maintenance(self):
+        runner, _, _ = self.build_runner()
+        invalid = AdapterError("open-order response has no orders list")
+        runner.preflight = AsyncMock(side_effect=invalid)
+        runner._wait_for_venue_recovery = AsyncMock()
+
+        with self.assertRaisesRegex(AdapterError, "no orders list"):
+            await runner.preflight_until_ready()
+
+        runner._wait_for_venue_recovery.assert_not_awaited()
+
+    async def test_market_reconnect_failure_is_bounded(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.market_stream_factory = FailingMarketStream
+
+        stop = await runner._recover_market_stream(
+            AdapterError("market WebSocket disconnected"))
+
+        self.assertEqual(
+            stop, "runner_failure:market_stream_recovery_exhausted")
+        self.assertEqual(
+            runner._runtime_error_counts["market_stream"],
+            MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
+        )
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

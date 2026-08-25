@@ -305,3 +305,17 @@ These are implementation requirements, not suggestions.
     joined during PLACE latency. A shadow signal also requires positive OPEN
     or PARTIAL order state and no unresolved CANCEL for that client order.
     Reducers and exits are excluded, and slot capacity remains 20.
+69. Venue maintenance may pause a runner but may not relax execution truth.
+    Only a positively classified transport failure, WebSocket disconnect or
+    HTTP 5xx may enter the maintenance coordinator; NotFound, HTTP 429,
+    malformed response/schema, ownership conflict and runtime invariants retain
+    their existing scoped or terminal behavior. Maintenance probes are
+    read-only complete authenticated open-order, position and balance reads
+    and are never applied as evidence that an absent order was cancelled.
+    Recovery requires three consecutive complete probe cycles one minute apart;
+    any failure resets the streak. Quoting remains blocked until the original
+    component recovery subsequently completes its cancellation, whole-account
+    reconciliation, fresh-stream and private-state gates. Startup uses the
+    same in-process pause rather than spending the supervisor's fast-crash
+    budget. Operator stop remains prompt, no pause proves flatness, and the
+    active market tuple and authorized 20-slot capacity must remain unchanged.

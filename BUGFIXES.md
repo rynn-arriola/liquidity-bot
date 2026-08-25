@@ -2528,3 +2528,48 @@ cannot answer") rather than an observed one. Checking the actual market status
 of the stuck rows took one query and would have pointed straight at the right
 branch. The sweep is still silent per-row -- instrumenting it remains worth
 doing, because that silence is why this cost an evening to locate.
+
+## Maintenance exhausted recovery and left the bot unable to return
+
+**Symptom (2026-08-25).** During Polymarket US maintenance,
+`GET /v1/orders/open` returned `InternalServerError`. Both-stream recovery
+reached attempt 12, shutdown could not prove the account flat, and the runner
+ended `runner_failure:bound_stream_recovery_exhausted`, `flat:false`. Exit 3
+correctly prevented the supervisor from restarting unknown live state, but the
+bot then required a human even after the venue recovered.
+
+**Mechanism.** The runner had only two choices after bounded recovery: exit
+restartable after an independent flat proof, or exit non-flat. Maintenance
+withheld exactly that proof. Startup transport errors used exit 5, but three
+fast failures consumed the supervisor bound, so a process launched during the
+same outage also stopped permanently. Retrying mutations harder cannot repair
+a venue outage and risks duplicate/ambiguous state.
+
+**Fix (local, not deployed).** Sustained positively-classified transport,
+WebSocket-disconnect and HTTP-5xx failures now transition the same runner to a
+dormant maintenance coordinator. It uses read-only complete authenticated open
+order, position and balance probes. Three consecutive passes at one-minute
+spacing are required, and any failure resets the streak. Then the existing
+component recovery still performs cancellation, exact reconciliation, fresh
+stream binding and private-state authorization. Startup uses the same hold
+after three consecutive service failures. Market-stream recovery, previously
+unbounded, now has the same 12-attempt local-defect bound as private and
+both-stream recovery.
+
+NotFound, 429, malformed/schema responses, ownership conflicts and runtime
+invariants are deliberately excluded. Probe snapshots are never applied as
+terminal order evidence; absence remains non-terminal. Operator stop is polled
+in five-second pieces. No selector, order plan, quote size, risk/economics gate
+or 20-slot mutation was added.
+
+**Coverage.** Eight focused tests cover narrow classification, startup hold,
+startup schema refusal, operator stop, three consecutive complete cycles with
+reset on failure, malformed probe escape, market reconnect bound, and a full
+20-slot private maintenance recovery with zero creates. The full local suite is
+581 tests. Three deliberate mutations were killed: retaining a pre-failure
+health success, classifying response-schema errors as maintenance, and
+subscribing only ten of twenty recovered markets.
+
+**Cost.** The incident stopped quoting until operator intervention. Trading
+loss is not attributed here: the operator manually cancelled and flattened,
+and the post-stop ledger was stale rather than venue truth.

@@ -112,11 +112,22 @@ DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
 # one market before that market is retired instead of retried forever.
 MAX_RECOVERY_ATTEMPTS = 12
 
-# A stream reconnect that genuinely cannot be established must not hold a live
-# process dormant forever. Shutdown still decides whether this is restartable:
-# flat -> exit 5, ambiguous/open state -> exit 3. Never infer flat from the cap.
+# Ordinary reconnects are bounded so a local/schema defect cannot hold a live
+# process dormant forever. Positively classified venue transport/5xx outages
+# cross into the maintenance coordinator below instead. Neither path infers
+# flatness; shutdown remains the only authority for that proof.
 MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
+MAX_MARKET_STREAM_RECOVERY_ATTEMPTS = 12
 MAX_BOUND_STREAM_RECOVERY_ATTEMPTS = 12
+
+# A venue outage is different from an unsafe account.  After the ordinary
+# bounded reconnect has proved that the failure persists, keep this process
+# dormant and probe only complete authenticated reads.  Three passes one
+# minute apart means "back" is sustained for about two minutes, rather than a
+# single lucky 200 during a rolling maintenance restart.
+MAINTENANCE_FAILURE_THRESHOLD = 3
+MAINTENANCE_STABLE_READS = 3
+MAINTENANCE_POLL_SECONDS = 60.0
 
 RETIRED_EXIT_RETRY_SECONDS = 60
 
@@ -1493,13 +1504,38 @@ class CommissioningRunner:
         """
 
         attempt = 0
+        venue_failure_streak = 0
         while True:
             attempt += 1
             try:
                 mode = await self.preflight()
                 self._runtime_error_counts.pop("startup_unavailable", None)
                 return mode
+            except AdapterError as exc:
+                # Do not let maintenance consume the supervisor's three-fast-
+                # crash allowance.  Only positively identified transport/5xx
+                # failures enter the long-lived pause; malformed responses,
+                # validation failures and ownership/state defects still leave
+                # this process and surface normally.
+                if not self._is_venue_unavailable(exc):
+                    raise
+                venue_failure_streak += 1
+                await self._report_runtime_error(
+                    "startup_venue_unavailable", exc, venue_failure_streak)
+                await self._release_partial_startup()
+                if venue_failure_streak >= MAINTENANCE_FAILURE_THRESHOLD:
+                    stop = await self._wait_for_venue_recovery("startup", exc)
+                    if stop:
+                        raise CommissioningRefused(
+                            f"operator stopped during maintenance pause: {stop}"
+                        ) from exc
+                    venue_failure_streak = 0
+                    attempt = 0
+                    continue
+                await self.sleep(self._recovery_delay(
+                    "startup_venue_unavailable", base=5.0, cap=30.0))
             except CommissioningUnavailable as exc:
+                venue_failure_streak = 0
                 if attempt >= MAX_STARTUP_UNAVAILABLE_ATTEMPTS:
                     raise CommissioningRefused(
                         f"startup blocked after {attempt} attempts: {exc}"
@@ -4196,6 +4232,7 @@ class CommissioningRunner:
 
         exc = initial
         attempt = 0
+        venue_failure_streak = 0
         self.gate.on_disconnect()
         while True:
             attempt += 1
@@ -4265,10 +4302,21 @@ class CommissioningRunner:
             except Exception as recovery_exc:
                 self.gate.on_disconnect()
                 exc = recovery_exc
+                venue_failure_streak = (
+                    venue_failure_streak + 1
+                    if self._is_venue_unavailable(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
                 if attempt >= MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS:
+                    if venue_failure_streak >= MAINTENANCE_FAILURE_THRESHOLD:
+                        stop = await self._wait_for_venue_recovery(
+                            "private_stream", recovery_exc)
+                        if stop:
+                            return stop
+                        attempt = 0
+                        venue_failure_streak = 0
+                        continue
                     exhausted = AdapterError(
                         "private stream recovery exhausted "
                         f"{MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS} attempts: "
@@ -4286,6 +4334,7 @@ class CommissioningRunner:
 
         exc = initial
         attempt = 0
+        venue_failure_streak = 0
         while True:
             attempt += 1
             await self._report_runtime_error("market_stream", exc, attempt)
@@ -4322,9 +4371,28 @@ class CommissioningRunner:
                 return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 exc = recovery_exc
+                venue_failure_streak = (
+                    venue_failure_streak + 1
+                    if self._is_venue_unavailable(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
+                if attempt >= MAX_MARKET_STREAM_RECOVERY_ATTEMPTS:
+                    if venue_failure_streak >= MAINTENANCE_FAILURE_THRESHOLD:
+                        stop = await self._wait_for_venue_recovery(
+                            "market_stream", recovery_exc)
+                        if stop:
+                            return stop
+                        attempt = 0
+                        venue_failure_streak = 0
+                        continue
+                    exhausted = AdapterError(
+                        "market stream recovery exhausted "
+                        f"{MAX_MARKET_STREAM_RECOVERY_ATTEMPTS} attempts: "
+                        f"{type(recovery_exc).__name__}: {recovery_exc}")
+                    await self._report_runtime_error(
+                        "market_stream_terminal", exhausted, attempt)
+                    return "runner_failure:market_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
     async def _recover_bound_streams(self, initial: Exception) -> str | None:
@@ -4346,6 +4414,7 @@ class CommissioningRunner:
 
         exc = initial
         attempt = 0
+        venue_failure_streak = 0
         await self.notifier.send_async(
             "⚠️ Liquidity Bot lost both streams while rebinding the active "
             "set. Quoting is stopped and no market can report state until "
@@ -4407,10 +4476,21 @@ class CommissioningRunner:
                 return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 exc = recovery_exc
+                venue_failure_streak = (
+                    venue_failure_streak + 1
+                    if self._is_venue_unavailable(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
                 if attempt >= MAX_BOUND_STREAM_RECOVERY_ATTEMPTS:
+                    if venue_failure_streak >= MAINTENANCE_FAILURE_THRESHOLD:
+                        stop = await self._wait_for_venue_recovery(
+                            "bound_streams", recovery_exc)
+                        if stop:
+                            return stop
+                        attempt = 0
+                        venue_failure_streak = 0
+                        continue
                     exhausted = AdapterError(
                         "bound stream recovery exhausted "
                         f"{MAX_BOUND_STREAM_RECOVERY_ATTEMPTS} attempts: "
@@ -4422,6 +4502,158 @@ class CommissioningRunner:
                     # inventory into a restartable result.
                     return "runner_failure:bound_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
+
+    @staticmethod
+    def _is_venue_unavailable(exc: Exception) -> bool:
+        """Recognize transport/server failure without swallowing code defects.
+
+        The SDK exception is wrapped by ``AsyncReadOnlyGateway`` but retains
+        its cause.  Inspect both.  HTTP 4xx, NotFound consistency lag and
+        response-shape validation are deliberately absent: those need their
+        existing scoped or terminal handling, not an indefinite maintenance
+        label.
+        """
+
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        texts: list[str] = []
+        names: list[str] = []
+        statuses: list[int] = []
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            texts.append(str(current).lower())
+            names.append(type(current).__name__.lower())
+            raw_status = getattr(current, "status_code", None)
+            if raw_status is None:
+                raw_status = getattr(
+                    getattr(current, "response", None), "status_code", None)
+            try:
+                if raw_status is not None:
+                    statuses.append(int(raw_status))
+            except (TypeError, ValueError):
+                pass
+            current = current.__cause__ or current.__context__
+
+        combined = " ".join((*names, *texts))
+        if any(token in combined for token in (
+                "notfound", "not found", "rate limit", "status 429")):
+            return False
+        if any(500 <= status <= 599 for status in statuses):
+            return True
+        return any(token in combined for token in (
+            "internalservererror", "internal server error",
+            "serviceunavailable", "service unavailable",
+            "badgateway", "bad gateway", "gatewaytimeout", "gateway timeout",
+            "temporarily unavailable", "under maintenance", "maintenance",
+            "connecterror", "connectionerror", "connection error",
+            "connection reset", "connection refused", "name resolution",
+            "gaierror", "readtimeout", "connecttimeout", "timed out",
+            "timeouterror", "request timeout", "websocket disconnected",
+        ))
+
+    def _maintenance_stop_reason(self) -> str | None:
+        """Read stop state safely even if preflight has no risk guard yet."""
+
+        if self._stop_requested:
+            return self._stop_requested
+        if self.risk_guard is None:
+            return None
+        return self._stop_reason(self._now())
+
+    async def _maintenance_sleep(self, seconds: float) -> str | None:
+        """Sleep in short pieces so SIGTERM is prompt during a long pause."""
+
+        remaining = max(0.0, float(seconds))
+        while remaining > 0:
+            stop = self._maintenance_stop_reason()
+            if stop:
+                return stop
+            step = min(5.0, remaining)
+            await self.sleep(step)
+            remaining -= step
+        return self._maintenance_stop_reason()
+
+    async def _wait_for_venue_recovery(
+        self, component: str, initial: Exception,
+    ) -> str | None:
+        """Hold dormant until authenticated venue reads are stably healthy.
+
+        Probes are intentionally read-only and are not applied as ledger
+        snapshots.  In particular, an order missing from these observations is
+        never interpreted as cancelled.  The component-specific recovery then
+        performs the normal quarantine, reconciliation and fresh-stream gates
+        before the run loop can quote again.
+        """
+
+        print(
+            f"[maintenance-pause] at={self._now().isoformat()} "
+            f"component={component} state=entered "
+            f"reason={type(initial).__name__}:{initial}",
+            flush=True,
+        )
+        await self.notifier.send_async(
+            "🛠️ Liquidity Bot detected sustained Polymarket service "
+            f"unavailability in {component}. New quoting is paused; no "
+            "order absence is treated as cancellation. Read-only account "
+            "health must pass three times over about two minutes before the "
+            "normal reconciliation and stream gates are retried.",
+            critical=True,
+        )
+        stable = 0
+        while stable < MAINTENANCE_STABLE_READS:
+            stop = self._maintenance_stop_reason()
+            if stop:
+                return stop
+            try:
+                observed_at = self._now()
+                orders = await self.account.fetch_open_orders(
+                    observed_at=observed_at)
+                positions = await self.account.fetch_positions(
+                    observed_at=observed_at)
+                balance = await self.account.fetch_balance(
+                    observed_at=observed_at)
+                stable += 1
+                print(
+                    f"[maintenance-pause] at={self._now().isoformat()} "
+                    f"component={component} health=success "
+                    f"stable={stable}/{MAINTENANCE_STABLE_READS} "
+                    f"open_orders={len(orders)} positions={len(positions)} "
+                    f"equity={balance.marked_equity}",
+                    flush=True,
+                )
+            except RuntimeInvariantViolation:
+                raise
+            except Exception as probe_exc:
+                if not self._is_venue_unavailable(probe_exc):
+                    await self._report_runtime_error(
+                        "maintenance_probe_terminal", probe_exc)
+                    raise
+                stable = 0
+                await self._report_runtime_error(
+                    "maintenance_probe", probe_exc)
+                print(
+                    f"[maintenance-pause] at={self._now().isoformat()} "
+                    f"component={component} health=failed stable=0/"
+                    f"{MAINTENANCE_STABLE_READS} "
+                    f"reason={type(probe_exc).__name__}:{probe_exc}",
+                    flush=True,
+                )
+            if stable < MAINTENANCE_STABLE_READS:
+                stop = await self._maintenance_sleep(MAINTENANCE_POLL_SECONDS)
+                if stop:
+                    return stop
+        await self.notifier.send_async(
+            "✅ Liquidity Bot maintenance health gate passed three complete "
+            "authenticated account reads. Normal stream recovery and exact "
+            "order/position reconciliation are resuming; quoting remains "
+            "blocked until those existing gates pass.")
+        print(
+            f"[maintenance-pause] at={self._now().isoformat()} "
+            f"component={component} state=health_gate_passed",
+            flush=True,
+        )
+        self._runtime_error_counts.pop("maintenance_probe", None)
+        return None
 
     async def _reconcile_pending_hard_exit(
         self, slug: str | None = None,

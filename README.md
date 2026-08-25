@@ -74,9 +74,15 @@ cost cannot repeat indefinitely.
 Recoverable market/private adapter failures no longer terminate the process.
 The runner logs the stack, disables new risk, cancels known working quotes,
 reconnects, and requires whole-account REST plus fresh stream state before it
-can quote again. Confirmed loss limits and unsafe/ambiguous ownership remain
-terminal safety events. `stop_commissioning.sh` requests graceful cancellation,
-flattening, and exact flat-state proof before exit.
+can quote again. Sustained, positively classified transport/HTTP-5xx failures
+enter `MAINTENANCE_PAUSED`: complete authenticated open-order, position and
+balance reads must pass three consecutive times over about two minutes before
+the normal reconciliation and stream gates are retried. These probes are
+read-only and never interpret order absence as cancellation. Response-schema,
+ownership and invariant errors are not maintenance. Confirmed loss limits and
+unsafe/ambiguous ownership remain terminal safety events.
+`stop_commissioning.sh` requests graceful cancellation, flattening, and exact
+flat-state proof before exit.
 
 All REST access shares one asynchronous limiter. The default is 4 requests per
 second, the configured hard maximum is 20, and continuous book/trade data uses

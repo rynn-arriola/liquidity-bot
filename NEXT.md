@@ -1,5 +1,43 @@
 # Next session — outstanding fixes
 
+## LOCAL COMPLETE, BOT STOPPED: maintenance-aware automatic recovery
+
+The 2026-08-25 maintenance incident exhausted the 12-attempt both-stream
+recovery at 11:14:26Z. Shutdown could not prove the stale ledger flat, so the
+runner correctly recorded `flat:false` and exited 3; the supervisor correctly
+did not restart an account whose state was unproved. That safety combination
+also meant the bot could not come back by itself after the venue recovered.
+
+The local repair keeps the same process alive and dormant only for positively
+identified transport/HTTP-5xx failures. It probes complete authenticated open
+orders, positions and balance read-only. Three consecutive complete passes one
+minute apart (about two minutes) are required; any failed pass resets the
+streak. The normal component recovery then still has to cancel known quotes,
+reconcile exact order/position state, bind fresh streams and pass the existing
+private-state gates before quoting. Absence is never cancellation. A malformed
+response, NotFound, 429, ownership conflict or runtime invariant is not called
+maintenance and keeps its existing fail-closed path.
+
+Startup uses the same in-process hold after three consecutive venue failures,
+so maintenance no longer consumes the supervisor's three-fast-crash budget.
+Private, market and both-stream runtime recovery use it after their ordinary
+12-attempt bound. Logs and alerts use `[maintenance-pause]` with
+`state=entered`, `health=success|failed`, `stable=N/3`, and
+`state=health_gate_passed`.
+
+The 20-slot scheduler, active-set selection, action planning, REST ceiling,
+quote quantity and all risk/economic gates are untouched. A dedicated test
+binds 20 slugs, drives maintenance through the private path and proves the same
+20 are subscribed after recovery with zero creates during the pause.
+
+Local verification: **581 tests pass** plus three deliberate mutation checks
+(failed health must reset the stable streak; response-contract errors must not
+be classified as maintenance; recovered private subscription must retain all
+20 slots). The bot remains stopped. Next authorized steps are review the final
+diff, commit/push, copy and hash-verify changed runtime files, run the full
+suite on the droplet, then restart and verify the markers above before accepting
+new orders.
+
 ## DEPLOYED AND RESTARTED: dual-stream recovery no longer waits on one absent cancel
 
 The 2026-08-24 21:31Z top-up bind failed while five owned GET-by-ID reads

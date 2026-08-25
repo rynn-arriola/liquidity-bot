@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## LOCAL, REVIEW REQUIRED, NOT DEPLOYED: hourly seven-day reward Discord post
+## DEPLOYED AND ACTIVE: hourly seven-day reward Discord post
 
 The dedicated report reuses `scripts/reward_table.py`; `--post-discord --quiet`
 routes the complete seven-day ET table to `DISCORD_REWARDS_WEBHOOK_URL` without
@@ -11,10 +11,11 @@ read-only apart from Discord: one account-wide earnings request, SQLite
 runner control path.
 
 Measured on the stopped live server and its 73 MB ledger: 2.86 seconds elapsed,
-28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The intended cron is
-minute 7 of every hour. Store the dedicated webhook only in the existing
-server-side shared credentials file, tighten that file to mode `0600`, run one
-manual delivery acceptance, then install the cron line. No bot restart is
+28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The installed cron is
+minute 7 of every hour. The dedicated webhook is stored only in the existing
+server-side shared credentials file, now mode `0600`. All 26 deployed hashes
+matched, all 609 tests passed on the stopped server in 65.089 seconds, and a
+real acceptance post succeeded at `2026-08-25T18:06:15Z`. No bot restart is
 needed for this independent job.
 
 Local review is complete: all 609 tests pass. Three deliberate mutations were
@@ -22,7 +23,7 @@ killed by routing the report to the wrong Discord channel, allowing silent
 message truncation, and removing the non-overlap lock from the wrapper.
 
 
-## LOCAL, REVIEW REQUIRED, NOT DEPLOYED: ET risk day and $80/$80 limits
+## DEPLOYED, BOT STOPPED, NOT YET ACTIVE: ET risk day and $80/$80 limits
 
 The operator authorized midnight `America/New_York` as the durable reset for
 the per-market/session/hard loss budget and one $80 threshold for the two
@@ -48,10 +49,10 @@ test; and rejecting equal session/hard limits failed the independent-sensor
 test.
 
 The funded `2e3c677` runner stopped gracefully at `2026-08-25T17:48:00Z` with
-venue-backed `flat:true`; its supervisor and runner are both down. Nothing has
-been deployed or restarted. Deployment still requires the stopped-server full
-suite and hash verification before restart; acceptance must show `$80 / $80`,
-`since 00:00 ET`, an ET risk-baseline row whose first source is
+venue-backed `flat:true`; its supervisor and runner are both down and it has not
+been restarted. All 26 deployed hashes matched and all 609 tests passed on the
+stopped server. Restart acceptance must show `$80 / $80`, `since 00:00 ET`, an
+ET risk-baseline row whose first source is
 `legacy_utc_cutover`, and unchanged 20-slot/size-10 behavior.
 
 

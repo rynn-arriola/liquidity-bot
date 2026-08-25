@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### POLICY CHANGE PREPARED, NOT DEPLOYED — daily loss budget reset was UTC
+### POLICY CHANGE DEPLOYED, BOT STOPPED — daily loss budget reset was UTC
 
 **Symptom.** The bot's TODAY/hard-stop day reset at 00:00 UTC even though the
 operator reads rewards and daily trading on the venue's ET day. The two $80
@@ -61,8 +61,10 @@ strict `hard > session` validation was caught by the equal-limit sensor test.
 Requiring an exact legacy date was separately caught by the stopped-across-UTC-
 midnight regression.
 
-This is local only. The `2e3c677` bot stopped gracefully at
-`2026-08-25T17:48:00Z` with `flat:true`; it was not modified or restarted.
+The reviewed files are deployed after all 26 hashes matched and all 609 tests
+passed on the stopped server. The `2e3c677` bot stopped gracefully at
+`2026-08-25T17:48:00Z` with `flat:true` and was not restarted, so the new ET
+calendar and $80/$80 limits are not active until the next authorized start.
 
 ---
 

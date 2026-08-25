@@ -22,19 +22,19 @@ from fact rather than from the last thing someone remembers.
   first natural `reward_ended=N` event still awaits observation. Raw working-
   order count is not slot count; use the newest FINDINGS 20-slot audit.
 
-- **LOCAL ONLY — NOT DEPLOYED OR ACTIVE: ET risk day and one $80 account
-  threshold.** The operator authorized both session and hard thresholds at
+- **DEPLOYED BUT NOT ACTIVE: ET risk day and one $80 account threshold.** The
+  operator authorized both session and hard thresholds at
   $80 and moved their durable reset from UTC midnight to midnight
   `America/New_York`. Both sensors remain: realized loss pauses new risk;
   marked-equity loss is terminal emergency protection. The guarded first-run
   migration copies the baseline the UTC runner was already enforcing, so a
   restart cannot grant a second budget; if stopped across UTC midnight it uses
   the latest prior row, and later baselines are ET-only. The local
-  implementation passes all 606 tests and kills four deliberate safety
-  mutations. The stopped server still has the old $70 session / $80 hard UTC
-  build until a reviewed deploy and restart.
+  implementation passes all 609 tests and kills four deliberate safety
+  mutations. The reviewed files are deployed, but the bot remains stopped;
+  ET/$80 becomes active only on the next authorized restart.
 
-- **LOCAL ONLY — hourly seven-day reward table.** The operator requested one
+- **DEPLOYED AND ACTIVE — hourly seven-day reward table.** The operator requested one
   post per hour to a dedicated Discord webhook. The report is the existing
   ET-dated, balanced-leg seven-day table: one account-wide earnings request and
   a read-only SQLite ledger scan. The wrapper has a nonblocking lock, 90-second
@@ -42,8 +42,9 @@ from fact rather than from the last thing someone remembers.
   Live benchmarking on the 73 MB ledger took 2.86 seconds, 28% of one CPU and
   45,516 KB peak RSS, producing 1,162 bytes. The secret is named
   `DISCORD_REWARDS_WEBHOOK_URL` and belongs only in the shared server credential
-  file. The intended cron cadence is minute 7 of every hour. Not yet deployed
-  or scheduled. All 609 tests pass; deliberate mutations prove the suite catches
+  file. One real acceptance post succeeded at `2026-08-25T18:06:15Z`; cron runs
+  at minute 7 of every hour and the credential file is mode `0600`. All 609
+  tests pass locally and on the stopped server; deliberate mutations prove the suite catches
   misrouting into the status webhook, silent Discord truncation, and removal of
   the non-overlap lock.
 

@@ -39,10 +39,11 @@ writer. At the measured size this should not materially slow quoting.
 The destination is a third, dedicated secret named
 `DISCORD_REWARDS_WEBHOOK_URL`, loaded from the existing server-only shared
 credentials file. The URL is never accepted as a command-line argument, shown
-in repr, written to a log or committed. This feature is prepared locally and
-has not yet been deployed, scheduled or manually posted. All 609 tests pass;
-three deliberate mutations proved dedicated routing, full-message refusal and
-the non-overlap lock are test-sensitive.
+in repr, written to a log or committed. All 26 deployed hashes matched and all
+609 stopped-server tests passed in 65.089 seconds. The credential file is mode
+`0600`; a real post succeeded at `2026-08-25T18:06:15Z`, and cron runs at minute
+7 hourly. Three deliberate mutations proved dedicated routing, full-message
+refusal and the non-overlap lock are test-sensitive.
 
 ---
 
@@ -84,9 +85,11 @@ date reset failed at 00:30Z, bypassing the one-time legacy copy failed the
 cutover test, requiring an exact current UTC row failed the stopped-across-
 midnight test, and disallowing equal $80 limits failed the two-sensor test.
 
-This change is prepared locally only. The funded `2e3c677` process stopped at
+This change is deployed but cannot be active while the bot is down. The funded
+`2e3c677` process stopped at
 `2026-08-25T17:48:00Z` with venue-backed `flat:true`; its supervisor and runner
-are down, and no code was deployed or restarted.
+are down and were not restarted. All 26 deployed hashes matched and the complete
+609-test suite passed on the stopped server.
 
 ---
 

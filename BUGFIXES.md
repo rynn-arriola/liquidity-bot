@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED LOCALLY; NOT YET ACTIVE — LIVE Discord showed reward-score hours instead of resting hours
+### FIXED, PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART — LIVE Discord showed reward-score hours instead of resting hours
 
 **Symptom.** Discord showed 17.82 `Score-hours today` even though the seven-day
 reward table showed hundreds of hours for the same ET day.
@@ -55,7 +55,10 @@ a forced read exception proves the summary still sends and trading cannot be
 stopped by this observation. The targeted 292 tests and all 623 local tests
 pass. Replacing the renderer with the old score-hours line and discarding the
 shared helper result each independently fail their focused regression. The
-running process remains on the prior display until restart.
+source commit is `39e8ddb`; all 12 server hashes matched and all 623 server
+tests passed in 74.516 seconds. Deployed code rendered 422.21 side-hours from
+the production ledger in 0.632 seconds. The unchanged running process remains
+on the prior display until restart.
 
 ---
 

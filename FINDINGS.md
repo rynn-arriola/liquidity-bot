@@ -52,6 +52,14 @@ targeted 292 tests and complete 623-test local suite pass, including exact
 restoring the old renderer and ignoring the helper result—are each killed by
 their focused regression.
 
+Deployment acceptance used source commit `39e8ddb`. All 12 changed-file hashes
+matched and all 623 reduced-priority server tests passed in 74.516 seconds. A
+direct deployed-code read of the production ledger returned 422.21 side-hours
+and rendered `Resting side-hours     422.21` in 0.632 seconds. Supervisor
+`187359` and runner `187549` remained unchanged throughout, proving deployment
+did not restart the bot; the current process will retain its old display until
+the next reviewed restart.
+
 ---
 
 ## One failed one-slot top-up destroyed eighteen healthy owners because proof came after commit

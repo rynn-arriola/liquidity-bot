@@ -26,7 +26,7 @@ from fact rather than from the last thing someone remembers.
   progressing; no new bound-stream/quarantine/timeout/runner-failure marker
   appeared. Observe the next natural top-up; do not induce one.
 
-- **FIXED AND LOCALLY VERIFIED — LIVE must show resting side-hours, not
+- **PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART — LIVE must show resting side-hours, not
   reward-score hours.** The requested number was the `Resting side-hours`
   column from `scripts/reward_table.py`. At 22:06Z that exact calculation was
   416.65 hours / 23.01 average sides for the current ET day, while Discord
@@ -37,8 +37,11 @@ from fact rather than from the last thing someone remembers.
   It makes no venue request and cannot place, cancel, select or reprice. LIVE
   renders `Resting side-hours`; SHADOW retains modeled score-hours. Two focused
   integration tests prove the exact value and failure isolation; all 623 local
-  tests pass. The currently running process still has the old display until a
-  future reviewed restart.
+  tests pass. Source commit `39e8ddb` is pushed and deployed on disk, all 12
+  file hashes match, and all 623 reduced-priority server tests passed in 74.516
+  seconds. A deployed-code read rendered 422.21 current-day side-hours in 0.632
+  seconds. Supervisor `187359` / runner `187549` remained unchanged, so the
+  running process still has the old display until a future reviewed restart.
 
 - **Historical 20-slot acceptance on reviewed commit `26b11b2`.** Before
   restart, all 15 changed

@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## FIXED LOCALLY; NOT YET ACTIVE: Discord uses seven-day-table resting hours
+## PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART: Discord uses seven-day-table resting hours
 
 The operator meant the `Resting side-hours` column from the seven-day reward
 table, not contract-weighted reward score divided by 3,600. A live read at
@@ -13,7 +13,11 @@ five-minute summary boundary. It adds no venue/API request and has no order,
 selection, scheduler, stream or risk input. LIVE says `Resting side-hours`;
 SHADOW continues saying `score-hours this run`. A read failure is reported and
 falls back to 0 without breaking summary or shutdown. All 623 local tests pass.
-The current runner has not been restarted with this correction.
+Source commit `39e8ddb` is pushed and deployed; all 12 hashes matched and all
+623 reduced-priority server tests passed in 74.516 seconds. Deployed code read
+422.21 current-day side-hours from the production ledger in 0.632 seconds and
+rendered the correct label. Supervisor `187359` / runner `187549` remained
+unchanged, so the current runner has not loaded this correction.
 
 ---
 

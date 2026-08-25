@@ -1,7 +1,7 @@
 """Credential handoff without copying or executing maker-lab code.
 
 Environment variables take precedence. When they are absent, the loader reads
-only four literal string assignments from the sibling maker-lab
+only five literal string assignments from the sibling maker-lab
 ``credentials.py`` file. The file is parsed as data with :mod:`ast`; it is
 never imported or executed.
 """
@@ -20,6 +20,7 @@ KEY_ENV = "POLYMARKET_US_KEY_ID"
 SECRET_ENV = "POLYMARKET_US_SECRET_KEY"
 DISCORD_ENV = "DISCORD_WEBHOOK_URL"
 DISCORD_ERRORS_ENV = "DISCORD_ERRORS_WEBHOOK_URL"
+DISCORD_REWARDS_ENV = "DISCORD_REWARDS_WEBHOOK_URL"
 CREDENTIALS_FILE_ENV = "LIQUIDITY_BOT_SHARED_CREDENTIALS_FILE"
 
 _FILE_KEYS = {
@@ -27,6 +28,7 @@ _FILE_KEYS = {
     "SECRET_KEY",
     "DISCORD_WEBHOOK_URL",
     "DISCORD_ERRORS_WEBHOOK_URL",
+    "DISCORD_REWARDS_WEBHOOK_URL",
 }
 
 
@@ -41,6 +43,7 @@ class RuntimeSecrets:
     secret_key: str = field(default="", repr=False)
     discord_webhook_url: str = field(default="", repr=False)
     discord_errors_webhook_url: str = field(default="", repr=False)
+    discord_rewards_webhook_url: str = field(default="", repr=False)
     source: str = "none"
 
     @property
@@ -55,6 +58,10 @@ class RuntimeSecrets:
     def discord_errors_configured(self) -> bool:
         return bool(self.discord_errors_webhook_url
                     or self.discord_webhook_url)
+
+    @property
+    def discord_rewards_configured(self) -> bool:
+        return bool(self.discord_rewards_webhook_url)
 
 
 def default_shared_credentials_file() -> Path:
@@ -131,6 +138,8 @@ def load_runtime_secrets(
     discord = value(DISCORD_ENV, "DISCORD_WEBHOOK_URL")
     discord_errors = value(
         DISCORD_ERRORS_ENV, "DISCORD_ERRORS_WEBHOOK_URL")
+    discord_rewards = value(
+        DISCORD_REWARDS_ENV, "DISCORD_REWARDS_WEBHOOK_URL")
     if bool(key_id) != bool(secret_key):
         raise RuntimeSecretError(
             "Polymarket key ID and secret key must be configured together")
@@ -140,13 +149,16 @@ def load_runtime_secrets(
             "shared maker-lab credential file")
     _validate_discord_url(discord, DISCORD_ENV)
     _validate_discord_url(discord_errors, DISCORD_ERRORS_ENV)
+    _validate_discord_url(discord_rewards, DISCORD_REWARDS_ENV)
     source = "environment" if any(str(environment.get(name, "")).strip() for name in (
-        KEY_ENV, SECRET_ENV, DISCORD_ENV, DISCORD_ERRORS_ENV)) else (
+        KEY_ENV, SECRET_ENV, DISCORD_ENV, DISCORD_ERRORS_ENV,
+        DISCORD_REWARDS_ENV)) else (
             "shared_file" if file_values else "none")
     return RuntimeSecrets(
         key_id=key_id,
         secret_key=secret_key,
         discord_webhook_url=discord,
         discord_errors_webhook_url=discord_errors,
+        discord_rewards_webhook_url=discord_rewards,
         source=source,
     )

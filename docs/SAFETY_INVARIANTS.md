@@ -330,3 +330,11 @@ These are implementation requirements, not suggestions.
     Reward projection must intersect the nominal day-of clock with explicit
     program bounds so selection and runtime authorization value the same
     interval.
+71. The hourly seven-day reward report is operationally isolated from trading.
+    It runs as a separate process, opens the execution ledger with SQLite
+    `mode=ro`, makes exactly one account-wide earnings request, and has no
+    order, position, balance, book, discovery or mutation call. A nonblocking
+    file lock prevents overlap and a 90-second timeout bounds runtime. Its
+    dedicated Discord webhook is loaded only from the server-side shared
+    credentials file, is excluded from repr/log output, and may never be
+    committed. Report failure cannot stop, restart or alter the runner.

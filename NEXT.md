@@ -1,5 +1,27 @@
 # Next session — outstanding fixes
 
+## LOCAL, REVIEW REQUIRED, NOT DEPLOYED: hourly seven-day reward Discord post
+
+The dedicated report reuses `scripts/reward_table.py`; `--post-discord --quiet`
+routes the complete seven-day ET table to `DISCORD_REWARDS_WEBHOOK_URL` without
+printing the credential. `scripts/post_hourly_reward_table.sh` runs it under a
+nonblocking file lock, 90-second timeout and reduced CPU priority. It is
+read-only apart from Discord: one account-wide earnings request, SQLite
+`mode=ro`, no discovery/book/order/position/balance or mutation calls, and no
+runner control path.
+
+Measured on the stopped live server and its 73 MB ledger: 2.86 seconds elapsed,
+28% of one CPU, 45,516 KB peak RSS and 1,162 output bytes. The intended cron is
+minute 7 of every hour. Store the dedicated webhook only in the existing
+server-side shared credentials file, tighten that file to mode `0600`, run one
+manual delivery acceptance, then install the cron line. No bot restart is
+needed for this independent job.
+
+Local review is complete: all 609 tests pass. Three deliberate mutations were
+killed by routing the report to the wrong Discord channel, allowing silent
+message truncation, and removing the non-overlap lock from the wrapper.
+
+
 ## LOCAL, REVIEW REQUIRED, NOT DEPLOYED: ET risk day and $80/$80 limits
 
 The operator authorized midnight `America/New_York` as the durable reset for

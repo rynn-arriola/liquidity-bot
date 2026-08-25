@@ -38,15 +38,18 @@ class RuntimeSecretTests(unittest.TestCase):
             'KEY_ID = "key-one"\n'
             'SECRET_KEY = "secret-one"\n'
             'DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1/token"\n'
-            'DISCORD_ERRORS_WEBHOOK_URL = "https://discord.com/api/webhooks/2/token"\n')
+            'DISCORD_ERRORS_WEBHOOK_URL = "https://discord.com/api/webhooks/2/token"\n'
+            'DISCORD_REWARDS_WEBHOOK_URL = "https://discord.com/api/webhooks/3/token"\n')
         secrets = load_runtime_secrets(
             credentials_file=path, environ={}, require_polymarket=True)
         self.assertTrue(secrets.polymarket_configured)
         self.assertTrue(secrets.discord_errors_configured)
+        self.assertTrue(secrets.discord_rewards_configured)
         rendered = repr(secrets)
         self.assertNotIn("key-one", rendered)
         self.assertNotIn("secret-one", rendered)
         self.assertNotIn("/1/token", rendered)
+        self.assertNotIn("/3/token", rendered)
 
     def test_environment_overrides_file_without_requiring_copy(self):
         path = self.secret_file('KEY_ID="old"\nSECRET_KEY="old-secret"\n')
@@ -77,7 +80,8 @@ class DiscordTests(unittest.TestCase):
     def secrets(self) -> RuntimeSecrets:
         return RuntimeSecrets(
             discord_webhook_url="https://discord.com/api/webhooks/1/status",
-            discord_errors_webhook_url="https://discord.com/api/webhooks/2/error")
+            discord_errors_webhook_url="https://discord.com/api/webhooks/2/error",
+            discord_rewards_webhook_url="https://discord.com/api/webhooks/3/rewards")
 
     def test_status_and_critical_use_separate_hooks_without_network(self):
         calls = []
@@ -109,9 +113,11 @@ class DiscordTests(unittest.TestCase):
         notifier = DiscordNotifier(self.secrets(), transport=transport)
         notifier.send("retrying", critical=False, channel="errors")
         notifier.send("session summary", critical=False)
+        notifier.send("seven-day table", critical=False, channel="rewards")
 
         self.assertIn("/2/error", calls[0])
         self.assertIn("/1/status", calls[1])
+        self.assertIn("/3/rewards", calls[2])
 
     def test_an_unknown_channel_is_refused(self):
         notifier = DiscordNotifier(self.secrets(), transport=lambda u, b: True)

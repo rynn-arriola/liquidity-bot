@@ -131,8 +131,17 @@ opens `data/commissioning.db` read-only and makes exactly one account-wide
 `GET /v1/incentives/earnings` request. It performs no market discovery, book,
 order, position, balance or mutation calls. One report request is below the
 venue ceiling even beside the runner's conservative 4 request/second governor;
-do not loop the command. Pending and unposted reward are never counted as net,
-and the current ET day is marked partial.
+do not tight-loop it or schedule it more frequently than hourly. Pending and
+unposted reward are never counted as net, and the current ET day is marked
+partial.
+
+The server can post the same table hourly to a dedicated Discord channel with
+`scripts/post_hourly_reward_table.sh`. The wrapper uses a nonblocking file lock,
+a 90-second timeout and reduced CPU priority; it is a separate process and has
+no order mutation path. Its `DISCORD_REWARDS_WEBHOOK_URL` lives only in the
+server-side shared credentials file. The installed cron schedule runs at minute
+7 of every hour and writes only redacted success/failure status to
+`logs/reward-table-hourly.log`.
 
 ## Prospective building-quote observations
 

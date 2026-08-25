@@ -88,6 +88,11 @@ here: it runs in a sandboxed cloud environment, so it may not be able to reach
 your droplet over SSH. Confirm that before relying on it for anything
 operational.
 
+The dedicated hourly reward report reads `DISCORD_REWARDS_WEBHOOK_URL` from the
+same droplet-only `maker-lab/credentials.py` file as the status and error
+webhooks. Keep that file mode `0600`; never paste its values into a tracked file,
+cron line, command-line argument, log, or Markdown document.
+
 ## Keeping machines in sync
 
 **Start Claude Code from inside the repo directory.** `CLAUDE.md` is read from

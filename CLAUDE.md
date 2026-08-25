@@ -34,6 +34,19 @@ from fact rather than from the last thing someone remembers.
   mutations. The stopped server still has the old $70 session / $80 hard UTC
   build until a reviewed deploy and restart.
 
+- **LOCAL ONLY — hourly seven-day reward table.** The operator requested one
+  post per hour to a dedicated Discord webhook. The report is the existing
+  ET-dated, balanced-leg seven-day table: one account-wide earnings request and
+  a read-only SQLite ledger scan. The wrapper has a nonblocking lock, 90-second
+  timeout and `nice -n 10`; it cannot mutate or control the trading runner.
+  Live benchmarking on the 73 MB ledger took 2.86 seconds, 28% of one CPU and
+  45,516 KB peak RSS, producing 1,162 bytes. The secret is named
+  `DISCORD_REWARDS_WEBHOOK_URL` and belongs only in the shared server credential
+  file. The intended cron cadence is minute 7 of every hour. Not yet deployed
+  or scheduled. All 609 tests pass; deliberate mutations prove the suite catches
+  misrouting into the status webhook, silent Discord truncation, and removal of
+  the non-overlap lock.
+
 - **The second slot-lifecycle gap is fixed and deployed.** At 13:00Z ten
   bound markets positively transitioned to `no_incentive`; at 13:07Z those ten
   held no orders while nine other markets held 18 size-10 orders. Capacity was
@@ -338,7 +351,8 @@ It combines ET-dated balanced-leg trading P&L, paid/pending venue reward and
 merged resting side-hours. It opens the ledger read-only and makes exactly one
 account-wide earnings request—no discovery, books, account snapshots or order
 calls, and no mutation path—so it is safe beside the live runner. Do not loop
-it. `Not posted` is not zero, pending is excluded from finalized net, the
+it tightly or schedule it more frequently than the reviewed hourly wrapper.
+`Not posted` is not zero, pending is excluded from finalized net, the
 current ET day is partial, and trading still omits unbalanced/settled markets.
 
 `scripts/backup_ledger.py` runs nightly from cron at 04:17 UTC and keeps 30

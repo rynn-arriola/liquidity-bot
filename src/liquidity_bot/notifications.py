@@ -47,6 +47,7 @@ class DiscordNotifier:
         self._status_url = secrets.discord_webhook_url
         self._error_url = (secrets.discord_errors_webhook_url
                            or secrets.discord_webhook_url)
+        self._rewards_url = secrets.discord_rewards_webhook_url
         self._transport = transport
 
     @staticmethod
@@ -77,10 +78,14 @@ class DiscordNotifier:
         # moved them into the status channel, which is meant for reporting.
         # Operational noise belongs in the errors channel whether or not it
         # needs a human right now.
-        if channel not in (None, "status", "errors"):
-            raise ValueError("channel must be 'status' or 'errors'")
-        to_errors = (critical if channel is None else channel == "errors")
-        url = self._error_url if to_errors else self._status_url
+        if channel not in (None, "status", "errors", "rewards"):
+            raise ValueError(
+                "channel must be 'status', 'errors', or 'rewards'")
+        if channel == "rewards":
+            url = self._rewards_url
+        else:
+            to_errors = (critical if channel is None else channel == "errors")
+            url = self._error_url if to_errors else self._status_url
         if not url:
             return NotificationResult(False, "webhook_not_configured")
         if not isinstance(payload, Mapping) or not payload:

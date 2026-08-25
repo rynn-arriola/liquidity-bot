@@ -7,7 +7,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from scripts.reward_table import render_table, resting_side_hours_by_day
+from scripts.reward_table import (
+    discord_message, render_table, resting_side_hours_by_day)
 
 
 class RewardTableTests(unittest.TestCase):
@@ -74,6 +75,47 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
         self.assertIn("| 2026-08-25* | $-10.00 | Not posted | Not posted | Pending", output)
         self.assertIn("Finalized net (complete reward days only): **$+5.00**", output)
+
+    def test_discord_table_is_complete_and_within_the_message_limit(self):
+        days = [date(2026, 8, 19 + offset) for offset in range(7)]
+        table = render_table(
+            days,
+            pnl={day.isoformat(): Decimal("-10") for day in days},
+            paid={day.isoformat(): Decimal("15") for day in days},
+            pending={},
+            resting_hours={day.isoformat(): 24.0 for day in days},
+            elapsed_hours={day.isoformat(): 24.0 for day in days},
+            today=date(2026, 8, 25),
+        )
+
+        message = discord_message(
+            table,
+            generated_at=datetime(2026, 8, 25, 17, tzinfo=timezone.utc),
+            unbalanced_markets=30)
+
+        self.assertLessEqual(len(message), 2000)
+        self.assertIn("7-Day Reward Table (ET)", message)
+        self.assertIn("2026-08-19", message)
+        self.assertIn("2026-08-25*", message)
+        self.assertIn("Pending reward is never counted", message)
+        self.assertIn("Generated 2026-08-25 13:00 EDT", message)
+        self.assertIn("30 unbalanced market(s)", message)
+
+    def test_discord_post_refuses_to_silently_truncate_a_table(self):
+        with self.assertRaisesRegex(ValueError, "2,000-character cap"):
+            discord_message("x" * 2000)
+
+    def test_hourly_wrapper_is_bounded_locked_and_lower_priority(self):
+        wrapper = (
+            Path(__file__).resolve().parents[1]
+            / "scripts" / "post_hourly_reward_table.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("flock -n", wrapper)
+        self.assertIn("timeout 90s", wrapper)
+        self.assertIn("nice -n 10", wrapper)
+        self.assertIn("--days 7 --post-discord --quiet", wrapper)
+        self.assertNotIn("discord.com/api/webhooks", wrapper)
 
 
 if __name__ == "__main__":

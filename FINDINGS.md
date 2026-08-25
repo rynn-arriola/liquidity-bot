@@ -20,6 +20,32 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## An hourly seven-day reward post is negligible and isolated from trading
+
+Established 2026-08-25 by timing the existing report on the stopped live
+server against its 73 MB commissioning ledger. One complete seven-day run took
+2.86 seconds elapsed, used 28% of one CPU, peaked at 45,516 KB RSS and emitted
+1,162 bytes. It made the documented single account-wide earnings request and
+opened the ledger read-only.
+
+The prepared hourly wrapper is a separate process with `nice -n 10`, a
+nonblocking `flock` and a 90-second timeout. At minute 7 each hour this adds one
+request per hour (0.00028 requests/second averaged), while the runner itself
+already samples earnings every 15 minutes. It does not use the runner's event
+loop, WebSockets, market selector, 20-slot scheduler or order API. The only
+shared resource is a short read-only SQLite scan; WAL permits it beside the
+writer. At the measured size this should not materially slow quoting.
+
+The destination is a third, dedicated secret named
+`DISCORD_REWARDS_WEBHOOK_URL`, loaded from the existing server-only shared
+credentials file. The URL is never accepted as a command-line argument, shown
+in repr, written to a log or committed. This feature is prepared locally and
+has not yet been deployed, scheduled or manually posted. All 609 tests pass;
+three deliberate mutations proved dedicated routing, full-message refusal and
+the non-overlap lock are test-sensitive.
+
+---
+
 ## ET risk-day cutover must preserve the UTC baseline already in force
 
 Established 2026-08-25 from the live read-only ledger and the loss-stop call
@@ -133,8 +159,9 @@ was stopped or restarted. The reporting-only deployment deliberately left
 Verification: all 600 local tests pass, the six focused report/daily-P&L tests
 also pass on the server, and deliberate mutations proved that the tests reject
 both counting incomplete rewards in finalized net and double-counting
-overlapping resting intervals. Do not loop the command: one manual run is the
-bounded, verified operating pattern.
+overlapping resting intervals. That acceptance established one manual run as
+safe; the newer measured finding above extends the bounded operating pattern to
+one locked run per hour. It does not authorize a tight loop.
 
 ---
 

@@ -205,13 +205,42 @@ def render_table(
     return "\n".join(lines)
 
 
+def discord_message(
+    table: str, *, generated_at: datetime | None = None,
+    unbalanced_markets: int = 0,
+) -> str:
+    """Render the seven-day report legibly within Discord's 2,000-char cap."""
+
+    at = generated_at or datetime.now(timezone.utc)
+    if at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError("generated_at must be timezone-aware")
+    stamp = at.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M %Z")
+    clean = str(table).strip().replace("**", "")
+    message = (
+        "**Liquidity Bot — 7-Day Reward Table (ET)**\n"
+        f"Generated {stamp}\n```text\n{clean}\n```\n"
+        f"Balanced-leg ledger P&L; {unbalanced_markets} unbalanced market(s) "
+        "and settled exits may be missing.")
+    if len(message) > 2000:
+        raise ValueError("Discord reward table exceeds the 2,000-character cap")
+    return message
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
     parser.add_argument("--days", type=int, default=7)
+    parser.add_argument(
+        "--post-discord", action="store_true",
+        help="post to the dedicated rewards webhook")
+    parser.add_argument(
+        "--quiet", action="store_true",
+        help="suppress the table on stdout; requires --post-discord")
     args = parser.parse_args()
     if args.days <= 0:
         parser.error("--days must be positive")
+    if args.quiet and not args.post_discord:
+        parser.error("--quiet requires --post-discord")
 
     now = datetime.now(timezone.utc)
     today = date.fromisoformat(reward_day(now))
@@ -221,14 +250,31 @@ async def main() -> int:
     paid, pending = await reward_by_day()
     resting, elapsed = resting_side_hours_by_day(
         args.db, days, now=now)
-    print(render_table(
+    table = render_table(
         days, pnl=pnl, paid=paid, pending=pending,
-        resting_hours=resting, elapsed_hours=elapsed, today=today))
-    print()
-    print("Trading is balanced-leg ledger P&L and excludes "
-          f"{unbalanced} unbalanced market(s); settled exits can be missing.")
-    print("Resting side-hours merge overlap per market/side and may exceed 24 "
-          "when several sides rest simultaneously.")
+        resting_hours=resting, elapsed_hours=elapsed, today=today)
+    if not args.quiet:
+        print(table)
+        print()
+        print("Trading is balanced-leg ledger P&L and excludes "
+              f"{unbalanced} unbalanced market(s); settled exits can be missing.")
+        print("Resting side-hours merge overlap per market/side and may exceed 24 "
+              "when several sides rest simultaneously.")
+    if args.post_discord:
+        from liquidity_bot.notifications import DiscordNotifier
+        from liquidity_bot.runtime_secrets import load_runtime_secrets
+
+        notifier = DiscordNotifier(load_runtime_secrets())
+        result = await notifier.send_async(
+            discord_message(
+                table, generated_at=now,
+                unbalanced_markets=unbalanced),
+            channel="rewards")
+        if not result.sent:
+            print(f"reward table Discord post failed: {result.reason}",
+                  file=sys.stderr)
+            return 1
+        print("reward table posted to dedicated Discord webhook")
     return 0
 
 

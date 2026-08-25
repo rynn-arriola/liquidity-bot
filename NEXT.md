@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## LOCAL COMPLETE, BOT STOPPED: maintenance-aware automatic recovery
+## DEPLOYED AND RESTARTED: maintenance-aware automatic recovery
 
 The 2026-08-25 maintenance incident exhausted the 12-attempt both-stream
 recovery at 11:14:26Z. Shutdown could not prove the stale ledger flat, so the
@@ -33,10 +33,18 @@ binds 20 slugs, drives maintenance through the private path and proves the same
 Local verification: **581 tests pass** plus three deliberate mutation checks
 (failed health must reset the stable streak; response-contract errors must not
 be classified as maintenance; recovered private subscription must retain all
-20 slots). The bot remains stopped. Next authorized steps are review the final
-diff, commit/push, copy and hash-verify changed runtime files, run the full
-suite on the droplet, then restart and verify the markers above before accepting
-new orders.
+20 slots). Commit `feba761` was pushed; all eight deployed file hashes matched,
+and the droplet's own environment passed all 581 tests in 54.764 seconds. The
+size-10 supervisor/runner restarted at 12:18:55Z/12:18:56Z on 2026-08-25.
+
+Initial live acceptance found two selected candidates had become non-open
+during preflight, so the safe startup drop bound 18 rather than pretending the
+slate still held 20. The unchanged capacity remains 20. By 12:26:15Z the run
+had 37 placements across 17 markets and 23 working orders across 12 markets,
+all at quantity 10, with zero unresolved intents, zero `UNKNOWN_ABSENT` rows
+and zero positions. No maintenance, runner-failure or risk-stop marker appeared.
+The maintenance branch itself remains for acceptance on the next natural venue
+outage; do not induce one on the funded account.
 
 ## DEPLOYED AND RESTARTED: dual-stream recovery no longer waits on one absent cancel
 

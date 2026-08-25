@@ -2545,7 +2545,7 @@ fast failures consumed the supervisor bound, so a process launched during the
 same outage also stopped permanently. Retrying mutations harder cannot repair
 a venue outage and risks duplicate/ambiguous state.
 
-**Fix (local, not deployed).** Sustained positively-classified transport,
+**Fix (deployed as `feba761`).** Sustained positively-classified transport,
 WebSocket-disconnect and HTTP-5xx failures now transition the same runner to a
 dormant maintenance coordinator. It uses read-only complete authenticated open
 order, position and balance probes. Three consecutive passes at one-minute
@@ -2573,3 +2573,11 @@ subscribing only ten of twenty recovered markets.
 **Cost.** The incident stopped quoting until operator intervention. Trading
 loss is not attributed here: the operator manually cancelled and flattened,
 and the post-stop ledger was stale rather than venue truth.
+
+**Deployment acceptance.** All eight hashes matched and the droplet passed all
+581 tests in 54.764 seconds before restart. The size-10 runner started at
+12:18:56Z. By 12:26:15Z it had 37 placements across 17 markets, 23 working
+orders all at quantity 10, zero unresolved intents, zero unknown-absent orders
+and zero positions. Two candidates had become non-open during preflight, so
+startup safely bound 18 under the unchanged 20-market capacity. No new outage
+was induced; the maintenance transition itself awaits natural acceptance.

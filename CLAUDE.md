@@ -8,17 +8,20 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **Bot is STOPPED by operator instruction. Do not restart before the current
-  maintenance-recovery change is pushed, deployed, production-tested and
-  hash-verified.** The last runner stopped at 2026-08-25T11:14:26Z with
+- **Bot is RUNNING on `feba761` since 2026-08-25T12:18:56Z at quote size 10.**
+  The previous runner stopped at 2026-08-25T11:14:26Z with
   `runner_failure:bound_stream_recovery_exhausted`, `flat:false`, after
   `GET /v1/orders/open` returned `InternalServerError` during Polymarket US
   maintenance. The operator subsequently cancelled and flattened at the
-  venue; the local ledger remains a stale incident record, not venue truth.
-  Local code now has a maintenance-aware dormant health gate for startup and
-  all business streams. All 581 tests and three deliberate mutation checks
-  pass locally. It is not committed or deployed yet. See the newest NEXT,
-  FINDINGS, BUGFIXES and invariant 69 entries.
+  venue. The deployed runner now has a maintenance-aware dormant health gate
+  for startup and all business streams. All eight hashes matched and all 581
+  tests passed locally and on the droplet; three deliberate mutants were
+  killed. Startup safely dropped two candidates that had become non-open,
+  so it initially bound 18 with unchanged capacity 20. Acceptance at 12:26:15Z
+  had 37 placements across 17 markets, 23 working orders all at size 10, and
+  zero position, unresolved or unknown-absent state. The maintenance branch
+  awaits a natural outage; do not induce one. See the newest NEXT, FINDINGS,
+  BUGFIXES and invariant 69 entries.
 
 - **The dual-stream recovery repair is deployed as `bec8a83`.**
   At 21:31Z a top-up bind closed both streams, then owned GET-by-ID NotFound

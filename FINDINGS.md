@@ -5328,3 +5328,20 @@ attempt depth, exact authenticated endpoint errors, the subsequent normal
 stream-recovery marker, and distinct `[action]` markets. Verify no create in
 the pause, no absence treated as cancellation, and the ordered 20-market active
 set is unchanged before versus after recovery.”**
+
+### Production deployment and initial acceptance
+
+Commit `feba761` was pushed and all eight deployed hashes matched. The complete
+droplet suite passed 581 tests in 54.764 seconds while both runner and
+supervisor remained stopped. The existing size-10 supervisor/runner then
+started at 12:18:55Z/12:18:56Z on 2026-08-25.
+
+Two selected candidates became non-open during preflight and were explicitly
+dropped, leaving 18 initially bound markets under the unchanged 20-slot cap.
+This is candidate lifecycle, not a scheduler-cap change. At 12:26:15Z the new
+session had created 37 placements across 17 distinct markets and held 23
+working orders across 12 markets, every working quantity exactly 10. Unresolved
+intents, `UNKNOWN_ABSENT` orders and nonzero positions were all zero. No
+maintenance-pause, runner-failure or risk-stop marker appeared. The new outage
+branch therefore remains pending natural live acceptance; forcing maintenance
+or disconnecting a funded bot solely to exercise it is not justified.

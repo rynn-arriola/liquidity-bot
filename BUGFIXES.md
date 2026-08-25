@@ -42,12 +42,16 @@ while selector evidence still showed 96 viable alternatives.
 max_markets`, and lifecycle release sees only past-kickoff, flat markets. A
 pregame market whose reward period has ended satisfies neither condition, so
 it continues consuming one of the 20 slots. Full rotation remains blocked by
-healthy resting orders elsewhere.
+healthy resting orders elsewhere. Selection validates `ends_at` only at the
+selection instant; reward projection uses game kickoff as the day-of period
+end and final ranking has no explicit reward-time-remaining key. It can
+therefore rank a program with minutes left as though it pays until kickoff.
 
 **Status.** Diagnosed only; no code or process change was made during the
 check. A fix must distinguish a positively ended reward period from transient
 missing reward metadata, and may release only a flat, order-free and
-unresolved-free owner. See the newest FINDINGS entry for the exact signature.
+unresolved-free owner. It must also project/rank against an explicit earlier
+reward end. See the newest FINDINGS entry for the exact signature.
 
 ### FIXED AND DEPLOYED — startup validation could leave free slots invisible to top-up
 

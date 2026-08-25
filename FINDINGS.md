@@ -48,6 +48,15 @@ counts as bound, so it can occupy a slot until kickoff while viable rewarded
 alternatives remain outside the set. Full rotation still cannot normally run
 because resting orders make `_safe_to_scan()` false.
 
+The selector also explains why ten soon-ending rows could win the original
+ranking. `select_applicable_period` checks an incentive's explicit `starts_at`
+and `ends_at`, so each row was genuinely active at 12:54Z. But
+`project_order_reward` then defines the day-of projection end as game kickoff,
+and `_opportunity_key` contains no explicit reward-time-remaining key. Thus a
+program ending at 13:00Z can be projected and ranked as though its pool remains
+available until kickoff. The lifecycle gap keeps it bound after that optimistic
+selection assumption becomes visibly false.
+
 Detection signature:
 
 ```text
@@ -66,6 +75,9 @@ single `no_incentive` observation must not cause immediate churn. Any future
 implementation should require fresh reward metadata and a stable terminal
 reward-period condition, release only flat/order-free/unresolved-free owners,
 keep the near-flatten-deadline guard, and cap additions at the exact free count.
+Selection should also project against the effective reward end
+`min(game_start, incentive.ends_at)` when an explicit end exists, rather than
+only repairing the slot after expiry.
 
 ---
 

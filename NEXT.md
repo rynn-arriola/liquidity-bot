@@ -17,6 +17,12 @@ near-flatten-deadline guard. Add regressions for transient reward API omission,
 period-boundary stability, held inventory, working/unresolved ownership, no
 replacement, exact cap and failed stream bind before deployment.
 
+Also correct selection-time value: `select_applicable_period` honors explicit
+`ends_at`, but the 30-second reward projection assumes day-of ends at kickoff
+and the final sort has no remaining-reward-time key. Use the effective end
+`min(game_start, ends_at)` in projection/ranking so a program with five minutes
+left cannot outrank one that remains available for hours on a false duration.
+
 No code, configuration, process or venue mutation was made during diagnosis.
 
 ## DEPLOYED AND RESTARTED: refill capacity rejected during startup validation

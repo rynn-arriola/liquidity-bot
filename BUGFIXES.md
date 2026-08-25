@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### PREPARED, NOT DEPLOYED — LIVE Discord score reset on every process run
+### DEPLOYED ON DISK, NEXT RESTART — LIVE Discord score reset on every process run
 
 **Symptom.** The LIVE summary reported raw `Score-seconds` accumulated only by
 the current process. A restart reset the number to zero, and crossing ET
@@ -59,8 +59,14 @@ proves the summary still sends, the increment remains pending for retry and
 the error is recorded without escaping into the runner or shutdown. This
 reporting-only change killed two deliberate mutations: skipping the durable
 add failed the midnight/restart test, and allowing a score-write exception to
-escape failed the shutdown-isolation test. It has not been pushed, deployed or
-restarted.
+escape failed the shutdown-isolation test. The running bot was not restarted.
+
+**Deployment acceptance.** Source commit `b052e62` is pushed and deployed on
+disk. All changed-file and complete source/test hashes matched, and all 618
+server tests passed under reduced CPU priority in 72.378 seconds. Supervisor
+PID `1885250` and runner PID `1885453` remained unchanged. The current process
+therefore still runs its previously loaded code; this fix activates on the
+next restart.
 
 ---
 

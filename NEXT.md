@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## PREPARED LOCALLY: restart-persistent ET-day score-hours in LIVE Discord
+## DEPLOYED ON DISK, NEXT RESTART: restart-persistent ET-day score-hours
 
 LIVE Discord now renders `Score-hours today` from a durable ET calendar-day
 total instead of displaying the current process's raw score-seconds. Accrual
@@ -10,13 +10,16 @@ and continues across restarts. SHADOW is still run-scoped and says so.
 
 All 618 tests pass, including a forced persistence failure that remains
 reporting-only and cannot interrupt shutdown. No order, selection, 20-slot,
-risk, REST or WebSocket path was added or changed. This is not pushed or
-deployed and the bot was not restarted. The first activation date will be
-partial because prior processes did not store daily score; complete days begin
-at the following ET midnight. Aggregate score-hours sum concurrent eligible
-sides and can exceed 24. A hard kill can omit only the increment since the
-preceding five-minute flush. Deliberate mutations that removed persistence or
-allowed its exception to escape were both detected by the new tests.
+risk, REST or WebSocket path was added or changed. Source commit `b052e62` is
+pushed and deployed on disk. All source/test hashes matched and all 618 server
+tests passed at reduced priority in 72.378 seconds. The bot was not restarted:
+supervisor PID `1885250` and runner PID `1885453` remained unchanged, so this
+activates on the next restart. The first activation date will be partial
+because prior processes did not store daily score; complete days begin at the
+following ET midnight. Aggregate score-hours sum concurrent eligible sides and
+can exceed 24. A hard kill can omit only the increment since the preceding
+five-minute flush. Deliberate mutations that removed persistence or allowed
+its exception to escape were both detected by the new tests.
 
 ---
 

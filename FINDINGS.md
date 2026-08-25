@@ -47,7 +47,11 @@ again. The change adds no venue request, WebSocket, order decision, scheduler
 gate or risk input. A forced score-write failure proves the summary still
 sends, the increment stays buffered for retry and shutdown cannot be stranded
 by this telemetry. It is prepared locally, passes all 618 tests, and has not
-been pushed, deployed or activated.
+been activated. Source commit `b052e62` is pushed and deployed on disk; all
+source/test hashes matched and all 618 reduced-priority server tests passed in
+72.378 seconds. The existing supervisor PID `1885250` and runner PID `1885453`
+were unchanged, so the running process still has the prior code loaded. The
+daily accounting becomes active only on the next restart.
 
 ---
 

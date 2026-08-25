@@ -113,6 +113,23 @@ python -B -m liquidity_bot.probe --slug MARKET-SLUG --earnings --stream-seconds 
 The `--size` argument is hypothetical and is used only to calculate reward
 score. The probe never submits it.
 
+## Seven-day reward table
+
+For one ET-dated table containing balanced-leg trading P&L, paid and pending
+liquidity reward, finalized net, and merged resting side-hours:
+
+```bash
+.venv/bin/python -B scripts/reward_table.py --days 7
+```
+
+The phrase **“run 7 day reward table”** means this exact command. The script
+opens `data/commissioning.db` read-only and makes exactly one account-wide
+`GET /v1/incentives/earnings` request. It performs no market discovery, book,
+order, position, balance or mutation calls. One report request is below the
+venue ceiling even beside the runner's conservative 4 request/second governor;
+do not loop the command. Pending and unposted reward are never counted as net,
+and the current ET day is marked partial.
+
 ## Prospective building-quote observations
 
 The commissioning ledger can retain a measurement-only snapshot for every

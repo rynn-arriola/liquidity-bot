@@ -312,6 +312,19 @@ account-wide; passing a market slug to `/v1/incentives/earnings` returns \$0 eve
 for markets that plainly earned. A missing day means either "not posted yet" or
 "earned nothing", and one reading cannot tell them apart — re-run a day later.
 
+**“Run 7 day reward table”** means execute:
+
+```bash
+.venv/bin/python -B scripts/reward_table.py --days 7
+```
+
+It combines ET-dated balanced-leg trading P&L, paid/pending venue reward and
+merged resting side-hours. It opens the ledger read-only and makes exactly one
+account-wide earnings request—no discovery, books, account snapshots or order
+calls, and no mutation path—so it is safe beside the live runner. Do not loop
+it. `Not posted` is not zero, pending is excluded from finalized net, the
+current ET day is partial, and trading still omits unbalanced/settled markets.
+
 `scripts/backup_ledger.py` runs nightly from cron at 04:17 UTC and keeps 30
 dated snapshots in `backups/daily/`. It uses SQLite's online backup API, so it
 is safe against the live writer — never `cp` a WAL database. **Those snapshots

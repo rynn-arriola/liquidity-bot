@@ -31,8 +31,22 @@ from fact rather than from the last thing someone remembers.
   all eight final hashes match and all 629 server tests pass in 77.579 seconds.
   The deployed dry run rendered account realized **-$44.73** against pair
   estimate **-$26.66**; its exact terms were opening 466.0899, current cash
-  421.3568, position basis 0 and non-trading cash 0. Supervisor `187359` and
-  runner `187549` were not restarted.
+  421.3568, position basis 0 and non-trading cash 0. That report deployment did
+  not restart the runner; the later operator-authorized restart described below
+  was for the already-deployed LIVE resting-hours correction.
+
+- **LIVE RESTARTED CLEANLY at 2026-08-26T01:29Z.** The pre-stop authenticated
+  gate proved venue orders 0, positions 0, ledger working/unresolved/absent all
+  0. Graceful shutdown ended with `operator_sigterm` and explicit `flat:true`;
+  a second post-stop venue/ledger gate remained all zero. The unchanged
+  `auto 10` start produced supervisor `2631716` / runner `2631877`. Startup
+  queue telemetry proved scope `markets=20`; by 01:33Z the ledger held 29
+  working orders across 19 active owners, zero unresolved and zero
+  `UNKNOWN_ABSENT`, with no position at the venue checkpoint. Nineteen quoted
+  owners does not mean nineteen slots: the queue scope is the slot proof and a
+  slot may temporarily have no authorized side. No new stream quarantine,
+  timeout or runner-failure marker appeared after the new-run queue marker.
+  This restart loaded the deployed LIVE `Resting side-hours` renderer.
 
 - **DEPLOYED AND ACTIVE — transactional top-up repair.** At
   21:04Z one incremental replacement committed its new active tuple and closed
@@ -52,7 +66,7 @@ from fact rather than from the last thing someone remembers.
   progressing; no new bound-stream/quarantine/timeout/runner-failure marker
   appeared. Observe the next natural top-up; do not induce one.
 
-- **PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART — LIVE must show resting side-hours, not
+- **PUSHED, DEPLOYED AND ACTIVE — LIVE shows resting side-hours, not
   reward-score hours.** The requested number was the `Resting side-hours`
   column from `scripts/reward_table.py`. At 22:06Z that exact calculation was
   416.65 hours / 23.01 average sides for the current ET day, while Discord
@@ -66,8 +80,8 @@ from fact rather than from the last thing someone remembers.
   tests pass. Source commit `39e8ddb` is pushed and deployed on disk, all 12
   file hashes match, and all 623 reduced-priority server tests passed in 74.516
   seconds. A deployed-code read rendered 422.21 current-day side-hours in 0.632
-  seconds. Supervisor `187359` / runner `187549` remained unchanged, so the
-  running process still has the old display until a future reviewed restart.
+  seconds. The flat-gated 01:29Z restart launched supervisor `2631716` / runner
+  `2631877`, so the running process has now loaded this correction.
 
 - **Historical 20-slot acceptance on reviewed commit `26b11b2`.** Before
   restart, all 15 changed

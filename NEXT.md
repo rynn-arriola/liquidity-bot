@@ -28,12 +28,13 @@ Production schema was checked read-only. Commits `b1fd50e` and `435a5e9` are
 pushed and deployed; all eight final hashes matched and all 629 production
 tests passed in 77.579 seconds. The acceptance read rendered account realized
 -$44.73 versus pair estimate -$26.66 from opening cash 466.0899, current cash
-421.3568, zero open basis and zero non-trading transfer. The next hourly process
-loads it automatically. Supervisor `187359` / runner `187549` were not restarted.
+421.3568, zero open basis and zero non-trading transfer. The hourly process
+loads it automatically. Its deployment did not require a runner restart; the
+later 01:29Z restart below was for already-deployed LIVE telemetry.
 
 ---
 
-## PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART: Discord uses seven-day-table resting hours
+## PUSHED, DEPLOYED AND ACTIVE: Discord uses seven-day-table resting hours
 
 The operator meant the `Resting side-hours` column from the seven-day reward
 table, not contract-weighted reward score divided by 3,600. A live read at
@@ -49,8 +50,14 @@ falls back to 0 without breaking summary or shutdown. All 623 local tests pass.
 Source commit `39e8ddb` is pushed and deployed; all 12 hashes matched and all
 623 reduced-priority server tests passed in 74.516 seconds. Deployed code read
 422.21 current-day side-hours from the production ledger in 0.632 seconds and
-rendered the correct label. Supervisor `187359` / runner `187549` remained
-unchanged, so the current runner has not loaded this correction.
+rendered the correct label. At 01:28:42Z the operator-authorized restart gate
+proved venue orders/positions and ledger working/unresolved/absent all zero.
+Graceful shutdown returned `flat:true`, and the 01:29:32Z post-stop gate remained
+clean. The unchanged `auto 10` start launched supervisor `2631716` / runner
+`2631877`, which has loaded this correction. Queue telemetry proved 20-market
+scope; by 01:33Z it held 29 working orders in 19 owners with zero unresolved or
+unknown-absent rows and no position at the venue checkpoint. Raw quoted-owner
+count is not slot count; a bound slot may temporarily have no authorized side.
 
 ---
 

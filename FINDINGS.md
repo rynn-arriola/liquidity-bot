@@ -20,6 +20,67 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The reward-table trading column understated the current ET-day realized loss
+
+Established 2026-08-25 at `2026-08-26T00:53:43Z` by reconciling the hourly
+reward table, durable risk baseline, ET-boundary fills, current venue cash and
+positions, and the bounded activity stream. This was read-only; the bot was not
+restarted.
+
+The webhook showed **-$24.40** for 2026-08-25. That is the documented
+balanced-leg ledger estimate, not complete realized account trading P&L. The
+account reconciliation at the same point was:
+
+```text
+legacy 00:00Z opening cash/equity                 478.6998
+00:00Z-04:00Z trading while flat at both ends    -12.6099
+reconstructed 00:00 ET opening cash              466.0899
+current venue cash                               414.5441
+cash change since ET midnight                    -51.5458
+venue basis of four current positions            +20.5614
+realized trading since ET midnight               -30.9844
+reward-table balanced-leg estimate               -24.4000
+understatement                                     -6.5844
+```
+
+The bounded activity walk reached before the ET boundary in three 100-row
+pages and found no completed reward, deposit, withdrawal or other transfer
+after 04:00Z. The account was flat at 04:00Z, so reconstructing that boundary
+from the guarded legacy baseline does not carry an unmarked position across
+the cut. The four current positions and venue-reported bases were:
+
+```text
+barser-meraur   -10.00   7.0700
+didand-kozden   +10.00   6.3700
+plapav-kovole  +10.00   6.2700
+pontym-abaspa   - 1.29   0.8514
+total basis             20.5614
+```
+
+Two one-sided positions resolved during the ET day. `mars-yurart` lost 5.90
+and `marand-lipole` lost 1.64, **$7.54 total**. They have no balancing exit fill
+and are therefore excluded by `trading_by_day`, which is the primary reason
+the webhook is too optimistic. Its footer already says “balanced-leg only” and
+“settled exits may be missing,” but the heading `Trading P&L` is easy to read as
+the complete loss. The table also reports 35 historically unbalanced markets;
+that count is not a statement that all 35 belong to the current day.
+
+The venue trade payload also positively resolves the current price-frame
+question: a maker `BUY_SHORT` recorded at `lastPx=0.29` carried trade
+`cost=7.07` for ten contracts after a three-cent rebate, i.e.
+`10 * (1 - 0.29) - 0.03`. The reward table's `1 - price` conversion is correct.
+Any report that treats BUY_SHORT cost as `qty * price` is wrong for these live
+fills.
+
+No code change was made from this diagnosis. If the webhook is intended to
+answer “how much trading money did we lose today,” it needs a separately
+labeled account-realized figure based on ET opening cash, current settled cash
+and current position basis. Historical balanced-pair rows should remain
+explicitly labeled estimates unless settlement cash and daily account
+boundaries are durably available for every day.
+
+---
+
 ## The requested "hours" are resting side-hours, not reward-score hours
 
 Established 2026-08-25 by comparing the running Discord value with the exact

@@ -8,6 +8,17 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
+- **OPEN — the reward webhook's `Trading P&L` is a balanced-pair estimate, not
+  complete daily realized loss.** At 2026-08-26T00:53Z it showed -$24.40 for
+  the current ET day, while venue cash plus exact basis of four open positions
+  proved -$30.98 realized. Cash was down -$51.55; $20.56 remained position
+  basis. No reward/funding transfer occurred after 04:00Z. Two one-sided
+  positions resolved for -$7.54 and are omitted by the balanced-leg report,
+  explaining most of the $6.58 understatement. The current BUY_SHORT wire
+  frame is positively proven: ten at recorded 0.29 cost $7.07 after rebate, so
+  economic cost is `qty * (1 - price)`. No code or bot state changed. See the
+  newest FINDINGS/NEXT entry before changing the webhook.
+
 - **DEPLOYED AND ACTIVE — transactional top-up repair.** At
   21:04Z one incremental replacement committed its new active tuple and closed
   both healthy streams before strict REST proof. Three owned order reads then

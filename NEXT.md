@@ -1,5 +1,25 @@
 # Next session — outstanding fixes
 
+## OPEN: reward webhook `Trading P&L` is not complete realized daily loss
+
+At 2026-08-26T00:53Z the webhook showed -$24.40 for the current ET day, while
+venue cash plus the exact basis of four open positions proved realized trading
+of **-$30.98**. Cash was down -$51.55 and $20.56 was still position basis. No
+reward or funding transfer occurred after the ET boundary. Two one-sided
+positions resolved for -$7.54 and were excluded by the balanced-leg report,
+which explains most of the $6.58 understatement.
+
+Do not silently replace all seven historical rows with a number they cannot
+support. The appropriate next design is a clearly separate current-day
+`Account realized` figure using ET opening cash, current cash and venue position
+basis, while retaining and relabeling historical balanced-pair estimates. The
+first ET-day risk row is a guarded legacy 00:00Z cutover; for 2026-08-25 only,
+the bot was proven flat at 04:00Z and the intervening -$12.6099 reconstructs an
+ET opening of $466.0899. Later days should have native ET baselines. Any added
+hourly reads must remain bounded and isolated from trading.
+
+---
+
 ## PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART: Discord uses seven-day-table resting hours
 
 The operator meant the `Resting side-hours` column from the seven-day reward

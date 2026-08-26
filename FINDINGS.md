@@ -69,6 +69,15 @@ including the audited legacy-boundary and exact fresh-boundary startup cases.
 The running process is unchanged until its next restart; deployment alone
 cannot alter code already loaded in memory.
 
+Commit `325f64b` was pushed and deployed without a restart. All 13 changed
+files were byte-identical and all 634 tests passed in the server's Python 3.12
+environment. The deployed report printed -$44.52 trading and +$128.38 finalized
+net for August 25. Supervisor 2631716 and runner 2631877 retained their original
+01:29 UTC start times through deployment, proving no reload occurred. The
+operator then requested a stop; graceful shutdown completed at 02:39:34 UTC
+with `operator_sigterm`, `flat=true`, and both processes stopped. The next start
+will load the LIVE correction.
+
 ---
 
 ## The reward-table trading column understated the current ET-day realized loss

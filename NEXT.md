@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## FIXED AND REVIEWED; DEPLOYMENT PENDING: non-trading cash cannot mask session loss
+## PUSHED AND DEPLOYED; LIVE ACTIVATION NEXT RESTART: non-trading cash cannot mask session loss
 
 At 2026-08-26T02:10Z the authoritative current-day result was -$44.5193 from
 466.0899 opening cash, 774.8506 current cash, +353.2800 completed non-trading
@@ -21,6 +21,14 @@ regressions.
 Deployment intentionally does not restart the bot. The hourly report reads the
 new script on its next run; the LIVE safety correction activates only on the
 next operator-authorized restart.
+
+Commit `325f64b` is pushed and deployed. All 13 changed files matched, all 634
+tests passed on the server, and a production report printed -$44.52 trading and
++$128.38 finalized net for August 25. Supervisor/runner 2631716/2631877 kept
+their original 01:29 UTC start times through deployment, proving no restart
+occurred. The operator then requested a graceful stop; it completed at
+02:39:34 UTC with `flat=true`, and both processes are stopped. The next start
+will activate the LIVE correction.
 
 ---
 

@@ -8,7 +8,7 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **FIXED AND REVIEWED; DEPLOY/ACTIVATION SPLIT — reward cash cannot mask the
+- **PUSHED AND DEPLOYED; LIVE ACTIVATION NEXT RESTART — reward cash cannot mask the
   session stop, and today's row uses account truth.** At 2026-08-26T02:10Z the
   account proved opening cash 466.0899, current cash 774.8506, completed
   non-trading cash +353.2800, zero open basis and trading -44.5193. The table
@@ -21,6 +21,11 @@ from fact rather than from the last thing someone remembers.
   The hourly report becomes active from deployed script files without a bot
   restart. LIVE code is active only on the next restart; the operator explicitly
   requested no restart in this deployment.
+  Commit `325f64b` is the deployed source marker; all 13 changed files matched
+  and all 634 tests passed on the server. Runner 2631877 kept its original
+  01:29:39 UTC start through deployment, then an operator-requested graceful
+  shutdown completed at 02:39:34 UTC with `flat=true`. Both supervisor and
+  runner are stopped. The next start will load the runtime correction.
 
 - **PUSHED, DEPLOYED AND ACTIVE; NO BOT RESTART — the reward webhook now separates
   current account-realized trading from historical pair estimates.** The new

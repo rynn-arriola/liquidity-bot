@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED AND REVIEWED; DEPLOYMENT PENDING — reward credits masked the $80 session-loss sensor and today's table net
+### FIXED, PUSHED AND DEPLOYED; LIVE ACTIVATION NEXT RESTART — reward credits masked the $80 session-loss sensor and today's table net
 
 **Symptom.** The August 25 table row showed -$26.41 while the separately
 labeled account result proved -$44.52. More seriously, $353.28 of completed
@@ -63,6 +63,14 @@ All 634 tests pass, including the audited legacy-boundary and exact fresh-
 boundary startup regressions. The bot is intentionally not restarted; the LIVE correction activates
 only on the next restart, while the separate hourly reporter reads deployed
 script code on its next run.
+
+Commit `325f64b` was pushed and deployed without restarting. All 13 changed
+files matched byte-for-byte, and the server's Python 3.12 environment passed
+all 634 tests. A server report then printed August 25 trading -$44.52 and
+finalized net +$128.38. Supervisor/runner PIDs remained 2631716/2631877 with
+their original 01:29 UTC start times through deployment. At the operator's
+later request, graceful shutdown completed at 02:39:34 UTC with
+`stop_reason=operator_sigterm` and `flat=true`; neither process remains.
 
 ---
 

@@ -121,21 +121,26 @@ score. The probe never submits it.
 
 ## Seven-day reward table
 
-For one ET-dated table containing balanced-leg trading P&L, paid and pending
-liquidity reward, finalized net, and merged resting side-hours:
+For one ET-dated table containing current account-realized trading, historical
+balanced-pair estimates, paid and pending liquidity reward, finalized net, and
+merged resting side-hours:
 
 ```bash
 .venv/bin/python -B scripts/reward_table.py --days 7
 ```
 
 The phrase **“run 7 day reward table”** means this exact command. The script
-opens `data/commissioning.db` read-only and makes exactly one account-wide
-`GET /v1/incentives/earnings` request. It performs no market discovery, book,
-order, position, balance or mutation calls. One report request is below the
-venue ceiling even beside the runner's conservative 4 request/second governor;
-do not tight-loop it or schedule it more frequently than hourly. Pending and
-unposted reward are never counted as net, and the current ET day is marked
-partial.
+opens `data/commissioning.db` read-only. It makes one earnings request plus a
+bounded account snapshot for `Account realized today (ET)`: two matching
+balance reads around a complete position read and no more than four cash-only
+activity pages. These calls share a separate 1 request/second limiter. The
+account figure subtracts completed rewards/deposits/other non-trading cash and
+adds current venue position basis; if the boundary or snapshot is not proved,
+it displays `Unavailable`. Historical `Pair est.` rows keep the balanced-leg
+ledger method and can omit settled exits. The script performs no market
+discovery, book, order or mutation call. Do not tight-loop it or schedule it
+more frequently than hourly. Pending and unposted reward are never counted as
+net, and the current ET day is marked partial.
 
 The server can post the same table hourly to a dedicated Discord channel with
 `scripts/post_hourly_reward_table.sh`. The wrapper uses a nonblocking file lock,

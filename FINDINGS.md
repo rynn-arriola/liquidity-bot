@@ -72,12 +72,40 @@ question: a maker `BUY_SHORT` recorded at `lastPx=0.29` carried trade
 Any report that treats BUY_SHORT cost as `qty * price` is wrong for these live
 fills.
 
-No code change was made from this diagnosis. If the webhook is intended to
-answer “how much trading money did we lose today,” it needs a separately
-labeled account-realized figure based on ET opening cash, current settled cash
-and current position basis. Historical balanced-pair rows should remain
-explicitly labeled estimates unless settlement cash and daily account
-boundaries are durably available for every day.
+The report fix keeps those historical rows but labels them `Pair est.` and adds
+a separate `Account realized today (ET)` value:
+
+```text
+current settled cash
+- ET opening cash
+- completed non-trading cash received (withdrawals have negative sign)
++ exact venue basis of every open position
+```
+
+The account figure is deliberately fail-closed. Two equal balance reads must
+bracket a complete position snapshot. Every nonzero position must have a
+nonnegative venue basis. The current ET risk baseline must be native and within
+two minutes of midnight, except for the single audited 2026-08-25 legacy
+correction whose stored `478.6998` value must match exactly before `466.0899`
+is used. A cash-only activity walk requests the five deposit, withdrawal,
+referral and transfer types newest-first, stops only at explicit EOF or the ET
+boundary, and is capped at four pages. Completed unknown transfers, malformed
+rows, cursor problems, a moving balance or an ET rollover make the value
+`Unavailable`; none is treated as zero.
+
+At implementation review, two bounded production schema reads confirmed that
+the venue honors the cash-type filter and returns `ACTIVITY_TYPE_TRANSFER` with
+top-level and transaction-level `amount`, `status`, `description`,
+`createTime`/`updateTime`. The newest cash row was the 2026-08-24 reward payout,
+already before the current ET boundary. The reporter shares one 1 request/sec
+limiter across earnings and all added reads. It is still a separate hourly,
+locked, timeout-bounded process and has no order resource or mutation method.
+
+Five focused edge-case tests cover reward-transfer subtraction and open basis,
+cash moving during either snapshot phase, bounded-window exhaustion and unknown
+completed transfers. All 628 tests pass. Reversing transfer subtraction made the focused
+result `-5` instead of `-25` and failed its regression, then the correct code
+was restored and the focused suite passed again.
 
 ---
 

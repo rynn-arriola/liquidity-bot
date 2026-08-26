@@ -87,7 +87,7 @@ def trading_by_day(db: str, since: str) -> tuple[dict, dict, int]:
     return pnl, pairs, unbalanced
 
 
-async def reward_by_day() -> tuple[dict, dict]:
+async def reward_by_day(gateway=None) -> tuple[dict, dict]:
     """Returns (paid_by_day, pending_by_day).
 
     Pending is returned, not discarded, because a day can post PARTIALLY -- and
@@ -104,10 +104,11 @@ async def reward_by_day() -> tuple[dict, dict]:
 
     # Keep the venue SDK dependency out of module import so the pure ledger
     # bucketing path remains testable without live-client packages installed.
-    from liquidity_bot.adapters import AsyncReadOnlyGateway
-    from liquidity_bot.probe import client_from_environment
+    if gateway is None:
+        from liquidity_bot.adapters import AsyncReadOnlyGateway
+        from liquidity_bot.probe import client_from_environment
 
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+        gateway = AsyncReadOnlyGateway(client_from_environment())
     rows = await gateway.fetch_earnings(program_type="liquidityProgram")
     paid: dict = defaultdict(Decimal)
     pending: dict = defaultdict(Decimal)

@@ -8,16 +8,23 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **OPEN — the reward webhook's `Trading P&L` is a balanced-pair estimate, not
-  complete daily realized loss.** At 2026-08-26T00:53Z it showed -$24.40 for
-  the current ET day, while venue cash plus exact basis of four open positions
-  proved -$30.98 realized. Cash was down -$51.55; $20.56 remained position
-  basis. No reward/funding transfer occurred after 04:00Z. Two one-sided
-  positions resolved for -$7.54 and are omitted by the balanced-leg report,
-  explaining most of the $6.58 understatement. The current BUY_SHORT wire
-  frame is positively proven: ten at recorded 0.29 cost $7.07 after rebate, so
-  economic cost is `qty * (1 - price)`. No code or bot state changed. See the
-  newest FINDINGS/NEXT entry before changing the webhook.
+- **FIXED LOCALLY; NO BOT RESTART REQUIRED — the reward webhook now separates
+  current account-realized trading from historical pair estimates.** The new
+  `Account realized today (ET)` is current settled cash minus the ET opening
+  cash, minus completed non-trading cash changes, plus exact venue basis of
+  every open position. Two equal balance reads bracket the complete position
+  snapshot; any cash movement, missing basis, stale/non-boundary baseline,
+  unknown transfer, malformed pagination, day rollover, or four-page cash
+  window exhaustion prints `Unavailable` instead of a guess. Cash activities
+  are restricted to five non-trading types and every report request shares a
+  separate 1 request/second limiter. The seven historical rows and finalized
+  nets keep their balanced-pair calculation but are now labeled `Pair est.`.
+  The one legacy 2026-08-25 boundary uses only the exact audited stored/corrected
+  pair `478.6998 -> 466.0899`; later days require a native ET baseline created
+  within two minutes of midnight. Production schema reads confirmed the
+  filtered transfer shape. Five new edge-case tests, 628 full-suite tests and
+  a killed transfer-sign mutant pass. This changes only the separate hourly
+  reporter; do not restart the bot for it.
 
 - **DEPLOYED AND ACTIVE — transactional top-up repair.** At
   21:04Z one incremental replacement committed its new active tuple and closed

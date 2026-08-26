@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One daily table: trading P&L, venue reward, and resting side-hours.
 
-Read-only. The command makes one account-wide liquidity-earnings request and
-reads the commissioning ledger in SQLite read-only mode. It never places,
-cancels, modifies, or reprices an order.
+Read-only. The command makes bounded account-wide earnings, cash-activity,
+balance and position reads and opens the commissioning ledger in SQLite
+read-only mode. It never places, cancels, modifies, or reprices an order.
 
     .venv/bin/python -B scripts/reward_table.py --days 7
 
@@ -18,18 +18,340 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
 import sys
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa: E402
+from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
+from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.errors import AdapterError  # noqa: E402
+from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK, reward_day  # noqa: E402
 from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
+
+
+ACCOUNT_ACTIVITY_MAX_PAGES = 4
+ACCOUNT_REPORT_RATE_PER_SECOND = 1.0
+BASELINE_START_TOLERANCE = timedelta(minutes=2)
+CASH_ACTIVITY_TYPES = (
+    "ACTIVITY_TYPE_ACCOUNT_DEPOSIT",
+    "ACTIVITY_TYPE_ACCOUNT_ADVANCED_DEPOSIT",
+    "ACTIVITY_TYPE_ACCOUNT_WITHDRAWAL",
+    "ACTIVITY_TYPE_REFERRAL_BONUS",
+    "ACTIVITY_TYPE_TRANSFER",
+)
+# The first ET-keyed row copied the old UTC baseline. This one boundary was
+# positively reconstructed while the account was flat at 04:00Z and a bounded
+# activity walk proved no transfer crossed it. Never apply the correction to a
+# database whose stored legacy value differs from the value that was audited.
+LEGACY_ET_OPENING_CASH = {
+    "2026-08-25": (Decimal("478.6998"), Decimal("466.0899")),
+}
+
+
+@dataclass(frozen=True)
+class AccountRealizedToday:
+    value: Decimal | None
+    reason: str
+    as_of: datetime | None = None
+    opening_cash: Decimal | None = None
+    current_cash: Decimal | None = None
+    position_basis: Decimal | None = None
+    nontrading_cash: Decimal | None = None
+
+
+class AccountMetricUnavailable(ValueError):
+    """The current-day account number cannot be proved from bounded reads."""
+
+
+def _decimal(value: Any, field: str) -> Decimal:
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise AccountMetricUnavailable(f"{field} is invalid") from exc
+    if not result.is_finite():
+        raise AccountMetricUnavailable(f"{field} is not finite")
+    return result
+
+
+def _timestamp(value: Any, field: str) -> datetime:
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        result = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise AccountMetricUnavailable(f"{field} timestamp is invalid") from exc
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise AccountMetricUnavailable(f"{field} timestamp is timezone-naive")
+    return result.astimezone(timezone.utc)
+
+
+def _first_timestamp(*sources: Any) -> datetime:
+    keys = (
+        "updateTime", "createTime", "updatedAt", "createdAt",
+        "update_time", "create_time", "updated_at", "created_at",
+        "timestamp", "time", "date", "settledAt",
+    )
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            if source.get(key) not in (None, ""):
+                return _timestamp(source[key], "activity")
+    raise AccountMetricUnavailable("cash activity has no timestamp")
+
+
+def _amount(raw: Any) -> Decimal:
+    if isinstance(raw, dict):
+        currency = str(raw.get("currency") or "USD").upper()
+        if currency != "USD":
+            raise AccountMetricUnavailable(
+                f"cash activity currency is {currency}, not USD")
+        raw = raw.get("value")
+    return _decimal(raw, "cash activity amount")
+
+
+def _completed(status: Any) -> bool:
+    clean = str(status or "").upper()
+    return ((clean == "COMPLETED" or clean.endswith("_COMPLETED"))
+            and not clean.endswith("NOT_COMPLETED"))
+
+
+def _cash_change_sign(activity_type: str, description: str,
+                      amount: Decimal) -> Decimal:
+    if amount < 0:
+        return amount
+    if activity_type == "ACTIVITY_TYPE_ACCOUNT_WITHDRAWAL":
+        return -amount
+    if activity_type in {
+            "ACTIVITY_TYPE_ACCOUNT_DEPOSIT",
+            "ACTIVITY_TYPE_ACCOUNT_ADVANCED_DEPOSIT",
+            "ACTIVITY_TYPE_REFERRAL_BONUS"}:
+        return amount
+    text = description.lower()
+    if "withdraw" in text:
+        return -amount
+    if any(token in text for token in (
+            "reward", "deposit", "apple pay", "credit", "bonus", "referral")):
+        return amount
+    raise AccountMetricUnavailable(
+        f"unclassified completed cash transfer: {description or '(blank)'}")
+
+
+def _cash_rows(activity: dict[str, Any]) -> Iterable[tuple[dict, dict]]:
+    change = activity.get("accountBalanceChange")
+    if not isinstance(change, dict):
+        raise AccountMetricUnavailable(
+            "cash activity has no accountBalanceChange")
+    # The balance change is the economic event. Its transaction list contains
+    # payment attempts and may grow; summing both levels can count one deposit
+    # more than once. Current production rows carry the authoritative amount,
+    # status and timestamp at this top level. Use transactions only as a
+    # compatibility fallback when those economic fields are absent.
+    if change.get("amount") is not None and change.get("status") is not None:
+        yield change, change
+        return
+    transactions = change.get("transactions")
+    if isinstance(transactions, list) and transactions:
+        for transaction in transactions:
+            if not isinstance(transaction, dict):
+                raise AccountMetricUnavailable(
+                    "cash activity transaction is not an object")
+            yield change, transaction
+    else:
+        yield change, change
+
+
+def _activity_time(activity: dict[str, Any]) -> datetime:
+    change = activity.get("accountBalanceChange")
+    if (isinstance(change, dict) and change.get("amount") is not None
+            and change.get("status") is not None):
+        return _first_timestamp(change, activity)
+    transactions = change.get("transactions") if isinstance(change, dict) else None
+    if isinstance(transactions, list) and transactions:
+        times = [_first_timestamp(row, change, activity)
+                 for row in transactions if isinstance(row, dict)]
+        if not times:
+            raise AccountMetricUnavailable(
+                "cash activity has no valid transaction")
+        return max(times)
+    for key in ("trade", "positionResolution", "accountBalanceChange"):
+        nested = activity.get(key)
+        if isinstance(nested, dict):
+            return _first_timestamp(nested, activity)
+    return _first_timestamp(activity)
+
+
+def _opening_cash_for_day(db: str, day_value: date,
+                          boundary: datetime) -> Decimal:
+    try:
+        connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            row = connection.execute(
+                "SELECT opening_cash,created_at,source "
+                "FROM execution_risk_day_baselines WHERE risk_date=?",
+                (day_value.isoformat(),)).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise AccountMetricUnavailable(
+            "ET opening-cash baseline is unreadable") from exc
+    if row is None or row["opening_cash"] is None:
+        raise AccountMetricUnavailable("ET opening-cash baseline is missing")
+    stored = _decimal(row["opening_cash"], "opening cash")
+    source = str(row["source"] or "")
+    if source == "legacy_utc_cutover":
+        correction = LEGACY_ET_OPENING_CASH.get(day_value.isoformat())
+        if correction is None or stored != correction[0]:
+            raise AccountMetricUnavailable(
+                "legacy UTC baseline has no proven ET correction")
+        return correction[1]
+    if source != "fresh_et_day":
+        raise AccountMetricUnavailable(f"unknown ET baseline source: {source}")
+    created_at = _timestamp(row["created_at"], "opening baseline")
+    delta = created_at - boundary.astimezone(timezone.utc)
+    if delta < timedelta(0) or delta > BASELINE_START_TOLERANCE:
+        raise AccountMetricUnavailable(
+            "ET baseline was not captured at the day boundary")
+    return stored
+
+
+async def _nontrading_cash_today(
+    gateway: AsyncReadOnlyGateway, *, boundary: datetime, through: datetime,
+) -> Decimal:
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    previous_time: datetime | None = None
+    net = Decimal(0)
+    for _ in range(ACCOUNT_ACTIVITY_MAX_PAGES):
+        params: dict[str, Any] = {
+            "limit": 100,
+            "types": list(CASH_ACTIVITY_TYPES),
+            "sortOrder": "SORT_ORDER_DESCENDING",
+        }
+        if cursor:
+            params["cursor"] = cursor
+        response = await gateway._call(
+            "GET /v1/portfolio/activities (cash only)",
+            lambda params=params: gateway.client.portfolio.activities(params))
+        if not isinstance(response, dict) or not isinstance(
+                response.get("activities"), list):
+            raise AccountMetricUnavailable(
+                "cash-activity response has no activities list")
+        crossed_boundary = False
+        for activity in response["activities"]:
+            if not isinstance(activity, dict):
+                raise AccountMetricUnavailable("cash activity is not an object")
+            activity_at = _activity_time(activity)
+            if previous_time is not None and activity_at > previous_time:
+                raise AccountMetricUnavailable(
+                    "cash activities are not newest-first")
+            previous_time = activity_at
+            if activity_at < boundary:
+                crossed_boundary = True
+                continue
+            activity_type = str(activity.get("type") or "").upper()
+            if activity_type not in CASH_ACTIVITY_TYPES:
+                raise AccountMetricUnavailable(
+                    f"unexpected cash activity type: {activity_type or '(blank)'}")
+            for parent, row in _cash_rows(activity):
+                status = row.get("status", parent.get("status"))
+                if status in (None, ""):
+                    raise AccountMetricUnavailable(
+                        "cash activity status is missing")
+                if not _completed(status):
+                    continue
+                row_at = _first_timestamp(row, parent, activity)
+                if row_at > through:
+                    raise AccountMetricUnavailable(
+                        "completed cash activity changed after the account snapshot")
+                if row_at < boundary:
+                    continue
+                amount = _amount(row.get("amount", parent.get("amount")))
+                description = str(
+                    row.get("description", parent.get("description", "")))
+                net += _cash_change_sign(activity_type, description, amount)
+        eof = response.get("eof")
+        if eof is True or crossed_boundary:
+            return net
+        if eof is not False:
+            raise AccountMetricUnavailable(
+                "cash-activity pagination has no explicit eof")
+        next_cursor = response.get("nextCursor")
+        if not isinstance(next_cursor, str) or not next_cursor.strip():
+            raise AccountMetricUnavailable(
+                "cash-activity pagination ended without eof")
+        if next_cursor in seen_cursors:
+            raise AccountMetricUnavailable(
+                "cash-activity pagination cursor repeated")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    raise AccountMetricUnavailable(
+        "cash-activity scan did not reach the ET boundary")
+
+
+async def account_realized_today(
+    db: str, gateway: AsyncReadOnlyGateway, *, now: datetime,
+) -> AccountRealizedToday:
+    """Return account-wide realized trading since ET midnight, or no number.
+
+    Two equal balance reads bracket the position snapshot. If settled cash
+    moves while positions are being read, the report declines to mix states.
+    Completed non-trading cash changes are subtracted through the second balance
+    observation. Every venue operation is read-only and bounded.
+    """
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        return AccountRealizedToday(None, "report time is timezone-naive")
+    today = now.astimezone(NEW_YORK).date()
+    boundary = datetime.combine(today, time.min, tzinfo=NEW_YORK).astimezone(
+        timezone.utc)
+    try:
+        opening_cash = _opening_cash_for_day(db, today, boundary)
+        account = AsyncAccountSnapshotGateway(gateway)
+        first = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
+        positions = await account.fetch_positions(
+            observed_at=datetime.now(timezone.utc))
+        second = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
+        as_of = datetime.now(timezone.utc)
+        if as_of.astimezone(NEW_YORK).date() != today:
+            raise AccountMetricUnavailable(
+                "ET day changed during the account snapshot")
+        if first.current_balance != second.current_balance:
+            raise AccountMetricUnavailable(
+                "settled cash changed during the account snapshot")
+        basis = Decimal(0)
+        for position in positions:
+            if position.net_qty == 0:
+                continue
+            if position.cost is None:
+                raise AccountMetricUnavailable(
+                    f"open position has no venue basis: {position.market_slug}")
+            cost = _decimal(position.cost, "position basis")
+            if cost < 0:
+                raise AccountMetricUnavailable(
+                    f"open position basis is negative: {position.market_slug}")
+            basis += cost
+        nontrading = await _nontrading_cash_today(
+            gateway, boundary=boundary, through=as_of)
+        value = second.current_balance - opening_cash - nontrading + basis
+        return AccountRealizedToday(
+            value, "ok", as_of=as_of, opening_cash=opening_cash,
+            current_cash=second.current_balance, position_basis=basis,
+            nontrading_cash=nontrading)
+    except (AccountMetricUnavailable, AdapterError) as exc:
+        return AccountRealizedToday(None, str(exc))
 
 
 def _money(value: Decimal | None, *, zero_if_missing: bool = False) -> str:
@@ -41,10 +363,10 @@ def _money(value: Decimal | None, *, zero_if_missing: bool = False) -> str:
 def render_table(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
-    today: date,
+    today: date, account_realized: AccountRealizedToday | None = None,
 ) -> str:
     lines = [
-        "| Date (ET) | Trading P&L | Paid reward | Pending reward | "
+        "| Date (ET) | Pair estimate | Paid reward | Pending reward | "
         "Finalized net | Resting side-hours | Avg. sides resting |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
@@ -85,7 +407,11 @@ def render_table(
     resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
     lines.extend([
         "",
-        f"- Trading P&L: **${float(trade_total):+,.2f}**",
+        (f"- Account realized today (ET): "
+         f"**{_money(account_realized.value)}**"
+         if account_realized is not None and account_realized.value is not None
+         else "- Account realized today (ET): **Unavailable**"),
+        f"- Balanced-pair estimate (7d): **${float(trade_total):+,.2f}**",
         f"- Paid rewards: **${float(paid_total):,.2f}**",
         f"- Known pending rewards: **${float(pending_total):,.2f}**",
         f"- Finalized net (complete reward days only): "
@@ -94,7 +420,11 @@ def render_table(
         "",
         "`*` Current ET day is partial. `Not posted` is not zero. Pending "
         "reward is never counted in finalized net.",
+        "Account realized is account-wide settled-cash change, less completed "
+        "non-trading cash changes, plus current open-position basis.",
     ])
+    if account_realized is not None and account_realized.value is None:
+        lines.append(f"Account realized unavailable: {account_realized.reason}.")
     return "\n".join(lines)
 
 
@@ -102,6 +432,7 @@ def build_discord_payload(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
     today: date, generated_at: datetime, unbalanced_markets: int,
+    account_realized: AccountRealizedToday | None = None,
 ) -> dict:
     """Build two narrow, aligned tables that Discord renders consistently."""
 
@@ -111,7 +442,7 @@ def build_discord_payload(
         raise ValueError("the Discord table layout supports at most 7 days")
 
     pnl_lines = [
-        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  "
+        f"{'Date ET':<11}  {'Pair est.':>9}  {'Paid':>8}  "
         f"{'Pending':>8}  {'Net':>9}",
         "-----------  ---------  --------  --------  ---------",
     ]
@@ -177,7 +508,9 @@ def build_discord_payload(
     embed = {
         "title": "Liquidity Bot · Last 7 ET Days",
         "description": (
-            f"**Trading P&L:** ${float(trade_total):+,.2f}\n"
+            f"**Account realized today (ET):** "
+            f"{_money(account_realized.value) if account_realized is not None else '—'}\n"
+            f"**Balanced-pair estimate (7d):** ${float(trade_total):+,.2f}\n"
             f"**Paid rewards:** ${float(paid_total):,.2f}\n"
             f"**Known pending:** ${float(pending_total):,.2f}\n"
             f"**Finalized net:** ${float(complete_net):+,.2f}\n"
@@ -186,9 +519,14 @@ def build_discord_payload(
         "footer": {"text": (
             f"Generated {stamp} · * current ET day is partial · "
             "-- reward not posted · Pending excluded from net · "
-            f"Balanced-leg only; {unbalanced_markets} unbalanced market(s) "
-            "and settled exits may be missing")},
+            "Account realized is account-wide cash change - transfers + open "
+            "basis · Historical rows are balanced-pair estimates; "
+            f"{unbalanced_markets} unbalanced market(s) and settled exits may "
+            "be missing")},
     }
+    if account_realized is not None and account_realized.value is None:
+        embed["footer"]["text"] += (
+            f" · Account figure unavailable: {account_realized.reason}")
     total_chars = (
         len(embed["title"]) + len(embed["description"])
         + len(embed["footer"]["text"])
@@ -222,17 +560,27 @@ async def main() -> int:
     days = [today - timedelta(days=n)
             for n in range(args.days - 1, -1, -1)]
     pnl, _, unbalanced = trading_by_day(args.db, CLEAN_FROM)
-    paid, pending = await reward_by_day()
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(),
+        limiter=AsyncIntervalLimiter.from_rate(ACCOUNT_REPORT_RATE_PER_SECOND),
+        max_pages=ACCOUNT_ACTIVITY_MAX_PAGES)
+    paid, pending = await reward_by_day(gateway)
+    account_realized = await account_realized_today(
+        args.db, gateway, now=now)
     resting, elapsed = resting_side_hours_by_day(
         args.db, days, now=now)
     table = render_table(
         days, pnl=pnl, paid=paid, pending=pending,
-        resting_hours=resting, elapsed_hours=elapsed, today=today)
+        resting_hours=resting, elapsed_hours=elapsed, today=today,
+        account_realized=account_realized)
     if not args.quiet:
         print(table)
         print()
         print("Trading is balanced-leg ledger P&L and excludes "
               f"{unbalanced} unbalanced market(s); settled exits can be missing.")
+        if account_realized.value is None:
+            print(f"Account realized today is unavailable: "
+                  f"{account_realized.reason}.")
         print("Resting side-hours merge overlap per market/side and may exceed 24 "
               "when several sides rest simultaneously.")
     if args.post_discord:
@@ -245,7 +593,8 @@ async def main() -> int:
             build_discord_payload(
                 days, pnl=pnl, paid=paid, pending=pending,
                 resting_hours=resting, elapsed_hours=elapsed, today=today,
-                generated_at=now, unbalanced_markets=unbalanced),
+                generated_at=now, unbalanced_markets=unbalanced,
+                account_realized=account_realized),
             channel="rewards")
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",

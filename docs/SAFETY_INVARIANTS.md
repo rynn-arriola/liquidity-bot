@@ -345,8 +345,16 @@ These are implementation requirements, not suggestions.
     interval.
 71. The hourly seven-day reward report is operationally isolated from trading.
     It runs as a separate process, opens the execution ledger with SQLite
-    `mode=ro`, makes exactly one account-wide earnings request, and has no
-    order, position, balance, book, discovery or mutation call. A nonblocking
+    `mode=ro`, and has no order, book, discovery or mutation call. For its
+    separately labeled current-day account-realized value it may make only
+    bounded account-wide reads: one earnings request, two equal balance reads
+    bracketing one complete position snapshot, and at most four newest-first
+    cash-only activity pages. All use one report-local 1 request/sec limiter.
+    The value is current cash minus ET opening cash and completed non-trading
+    cash, plus exact open-position basis. Any moving balance, absent basis, unproven
+    boundary, unknown cash transfer, pagination defect, page exhaustion or day
+    rollover must render `Unavailable`, never a partial number. Historical
+    daily trading rows remain explicitly balanced-pair estimates. A nonblocking
     file lock prevents overlap and a 90-second timeout bounds runtime. Its
     dedicated Discord webhook is loaded only from the server-side shared
     credentials file, is excluded from repr/log output, and may never be

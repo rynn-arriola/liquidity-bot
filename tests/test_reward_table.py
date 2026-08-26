@@ -8,7 +8,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from scripts.reward_table import (
-    build_discord_payload, render_table, resting_side_hours_by_day)
+    AccountMetricUnavailable, AccountRealizedToday, _nontrading_cash_today,
+    account_realized_today, build_discord_payload, render_table,
+    resting_side_hours_by_day)
 
 
 class RewardTableTests(unittest.TestCase):
@@ -23,6 +25,11 @@ class RewardTableTests(unittest.TestCase):
             "CREATE TABLE execution_orders ("
             "client_order_id TEXT, market_slug TEXT, side TEXT, "
             "status TEXT, event_at TEXT)")
+        connection.execute(
+            "CREATE TABLE execution_risk_day_baselines ("
+            "risk_date TEXT PRIMARY KEY, opening_equity TEXT NOT NULL, "
+            "opening_realized TEXT NOT NULL, opening_cash TEXT, "
+            "created_at TEXT NOT NULL, source TEXT NOT NULL)")
         connection.executemany(
             "INSERT INTO execution_intents VALUES (?,?,?)",
             [
@@ -69,12 +76,16 @@ class RewardTableTests(unittest.TestCase):
             resting_hours={day.isoformat(): 24.0 for day in days},
             elapsed_hours={day.isoformat(): 24.0 for day in days},
             today=date(2026, 8, 25),
+            account_realized=AccountRealizedToday(
+                Decimal("-30.9844"), "ok"),
         )
 
         self.assertIn("| 2026-08-23 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
         self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
         self.assertIn("| 2026-08-25* | $-10.00 | Not posted | Not posted | Pending", output)
         self.assertIn("Finalized net (complete reward days only): **$+5.00**", output)
+        self.assertIn("Account realized today (ET): **$-30.98**", output)
+        self.assertIn("Balanced-pair estimate (7d): **$-30.00**", output)
 
     def test_discord_embed_contains_two_aligned_visual_tables(self):
         days = [date(2026, 8, 19 + offset) for offset in range(7)]
@@ -87,14 +98,16 @@ class RewardTableTests(unittest.TestCase):
             elapsed_hours={day.isoformat(): 24.0 for day in days},
             today=date(2026, 8, 25),
             generated_at=datetime(2026, 8, 25, 17, tzinfo=timezone.utc),
-            unbalanced_markets=30)
+            unbalanced_markets=30,
+            account_realized=AccountRealizedToday(
+                Decimal("-30.9844"), "ok"))
 
         embed = payload["embeds"][0]
         self.assertEqual(embed["title"], "Liquidity Bot · Last 7 ET Days")
         self.assertEqual(len(embed["fields"]), 2)
         pnl_table = embed["fields"][0]["value"]
         resting_table = embed["fields"][1]["value"]
-        self.assertIn("Date ET        Trading", pnl_table)
+        self.assertIn("Date ET      Pair est.", pnl_table)
         self.assertIn("2026-08-19     $-10.00", pnl_table)
         self.assertIn("2026-08-25*", pnl_table)
         self.assertIn("$+5.00", pnl_table)
@@ -106,6 +119,12 @@ class RewardTableTests(unittest.TestCase):
         self.assertEqual({len(line) for line in pnl_lines}, {53})
         self.assertEqual({len(line) for line in resting_lines}, {34})
         self.assertIn("**Finalized net:** $+35.00", embed["description"])
+        self.assertIn(
+            "**Account realized today (ET):** $-30.98",
+            embed["description"])
+        self.assertIn(
+            "**Balanced-pair estimate (7d):** $-70.00",
+            embed["description"])
         self.assertIn("Generated 2026-08-25 13:00 EDT", embed["footer"]["text"])
         self.assertIn("30 unbalanced market(s)", embed["footer"]["text"])
 
@@ -135,6 +154,174 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("--days 7 --post-discord --quiet", wrapper)
         self.assertNotIn("discord.com/api/webhooks", wrapper)
         self.assertIn("require_rewards_webhook=True", report)
+
+
+class _Account:
+    def __init__(self, balances):
+        self.balances_left = list(balances)
+
+    async def balances(self):
+        value = self.balances_left.pop(0)
+        return {"balances": [{
+            "currency": "USD", "currentBalance": str(value),
+            "assetNotional": "0", "buyingPower": str(value),
+        }]}
+
+
+class _Portfolio:
+    def __init__(self, positions, activity_pages):
+        self.position_rows = positions
+        self.activity_pages = list(activity_pages)
+        self.activity_params = []
+
+    async def positions(self, _params):
+        return {"positions": self.position_rows, "eof": True}
+
+    async def activities(self, params):
+        self.activity_params.append(params)
+        return self.activity_pages.pop(0)
+
+
+class _Client:
+    def __init__(self, balances, positions, activity_pages):
+        self.account = _Account(balances)
+        self.portfolio = _Portfolio(positions, activity_pages)
+
+
+class _Gateway:
+    def __init__(self, balances, positions, activity_pages):
+        self.max_pages = 4
+        self.client = _Client(balances, positions, activity_pages)
+
+    async def _call(self, _operation, call):
+        return await call()
+
+
+class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        folder = Path(tempfile.mkdtemp(prefix="liquidity-account-realized-"))
+        self.database = folder / "ledger.db"
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "CREATE TABLE execution_risk_day_baselines ("
+            "risk_date TEXT PRIMARY KEY, opening_equity TEXT NOT NULL, "
+            "opening_realized TEXT NOT NULL, opening_cash TEXT, "
+            "created_at TEXT NOT NULL, source TEXT NOT NULL)")
+        connection.execute(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            ("2026-08-25", "500", "0", "500",
+             "2026-08-25T04:00:02+00:00", "fresh_et_day"))
+        connection.commit()
+        connection.close()
+
+    async def test_realized_subtracts_reward_cash_and_adds_open_basis(self):
+        gateway = _Gateway(
+            [Decimal("480"), Decimal("480")],
+            {"market-one": {
+                "netPositionDecimal": "10",
+                "cost": {"value": "5", "currency": "USD"},
+                "updateTime": "2026-08-25T16:00:00Z",
+            }},
+            [{"activities": [{
+                "type": "ACTIVITY_TYPE_TRANSFER",
+                "accountBalanceChange": {
+                    "status": "COMPLETED",
+                    "amount": {"value": "10", "currency": "USD"},
+                    "description": "liquidity reward payout",
+                    "updateTime": "2026-08-25T12:00:00Z",
+                    # This is a payment-attempt detail for the same balance
+                    # change, not a second $10 economic event.
+                    "transactions": [{
+                        "status": "COMPLETED",
+                        "amount": {"value": "10", "currency": "USD"},
+                        "description": "liquidity reward payout",
+                        "updateTime": "2026-08-25T12:00:00Z",
+                    }],
+                },
+            }], "eof": True}])
+
+        result = await account_realized_today(
+            str(self.database), gateway,
+            now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+        self.assertEqual(result.value, Decimal("-25"))
+        self.assertEqual(result.position_basis, Decimal("5"))
+        self.assertEqual(result.nontrading_cash, Decimal("10"))
+        params = gateway.client.portfolio.activity_params[0]
+        self.assertEqual(params["sortOrder"], "SORT_ORDER_DESCENDING")
+        self.assertEqual(len(params["types"]), 5)
+
+    async def test_realized_fails_closed_if_cash_moves_during_snapshot(self):
+        gateway = _Gateway(
+            [Decimal("480"), Decimal("479")], {},
+            [{"activities": [], "eof": True}])
+
+        result = await account_realized_today(
+            str(self.database), gateway,
+            now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+        self.assertIsNone(result.value)
+        self.assertIn("cash changed", result.reason)
+        self.assertEqual(gateway.client.portfolio.activity_params, [])
+
+    async def test_cash_scan_refuses_a_window_larger_than_its_page_bound(self):
+        fresh = {
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "PENDING",
+                "amount": {"value": "1", "currency": "USD"},
+                "description": "liquidity reward payout",
+                "updateTime": "2026-08-25T12:00:00Z",
+            },
+        }
+        pages = [
+            {"activities": [fresh], "eof": False, "nextCursor": f"page-{n}"}
+            for n in range(4)
+        ]
+        gateway = _Gateway([], {}, pages)
+
+        with self.assertRaisesRegex(
+                AccountMetricUnavailable, "did not reach the ET boundary"):
+            await _nontrading_cash_today(
+                gateway,
+                boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
+                through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+    async def test_unknown_completed_transfer_is_not_silently_counted(self):
+        gateway = _Gateway([], {}, [{"activities": [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "3", "currency": "USD"},
+                "description": "mystery adjustment",
+                "updateTime": "2026-08-25T12:00:00Z",
+            },
+        }], "eof": True}])
+
+        with self.assertRaisesRegex(
+                AccountMetricUnavailable, "unclassified completed"):
+            await _nontrading_cash_today(
+                gateway,
+                boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
+                through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+    async def test_completed_transfer_after_balance_makes_snapshot_unavailable(self):
+        gateway = _Gateway([], {}, [{"activities": [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "4", "currency": "USD"},
+                "description": "liquidity reward payout",
+                "updateTime": "2026-08-25T17:00:01Z",
+            },
+        }], "eof": True}])
+
+        with self.assertRaisesRegex(
+                AccountMetricUnavailable, "changed after the account snapshot"):
+            await _nontrading_cash_today(
+                gateway,
+                boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
+                through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
 
 if __name__ == "__main__":

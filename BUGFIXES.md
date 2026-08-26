@@ -31,6 +31,37 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIXED LOCALLY; NO BOT RESTART REQUIRED — reward webhook understated today's trading loss
+
+**Symptom.** The current ET row and `Trading P&L` total showed -$24.40 while
+account cash and four exact open-position bases proved -$30.98 realized. Two
+one-sided markets that resolved for -$7.54 had no balancing exit fill and were
+excluded by the pair-only estimator.
+
+**Mechanism.** `trading_by_day` intentionally reports only markets with equal
+LONG and SHORT fill quantity. That makes historical settlement-free estimates
+possible, but it cannot be the complete current account loss. Its heading made
+the narrower metric too easy to read as authoritative.
+
+**Fix.** Keep and relabel the historical rows as `Pair est.`. Add a separate
+account-wide `Account realized today (ET)` from settled-cash change, less
+completed non-trading cash changes, plus current venue position basis. Two
+identical balance reads bracket the positions. Baseline timing, position basis,
+cash activity type/status/time, descending pagination, the four-page boundary
+and ET date are all proven or the field says `Unavailable`. The one UTC-to-ET
+cutover uses only its exact audited correction. All report calls share a
+separate 1 request/sec limiter; the process remains read-only, locked, nice'd
+and limited to 90 seconds.
+
+**Proof.** Two production schema reads confirmed the filtered transfer payload
+and that its newest row was already before the current ET boundary. Five new
+tests cover transfer subtraction/open basis, both moving-cash rejection paths,
+page-bound rejection and unknown-transfer rejection. All 628 tests pass. A deliberate
+transfer-sign reversal failed with `-5 != -25`, proving the regression detects
+the economic error. No bot code path changed and no restart is needed.
+
+---
+
 ### FIXED, PUSHED AND DEPLOYED; ACTIVE ON NEXT RESTART — LIVE Discord showed reward-score hours instead of resting hours
 
 **Symptom.** Discord showed 17.82 `Score-hours today` even though the seven-day

@@ -119,6 +119,22 @@ Reversing transfer subtraction made the focused
 result `-5` instead of `-25` and failed its regression, then the correct code
 was restored and the focused suite passed again.
 
+Final deployed acceptance at `2026-08-26T01:24:08Z` produced:
+
+```text
+ET opening cash             466.0899
+current settled cash        421.3568
+completed non-trading cash    0.0000
+open position basis           0.0000
+account realized today      -44.7331
+balanced-pair estimate      -26.6600
+```
+
+The account was flat at that exact snapshot, so no basis ambiguity remained.
+All eight files in the ordering-correction deploy matched local SHA-256 and all
+629 production tests passed in 77.579 seconds. Commits `b1fd50e` and `435a5e9`
+are pushed. The unchanged supervisor/runner PIDs prove there was no restart.
+
 ---
 
 ## The requested "hours" are resting side-hours, not reward-score hours

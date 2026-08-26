@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## FIXED LOCALLY; NO BOT RESTART REQUIRED: separate account-realized today
+## PUSHED, DEPLOYED AND ACTIVE; NO BOT RESTART: account-realized today
 
 At 2026-08-26T00:53Z the webhook showed -$24.40 for the current ET day, while
 venue cash plus the exact basis of four open positions proved realized trading
@@ -24,8 +24,12 @@ live dry run caught that the feed orders `createTime`, not cash-effect
 creation order as an ET-boundary proof. It prints `Unavailable` on any
 incomplete or inconsistent proof. Six focused tests and all 629 tests pass;
 reversing transfer subtraction kills the focused test.
-Production schema was checked read-only. Push/deploy the ordering correction;
-the next hourly process loads it automatically and the bot must not restart.
+Production schema was checked read-only. Commits `b1fd50e` and `435a5e9` are
+pushed and deployed; all eight final hashes matched and all 629 production
+tests passed in 77.579 seconds. The acceptance read rendered account realized
+-$44.73 versus pair estimate -$26.66 from opening cash 466.0899, current cash
+421.3568, zero open basis and zero non-trading transfer. The next hourly process
+loads it automatically. Supervisor `187359` / runner `187549` were not restarted.
 
 ---
 

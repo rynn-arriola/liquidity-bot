@@ -8,7 +8,7 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **FIXED LOCALLY; NO BOT RESTART REQUIRED — the reward webhook now separates
+- **PUSHED, DEPLOYED AND ACTIVE; NO BOT RESTART — the reward webhook now separates
   current account-realized trading from historical pair estimates.** The new
   `Account realized today (ET)` is current settled cash minus the ET opening
   cash, minus completed non-trading cash changes, plus exact venue basis of
@@ -27,7 +27,12 @@ from fact rather than from the last thing someone remembers.
   requires explicit EOF instead of treating ordering as a boundary proof.
   Six new edge-case tests, 629 full-suite tests and
   a killed transfer-sign mutant pass. This changes only the separate hourly
-  reporter; do not restart the bot for it.
+  reporter. Commits `b1fd50e` and ordering correction `435a5e9` are pushed;
+  all eight final hashes match and all 629 server tests pass in 77.579 seconds.
+  The deployed dry run rendered account realized **-$44.73** against pair
+  estimate **-$26.66**; its exact terms were opening 466.0899, current cash
+  421.3568, position basis 0 and non-trading cash 0. Supervisor `187359` and
+  runner `187549` were not restarted.
 
 - **DEPLOYED AND ACTIVE — transactional top-up repair.** At
   21:04Z one incremental replacement committed its new active tuple and closed

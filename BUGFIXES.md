@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED LOCALLY; NO BOT RESTART REQUIRED — reward webhook understated today's trading loss
+### FIXED, PUSHED, DEPLOYED AND ACTIVE; NO RESTART — reward webhook understated today's trading loss
 
 **Symptom.** The current ET row and `Trading P&L` total showed -$24.40 while
 account cash and four exact open-position bases proved -$30.98 realized. Two
@@ -62,7 +62,12 @@ history fits in one. Six new tests cover transfer subtraction/open basis, both
 moving-cash rejection paths, page-bound rejection, unknown-transfer rejection
 and create/update inversion. All 629 tests pass. A deliberate
 transfer-sign reversal failed with `-5 != -25`, proving the regression detects
-the economic error. No bot code path changed and no restart is needed.
+the economic error. Commits `b1fd50e` and `435a5e9` are pushed and deployed;
+all eight final hashes matched and all 629 server tests passed in 77.579
+seconds. The deployed read proved -$44.7331 account realized from 466.0899
+opening cash, 421.3568 current cash, zero basis and zero non-trading cash,
+while the pair estimate showed -$26.66. No bot code path changed; supervisor
+`187359` / runner `187549` were not restarted.
 
 ---
 

@@ -133,7 +133,9 @@ The phrase **“run 7 day reward table”** means this exact command. The script
 opens `data/commissioning.db` read-only. It makes one earnings request plus a
 bounded account snapshot for `Account realized today (ET)`: two matching
 balance reads around a complete position read and no more than four cash-only
-activity pages. These calls share a separate 1 request/second limiter. The
+activity pages, which must reach explicit EOF. Cash changes are assigned by
+completion time because the endpoint orders them by creation time. These calls
+share a separate 1 request/second limiter. The
 account figure subtracts completed rewards/deposits/other non-trading cash and
 adds current venue position basis; if the boundary or snapshot is not proved,
 it displays `Unavailable`. Historical `Pair est.` rows keep the balanced-leg

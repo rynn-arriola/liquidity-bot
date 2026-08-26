@@ -88,8 +88,8 @@ nonnegative venue basis. The current ET risk baseline must be native and within
 two minutes of midnight, except for the single audited 2026-08-25 legacy
 correction whose stored `478.6998` value must match exactly before `466.0899`
 is used. A cash-only activity walk requests the five deposit, withdrawal,
-referral and transfer types newest-first, stops only at explicit EOF or the ET
-boundary, and is capped at four pages. Completed unknown transfers, malformed
+referral and transfer types and is capped at four pages. It must reach explicit
+EOF. Completed unknown transfers, malformed
 rows, cursor problems, a moving balance or an ET rollover make the value
 `Unavailable`; none is treated as zero.
 
@@ -101,9 +101,21 @@ already before the current ET boundary. The reporter shares one 1 request/sec
 limiter across earnings and all added reads. It is still a separate hourly,
 locked, timeout-bounded process and has no order resource or mutation method.
 
-Five focused edge-case tests cover reward-transfer subtraction and open basis,
-cash moving during either snapshot phase, bounded-window exhaustion and unknown
-completed transfers. All 628 tests pass. Reversing transfer subtraction made the focused
+The first deployed dry run correctly failed closed with `cash activities are
+not newest-first`. A bounded 60-row production read proved why: the endpoint
+orders balance changes by `createTime`, while the account cash effect belongs
+to completion `updateTime`. Ten update-time inversions appeared in that one
+page, while `createTime` had none. A deposit can be created before the ET
+boundary and complete after it, so crossing an ordered create-time boundary is
+not proof that all current-day cash effects were seen. The corrected walk
+therefore filters by completion time but requires explicit EOF within four
+cash-only pages. The live account currently has only 60 such rows, so it still
+completes in one request.
+
+Six focused edge-case tests cover reward-transfer subtraction and open basis,
+cash moving during either snapshot phase, bounded-window exhaustion, unknown
+completed transfers and create-time/update-time inversion. All 629 tests pass.
+Reversing transfer subtraction made the focused
 result `-5` instead of `-25` and failed its regression, then the correct code
 was restored and the focused suite passed again.
 

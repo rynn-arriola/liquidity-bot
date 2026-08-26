@@ -17,11 +17,14 @@ cash is exactly 478.6998 and then uses the positively reconstructed 466.0899;
 later days require a native baseline within two minutes of ET midnight.
 
 The reporter brackets the positions with two equal balance reads, filters the
-activity endpoint to five cash-only types, caps it at four newest-first pages
-and shares one 1 request/sec limiter across all report calls. It prints
-`Unavailable` on any incomplete or inconsistent proof. Five focused tests and
-all 628 tests pass; reversing transfer subtraction kills the focused test.
-Production schema was checked read-only. Push/deploy this report-only change;
+activity endpoint to five cash-only types, requires explicit EOF within four
+pages and shares one 1 request/sec limiter across all report calls. The first
+live dry run caught that the feed orders `createTime`, not cash-effect
+`updateTime`; the correction filters on completion time and never treats the
+creation order as an ET-boundary proof. It prints `Unavailable` on any
+incomplete or inconsistent proof. Six focused tests and all 629 tests pass;
+reversing transfer subtraction kills the focused test.
+Production schema was checked read-only. Push/deploy the ordering correction;
 the next hourly process loads it automatically and the bot must not restart.
 
 ---

@@ -323,6 +323,34 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
                 boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
                 through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
+    async def test_cash_scan_uses_completion_time_not_feed_order(self):
+        def transfer(amount, created, updated):
+            return {
+                "type": "ACTIVITY_TYPE_TRANSFER",
+                "accountBalanceChange": {
+                    "status": "COMPLETED",
+                    "amount": {"value": str(amount), "currency": "USD"},
+                    "description": "liquidity reward payout",
+                    "createTime": created,
+                    "updateTime": updated,
+                },
+            }
+
+        gateway = _Gateway([], {}, [{"activities": [
+            transfer("2", "2026-08-25T10:00:00Z", "2026-08-25T11:00:00Z"),
+            # Created earlier but completed later. The live endpoint orders on
+            # createTime, so updateTime is intentionally increasing here.
+            transfer("3", "2026-08-25T09:00:00Z", "2026-08-25T12:00:00Z"),
+            transfer("7", "2026-08-24T09:00:00Z", "2026-08-24T12:00:00Z"),
+        ], "eof": True}])
+
+        result = await _nontrading_cash_today(
+            gateway,
+            boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
+            through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+        self.assertEqual(result, Decimal("5"))
+
 
 if __name__ == "__main__":
     unittest.main()

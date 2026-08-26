@@ -172,26 +172,6 @@ def _cash_rows(activity: dict[str, Any]) -> Iterable[tuple[dict, dict]]:
         yield change, change
 
 
-def _activity_time(activity: dict[str, Any]) -> datetime:
-    change = activity.get("accountBalanceChange")
-    if (isinstance(change, dict) and change.get("amount") is not None
-            and change.get("status") is not None):
-        return _first_timestamp(change, activity)
-    transactions = change.get("transactions") if isinstance(change, dict) else None
-    if isinstance(transactions, list) and transactions:
-        times = [_first_timestamp(row, change, activity)
-                 for row in transactions if isinstance(row, dict)]
-        if not times:
-            raise AccountMetricUnavailable(
-                "cash activity has no valid transaction")
-        return max(times)
-    for key in ("trade", "positionResolution", "accountBalanceChange"):
-        nested = activity.get(key)
-        if isinstance(nested, dict):
-            return _first_timestamp(nested, activity)
-    return _first_timestamp(activity)
-
-
 def _opening_cash_for_day(db: str, day_value: date,
                           boundary: datetime) -> Decimal:
     try:
@@ -232,7 +212,6 @@ async def _nontrading_cash_today(
 ) -> Decimal:
     cursor: str | None = None
     seen_cursors: set[str] = set()
-    previous_time: datetime | None = None
     net = Decimal(0)
     for _ in range(ACCOUNT_ACTIVITY_MAX_PAGES):
         params: dict[str, Any] = {
@@ -249,18 +228,9 @@ async def _nontrading_cash_today(
                 response.get("activities"), list):
             raise AccountMetricUnavailable(
                 "cash-activity response has no activities list")
-        crossed_boundary = False
         for activity in response["activities"]:
             if not isinstance(activity, dict):
                 raise AccountMetricUnavailable("cash activity is not an object")
-            activity_at = _activity_time(activity)
-            if previous_time is not None and activity_at > previous_time:
-                raise AccountMetricUnavailable(
-                    "cash activities are not newest-first")
-            previous_time = activity_at
-            if activity_at < boundary:
-                crossed_boundary = True
-                continue
             activity_type = str(activity.get("type") or "").upper()
             if activity_type not in CASH_ACTIVITY_TYPES:
                 raise AccountMetricUnavailable(
@@ -283,7 +253,12 @@ async def _nontrading_cash_today(
                     row.get("description", parent.get("description", "")))
                 net += _cash_change_sign(activity_type, description, amount)
         eof = response.get("eof")
-        if eof is True or crossed_boundary:
+        # The endpoint sorts balance changes by createTime, but settled cash
+        # moves at completion/updateTime. An old-created deposit can therefore
+        # complete later than a newer row. Only explicit EOF proves the daily
+        # completion-time window; never stop merely because createTime crossed
+        # the ET boundary.
+        if eof is True:
             return net
         if eof is not False:
             raise AccountMetricUnavailable(

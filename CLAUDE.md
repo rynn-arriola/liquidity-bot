@@ -22,7 +22,10 @@ from fact rather than from the last thing someone remembers.
   The one legacy 2026-08-25 boundary uses only the exact audited stored/corrected
   pair `478.6998 -> 466.0899`; later days require a native ET baseline created
   within two minutes of midnight. Production schema reads confirmed the
-  filtered transfer shape. Five new edge-case tests, 628 full-suite tests and
+  filtered transfer shape. Live acceptance then proved that cash rows are
+  sorted by `createTime`, not settlement `updateTime`; the bounded walk now
+  requires explicit EOF instead of treating ordering as a boundary proof.
+  Six new edge-case tests, 629 full-suite tests and
   a killed transfer-sign mutant pass. This changes only the separate hourly
   reporter; do not restart the bot for it.
 

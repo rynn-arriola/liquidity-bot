@@ -348,8 +348,10 @@ These are implementation requirements, not suggestions.
     `mode=ro`, and has no order, book, discovery or mutation call. For its
     separately labeled current-day account-realized value it may make only
     bounded account-wide reads: one earnings request, two equal balance reads
-    bracketing one complete position snapshot, and at most four newest-first
-    cash-only activity pages. All use one report-local 1 request/sec limiter.
+    bracketing one complete position snapshot, and at most four cash-only
+    activity pages that must reach explicit EOF. Cash changes are assigned by
+    completion `updateTime`; feed order is only creation order and may not prove
+    an ET boundary. All use one report-local 1 request/sec limiter.
     The value is current cash minus ET opening cash and completed non-trading
     cash, plus exact open-position basis. Any moving balance, absent basis, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day

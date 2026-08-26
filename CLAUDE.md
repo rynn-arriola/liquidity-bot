@@ -8,8 +8,8 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **BOT STOPPED; AUGUST 26 FIX COMMITTED LOCALLY AS `5825db8`; DO NOT RESTART
-  OLD CODE.** The operator canceled all orders, flattened and asked for the
+- **PUSHED AND DEPLOYED; BOT STOPPED — AUGUST 26 RECOVERY/SLOT FIX.** The
+  operator canceled all orders, flattened and asked for the
   runner to be shut down. Today a private reconnect canceled before the new
   private listener existed, losing terminal events and retiring fourteen
   owners through acknowledged-cancel/`UNKNOWN_ABSENT` timeouts. The fix listens
@@ -20,7 +20,9 @@ from fact rather than from the last thing someone remembers.
   change quote size, 20-slot capacity, six-hour entry horizon, reward gates,
   loss limits or the rule that absence is never cancellation. Six deliberate
   reversions are killed by regressions and all 638 local tests pass in 40.584
-  seconds. Server/deploy acceptance is still in progress; leave the bot
+  seconds. Source commit `5825db8` and documentation/deploy commit `b738d8c`
+  are pushed. All 13 deployed hashes matched and the stopped server passed all
+  638 tests in 58.686 seconds. Maker-lab, supervisor and runner remained
   stopped. For future low-order diagnosis ask
   to **"run the 20-slot scheduler audit"** and use the exact recipe at the top
   of FINDINGS rather than treating working-order count as slot count.

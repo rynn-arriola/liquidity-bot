@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-26
 
-### FIXED LOCALLY — reconnect cancellation discarded terminal proof and retired healthy owners
+### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — reconnect cancellation discarded terminal proof and retired healthy owners
 
 **Symptom.** Fourteen markets retired together for
 `unresolved_mutation_timeout` after a private disconnect. They were flat by
@@ -51,7 +51,7 @@ the run loop. A regression synthesizes a cancel terminal event only after the
 new listener starts, and a shutdown regression proves buffered terminal state
 wins even while GET-by-ID returns NotFound.
 
-### FIXED LOCALLY — one retained NotFound could prevent an unrelated slot top-up
+### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — one retained NotFound could prevent an unrelated slot top-up
 
 **Symptom.** Repeated top-up messages named releases and replacements, but the
 active set did not change. A lagging ID in a market that was being retained
@@ -70,7 +70,7 @@ and reserve `[top-up] ... committed=yes active=N` for an actual bind. A
 regression makes a retained ID return NotFound and requires the unrelated slot
 replacement to commit without canceling the retained order.
 
-### FIXED LOCALLY — a rescheduled game could hold an unpaid slot indefinitely
+### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — a rescheduled game could hold an unpaid slot indefinitely
 
 **Symptom.** A market accrued 6,763.8 eligible seconds, then changed to `no
 applicable pregame liquidity period` while the exact active day-of program
@@ -84,7 +84,7 @@ record that separately from explicit program expiry and request immediate
 top-up. Missing/different rows still fail closed. Position, working order,
 `UNKNOWN_ABSENT` or unresolved intent still prevents release.
 
-### FIXED LOCALLY — recovered stale books generated thousands of false errors
+### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — recovered stale books generated thousands of false errors
 
 **Symptom.** The run logged 8,722 `book_stale` events, mostly attempt 1, even
 when the immediate REST refresh succeeded and the recursive plan used a fresh
@@ -95,7 +95,7 @@ refresh fails. A successful refresh replans without advancing the error counter
 or printing the failure diagnostic. Real refresh failures retain both error
 counters and escalation.
 
-### FIXED LOCALLY — abandoned flat markets refreshed books they can never use
+### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — abandoned flat markets refreshed books they can never use
 
 **Symptom.** A pre-kickoff owner abandoned at round ten continued quiet-book
 refreshes beyond attempt 100 even though it was flat and order-free and could
@@ -105,14 +105,16 @@ never be planned again.
 orders, `UNKNOWN_ABSENT` and unresolved intents are all absent. Any exit or
 ambiguity keeps the book alive.
 
-**Review proof for all five.** Source/tests are committed locally as `5825db8`.
+**Review proof for all five.** Source/tests are committed as `5825db8` and the
+first complete documentation/deploy marker is `b738d8c`.
 Five deliberate reversions were each detected: account-wide top-up strictness,
 cancel-before-listen ordering, explicit-end-only authorization loss,
 pre-refresh stale error reporting and continued abandoned-book refresh. A sixth
 reversion removing shutdown's buffer drain failed against a lagging-NotFound
 regression. The complete local suite passed all 638 tests in 40.584 seconds.
-Production acceptance is recorded in NEXT and CLAUDE after it finishes; the
-bot remains stopped meanwhile.
+All 13 deployed file hashes matched exactly and the stopped server passed all
+638 tests in 58.686 seconds. Maker-lab, the liquidity supervisor and the
+liquidity runner remained stopped before, during and after deployment.
 
 ### TEST FIX — account-report tests depended on the workstation's real date
 

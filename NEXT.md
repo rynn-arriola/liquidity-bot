@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## STOPPED; FIXED LOCALLY; DEPLOYMENT REVIEW IN PROGRESS: August 26 recovery and slot defects
+## PUSHED AND DEPLOYED; BOT STOPPED: August 26 recovery and slot defects
 
 The operator canceled all venue orders, flattened the account and requested a
 shutdown. The runner and supervisor are stopped. Do not restart from an older
@@ -27,10 +27,10 @@ buckets, top-up plan versus committed lines, and unresolved/UNKNOWN_ABSENT age
 and progress by owner. Raw order count is not capacity.
 
 Focused regressions pass, six deliberate reversions were killed and all 638
-local tests pass in 40.584 seconds. The stopped-server deploy/hash/test pass and
-final stopped status still need to be recorded below before this item becomes
-deployed. Do not restart as part of deployment unless the operator separately
-asks after the stopped gate.
+local tests pass in 40.584 seconds. Commits `5825db8` and `b738d8c` are pushed;
+all 13 deployed hashes matched and the stopped server passed all 638 tests in
+58.686 seconds. Maker-lab, supervisor and runner remained stopped. Do not
+restart unless the operator separately asks after a fresh flat/ownership gate.
 
 ---
 

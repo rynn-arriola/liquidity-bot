@@ -782,20 +782,34 @@ class CommissioningRunner:
             raise CommissioningUnavailable(
                 f"{slug} has ambiguous incentive periods") from exc
         if period is None:
-            ended = next((
+            prior = next((
                 item for item in state.incentive.periods
                 if item.program_id == state.reward_program_id
-                and item.ends_at is not None
-                and item.ends_at <= now
             ), None)
-            if ended is not None:
+            if prior is not None:
+                explicitly_ended = (
+                    prior.ends_at is not None and prior.ends_at <= now)
                 newly_confirmed = (
-                    state.reward_period_ended_at != ended.ends_at
-                    or state.reward_period_end_confirmed_at is None)
-                state.reward_period_ended_at = ended.ends_at
-                state.reward_period_end_confirmed_at = self._now()
+                    state.reward_authorization_loss_confirmed_at is None
+                    or state.reward_authorization_loss_reason
+                    != ("program_ended" if explicitly_ended
+                        else "no_longer_applicable"))
+                confirmed_at = self._now()
+                state.reward_authorization_lost_at = (
+                    prior.ends_at if explicitly_ended else now)
+                state.reward_authorization_loss_reason = (
+                    "program_ended" if explicitly_ended
+                    else "no_longer_applicable")
+                state.reward_authorization_loss_confirmed_at = confirmed_at
+                if explicitly_ended:
+                    state.reward_period_ended_at = prior.ends_at
+                    state.reward_period_end_confirmed_at = confirmed_at
                 if newly_confirmed:
                     self._reward_end_top_up_requested = True
+                # Preserve the exact row above as proof, but never leave it in
+                # the strategy field: it does not authorize an entry now.
+                state.incentive = None
+                state.clear_economics()
                 return
         if period is None or period.period == "live":
             raise CommissioningUnavailable(
@@ -804,6 +818,9 @@ class CommissioningRunner:
         state.reward_program_ends_at = period.ends_at
         state.reward_period_ended_at = None
         state.reward_period_end_confirmed_at = None
+        state.reward_authorization_lost_at = None
+        state.reward_authorization_loss_reason = None
+        state.reward_authorization_loss_confirmed_at = None
 
     async def _refresh_book(
         self, now: datetime, slug: str | None = None,
@@ -1464,6 +1481,25 @@ class CommissioningRunner:
         self.projector.apply(event, received_at=received_at)
         self._record_resolved_cancel_owners(unresolved_cancels)
         self._queue_measurement_sync(observed_at=received_at)
+
+    async def _drain_private_events(self) -> int:
+        """Apply private events already buffered by a connected stream.
+
+        The normal run loop drains after its pending ``next_event`` result.
+        Recovery and shutdown run outside that loop, but the stream remains
+        connected and can already hold the terminal cancel proof those paths
+        need.  Leaving it unread forced them onto a GET-by-id endpoint that can
+        answer NotFound for minutes after a successful cancel.
+        """
+
+        drain = getattr(self.private_stream, "drain_events", None)
+        if not callable(drain):
+            return 0
+        count = 0
+        for event in drain():
+            await self._observe_private(event, self._now())
+            count += 1
+        return count
 
     def _take_priority_replans(self) -> tuple[str, ...]:
         """Take cancel-confirmed markets in stable active-slot order."""
@@ -3320,17 +3356,18 @@ class CommissioningRunner:
                 now_at = self._now()
                 age = state.book_age_seconds(now_at)
                 due = state.next_book_refresh
-                print(
-                    f"[book-stale-why] at={now_at.isoformat()} market={slug} "
-                    f"age={'none' if age is None else round(age, 1)} "
-                    f"refresh_due_in="
-                    f"{'none' if due is None else round((due - now_at).total_seconds(), 1)} "
-                    f"fresh_enough={self._book_is_fresh_enough_to_plan(slug)} "
-                    f"replanned={replanned}",
-                    flush=True,
-                )
+                fresh_enough = self._book_is_fresh_enough_to_plan(slug)
+                if not fresh_enough:
+                    print(
+                        f"[book-stale-why] at={now_at.isoformat()} market={slug} "
+                        f"age={'none' if age is None else round(age, 1)} "
+                        f"refresh_due_in="
+                        f"{'none' if due is None else round((due - now_at).total_seconds(), 1)} "
+                        f"fresh_enough={fresh_enough} replanned={replanned}",
+                        flush=True,
+                    )
             if (not replanned and reason == "book_stale"
-                    and self._book_is_fresh_enough_to_plan(slug)):
+                    and fresh_enough):
                 return await self._decide_for_market(
                     slug, self._now(), replanned=True)
             return None, self._recovery_delay(f"strategy_state:{slug}")
@@ -4211,24 +4248,32 @@ class CommissioningRunner:
             return False
         return (self.ledger.position(slug) == 0
                 and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders(slug)
                 and not any(str(row["market_slug"]) == slug
                             for row in self.ledger.unresolved_intents()))
 
-    def _reward_ended_and_flat(self, slug: str, now: datetime) -> bool:
-        """True only after fresh metadata proves this slot's program ended.
+    def _reward_authorization_lost_and_flat(
+        self, slug: str, now: datetime,
+    ) -> bool:
+        """True only after fresh metadata proves this slot is no longer paid.
 
         Missing reward rows are not proof: a partial/transient incentive
         response must make the market idle, never release its ownership scope.
         `_refresh_contracts` records confirmation only when a later complete
-        response contains the exact program that previously authorized entry
-        and its explicit `ends_at` has elapsed.
+        response still contains the exact program that previously authorized
+        entry and that row no longer applies to the freshly read event clock.
+        This covers both an explicit elapsed ``ends_at`` and a postponed event
+        moving back outside the six-hour day-of phase.
         """
 
         state = self._markets.get(slug)
-        if (state is None
-                or state.reward_period_end_confirmed_at is None
-                or state.reward_period_ended_at is None
-                or state.reward_period_ended_at > now):
+        if state is None:
+            return False
+        confirmed_at = (state.reward_authorization_loss_confirmed_at
+                        or state.reward_period_end_confirmed_at)
+        lost_at = (state.reward_authorization_lost_at
+                   or state.reward_period_ended_at)
+        if (confirmed_at is None or lost_at is None or lost_at > now):
             return False
         market = state.market
         if (market is None or market.game_start is None
@@ -4238,8 +4283,14 @@ class CommissioningRunner:
             return False
         return (self.ledger.position(slug) == 0
                 and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders(slug)
                 and not any(str(row["market_slug"]) == slug
                             for row in self.ledger.unresolved_intents()))
+
+    def _reward_ended_and_flat(self, slug: str, now: datetime) -> bool:
+        """Compatibility name for the broader authorization-loss predicate."""
+
+        return self._reward_authorization_lost_and_flat(slug, now)
 
     def _position_near_its_flatten_deadline(self, now: datetime) -> bool:
         """True when held inventory is close enough to kickoff that a scan hurts.
@@ -4283,7 +4334,7 @@ class CommissioningRunner:
             len(self.active_slugs) < self.config.max_markets
             or any(self._expired_and_flat(slug, now)
                    for slug in self.active_slugs)
-            or any(self._reward_ended_and_flat(slug, now)
+            or any(self._reward_authorization_lost_and_flat(slug, now)
                    for slug in self.active_slugs)
         )
 
@@ -4344,8 +4395,15 @@ class CommissioningRunner:
                    if self._expired_and_flat(slug, now)]
         reward_ended = [
             slug for slug in self.active_slugs
-            if slug not in expired and self._reward_ended_and_flat(slug, now)]
-        released = expired + reward_ended
+            if (slug not in expired
+                and self._reward_authorization_lost_and_flat(slug, now)
+                and self.state_for(slug).reward_period_end_confirmed_at
+                is not None)]
+        reward_inactive = [
+            slug for slug in self.active_slugs
+            if (slug not in expired and slug not in reward_ended
+                and self._reward_authorization_lost_and_flat(slug, now))]
+        released = expired + reward_ended + reward_inactive
         keep = tuple(slug for slug in self.active_slugs
                      if slug not in released)
         free = max(0, self.config.max_markets - len(keep))
@@ -4364,10 +4422,11 @@ class CommissioningRunner:
             for item in selection.top_viable(self.config.max_markets,
                                              exclude=exclude))[:free]
         print(
-            f"[top-up] at={self._now().isoformat()} "
+            f"[top-up-plan] at={self._now().isoformat()} "
             f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} free_slots={free} "
             f"expired={len(expired)} reward_ended={len(reward_ended)} "
+            f"reward_inactive={len(reward_inactive)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )
@@ -4387,16 +4446,32 @@ class CommissioningRunner:
             # the current subscriptions intact and retry only on the normal
             # bounded selection cadence.
             return False
-        # Transaction boundary: prove the current account while the old active
-        # set and both healthy streams are still intact. On 2026-08-25 this
-        # strict read happened only after `_bind_markets` and after both
+        # Transaction boundary: take complete account snapshots and strictly
+        # prove every owner being released while the old active set and both
+        # healthy streams are still intact. Retained owners stay retained and
+        # individually gated if one of their GET-by-ID views lags. On
+        # 2026-08-25 this proof happened only after `_bind_markets` and after both
         # streams had been closed. Three attributable GET-by-ID NotFound reads
         # therefore turned a harmless one-slot top-up refusal into global
         # recovery, which cancelled 32 orders and retired 18 owners. Failing
         # here leaves the caller able to resume its old stream tasks without a
         # scope change, cancellation or rebind.
-        await self._rest_reconcile(self._now())
+        await self._rest_reconcile(
+            self._now(), strict_order_markets=frozenset(released))
         self._assert_runtime_scope()
+        # The complete snapshot above can discover a fill, a newly absent
+        # order, or another unresolved mutation. Recheck the release predicate
+        # at the transaction boundary instead of committing a decision made
+        # before that evidence arrived.
+        no_longer_releasable = [
+            slug for slug in released
+            if not (self._expired_and_flat(slug, self._now())
+                    or self._reward_authorization_lost_and_flat(
+                        slug, self._now()))]
+        if no_longer_releasable:
+            raise AdapterError(
+                "top-up release proof changed during preflight: "
+                + ", ".join(sorted(no_longer_releasable)))
         if not replacements:
             # Still worth releasing: a dead market costs a REST refresh every
             # service cycle and reports `book_stale` every time.
@@ -4413,6 +4488,15 @@ class CommissioningRunner:
         # recreate the same account-wide failure after the safe preflight.
         await self._open_streams_for_active_market(
             strict_order_markets=frozenset())
+        print(
+            f"[top-up] at={self._now().isoformat()} committed=yes "
+            f"released={len(released)} kept={len(keep)} "
+            f"added={len(replacements)} active={len(self.active_slugs)} "
+            f"expired={len(expired)} reward_ended={len(reward_ended)} "
+            f"reward_inactive={len(reward_inactive)} "
+            f"released_slugs={','.join(sorted(released))}",
+            flush=True,
+        )
         return True
 
     async def _rotate_reward_market(self, now: datetime) -> bool:
@@ -4553,6 +4637,7 @@ class CommissioningRunner:
         self.gate.on_disconnect()
         while True:
             attempt += 1
+            stream_listening = False
             await self._report_runtime_error("private_stream", exc, attempt)
             try:
                 try:
@@ -4570,22 +4655,21 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
-                # A private disconnect is account-wide, so first request
-                # cancellation for every known quote. Cancellation proof can
-                # lag for minutes: a complete snapshot may omit the order while
-                # GET-by-id still reports it active. That ambiguity belongs to
-                # the order's market. Reconnect the account stream and let the
-                # existing per-market gate keep only those owners dormant;
-                # requiring every cancel terminal here held all twenty markets
-                # dark for 20+ minutes on 2026-08-23.
-                await self._quarantine_working_orders(require_terminal=False)
                 stream = self.private_stream_factory(self.client)
                 self.private_stream = stream
                 await stream.start(list(self.active_slugs))
+                stream_listening = True
                 self.gate.on_connect()
-                await self._rest_reconcile(
-                    self._now(), strict_order_markets=frozenset())
+                # Listen before canceling. The private order stream is the
+                # venue's authoritative terminal-outcome channel; canceling the
+                # whole slate before this start created every terminal event in
+                # a visibility gap and forced repair onto GET-by-id, which can
+                # return NotFound for minutes. No decision can run while this
+                # recovery coroutine owns the loop, so starting the listener
+                # first cannot authorize new risk.
+                await self._quarantine_working_orders(require_terminal=False)
                 await self._wait_for_initial_private_state()
+                await self._drain_private_events()
                 ambiguous_markets = sorted({
                     str(row["market_slug"])
                     for row in (
@@ -4618,6 +4702,17 @@ class CommissioningRunner:
                 return f"critical:{invariant.code}"
             except Exception as recovery_exc:
                 self.gate.on_disconnect()
+                # If the replacement stream itself could not start, quotes are
+                # still blind. Preserve the old fail-safe response: make one
+                # best-effort cancellation pass before backing off. This branch
+                # may miss terminal events, but it is reached only when there is
+                # no working private listener to receive them.
+                if not stream_listening:
+                    try:
+                        await self._quarantine_working_orders(
+                            require_terminal=False)
+                    except Exception:
+                        pass
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
@@ -4721,12 +4816,13 @@ class CommissioningRunner:
         the whole bind has to be redone -- which is exactly what that method
         does, so this retries it rather than reimplementing the sequence.
 
-        Quarantines first, like both sibling recoveries. A top-up deliberately
+        Rebinds private visibility before quarantine. A top-up deliberately
         leaves resting orders alone, so cancelling here gives up the reward
         they were still accruing -- but the private stream is down, which means
         a fill can land unseen, and quoting blind is the one thing the gate
-        exists to prevent. Reward lost on a rare bind failure is cheaper than
-        an unobserved position.
+        exists to prevent. Listening first preserves terminal cancel proof;
+        the recovery coroutine still owns the loop, so no new-risk decision can
+        run before quarantine and fresh-state proof finish.
         """
 
         exc = initial
@@ -4751,16 +4847,14 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
-                # Terminal proof can lag for one cancelled quote even after a
-                # complete snapshot stops listing it. That ambiguity is owned
-                # by one market; requiring it here held every market dormant
-                # after the 2026-08-24 failed top-up bind. Request every known
-                # cancel, then restore both streams with non-strict order reads.
-                # The fresh private-state gate still blocks each ambiguous
-                # owner, while unaffected markets become safe to quote again.
-                await self._quarantine_working_orders(require_terminal=False)
+                # Restore private visibility before creating cancellation
+                # events, for the same reason as `_recover_private_stream`.
+                # `_open_streams_for_active_market` cannot return control to a
+                # decision loop, so this order does not create a quote window.
                 await self._open_streams_for_active_market(
                     strict_order_markets=frozenset())
+                await self._quarantine_working_orders(require_terminal=False)
+                await self._drain_private_events()
                 ambiguous_markets = sorted({
                     str(row["market_slug"])
                     for row in (
@@ -4792,6 +4886,12 @@ class CommissioningRunner:
                     "bound_streams_terminal", invariant)
                 return f"critical:{invariant.code}"
             except Exception as recovery_exc:
+                if not self.gate.connected:
+                    try:
+                        await self._quarantine_working_orders(
+                            require_terminal=False)
+                    except Exception:
+                        pass
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
@@ -4998,8 +5098,15 @@ class CommissioningRunner:
         would report the same condition forever and never quote again.
         """
 
-        await self._report_runtime_error(
-            f"strategy_state:{slug}", AdapterError(str(reason or "unknown")))
+        component = f"strategy_state:{slug}"
+        # A stale read is a decision refusal, but if the immediate REST refresh
+        # succeeds it is not an operational error. Reporting before the refresh
+        # produced 8,722 attempt=1 "errors" in one healthy day even though the
+        # recursive plan used a fresh book milliseconds later. Count and report
+        # only a stale condition that the recovery itself cannot clear.
+        if reason != "book_stale":
+            await self._report_runtime_error(
+                component, AdapterError(str(reason or "unknown")))
         try:
             if reason in {"book_stale", "book_market_mismatch",
                           "hard_exit_deferred_thin_book"}:
@@ -5022,6 +5129,9 @@ class CommissioningRunner:
         except RuntimeInvariantViolation:
             raise
         except Exception as exc:
+            if reason == "book_stale":
+                await self._report_runtime_error(
+                    component, AdapterError(str(reason or "unknown")))
             await self._report_runtime_error(
                 f"strategy_state_recovery:{slug}", exc)
 
@@ -5237,15 +5347,19 @@ class CommissioningRunner:
         keeps its refresh.
         """
 
-        if slug not in self._retired:
+        retired = self._retired.get(slug)
+        if retired is None:
             return False
-        if not self._retired_past_kickoff(slug, now):
+        abandoned = retired.rounds >= MAX_RETIREMENT_ROUNDS
+        if not abandoned and not self._retired_past_kickoff(slug, now):
             return False
         # The exit test, and the reason this stays safe. A retirement holding
         # anything at all keeps its book.
         if self.ledger.position(slug) != 0:
             return False
-        return not self.ledger.working_orders(slug)
+        if self.ledger.working_orders(slug) or self.ledger.absent_orders(slug):
+            return False
+        return not self.ledger.market_has_unresolved_intent(slug)
 
     def _release_retired_if_flat(self, slug: str) -> None:
         """Free a retired market's slot once the venue proves it flat.
@@ -5532,6 +5646,10 @@ class CommissioningRunner:
             delay = 1.0
             now = self._now()
             try:
+                # Stream tasks are paused while shutdown owns the loop, but the
+                # connected private socket still buffers terminal cancel/fill
+                # events. Apply those before falling back to REST reads.
+                await self._drain_private_events()
                 await self._rest_reconcile(now)
                 # Every market that ever held risk must be retired, not just
                 # the primary. A slug the session has already dropped can still

@@ -1424,6 +1424,25 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # Refreshing the primary would leave market-two stale forever: it would
         # report book_stale on every pass and never quote again.
         self.assertEqual(refreshed, ["market-two"])
+        self.assertNotIn("strategy_state:market-two",
+                         runner._runtime_error_counts)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_stale_book_refresh_is_counted_as_an_error(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner._refresh_book = AsyncMock(
+            side_effect=AdapterError("book endpoint unavailable"))
+
+        await runner._recover_strategy_state("book_stale", slug)
+
+        self.assertEqual(
+            runner._runtime_error_counts[f"strategy_state:{slug}"], 1)
+        self.assertEqual(
+            runner._runtime_error_counts[
+                f"strategy_state_recovery:{slug}"], 1)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -4470,6 +4489,88 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_private_recovery_listens_before_cancel_and_drains_proof(self):
+        """A reconnect must not create a terminal-event visibility gap."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+
+        class DrainingPrivateStream(FakePrivateStream):
+            def drain_events(self, *, limit=None):
+                if limit is None:
+                    limit = len(self.events)
+                drained = tuple(self.events[:limit])
+                del self.events[:limit]
+                return drained
+
+        runner.private_stream_factory = DrainingPrivateStream
+        slug = runner.market_slug
+        runner.ledger.apply_order_event(
+            "ws", "open-before-reconnect",
+            OrderState(
+                client_order_id="liquidity-reconnect",
+                exchange_order_id="exchange-reconnect",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        client.orders.rows["exchange-reconnect"] = {
+            "id": "exchange-reconnect",
+            "clientOrderId": "liquidity-reconnect",
+            "marketSlug": slug,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+        original_cancel = client.orders.cancel
+
+        async def cancel_after_listener_started(order_id, payload):
+            self.assertTrue(runner.private_stream.started)
+            await original_cancel(order_id, payload)
+            runner.private_stream.events.append(PrivateEvent(
+                PrivateEventKind.ORDER_UPDATE,
+                {"execution": {
+                    "id": "cancel-proof-reconnect",
+                    "type": "EXECUTION_TYPE_CANCEL",
+                    "order": {
+                        "id": order_id,
+                        "marketSlug": slug,
+                        "intent": "ORDER_INTENT_BUY_LONG",
+                        "side": "ORDER_SIDE_BUY",
+                        "state": "ORDER_STATE_CANCELED",
+                        "price": {"value": "0.49", "currency": "USD"},
+                        "quantity": "5",
+                        "cumQuantity": "0",
+                        "updateTime": runner._now().isoformat(),
+                    },
+                }},
+                "terminal-cancel-after-reconnect"))
+
+        client.orders.cancel = cancel_after_listener_started
+
+        async def stop_if_the_ordering_regresses(_seconds):
+            runner.request_stop("ordering_regressed")
+
+        runner.sleep = stop_if_the_ordering_regresses
+
+        stop = await runner._recover_private_stream(
+            AdapterError("private WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(runner.ledger.unresolved_intents(slug), [])
+        self.assertEqual(runner.ledger.absent_orders(slug), [])
+        self.assertEqual(runner.ledger.working_orders(slug), [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_reward_cash_cannot_mask_the_session_loss_stop(self):
         """Non-trading credits must not buy back the trading-loss budget."""
 
@@ -5618,6 +5719,127 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # "0/8 of capacity" makes obvious.
         self.assertIn(f"{'Quoting':<19}{'0/8':>10}", rendered)
         self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", rendered)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_shutdown_drains_buffered_terminal_cancel_proof(self):
+        """A stopped consumer must still apply proof already on its socket."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(runner.config, max_shutdown_seconds=15)
+        runner.sleep = AsyncMock()
+        slug = runner.market_slug
+        runner.ledger.apply_order_event(
+            "ws", "shutdown-open",
+            OrderState(
+                client_order_id="liquidity-shutdown",
+                exchange_order_id="exchange-shutdown",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.ledger.prepare_intent(
+            "shutdown-cancel", "CANCEL", slug, "liquidity-shutdown",
+            {"orderId": "exchange-shutdown"}, created_at=runner._now())
+        runner.ledger.transition_intent(
+            "shutdown-cancel", "SUBMITTING", updated_at=runner._now())
+        runner.ledger.transition_intent(
+            "shutdown-cancel", "ACKNOWLEDGED", updated_at=runner._now(),
+            exchange_order_id="exchange-shutdown")
+        client.orders.rows["exchange-shutdown"] = {
+            "id": "exchange-shutdown",
+            "clientOrderId": "liquidity-shutdown",
+            "marketSlug": slug,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_CANCELED",
+            "createTime": runner._now().isoformat(),
+        }
+
+        async def lagging_retrieve(_order_id):
+            raise AdapterError(
+                "GET /v1/order/exchange-shutdown failed: NotFoundError")
+
+        client.orders.retrieve = lagging_retrieve
+        buffered = [PrivateEvent(
+            PrivateEventKind.ORDER_UPDATE,
+            {"execution": {
+                "id": "shutdown-cancel-proof",
+                "type": "EXECUTION_TYPE_CANCEL",
+                "order": {
+                    "id": "exchange-shutdown",
+                    "marketSlug": slug,
+                    "intent": "ORDER_INTENT_BUY_LONG",
+                    "side": "ORDER_SIDE_BUY",
+                    "state": "ORDER_STATE_CANCELED",
+                    "price": {"value": "0.49", "currency": "USD"},
+                    "quantity": "5",
+                    "cumQuantity": "0",
+                    "updateTime": runner._now().isoformat(),
+                },
+            }},
+            "buffered-shutdown-cancel")]
+
+        def drain_events():
+            drained = tuple(buffered)
+            buffered.clear()
+            return drained
+
+        runner.private_stream.drain_events = drain_events
+
+        await runner._shutdown("operator_sigterm")
+
+        self.assertTrue(runner._shutdown_proved_flat)
+        self.assertEqual(runner.ledger.unresolved_intents(slug), [])
+        self.assertEqual(runner.ledger.working_orders(slug), [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_flat_abandoned_market_stops_refreshing_before_kickoff(self):
+        """Round ten cannot plan again, so a flat slot cannot use a book."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.state_for(slug).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=2))
+        for _ in range(MAX_RETIREMENT_ROUNDS):
+            await runner._retire_market(slug, "unrecoverable_book_stale")
+        runner._retired[slug].rounds = MAX_RETIREMENT_ROUNDS
+
+        self.assertTrue(runner._book_refresh_would_be_pointless(
+            slug, runner._now()))
+        before = client.markets.book_calls
+        due = runner._now() - timedelta(seconds=1)
+        next_due = await runner._refresh_quiet_book_if_due(due, slug)
+        self.assertEqual(client.markets.book_calls, before)
+        self.assertGreater(next_due, runner._now())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_ambiguous_abandoned_market_keeps_its_book_refresh(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        runner.state_for(slug).market = SimpleNamespace(
+            game_start=runner._now() + timedelta(hours=2))
+        for _ in range(MAX_RETIREMENT_ROUNDS):
+            await runner._retire_market(slug, "unrecoverable_book_stale")
+        runner._retired[slug].rounds = MAX_RETIREMENT_ROUNDS
+        runner.ledger.prepare_intent(
+            "abandoned-ambiguous", "CANCEL", slug,
+            "liquidity-ambiguous", {}, created_at=runner._now())
+
+        self.assertFalse(runner._book_refresh_would_be_pointless(
+            slug, runner._now()))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7195,6 +7417,51 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_rescheduled_exact_program_releases_an_unpaid_slot(self):
+        """The venue may move kickoff back outside the six-hour window."""
+
+        runner = await self.armed()
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.reward_program_id = f"reward-{slug}"
+        runner.gateway.fetch_market = AsyncMock(return_value=MarketMetadata(
+            slug=slug,
+            game_start=now + timedelta(hours=8),
+            tick_size=0.01,
+            active=True,
+            closed=False,
+            status="MARKET_STATUS_OPEN",
+            minimum_trade_qty=1,
+            sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE",
+        ))
+        runner.gateway.fetch_incentives = AsyncMock(return_value={
+            slug: MarketIncentive(slug=slug, periods=(IncentivePeriod(
+                program_id=f"reward-{slug}",
+                period="day_of",
+                status="active",
+                reward_pool=100,
+                discount_factor=0.5,
+                target_size=10,
+                starts_at=None,
+                ends_at=None,
+            ),)),
+        })
+
+        await runner._refresh_contracts(now, slug)
+
+        self.assertEqual(
+            state.reward_authorization_loss_reason,
+            "no_longer_applicable")
+        self.assertIsNotNone(
+            state.reward_authorization_loss_confirmed_at)
+        self.assertIsNone(state.incentive)
+        self.assertTrue(runner._reward_authorization_lost_and_flat(
+            slug, runner._now()))
+        self.assertTrue(runner._reward_end_top_up_requested)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_active_refresh_records_the_exact_authorizing_program(self):
         runner = await self.armed()
         slug = runner.market_slug
@@ -7298,6 +7565,34 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_absent_order_blocks_reward_slot_release(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        self.mark_reward_ended(runner, slug)
+        runner.ledger.apply_order_event(
+            "ws", "reward-ended-absent",
+            OrderState(
+                client_order_id="reward-ended-client",
+                exchange_order_id="reward-ended-exchange",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.ledger.connection.execute(
+            "UPDATE execution_orders SET status='UNKNOWN_ABSENT', "
+            "unknown_reason='missing_from_complete_snapshot' "
+            "WHERE exchange_order_id='reward-ended-exchange'")
+        runner.ledger.connection.commit()
+
+        self.assertFalse(runner._reward_ended_and_flat(
+            slug, runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_top_up_never_binds_an_empty_active_set(self):
         """`_bind_markets(())` leaves `market_slug` raising and kills the loop."""
 
@@ -7392,7 +7687,7 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.market_stream.close()
 
     async def test_top_up_scopes_only_the_post_preflight_bind_read(self):
-        """A race after strict preflight may bar its owner, not all slots."""
+        """Strict reads cover releases, never unrelated retained owners."""
 
         runner = await self.armed(replacements=("market-three",))
         await self._one_dead_slot(runner)
@@ -7406,11 +7701,58 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
 
         scopes = [call.kwargs.get("strict_order_markets")
                   for call in reconcile.await_args_list]
-        self.assertEqual(scopes, [None, frozenset()])
+        self.assertEqual(scopes, [frozenset({"market-two"}), frozenset()])
         self.assertEqual(
             runner.active_slugs, ("market-one", "market-three"))
         self.assertTrue(runner.gate.connected)
         self.assertFalse(runner._streams_need_rebind)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unrelated_not_found_does_not_block_a_slot_top_up(self):
+        """One retained owner's lagging GET must not freeze all 20 slots."""
+
+        runner = await self.armed(replacements=("market-three",))
+        held, _dead = await self._one_dead_slot(runner)
+        runner.ledger.apply_order_event(
+            "ws", "held-open",
+            OrderState(
+                client_order_id="liquidity-held",
+                exchange_order_id="exchange-held",
+                market_slug=held,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        runner.client.orders.rows["exchange-held"] = {
+            "id": "exchange-held",
+            "clientOrderId": "liquidity-held",
+            "marketSlug": held,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+        original_retrieve = runner.client.orders.retrieve
+
+        async def unrelated_not_found(order_id):
+            if order_id == "exchange-held":
+                raise AdapterError(
+                    "GET /v1/order/exchange-held failed: NotFoundError")
+            return await original_retrieve(order_id)
+
+        runner.client.orders.retrieve = unrelated_not_found
+
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "market-three"))
         self.assertEqual(runner.client.orders.cancel_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

@@ -6,6 +6,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.reward_table import (
     AccountMetricUnavailable, AccountRealizedToday, _nontrading_cash_today,
@@ -79,7 +80,16 @@ class RewardTableTests(unittest.TestCase):
             today=date(2026, 8, 25),
             account_realized=AccountRealizedToday(
                 Decimal("-30.9844"), "ok"),
-        )
+)
+
+
+class _August25Datetime(datetime):
+    """Keep rollover-sensitive account snapshots deterministic."""
+
+    @classmethod
+    def now(cls, tz=None):
+        moment = datetime(2026, 8, 25, 17, tzinfo=timezone.utc)
+        return moment if tz is None else moment.astimezone(tz)
 
         self.assertIn("| 2026-08-23 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
         self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
@@ -262,9 +272,10 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
                 },
             }], "eof": True}])
 
-        result = await account_realized_today(
-            str(self.database), gateway,
-            now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+        with patch("scripts.reward_table.datetime", _August25Datetime):
+            result = await account_realized_today(
+                str(self.database), gateway,
+                now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
         self.assertEqual(result.value, Decimal("-25"))
         self.assertEqual(result.position_basis, Decimal("5"))
@@ -294,9 +305,10 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
             [Decimal("480"), Decimal("479")], {},
             [{"activities": [], "eof": True}])
 
-        result = await account_realized_today(
-            str(self.database), gateway,
-            now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+        with patch("scripts.reward_table.datetime", _August25Datetime):
+            result = await account_realized_today(
+                str(self.database), gateway,
+                now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
         self.assertIsNone(result.value)
         self.assertIn("cash changed", result.reason)

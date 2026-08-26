@@ -83,6 +83,15 @@ class MarketState:
     reward_program_ends_at: datetime | None = None
     reward_period_ended_at: datetime | None = None
     reward_period_end_confirmed_at: datetime | None = None
+    # A reward can stop authorizing this market without the program itself
+    # ending.  The venue may postpone a game out of the six-hour day-of window
+    # while continuing to publish the same active day-of program with no
+    # ``ends_at``.  Keep that positive observation separate from an explicit
+    # program end so the scheduler can release the idle slot without claiming
+    # the reward program ended.
+    reward_authorization_lost_at: datetime | None = None
+    reward_authorization_loss_reason: str | None = None
+    reward_authorization_loss_confirmed_at: datetime | None = None
 
     def clear_economics(self) -> None:
         """Drop every derived per-side value before a fresh evaluation.
@@ -119,6 +128,9 @@ class MarketState:
         self.reward_program_ends_at = None
         self.reward_period_ended_at = None
         self.reward_period_end_confirmed_at = None
+        self.reward_authorization_lost_at = None
+        self.reward_authorization_loss_reason = None
+        self.reward_authorization_loss_confirmed_at = None
         self.clear_economics()
 
     def observe_book_touch(

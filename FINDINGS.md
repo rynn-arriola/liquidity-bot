@@ -75,8 +75,12 @@ environment. The deployed report printed -$44.52 trading and +$128.38 finalized
 net for August 25. Supervisor 2631716 and runner 2631877 retained their original
 01:29 UTC start times through deployment, proving no reload occurred. The
 operator then requested a stop; graceful shutdown completed at 02:39:34 UTC
-with `operator_sigterm`, `flat=true`, and both processes stopped. The next start
-will load the LIVE correction.
+with `operator_sigterm`, `flat=true`, and both processes stopped.
+
+The operator authorized restart after review. Supervisor 3454654 and runner
+3454861 started at 02:41 UTC from deployed commit `325f64b`. Startup completed,
+the 20-market measurement scope opened, and post-only quote actions resumed;
+there was no cash-classification, session-loss-sensor or startup-refusal error.
 
 ---
 

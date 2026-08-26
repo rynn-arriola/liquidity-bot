@@ -1,6 +1,6 @@
 # Next session — outstanding fixes
 
-## PUSHED AND DEPLOYED; LIVE ACTIVATION NEXT RESTART: non-trading cash cannot mask session loss
+## PUSHED, DEPLOYED AND ACTIVE: non-trading cash cannot mask session loss
 
 At 2026-08-26T02:10Z the authoritative current-day result was -$44.5193 from
 466.0899 opening cash, 774.8506 current cash, +353.2800 completed non-trading
@@ -27,8 +27,12 @@ tests passed on the server, and a production report printed -$44.52 trading and
 +$128.38 finalized net for August 25. Supervisor/runner 2631716/2631877 kept
 their original 01:29 UTC start times through deployment, proving no restart
 occurred. The operator then requested a graceful stop; it completed at
-02:39:34 UTC with `flat=true`, and both processes are stopped. The next start
-will activate the LIVE correction.
+02:39:34 UTC with `flat=true`, and both processes stopped.
+
+After review, the operator authorized restart. Supervisor 3454654 and runner
+3454861 started at 02:41 UTC from deployed commit `325f64b`; startup completed
+and post-only quoting resumed without cash-classification, session-loss-sensor
+or startup-refusal errors.
 
 ---
 

@@ -31,7 +31,7 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
-### FIXED, PUSHED AND DEPLOYED; LIVE ACTIVATION NEXT RESTART — reward credits masked the $80 session-loss sensor and today's table net
+### FIXED, PUSHED, DEPLOYED AND ACTIVE — reward credits masked the $80 session-loss sensor and today's table net
 
 **Symptom.** The August 25 table row showed -$26.41 while the separately
 labeled account result proved -$44.52. More seriously, $353.28 of completed
@@ -71,6 +71,10 @@ finalized net +$128.38. Supervisor/runner PIDs remained 2631716/2631877 with
 their original 01:29 UTC start times through deployment. At the operator's
 later request, graceful shutdown completed at 02:39:34 UTC with
 `stop_reason=operator_sigterm` and `flat=true`; neither process remains.
+After the completed review, the operator authorized restart. Supervisor 3454654
+and runner 3454861 started at 02:41 UTC from deployed commit `325f64b`; startup
+completed and post-only quoting resumed without cash-classification, loss-sensor
+or startup-refusal errors.
 
 ---
 

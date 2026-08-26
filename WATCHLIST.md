@@ -603,3 +603,77 @@ Watch for:
 
 Close this out either way: if reward does not move, the resting gain was
 measured on the wrong quantity and the churn work needs revisiting.
+
+---
+
+## 11. Would quote size 20 nearly double paid reward from size 10?
+
+**Three-complete-ET-day measurement opened 2026-08-25. No live size change is
+authorized.** Treat August 25 ET as a partial warm-up day. Measure the complete
+August 26, 27 and 28 ET reward days, then review the book counterfactual on or
+after **2026-08-29 00:00 ET**. Paid-reward validation must wait for those
+earning dates to post; an absent or pending reward is not zero.
+
+### Why raw Target Size does not answer this
+
+Twenty contracts is small beside a raw Target Size of 7,500-15,000 and one
+20-contract order at $0.50 uses about $10. Reward payout nevertheless uses our
+share of **discounted** score inside the cutoff, not our raw contracts divided
+by Target Size. Farther levels are multiplied by `discountFactor ** ticks`, so
+our touch order can own a material share even when its raw size is tiny.
+
+For a size-10 observation with our score `s` and total score `T` (including
+that size-10 order), the unchanged-book size-20 reward-share multiplier is:
+
+```
+(2s / (T + s)) / (s / T) = 2T / (T + s) = 2 / (1 + current_share)
+```
+
+This is near 2 only when current share is small. It approaches 1 as the order
+already owns nearly all discounted score.
+
+### Baseline before the cohort
+
+The read-only production review at 2026-08-26T01:51Z contained 3,003 size-10
+quote observations from 2026-08-24T02:51Z onward. Capture was complete across
+all quote sizes (3,059/3,059 required, zero missing), with 236 maker-filled
+observations and 1.96 observed days. The ordinary observation's median
+unchanged-book multiplier was 1.935x. Weighting the observations by their
+initial projected reward and measured resting duration produced 1.419x. The
+weighted number is a counterfactual from placement-time books, not a paid
+reward result and not a second-by-second venue settlement replay.
+
+Actual paid history answers only the earlier 5 -> 10 change. Across completed
+comparison days, size 5 earned $0.1276 per resting side-hour and size 10 earned
+$0.2069, a 1.622x weighted increase (1.703x using the mean of daily rates).
+Market mix, reward pools and operating history changed, so this is supporting
+evidence rather than a randomized size experiment. There is no actual size-20
+paid-reward cohort.
+
+### Measure without touching business logic
+
+The existing `execution_quote_observations` rows already retain `order_score`,
+`total_score`, `projected_reward`, exact quantity and the linked order lifetime.
+Continue collecting automatically at live size 10; this reward-share study
+needs no additional REST call, WebSocket, venue mutation, scheduler input,
+restart or code deployment.
+
+For each complete ET day report:
+
+- observation count, missing capture and maker-fill count;
+- unweighted median and projected-reward/rest-duration-weighted 10 -> 20
+  multiplier;
+- the share of resting exposure where current size 10 owns at least 25%, 50%
+  and 75% of discounted score;
+- actual size-10 paid reward per resting side-hour once the earning date posts;
+- a sensitivity range for size-20 trading loss at 1.5x, 2.0x and the observed
+  stressed-exit tail, with the unchanged $80 loss stop shown explicitly.
+
+Do not call the three-day result an exact size-20 payout forecast. The venue
+rescores every second, while the durable observation captures the placement
+book. If the three days still support scaling, the next gate is an exact
+measurement-only size-20 full-book exit/reward counterfactual followed by a
+separately authorized staged live trial. Deposit size, the hard-coded $340
+portfolio exposure cap, the 20-slot scheduler, the $40 per-market stop and both
+$80 account stops must be reviewed before any live size-20 start; adding
+capital alone changes none of those controls.

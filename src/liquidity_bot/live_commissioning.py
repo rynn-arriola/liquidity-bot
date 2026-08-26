@@ -30,6 +30,7 @@ from polymarket_us import AsyncPolymarketUS
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .bot_era import bot_era_rewards_by_status
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .cash_activity import corrected_opening_cash, fetch_nontrading_cash
 from .commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
@@ -63,7 +64,8 @@ from .market_selector import (
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
 from .readiness import ReadinessVerdict
-from .reward_calendar import reward_day, risk_day, split_reward_day_interval
+from .reward_calendar import (
+    NEW_YORK, reward_day, risk_day, split_reward_day_interval)
 from .resting_time import resting_side_hours_by_day
 from .reconciler import (
     ActionKind,
@@ -96,6 +98,14 @@ Clock = Callable[[], datetime]
 # Generous: with backoff capped at 60s this is roughly an hour of retrying
 # before a transient startup condition is finally treated as a refusal.
 MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
+
+# The runtime loss sensor needs the same positive cash classification as the
+# read-only reward report. One cash-only page currently covers the account;
+# four is the proven bounded ceiling. Including the second bracketing balance,
+# refreshing every fifteen seconds adds at most 0.33 request/s to the existing
+# 0.20 balance request/s, inside the shared 4 request/s governor.
+NONTRADING_CASH_MAX_PAGES = 4
+NONTRADING_CASH_REFRESH_SECONDS = 15.0
 
 # Refresh before the risk guard's hard freshness edge. A twenty-market sweep
 # can itself take several seconds when individual books need REST recovery.
@@ -391,6 +401,15 @@ class CommissioningRunner:
         # rejected (320 contracts move $38 on a twelve-cent mark) does not
         # apply -- cash does not move on paper price changes.
         self._cash_baseline: Decimal | None = None
+        # Completed rewards, deposits, withdrawals and transfers since the
+        # durable cash baseline. Raw cash change is not trading P&L when one
+        # of these lands: 2026-08-25 paid $353.28 while trading lost $44.52,
+        # making the old session sensor read a fictitious +$308.76. The scan
+        # is bounded, cash-only and bracketed by equal balance reads.
+        self._nontrading_cash: Decimal | None = None
+        self._nontrading_cash_observed_at: datetime | None = None
+        self._nontrading_cash_day: date | None = None
+        self._cash_activity_boundary: datetime | None = None
         self._day_opening_equity: Decimal | None = None
         # (ET risk date, blockers, streak) set by `_stop_reason` when a loss stop
         # pauses, consumed once by `_announce_loss_stop_pause`.
@@ -1748,6 +1767,10 @@ class CommissioningRunner:
         # re-points it at the ET day's opening equity from the ledger, so a
         # restart inherits the day's drawdown instead of resetting it.
         self._roll_realized_baseline()
+        # Raw cash can include a reward or deposit. Prove the non-trading
+        # adjustment before the driver exists, so startup can never arm new
+        # risk with a reward-masked session-loss sensor.
+        await self._refresh_balance(self._now())
         self.driver = ControlledActionDriver(
             self.executor, self.ledger, self.risk_guard)
         self._orders_before = self.ledger.query(
@@ -2462,17 +2485,53 @@ class CommissioningRunner:
     async def _refresh_balance(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
-        self.balance = await self.account.fetch_balance(observed_at=now)
-        # Freshness begins when the response is received, not when the request
-        # entered the shared 4 req/s governor.
-        observed_at = self._now()
-        self.risk_guard.observe_equity(
-            self.balance.marked_equity, observed_at=observed_at)
+        first = await self.account.fetch_balance(observed_at=now)
+        self.balance = first
         # Realised P&L from the fill ledger, per market and in total. This
         # used to attribute the whole account's marked-equity change to the
         # primary market, which was wrong twice over: marked equity is not
         # realised, and one market is not all of them.
         self._roll_realized_baseline()
+
+        observed_at = self._now()
+        adjustment_due = (
+            self._nontrading_cash is None
+            or self._nontrading_cash_observed_at is None
+            or self._nontrading_cash_day != self._baseline_day
+            or (observed_at - self._nontrading_cash_observed_at).total_seconds()
+            >= NONTRADING_CASH_REFRESH_SECONDS
+        )
+        if adjustment_due:
+            if self._cash_activity_boundary is None:
+                raise RuntimeError("cash-activity boundary is unavailable")
+            nontrading = await fetch_nontrading_cash(
+                self.gateway,
+                boundary=self._cash_activity_boundary,
+                through=observed_at,
+                max_pages=NONTRADING_CASH_MAX_PAGES,
+            )
+            # Cash activity can complete while its pages are being read. Two
+            # equal settled-cash reads prove the adjustment and balance belong
+            # to one snapshot; marked asset notional may legitimately move.
+            second = await self.account.fetch_balance(observed_at=self._now())
+            if first.current_balance != second.current_balance:
+                raise AdapterError(
+                    "settled cash changed during non-trading activity snapshot")
+            if date.fromisoformat(risk_day(self._now())) != self._baseline_day:
+                raise AdapterError(
+                    "ET risk day changed during non-trading activity snapshot")
+            self.balance = second
+            self._nontrading_cash = nontrading
+            self._nontrading_cash_observed_at = self._now()
+            self._nontrading_cash_day = self._baseline_day
+
+        # Freshness begins only after every cash input is proven, not when the
+        # first balance request entered the shared governor. A failed activity
+        # scan therefore lets the existing 15-second risk freshness expire and
+        # disables new risk instead of silently falling back to masked cash.
+        observed_at = self._now()
+        self.risk_guard.observe_equity(
+            self.balance.marked_equity, observed_at=observed_at)
         self.risk_guard.observe_realized(self._session_realized())
         self.risk_guard.observe_market_realized({
             slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
@@ -2537,8 +2596,14 @@ class CommissioningRunner:
         ledger_value = self.ledger.realized_pnl() - self._realized_baseline
         if self.balance is None or self._cash_baseline is None:
             return ledger_value
+        if (self._nontrading_cash is None
+                or self._nontrading_cash_day != self._baseline_day):
+            raise RuntimeError("non-trading cash adjustment is unavailable")
         try:
-            realised = self.balance.current_balance - self._cash_baseline
+            realised = (
+                self.balance.current_balance
+                - self._cash_baseline
+                - self._nontrading_cash)
             for slug in self._shutdown_slugs() or self.active_slugs:
                 position = self.ledger.position(slug)
                 if not position:
@@ -2616,11 +2681,44 @@ class CommissioningRunner:
                 # the UTC-based process was already enforcing. Once any ET
                 # row exists, the ledger ignores legacy rows forever.
                 legacy_utc_date=now.astimezone(timezone.utc).date().isoformat()))
+        baseline_rows = self.ledger.query(
+            "SELECT opening_cash,created_at,source "
+            "FROM execution_risk_day_baselines WHERE risk_date=?",
+            (today.isoformat(),),
+        )
+        if len(baseline_rows) != 1:
+            raise RuntimeError("durable ET cash baseline is unavailable")
+        baseline_row = baseline_rows[0]
+        source = str(baseline_row["source"] or "")
+        if opening_cash is not None:
+            opening_cash = corrected_opening_cash(
+                today.isoformat(), opening_cash, source)
+        if source == "legacy_utc_cutover":
+            cash_boundary = datetime.combine(
+                today, datetime.min.time(), tzinfo=NEW_YORK).astimezone(
+                    timezone.utc)
+        elif source == "fresh_et_day":
+            cash_boundary = datetime.fromisoformat(
+                str(baseline_row["created_at"]))
+            if (cash_boundary.tzinfo is None
+                    or cash_boundary.utcoffset() is None):
+                raise RuntimeError("durable cash baseline time is timezone-naive")
+            # `fetch_nontrading_cash` treats this lower boundary as exclusive:
+            # opening cash already includes activity completed at this exact
+            # response receipt. Do not move the boundary into the future; the
+            # following snapshot can legitimately share the same clock tick.
+            cash_boundary = cash_boundary.astimezone(timezone.utc)
+        else:  # corrected_opening_cash handles this when cash is present.
+            raise RuntimeError(f"unknown ET baseline source: {source}")
         self._baseline_day = today
         self._realized_baseline = opening_realized
         self._realized_baseline_by_market = dict(
             self.ledger.realized_by_market())
         self._cash_baseline = opening_cash
+        self._cash_activity_boundary = cash_boundary
+        self._nontrading_cash = None
+        self._nontrading_cash_observed_at = None
+        self._nontrading_cash_day = None
         self._day_opening_equity = opening_equity
         # The hard stop measures against this. Without it the emergency
         # ceiling stays pinned to whatever equity this process happened to

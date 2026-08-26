@@ -133,11 +133,20 @@ class FakePortfolio:
     def __init__(self):
         self.rows = {}
         self.trades = []
+        self.cash_activities = []
 
     async def positions(self, params):
         return {"positions": self.rows, "eof": True}
 
     async def activities(self, params):
+        if params.get("types"):
+            allowed = set(params["types"])
+            return {
+                "activities": [
+                    row for row in self.cash_activities
+                    if row.get("type") in allowed],
+                "eof": True,
+            }
         return {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": t}
                                for t in self.trades], "eof": True}
 
@@ -4458,6 +4467,62 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stop, "operator_requested")
         self.assertEqual(sleeps, 1)
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_cash_cannot_mask_the_session_loss_stop(self):
+        """Non-trading credits must not buy back the trading-loss budget."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        later = NOW + timedelta(seconds=20)
+        runner._now = lambda: later
+
+        # +$100 reward and -$80 trading leaves settled cash +$20. The old
+        # sensor read +$20 and left quoting enabled; trading P&L is -$80.
+        client.account.current_balance = Decimal("120")
+        client.portfolio.cash_activities = [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "100", "currency": "USD"},
+                "description": "liquidity reward payout",
+                "updateTime": later.isoformat(),
+            },
+        }]
+
+        await runner._refresh_balance(later)
+
+        self.assertEqual(runner.risk_guard.realized_pnl, Decimal("-80"))
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=later))
+        self.assertEqual(runner._nontrading_cash, Decimal("100"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unknown_cash_activity_expires_risk_freshness(self):
+        """An unclassified credit must fail closed instead of being ignored."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        later = NOW + timedelta(seconds=20)
+        runner._now = lambda: later
+        client.portfolio.cash_activities = [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "5", "currency": "USD"},
+                "description": "unclassified adjustment",
+                "updateTime": later.isoformat(),
+            },
+        }]
+
+        with self.assertRaisesRegex(AdapterError, "unclassified completed"):
+            await runner._refresh_balance(later)
+
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=later))
+        self.assertIn(
+            "marked account equity is stale",
+            runner.risk_guard.blockers(now=later))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

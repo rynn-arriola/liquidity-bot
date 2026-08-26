@@ -8,6 +8,20 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
+- **FIXED AND REVIEWED; DEPLOY/ACTIVATION SPLIT — reward cash cannot mask the
+  session stop, and today's row uses account truth.** At 2026-08-26T02:10Z the
+  account proved opening cash 466.0899, current cash 774.8506, completed
+  non-trading cash +353.2800, zero open basis and trading -44.5193. The table
+  still showed its pair estimate -26.41, while LIVE's raw-cash session sensor
+  saw a fictitious +308.7607. Today's table row/net now use account realized;
+  historical rows remain pair estimates. LIVE shares the bounded cash parser,
+  subtracts classified non-trading cash, brackets the scan with equal balance
+  reads every 15 seconds, and fails closed through risk freshness when the
+  adjustment is unknown. Two killed mutants proved the row and sensor tests.
+  The hourly report becomes active from deployed script files without a bot
+  restart. LIVE code is active only on the next restart; the operator explicitly
+  requested no restart in this deployment.
+
 - **PUSHED, DEPLOYED AND ACTIVE; NO BOT RESTART — the reward webhook now separates
   current account-realized trading from historical pair estimates.** The new
   `Account realized today (ET)` is current settled cash minus the ET opening
@@ -17,8 +31,9 @@ from fact rather than from the last thing someone remembers.
   unknown transfer, malformed pagination, day rollover, or four-page cash
   window exhaustion prints `Unavailable` instead of a guess. Cash activities
   are restricted to five non-trading types and every report request shares a
-  separate 1 request/second limiter. The seven historical rows and finalized
-  nets keep their balanced-pair calculation but are now labeled `Pair est.`.
+  separate 1 request/second limiter. Historical rows keep their balanced-pair
+  calculation; the later correction above makes the current row/net use the
+  account value.
   The one legacy 2026-08-25 boundary uses only the exact audited stored/corrected
   pair `478.6998 -> 466.0899`; later days require a native ET baseline created
   within two minutes of midnight. Production schema reads confirmed the

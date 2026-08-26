@@ -31,6 +31,41 @@ Ground rules that came out of these:
 
 ## 2026-08-25
 
+### FIXED AND REVIEWED; DEPLOYMENT PENDING — reward credits masked the $80 session-loss sensor and today's table net
+
+**Symptom.** The August 25 table row showed -$26.41 while the separately
+labeled account result proved -$44.52. More seriously, $353.28 of completed
+reward credits made LIVE's realized session sensor see approximately +$308.76,
+so the documented $80 trading-loss stop could not fire from that state.
+
+**Mechanism.** The report deliberately retained `trading_by_day` for historical
+rows, but also used it for today's row and finalized net after adding the
+authoritative account metric below the table. LIVE `_session_realized` used
+settled cash minus the durable opening cash plus open basis. Settled cash is
+immune to paper marks but not to rewards, deposits, withdrawals or transfers;
+those cash flows were never classified or removed in the runner.
+
+**Fix.** Today's row and net use `Account realized today (ET)`; historical rows
+remain pair estimates and the table heading/footer state the distinction. The
+cash-activity parser is now shared production code. LIVE performs a bounded
+cash-only explicit-EOF walk by completion time, bracketed by equal balance
+reads, before arming and at a 15-second cadence. It subtracts the proven net
+non-trading cash from the session sensor. An unknown/moving/unbounded snapshot
+does not renew risk freshness, so new risk fails closed. The existing marked-
+equity hard stop and per-market fill-ledger stops are unchanged.
+
+**Proof.** The current-day regression requires -$44.52 trading and +$128.38 net
+where the pair estimate would print -$26.41 and +$146.49. The LIVE regression
+combines +$100 reward cash with -$80 trading and requires the sensor to read
+-$80; an unknown-transfer regression requires stale-state refusal. Reintroducing
+each defect made its specific test fail (-26.41 row; +$20 runtime sensor).
+All 634 tests pass, including the audited legacy-boundary and exact fresh-
+boundary startup regressions. The bot is intentionally not restarted; the LIVE correction activates
+only on the next restart, while the separate hourly reporter reads deployed
+script code on its next run.
+
+---
+
 ### FIXED, PUSHED, DEPLOYED AND ACTIVE; NO RESTART — reward webhook understated today's trading loss
 
 **Symptom.** The current ET row and `Trading P&L` total showed -$24.40 while

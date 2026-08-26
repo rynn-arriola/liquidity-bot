@@ -43,7 +43,10 @@ strategy is profitable and not permission to scale.
   two sensors: realized session loss pauses new risk, while marked-account-
   equity loss is the emergency hard stop. The daily risk day resets at
   midnight `America/New_York`, including DST. These account-level loss limits
-  do not scale down with quote size;
+  do not scale down with quote size. The session sensor subtracts positively
+  classified completed rewards, deposits, withdrawals, bonuses and transfers
+  from settled-cash change; its bounded cash-only snapshot must be current and
+  proven or risk freshness expires and new risk fails closed;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account

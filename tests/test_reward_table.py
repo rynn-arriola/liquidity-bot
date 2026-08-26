@@ -9,7 +9,8 @@ from pathlib import Path
 
 from scripts.reward_table import (
     AccountMetricUnavailable, AccountRealizedToday, _nontrading_cash_today,
-    account_realized_today, build_discord_payload, render_table,
+    _opening_cash_for_day, account_realized_today, build_discord_payload,
+    render_table,
     resting_side_hours_by_day)
 
 
@@ -82,7 +83,9 @@ class RewardTableTests(unittest.TestCase):
 
         self.assertIn("| 2026-08-23 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
         self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
-        self.assertIn("| 2026-08-25* | $-10.00 | Not posted | Not posted | Pending", output)
+        self.assertIn(
+            "| 2026-08-25* | $-30.98 | Not posted | Not posted | Pending",
+            output)
         self.assertIn("Finalized net (complete reward days only): **$+5.00**", output)
         self.assertIn("Account realized today (ET): **$-30.98**", output)
         self.assertIn("Balanced-pair estimate (7d): **$-30.00**", output)
@@ -107,9 +110,9 @@ class RewardTableTests(unittest.TestCase):
         self.assertEqual(len(embed["fields"]), 2)
         pnl_table = embed["fields"][0]["value"]
         resting_table = embed["fields"][1]["value"]
-        self.assertIn("Date ET      Pair est.", pnl_table)
+        self.assertIn("Date ET        Trading", pnl_table)
         self.assertIn("2026-08-19     $-10.00", pnl_table)
-        self.assertIn("2026-08-25*", pnl_table)
+        self.assertIn("2026-08-25*    $-30.98", pnl_table)
         self.assertIn("$+5.00", pnl_table)
         self.assertIn("Side-hours  Avg sides", resting_table)
         self.assertIn("2026-08-25*       24.00       1.00", resting_table)
@@ -118,7 +121,7 @@ class RewardTableTests(unittest.TestCase):
         resting_lines = resting_table.splitlines()[1:-1]
         self.assertEqual({len(line) for line in pnl_lines}, {53})
         self.assertEqual({len(line) for line in resting_lines}, {34})
-        self.assertIn("**Finalized net:** $+35.00", embed["description"])
+        self.assertIn("**Finalized net:** $+14.02", embed["description"])
         self.assertIn(
             "**Account realized today (ET):** $-30.98",
             embed["description"])
@@ -127,6 +130,25 @@ class RewardTableTests(unittest.TestCase):
             embed["description"])
         self.assertIn("Generated 2026-08-25 13:00 EDT", embed["footer"]["text"])
         self.assertIn("30 unbalanced market(s)", embed["footer"]["text"])
+
+    def test_current_day_net_uses_account_realized_not_pair_estimate(self):
+        today = date(2026, 8, 25)
+        output = render_table(
+            [today], pnl={today.isoformat(): Decimal("-26.41")},
+            paid={today.isoformat(): Decimal("172.90")}, pending={},
+            resting_hours={today.isoformat(): 1.0},
+            elapsed_hours={today.isoformat(): 1.0}, today=today,
+            account_realized=AccountRealizedToday(
+                Decimal("-44.52"), "ok"))
+
+        self.assertIn(
+            "| 2026-08-25* | $-44.52 | $172.90 | $0.00 | **+128.38**",
+            output)
+        self.assertIn(
+            "Finalized net (complete reward days only): **$+128.38**",
+            output)
+        self.assertIn(
+            "Balanced-pair estimate (7d): **$-26.41**", output)
 
     def test_discord_post_refuses_more_days_than_the_visual_layout_allows(self):
         days = [date(2026, 8, 18) + timedelta(days=offset)
@@ -251,6 +273,22 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["sortOrder"], "SORT_ORDER_DESCENDING")
         self.assertEqual(len(params["types"]), 5)
 
+    async def test_audited_legacy_cash_uses_its_et_correction(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE execution_risk_day_baselines SET opening_cash=?, "
+            "created_at=?, source=? WHERE risk_date=?",
+            ("478.6998", "2026-08-25T00:00:01+00:00",
+             "legacy_utc_cutover", "2026-08-25"))
+        connection.commit()
+        connection.close()
+
+        value = _opening_cash_for_day(
+            str(self.database), date(2026, 8, 25),
+            datetime(2026, 8, 25, 4, tzinfo=timezone.utc))
+
+        self.assertEqual(value, Decimal("466.0899"))
+
     async def test_realized_fails_closed_if_cash_moves_during_snapshot(self):
         gateway = _Gateway(
             [Decimal("480"), Decimal("479")], {},
@@ -350,6 +388,25 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
             through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
         self.assertEqual(result, Decimal("5"))
+
+    async def test_cash_scan_excludes_activity_at_opening_balance_boundary(self):
+        """Opening cash already includes activity on the same clock tick."""
+
+        boundary = datetime(2026, 8, 25, 4, tzinfo=timezone.utc)
+        gateway = _Gateway([], {}, [{"activities": [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "10", "currency": "USD"},
+                "description": "liquidity reward payout",
+                "updateTime": boundary.isoformat(),
+            },
+        }], "eof": True}])
+
+        result = await _nontrading_cash_today(
+            gateway, boundary=boundary, through=boundary)
+
+        self.assertEqual(result, Decimal("0"))
 
 
 if __name__ == "__main__":

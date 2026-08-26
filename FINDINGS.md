@@ -20,6 +20,57 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Reward credits can mask the runtime session-loss stop unless cash is classified
+
+Established 2026-08-25 at `2026-08-26T02:10:26Z` from two bounded production
+account reconciliations followed by the exact runtime sensor trace. The current
+ET day proved:
+
+```text
+ET opening cash                         466.0899
+current settled cash                    774.8506
+completed non-trading cash              353.2800
+open-position basis                       0.0000
+account-realized trading loss           -44.5193
+reward-table balanced-pair estimate     -26.4100
+old runtime session sensor             +308.7607
+```
+
+The report's account-realized calculation was correct: `774.8506 - 466.0899
+- 353.2800 + 0 = -44.5193`. The daily row still displayed the narrower pair
+estimate, however, so its finalized net overstated the current day by $18.11.
+That was a presentation defect in the report fixed earlier the same day, not a
+failure of its new account metric.
+
+The deeper defect was in LIVE `_session_realized`. It used current settled cash
+minus opening settled cash plus open basis, but never removed rewards, deposits,
+withdrawals or other completed non-trading cash. The $353.28 reward credits
+therefore did not merely make a report look profitable: they made the $80
+realized-trading-loss sensor see +$308.76. The marked-equity emergency sensor is
+intentionally account-wide and remains separate; it is the session sensor whose
+documented meaning is trading loss.
+
+The correction shares one cash classifier between the report and runner. LIVE
+scans only the five proven cash activity types, requires explicit EOF within
+four pages, uses completion time, and brackets the scan with equal settled-cash
+reads. It refreshes at most every 15 seconds through the existing shared 4
+request/second governor. Unknown transfer text, malformed pagination, moving
+cash, page exhaustion or a day crossing cannot renew risk freshness; the
+existing 15-second stale-equity gate then disables new risk. Startup proves the
+adjustment before the action driver exists. Open positions are still added back
+at exact basis, so buying inventory is not misread as a realized loss.
+
+The current-day table row and its net now use the already-proven account value;
+historical rows remain explicitly balanced-pair estimates. A killed report
+mutation printed -26.41/+146.49 instead of -44.52/+128.38 and failed its
+regression. A killed runtime mutation read +20 for a synthetic +$100 reward /
+-$80 trading day and failed against the required -$80. All 634 tests pass,
+including the audited legacy-boundary and exact fresh-boundary startup cases.
+The running process is unchanged until its next restart; deployment alone
+cannot alter code already loaded in memory.
+
+---
+
 ## The reward-table trading column understated the current ET-day realized loss
 
 Established 2026-08-25 at `2026-08-26T00:53:43Z` by reconciling the hourly

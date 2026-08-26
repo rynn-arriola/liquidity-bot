@@ -90,6 +90,15 @@ unsafe/ambiguous ownership remain terminal safety events.
 `stop_commissioning.sh` requests graceful cancellation, flattening, and exact
 flat-state proof before exit.
 
+The $80 realized session sensor subtracts positively classified completed
+rewards, deposits, withdrawals, bonuses and transfers from settled-cash change.
+It shares the report's completion-time cash parser, requires explicit EOF within
+four cash-only pages, and brackets each 15-second refresh with equal balance
+reads. A cash snapshot that moves, cannot be classified, crosses the ET day or
+exceeds the bound cannot renew risk freshness, so new risk fails closed. This
+uses the existing shared REST governor and does not change the separate marked-
+equity emergency sensor.
+
 All REST access shares one asynchronous limiter. The default is 4 requests per
 second, the configured hard maximum is 20, and continuous book/trade data uses
 WebSockets instead of polling.
@@ -138,8 +147,9 @@ completion time because the endpoint orders them by creation time. These calls
 share a separate 1 request/second limiter. The
 account figure subtracts completed rewards/deposits/other non-trading cash and
 adds current venue position basis; if the boundary or snapshot is not proved,
-it displays `Unavailable`. Historical `Pair est.` rows keep the balanced-leg
-ledger method and can omit settled exits. The script performs no market
+it displays `Unavailable`. Historical rows keep the balanced-leg ledger method
+and can omit settled exits; the current ET row and its net use the account
+figure instead. The script performs no market
 discovery, book, order or mutation call. Do not tight-loop it or schedule it
 more frequently than hourly. Pending and unposted reward are never counted as
 net, and the current ET day is marked partial.

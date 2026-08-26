@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -33,6 +33,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa: E402
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
 from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.cash_activity import (  # noqa: E402
+    CashActivityUnavailable,
+    corrected_opening_cash,
+    fetch_nontrading_cash,
+)
 from liquidity_bot.errors import AdapterError  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK, reward_day  # noqa: E402
@@ -42,20 +47,6 @@ from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
 ACCOUNT_ACTIVITY_MAX_PAGES = 4
 ACCOUNT_REPORT_RATE_PER_SECOND = 1.0
 BASELINE_START_TOLERANCE = timedelta(minutes=2)
-CASH_ACTIVITY_TYPES = (
-    "ACTIVITY_TYPE_ACCOUNT_DEPOSIT",
-    "ACTIVITY_TYPE_ACCOUNT_ADVANCED_DEPOSIT",
-    "ACTIVITY_TYPE_ACCOUNT_WITHDRAWAL",
-    "ACTIVITY_TYPE_REFERRAL_BONUS",
-    "ACTIVITY_TYPE_TRANSFER",
-)
-# The first ET-keyed row copied the old UTC baseline. This one boundary was
-# positively reconstructed while the account was flat at 04:00Z and a bounded
-# activity walk proved no transfer crossed it. Never apply the correction to a
-# database whose stored legacy value differs from the value that was audited.
-LEGACY_ET_OPENING_CASH = {
-    "2026-08-25": (Decimal("478.6998"), Decimal("466.0899")),
-}
 
 
 @dataclass(frozen=True)
@@ -96,82 +87,6 @@ def _timestamp(value: Any, field: str) -> datetime:
     return result.astimezone(timezone.utc)
 
 
-def _first_timestamp(*sources: Any) -> datetime:
-    keys = (
-        "updateTime", "createTime", "updatedAt", "createdAt",
-        "update_time", "create_time", "updated_at", "created_at",
-        "timestamp", "time", "date", "settledAt",
-    )
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        for key in keys:
-            if source.get(key) not in (None, ""):
-                return _timestamp(source[key], "activity")
-    raise AccountMetricUnavailable("cash activity has no timestamp")
-
-
-def _amount(raw: Any) -> Decimal:
-    if isinstance(raw, dict):
-        currency = str(raw.get("currency") or "USD").upper()
-        if currency != "USD":
-            raise AccountMetricUnavailable(
-                f"cash activity currency is {currency}, not USD")
-        raw = raw.get("value")
-    return _decimal(raw, "cash activity amount")
-
-
-def _completed(status: Any) -> bool:
-    clean = str(status or "").upper()
-    return ((clean == "COMPLETED" or clean.endswith("_COMPLETED"))
-            and not clean.endswith("NOT_COMPLETED"))
-
-
-def _cash_change_sign(activity_type: str, description: str,
-                      amount: Decimal) -> Decimal:
-    if amount < 0:
-        return amount
-    if activity_type == "ACTIVITY_TYPE_ACCOUNT_WITHDRAWAL":
-        return -amount
-    if activity_type in {
-            "ACTIVITY_TYPE_ACCOUNT_DEPOSIT",
-            "ACTIVITY_TYPE_ACCOUNT_ADVANCED_DEPOSIT",
-            "ACTIVITY_TYPE_REFERRAL_BONUS"}:
-        return amount
-    text = description.lower()
-    if "withdraw" in text:
-        return -amount
-    if any(token in text for token in (
-            "reward", "deposit", "apple pay", "credit", "bonus", "referral")):
-        return amount
-    raise AccountMetricUnavailable(
-        f"unclassified completed cash transfer: {description or '(blank)'}")
-
-
-def _cash_rows(activity: dict[str, Any]) -> Iterable[tuple[dict, dict]]:
-    change = activity.get("accountBalanceChange")
-    if not isinstance(change, dict):
-        raise AccountMetricUnavailable(
-            "cash activity has no accountBalanceChange")
-    # The balance change is the economic event. Its transaction list contains
-    # payment attempts and may grow; summing both levels can count one deposit
-    # more than once. Current production rows carry the authoritative amount,
-    # status and timestamp at this top level. Use transactions only as a
-    # compatibility fallback when those economic fields are absent.
-    if change.get("amount") is not None and change.get("status") is not None:
-        yield change, change
-        return
-    transactions = change.get("transactions")
-    if isinstance(transactions, list) and transactions:
-        for transaction in transactions:
-            if not isinstance(transaction, dict):
-                raise AccountMetricUnavailable(
-                    "cash activity transaction is not an object")
-            yield change, transaction
-    else:
-        yield change, change
-
-
 def _opening_cash_for_day(db: str, day_value: date,
                           boundary: datetime) -> Decimal:
     try:
@@ -191,89 +106,33 @@ def _opening_cash_for_day(db: str, day_value: date,
         raise AccountMetricUnavailable("ET opening-cash baseline is missing")
     stored = _decimal(row["opening_cash"], "opening cash")
     source = str(row["source"] or "")
+    try:
+        corrected = corrected_opening_cash(
+            day_value.isoformat(), stored, source)
+    except CashActivityUnavailable as exc:
+        raise AccountMetricUnavailable(str(exc)) from exc
+    # The audited correction itself establishes the ET boundary. Its stored
+    # timestamp belongs to the copied UTC row and must not be judged against
+    # the fresh-ET two-minute tolerance.
     if source == "legacy_utc_cutover":
-        correction = LEGACY_ET_OPENING_CASH.get(day_value.isoformat())
-        if correction is None or stored != correction[0]:
-            raise AccountMetricUnavailable(
-                "legacy UTC baseline has no proven ET correction")
-        return correction[1]
-    if source != "fresh_et_day":
-        raise AccountMetricUnavailable(f"unknown ET baseline source: {source}")
+        return corrected
     created_at = _timestamp(row["created_at"], "opening baseline")
     delta = created_at - boundary.astimezone(timezone.utc)
     if delta < timedelta(0) or delta > BASELINE_START_TOLERANCE:
         raise AccountMetricUnavailable(
             "ET baseline was not captured at the day boundary")
-    return stored
+    return corrected
 
 
 async def _nontrading_cash_today(
     gateway: AsyncReadOnlyGateway, *, boundary: datetime, through: datetime,
 ) -> Decimal:
-    cursor: str | None = None
-    seen_cursors: set[str] = set()
-    net = Decimal(0)
-    for _ in range(ACCOUNT_ACTIVITY_MAX_PAGES):
-        params: dict[str, Any] = {
-            "limit": 100,
-            "types": list(CASH_ACTIVITY_TYPES),
-            "sortOrder": "SORT_ORDER_DESCENDING",
-        }
-        if cursor:
-            params["cursor"] = cursor
-        response = await gateway._call(
-            "GET /v1/portfolio/activities (cash only)",
-            lambda params=params: gateway.client.portfolio.activities(params))
-        if not isinstance(response, dict) or not isinstance(
-                response.get("activities"), list):
-            raise AccountMetricUnavailable(
-                "cash-activity response has no activities list")
-        for activity in response["activities"]:
-            if not isinstance(activity, dict):
-                raise AccountMetricUnavailable("cash activity is not an object")
-            activity_type = str(activity.get("type") or "").upper()
-            if activity_type not in CASH_ACTIVITY_TYPES:
-                raise AccountMetricUnavailable(
-                    f"unexpected cash activity type: {activity_type or '(blank)'}")
-            for parent, row in _cash_rows(activity):
-                status = row.get("status", parent.get("status"))
-                if status in (None, ""):
-                    raise AccountMetricUnavailable(
-                        "cash activity status is missing")
-                if not _completed(status):
-                    continue
-                row_at = _first_timestamp(row, parent, activity)
-                if row_at > through:
-                    raise AccountMetricUnavailable(
-                        "completed cash activity changed after the account snapshot")
-                if row_at < boundary:
-                    continue
-                amount = _amount(row.get("amount", parent.get("amount")))
-                description = str(
-                    row.get("description", parent.get("description", "")))
-                net += _cash_change_sign(activity_type, description, amount)
-        eof = response.get("eof")
-        # The endpoint sorts balance changes by createTime, but settled cash
-        # moves at completion/updateTime. An old-created deposit can therefore
-        # complete later than a newer row. Only explicit EOF proves the daily
-        # completion-time window; never stop merely because createTime crossed
-        # the ET boundary.
-        if eof is True:
-            return net
-        if eof is not False:
-            raise AccountMetricUnavailable(
-                "cash-activity pagination has no explicit eof")
-        next_cursor = response.get("nextCursor")
-        if not isinstance(next_cursor, str) or not next_cursor.strip():
-            raise AccountMetricUnavailable(
-                "cash-activity pagination ended without eof")
-        if next_cursor in seen_cursors:
-            raise AccountMetricUnavailable(
-                "cash-activity pagination cursor repeated")
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
-    raise AccountMetricUnavailable(
-        "cash-activity scan did not reach the ET boundary")
+    try:
+        return await fetch_nontrading_cash(
+            gateway, boundary=boundary, through=through,
+            max_pages=ACCOUNT_ACTIVITY_MAX_PAGES)
+    except CashActivityUnavailable as exc:
+        raise AccountMetricUnavailable(str(exc)) from exc
 
 
 async def account_realized_today(
@@ -335,20 +194,36 @@ def _money(value: Decimal | None, *, zero_if_missing: bool = False) -> str:
     return f"${float(value):,.2f}"
 
 
+def _displayed_trading(
+    day_value: date,
+    *,
+    today: date,
+    pnl: dict,
+    account_realized: AccountRealizedToday | None,
+) -> Decimal | None:
+    """Use account truth today and the balanced-pair estimate historically."""
+
+    if day_value == today:
+        return account_realized.value if account_realized is not None else None
+    return pnl.get(day_value.isoformat())
+
+
 def render_table(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
     today: date, account_realized: AccountRealizedToday | None = None,
 ) -> str:
     lines = [
-        "| Date (ET) | Pair estimate | Paid reward | Pending reward | "
+        "| Date (ET) | Trading P&L | Paid reward | Pending reward | "
         "Finalized net | Resting side-hours | Avg. sides resting |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     complete_net = Decimal(0)
     for day_value in days:
         key = day_value.isoformat()
-        trade = pnl.get(key)
+        trade = _displayed_trading(
+            day_value, today=today, pnl=pnl,
+            account_realized=account_realized)
         paid_reward = paid.get(key)
         pending_reward = pending.get(key)
         has_reward_row = paid_reward is not None or pending_reward is not None
@@ -368,7 +243,9 @@ def render_table(
         elapsed = float(elapsed_hours.get(key, 0.0))
         average = resting / elapsed if elapsed > 0 else 0.0
         label = f"{key}{'*' if day_value == today else ''}"
-        trade_text = (f"${float(trade):+,.2f}" if trade is not None else "n/a")
+        trade_text = (
+            f"${float(trade):+,.2f}" if trade is not None
+            else "Unavailable" if day_value == today else "n/a")
         lines.append(
             f"| {label} | {trade_text} | {paid_text} | {pending_text} | "
             f"{net_text} | {resting:.2f} | {average:.2f} |")
@@ -395,8 +272,9 @@ def render_table(
         "",
         "`*` Current ET day is partial. `Not posted` is not zero. Pending "
         "reward is never counted in finalized net.",
-        "Account realized is account-wide settled-cash change, less completed "
-        "non-trading cash changes, plus current open-position basis.",
+        "Today's Trading P&L is account-wide settled-cash change, less "
+        "completed non-trading cash changes, plus current open-position basis. "
+        "Historical Trading P&L rows remain balanced-pair estimates.",
     ])
     if account_realized is not None and account_realized.value is None:
         lines.append(f"Account realized unavailable: {account_realized.reason}.")
@@ -417,7 +295,7 @@ def build_discord_payload(
         raise ValueError("the Discord table layout supports at most 7 days")
 
     pnl_lines = [
-        f"{'Date ET':<11}  {'Pair est.':>9}  {'Paid':>8}  "
+        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  "
         f"{'Pending':>8}  {'Net':>9}",
         "-----------  ---------  --------  --------  ---------",
     ]
@@ -428,7 +306,9 @@ def build_discord_payload(
     complete_net = Decimal(0)
     for day_value in days:
         key = day_value.isoformat()
-        trade = pnl.get(key)
+        trade = _displayed_trading(
+            day_value, today=today, pnl=pnl,
+            account_realized=account_realized)
         paid_reward = paid.get(key)
         pending_reward = pending.get(key)
         has_reward = paid_reward is not None or pending_reward is not None
@@ -442,8 +322,9 @@ def build_discord_payload(
         else:
             net_text = "Pending"
 
-        trade_text = (f"${float(trade):+,.2f}"
-                      if trade is not None else "n/a")
+        trade_text = (
+            f"${float(trade):+,.2f}" if trade is not None
+            else "unavail" if day_value == today else "n/a")
         if has_reward:
             paid_text = _money(paid_reward, zero_if_missing=True)
             pending_text = _money(pending_reward, zero_if_missing=True)
@@ -494,8 +375,8 @@ def build_discord_payload(
         "footer": {"text": (
             f"Generated {stamp} · * current ET day is partial · "
             "-- reward not posted · Pending excluded from net · "
-            "Account realized is account-wide cash change - transfers + open "
-            "basis · Historical rows are balanced-pair estimates; "
+            "Today uses account-wide cash change - transfers + open basis · "
+            "Historical rows are balanced-pair estimates; "
             f"{unbalanced_markets} unbalanced market(s) and settled exits may "
             "be missing")},
     }

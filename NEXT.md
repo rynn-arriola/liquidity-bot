@@ -1,5 +1,29 @@
 # Next session — outstanding fixes
 
+## FIXED AND REVIEWED; DEPLOYMENT PENDING: non-trading cash cannot mask session loss
+
+At 2026-08-26T02:10Z the authoritative current-day result was -$44.5193 from
+466.0899 opening cash, 774.8506 current cash, +353.2800 completed non-trading
+cash and zero open basis. The table row still showed pair estimate -$26.41,
+and LIVE's raw-cash session sensor saw +$308.7607. Today's row/net now use the
+account value. Historical rows remain pair estimates.
+
+LIVE now shares the bounded completion-time cash classifier, subtracts proven
+non-trading cash and requires two equal settled-cash reads around the scan.
+Startup proves it before the action driver exists; runtime refreshes at most
+every 15 seconds through the shared 4 request/sec governor. Unknown transfers,
+moving cash, malformed pagination, four-page exhaustion or an ET-day crossing
+cannot renew risk freshness. The marked-equity hard stop remains separate and
+account-wide. Both economic defects were mutation-checked and all 634 tests
+pass, including the audited legacy-boundary and exact fresh-boundary startup
+regressions.
+
+Deployment intentionally does not restart the bot. The hourly report reads the
+new script on its next run; the LIVE safety correction activates only on the
+next operator-authorized restart.
+
+---
+
 ## PUSHED, DEPLOYED AND ACTIVE; NO BOT RESTART: account-realized today
 
 At 2026-08-26T00:53Z the webhook showed -$24.40 for the current ET day, while

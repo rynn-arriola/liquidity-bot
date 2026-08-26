@@ -353,10 +353,11 @@ These are implementation requirements, not suggestions.
     completion `updateTime`; feed order is only creation order and may not prove
     an ET boundary. All use one report-local 1 request/sec limiter.
     The value is current cash minus ET opening cash and completed non-trading
-    cash, plus exact open-position basis. Any moving balance, absent basis, unproven
+    cash, plus exact open-position basis. The current ET row and its net use
+    this value; historical daily trading rows remain explicitly balanced-pair
+    estimates. Any moving balance, absent basis, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day
-    rollover must render `Unavailable`, never a partial number. Historical
-    daily trading rows remain explicitly balanced-pair estimates. A nonblocking
+    rollover must render `Unavailable`, never a partial number. A nonblocking
     file lock prevents overlap and a 90-second timeout bounds runtime. Its
     dedicated Discord webhook is loaded only from the server-side shared
     credentials file, is excluded from repr/log output, and may never be
@@ -384,3 +385,16 @@ These are implementation requirements, not suggestions.
     prevent the next owner from entering the ordinary plan/apply path. The
     existing shutdown routine alone owns subsequent cancellation and
     flattening; prompt stop may not skip its positive whole-account flat proof.
+74. The realized session-loss sensor must measure trading cash, not raw settled
+    cash. Completed rewards, deposits, withdrawals, bonuses and transfers must
+    be positively classified and removed from current cash change before the
+    $80 session threshold is evaluated; open inventory remains added back at
+    exact basis. Startup must prove the adjustment before an action driver can
+    build risk. Runtime uses only the five proven cash activity types, requires
+    completion-time classification and explicit EOF within four pages, and
+    brackets the walk with equal settled-cash reads through the shared REST
+    governor. Unknown transfer text, malformed pagination, page exhaustion,
+    moving cash or ET-day rollover may not fall back to raw cash or renew risk
+    freshness. The existing stale-equity gate must disable new risk while the
+    adjustment is unproved. This does not redefine the separate marked-equity
+    emergency sensor, which remains account-wide.

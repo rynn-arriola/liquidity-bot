@@ -289,7 +289,13 @@ Automatic rotation first cancels owned quotes and requires whole-account REST
 proof of zero working orders, zero positions, known ownership, and zero
 unresolved intents. Only then is the active private/public subscription set
 rebound. Incremental top-up retains every healthy market/order and fills only
-safe free slots. The launcher refuses to overlap maker-lab or another liquidity runner. Its
+safe free slots. It also releases a flat owner when the exact reward program
+that authorized it is positively observed no longer to apply after an event
+reschedule. A lagging GET for a retained owner cannot freeze unrelated free-slot
+replacement, but that owner remains locally barred until terminal proof. During
+stream recovery the replacement private listener is established before
+quarantine cancels, so their terminal events are observable. The launcher
+refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
 orders enter recovery-only mode, where no new risk is allowed. Operator stop,
 startup refusal, caught terminal failure, and non-flat exit are never

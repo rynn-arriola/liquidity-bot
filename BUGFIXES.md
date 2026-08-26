@@ -29,6 +29,100 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-26
+
+### FIXED LOCALLY — reconnect cancellation discarded terminal proof and retired healthy owners
+
+**Symptom.** Fourteen markets retired together for
+`unresolved_mutation_timeout` after a private disconnect. They were flat by
+position, but their acknowledged cancels became `UNKNOWN_ABSENT`; shutdown could
+later remain stuck on the same shape while GET-by-ID returned NotFound.
+
+**Mechanism.** Private and both-stream recovery issued quarantine cancels before
+the replacement private listener existed. Terminal order events were created in
+that gap, and the only remaining path was a lagging individual REST read.
+Shutdown also paused its normal private consumer without draining the socket's
+buffer. The absence rule was not the bug and remains unchanged.
+
+**Fix.** Start fresh private visibility before quarantine, then drain buffered
+terminal events after fresh-state setup. Shutdown drains the same buffer before
+each REST reconcile. No decision can execute while those recovery routines own
+the run loop. A regression synthesizes a cancel terminal event only after the
+new listener starts, and a shutdown regression proves buffered terminal state
+wins even while GET-by-ID returns NotFound.
+
+### FIXED LOCALLY — one retained NotFound could prevent an unrelated slot top-up
+
+**Symptom.** Repeated top-up messages named releases and replacements, but the
+active set did not change. A lagging ID in a market that was being retained
+could reject replacement of a different flat/dead owner.
+
+**Mechanism.** The pre-commit top-up reconcile used strict individual reads for
+every working/absent order account-wide. Transactional ordering protected the
+old tuple, but the proof scope was broader than the state being released. Its
+log also announced `[top-up]` before proof, making a failed plan look committed.
+
+**Fix.** Keep complete order and position snapshots account-wide, but require
+individual terminal proof only for owners being released. Retained ambiguity
+stays retained and closes only that owner's gate. Recheck every release after
+the snapshot and immediately before commit. Log `[top-up-plan]` before proof
+and reserve `[top-up] ... committed=yes active=N` for an actual bind. A
+regression makes a retained ID return NotFound and requires the unrelated slot
+replacement to commit without canceling the retained order.
+
+### FIXED LOCALLY — a rescheduled game could hold an unpaid slot indefinitely
+
+**Symptom.** A market accrued 6,763.8 eligible seconds, then changed to `no
+applicable pregame liquidity period` while the exact active day-of program
+remained present without `ends_at`. The event had moved back outside six hours,
+so the market stopped quoting but could not satisfy the explicit-end-only
+release predicate.
+
+**Fix.** Remember the exact authorizing program. A successful later response
+containing that same row plus fresh metadata can prove it no longer applies;
+record that separately from explicit program expiry and request immediate
+top-up. Missing/different rows still fail closed. Position, working order,
+`UNKNOWN_ABSENT` or unresolved intent still prevents release.
+
+### FIXED LOCALLY — recovered stale books generated thousands of false errors
+
+**Symptom.** The run logged 8,722 `book_stale` events, mostly attempt 1, even
+when the immediate REST refresh succeeded and the recursive plan used a fresh
+book.
+
+**Fix.** A stale planning refusal is counted/reported only if its recovery
+refresh fails. A successful refresh replans without advancing the error counter
+or printing the failure diagnostic. Real refresh failures retain both error
+counters and escalation.
+
+### FIXED LOCALLY — abandoned flat markets refreshed books they can never use
+
+**Symptom.** A pre-kickoff owner abandoned at round ten continued quiet-book
+refreshes beyond attempt 100 even though it was flat and order-free and could
+never be planned again.
+
+**Fix.** Skip the refresh for an abandoned owner only when position, working
+orders, `UNKNOWN_ABSENT` and unresolved intents are all absent. Any exit or
+ambiguity keeps the book alive.
+
+**Review proof for all five.** Source/tests are committed locally as `5825db8`.
+Five deliberate reversions were each detected: account-wide top-up strictness,
+cancel-before-listen ordering, explicit-end-only authorization loss,
+pre-refresh stale error reporting and continued abandoned-book refresh. A sixth
+reversion removing shutdown's buffer drain failed against a lagging-NotFound
+regression. The complete local suite passed all 638 tests in 40.584 seconds.
+Production acceptance is recorded in NEXT and CLAUDE after it finishes; the
+bot remains stopped meanwhile.
+
+### TEST FIX — account-report tests depended on the workstation's real date
+
+Two August 25 account-realized tests began failing on August 26 because the
+production rollover guard correctly compared their historical injected `now`
+with an unpatched real `datetime.now()`. Their snapshot clock is now frozen to
+the fixture date. No report or trading behavior changed.
+
+---
+
 ## 2026-08-25
 
 ### FIXED, PUSHED, DEPLOYED AND ACTIVE — reward credits masked the $80 session-loss sensor and today's table net

@@ -41,8 +41,11 @@ every 15 minutes and maintains one executor across at most 20 selected markets.
 It performs a bounded 100-book deep pass and round-robins deferred programs.
 Full rotation still requires whole-account flat, order-free, resolved, and
 owned proof. Incremental top-up preserves healthy markets and resting orders,
-releases only flat/order-free/resolved expired or reward-ended owners, and
-cannot exceed the 20-slot cap. The EV model is measured and logged but remains
+releases only flat/order-free/resolved owners whose event or exact authorizing
+reward phase no longer applies, and cannot exceed the 20-slot cap. Complete
+account snapshots remain global; strict individual reads are scoped to owners
+being released, while retained ambiguity remains behind its owner's gate. The
+EV model is measured and logged but remains
 advisory while `enforce_reward_cost_gate` is false.
 
 ### Observation-only branch
@@ -111,3 +114,6 @@ whole-account REST snapshot, receive complete private order and balance
 snapshots, and remain fresh before the action driver can add risk. A disconnect,
 unknown message, incomplete snapshot, ambiguous mutation, unowned order, or
 stale marked equity revokes that permission while preserving cancel/exit paths.
+Recovery starts its replacement private listener before sending quarantine
+cancels, and recovery/shutdown drain buffered terminal events before falling
+back to lagging individual REST reads.

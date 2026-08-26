@@ -101,20 +101,24 @@ cancel/flat/rebind downtime can be measured before any concurrency change.
 
 During runtime, an explicitly recoverable private, market, or order adapter
 error enters a dormant recovery state instead of ending the process. The runner
-records the error and stack, cancels known quotes, reconnects, reconciles the
-whole account, backs off exponentially, and only then permits new risk. Unknown
+records the error and stack, establishes replacement private visibility,
+cancels known quotes, applies buffered terminal events, reconciles the whole
+account, backs off exponentially, and only then permits new risk. Unknown
 strategy conditions default to terminal. Ownership, cross-market identity,
 exact-position, planning, and unexitable-inventory failures end maker quoting
 and enter cancel/flatten shutdown; they are not downgraded to warnings. A
 first- or second-consecutive ET loss-stop day pauses new risk in-process while
 exits remain active; the third consecutive day is terminal.
 
-Incremental slot top-up proves the whole account strictly before it changes the
-active tuple or closes healthy streams. A failed proof leaves the old tuple,
-streams and resting venue orders untouched. After that pre-commit proof, the
-socket handoff still requires complete account snapshots and fresh private
-state; ambiguity positively owned by one market remains behind that market's
-gate, while missing/conflicting/unowned/out-of-scope state stays terminal.
+Incremental slot top-up takes complete account snapshots and strictly proves
+every owner it will release before it changes the active tuple or closes
+healthy streams. A failed proof leaves the old tuple, streams and resting venue
+orders untouched. A lagging ID in a retained, positively-owned market bars only
+that retained owner. Release predicates are checked again immediately before
+commit. After that pre-commit proof, the socket handoff still requires complete
+account snapshots and fresh private state; missing/conflicting/unowned/out-of-
+scope state stays terminal. Logs distinguish `[top-up-plan]` from an actual
+`[top-up] ... committed=yes` transition.
 
 Shutdown carries its own three-attempt flatten budget, independent of whatever
 the quoting loop already spent, so reaching the runtime ceiling can never stop

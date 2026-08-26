@@ -38,6 +38,11 @@ Official references:
   scoring. A volume program is not equivalent.
 - A program contains `timePeriods`, and several periods can have active status;
   select only the lifecycle phase applying at the verified market clock.
+- `gameStartTime` can move after a market was selected. A successful refresh
+  may therefore return the same active program ID while its `day_of` period no
+  longer applies because the event moved back outside six hours. That exact-row
+  observation is positive loss of current reward authorization; an omitted row
+  or different ID is not.
 - A filtered incentive row can contain an empty `eventStartTime`. Do not use it
   as the sole event clock.
 - A live unfiltered page on 2026-08-13 returned 100 program groups plus a next
@@ -109,6 +114,10 @@ Official references:
 - There is no documented durable replay cursor. Every disconnect disables new
   risk; reconnect requires whole-account REST reconciliation plus complete,
   fresh private snapshots before risk can resume.
+- A replacement private listener must be active before recovery sends cancels.
+  Terminal order events produced before the listener exists are not replayable
+  by contract, and GET-by-ID can temporarily answer NotFound. Recovery and
+  shutdown drain already-buffered private events before relying on REST.
 - Heartbeat silence beyond the configured freshness window disables new risk.
 - The authenticated account stream can also be change-driven after its initial
   balance snapshot. While the socket remains connected, a complete whole-

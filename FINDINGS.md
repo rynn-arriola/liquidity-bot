@@ -20,6 +20,83 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The August 26 mass retirements were a private-stream visibility gap, not a 20-slot cap
+
+Established 2026-08-26 from the production log beginning at byte 75,132,372,
+the durable intent/order rows and a stopped-server venue check. The run began
+at 02:41 UTC with the configured 20-market scope. A private disconnect at
+21:11 UTC was followed by fourteen positively-owned markets becoming ambiguous
+and then retiring for `unresolved_mutation_timeout` around 21:14. Terminal
+proof arrived slowly through GET-by-ID until about 21:40. Shutdown later held
+an acknowledged cancel beside `UNKNOWN_ABSENT`; the exact retrieve returned
+NotFound even though the operator had canceled and flattened at the venue.
+
+The recovery order was the defect. `_recover_private_stream` closed the old
+private socket, sent every quarantine cancel, and only then started the
+replacement socket. Those terminal cancel events were therefore created in a
+visibility gap. The venue has no durable private-stream replay contract, a
+cancel acknowledgement is not terminal proof, and GET-by-ID can lag with
+NotFound. The safety rule "absence is never cancellation" was correct; the bot
+had discarded its best positive-proof channel before creating the events it
+needed.
+
+The same ordering existed in both-stream recovery, and shutdown canceled its
+consumer task without draining terminal events already buffered by the still-
+connected socket. Recovery must listen before cancel and both recovery and
+shutdown must apply buffered private events before classifying owners as
+ambiguous. This does not let a decision run while recovery owns the loop.
+
+The 20-slot diagnosis for future sessions is:
+
+1. Prove subscription capacity from queue telemetry (`markets=20`) or the
+   exact active tuple. Working-order count is not slot count; 12-14 orders can
+   be valid when sides are ineligible.
+2. Count distinct active owners and split the dashboard into `re-quoting`,
+   `no_quote_yet`, `stuck` and `free, no supply`.
+3. Search `[top-up-plan]` and require a later `[top-up] ... committed=yes`.
+   A plan without a commit means proof/bind failed; it did not change slots.
+4. Join `[private-recovery]` / `[bound-stream-recovery]`,
+   `[unresolved-repair]`, `UNKNOWN_ABSENT` and
+   `unresolved_mutation_timeout` by market. Age and progress matter; a fresh
+   acknowledged cancel is normal, the same owner aging to timeout is not.
+
+The reusable request to an AI/operator is: **"run the 20-slot scheduler audit:
+prove queue scope, active owners, slot-state buckets, top-up plan versus commit,
+and unresolved/UNKNOWN_ABSENT progress by owner."**
+
+## Four additional August 26 defects reduced availability or hid the signal
+
+Established from the same run:
+
+- Incremental top-up performed strict GET-by-ID reads for retained owners. An
+  unrelated retained order returning NotFound could reject replacement of a
+  different proven-flat slot. Complete account snapshots remain mandatory,
+  but strict individual proof is needed only for owners being released; a
+  retained ambiguous owner stays in scope and behind its own gate.
+- One exact active day-of program remained present without `ends_at`, but the
+  venue moved its game start back outside the six-hour window. Runtime logged
+  `no applicable pregame` after 6,763.8 eligible seconds, while top-up could
+  release only an explicit program end. This is positive loss of authorization
+  from the exact same row plus fresh event metadata, not a missing-row
+  inference.
+- The log contained 8,722 `book_stale` reports, almost all attempt 1. Recovery
+  reported the condition before an immediate REST refresh that commonly
+  succeeded and replanned. A recovered stale refusal is not an operational
+  error; only a refresh that fails should advance the error counter.
+- A flat, order-free market abandoned after ten rounds can never be planned
+  again, yet a pre-kickoff abandoned market continued refreshing its book more
+  than 100 times. With no position, working/unknown-absent order or unresolved
+  intent, the book cannot serve an entry or exit and the refresh is pointless.
+
+The run also logged 1,420 empty two-sided books, 736 markets no longer pregame,
+10 no-applicable-pregame observations, 18 individual GET NotFound responses,
+four private disconnects, 108 `unrecoverable_book_AdapterError` retirements and
+101 `unrecoverable_book_stale` retirements. There were no 429s, HTTP 500s or
+cash-classification failures. Raw counts alone do not prove a scheduler defect;
+the owner/state timeline above does.
+
+---
+
 ## Reward credits can mask the runtime session-loss stop unless cash is classified
 
 Established 2026-08-25 at `2026-08-26T02:10:26Z` from two bounded production

@@ -1,5 +1,39 @@
 # Next session — outstanding fixes
 
+## STOPPED; FIXED LOCALLY; DEPLOYMENT REVIEW IN PROGRESS: August 26 recovery and slot defects
+
+The operator canceled all venue orders, flattened the account and requested a
+shutdown. The runner and supervisor are stopped. Do not restart from an older
+commit.
+
+Local source commit `5825db8` fixes five production defects found in the full
+August 26 timeline:
+
+1. private/both-stream recovery now listens before quarantine cancels and
+   drains buffered terminal events; shutdown drains the same proof;
+2. incremental top-up strictly reads only owners it releases, rechecks release
+   proof before commit and distinguishes `[top-up-plan]` from
+   `[top-up] ... committed=yes`;
+3. the exact authorizing reward row can positively prove loss of eligibility
+   after an event is rescheduled outside the six-hour window;
+4. a stale book that immediately refreshes no longer increments an error or
+   emits a false failure diagnostic;
+5. an ambiguity-free, flat owner abandoned at round ten stops book refreshes it
+   can never use.
+
+The exact 20-slot diagnostic is now documented in FINDINGS. Ask to **"run the
+20-slot scheduler audit"** and verify queue `markets=20`, active owners, slot
+buckets, top-up plan versus committed lines, and unresolved/UNKNOWN_ABSENT age
+and progress by owner. Raw order count is not capacity.
+
+Focused regressions pass, six deliberate reversions were killed and all 638
+local tests pass in 40.584 seconds. The stopped-server deploy/hash/test pass and
+final stopped status still need to be recorded below before this item becomes
+deployed. Do not restart as part of deployment unless the operator separately
+asks after the stopped gate.
+
+---
+
 ## PUSHED, DEPLOYED AND ACTIVE: non-trading cash cannot mask session loss
 
 At 2026-08-26T02:10Z the authoritative current-day result was -$44.5193 from

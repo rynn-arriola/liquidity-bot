@@ -3,10 +3,27 @@
 A live Polymarket US liquidity-reward market maker. **It trades real money on a
 real account.** Every change can lose it.
 
-## Where things stand — 2026-08-25
+## Where things stand — 2026-08-26
 
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
+
+- **BOT STOPPED; AUGUST 26 FIX COMMITTED LOCALLY AS `5825db8`; DO NOT RESTART
+  OLD CODE.** The operator canceled all orders, flattened and asked for the
+  runner to be shut down. Today a private reconnect canceled before the new
+  private listener existed, losing terminal events and retiring fourteen
+  owners through acknowledged-cancel/`UNKNOWN_ABSENT` timeouts. The fix listens
+  before cancel, drains buffered proof in recovery/shutdown, scopes top-up ID
+  proof to released owners, handles exact-program rescheduling outside the
+  six-hour window, suppresses recovered `book_stale` false errors, and stops
+  useless refreshes for ambiguity-free round-ten abandoned owners. It does not
+  change quote size, 20-slot capacity, six-hour entry horizon, reward gates,
+  loss limits or the rule that absence is never cancellation. Six deliberate
+  reversions are killed by regressions and all 638 local tests pass in 40.584
+  seconds. Server/deploy acceptance is still in progress; leave the bot
+  stopped. For future low-order diagnosis ask
+  to **"run the 20-slot scheduler audit"** and use the exact recipe at the top
+  of FINDINGS rather than treating working-order count as slot count.
 
 - **PUSHED, DEPLOYED AND ACTIVE — reward cash cannot mask the
   session stop, and today's row uses account truth.** At 2026-08-26T02:10Z the

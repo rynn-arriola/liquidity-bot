@@ -248,7 +248,11 @@ These are implementation requirements, not suggestions.
     cooldown/abandonment behavior. Ending the session for a per-market
     condition exits 4, which the supervisor never restarts, so one thin book
     took down seven healthy markets and left the process dead until an
-    operator noticed.
+    operator noticed. Once a flat, order-free and ambiguity-free retirement
+    reaches the ten-round abandonment bound, its book refresh also stops even
+    before kickoff: the planner can never run for it again, so another book
+    cannot serve an entry or exit. Any position, working/unknown-absent order
+    or unresolved intent keeps the refresh alive.
 63. Retirement is bounded in three directions. Retirement is opt-in by name,
     so an unrecognised critical still fails closed to terminal. A market that
     fails ten rounds is abandoned and never planned again --
@@ -270,10 +274,13 @@ These are implementation requirements, not suggestions.
     remain mandatory on their normal cadence. Absence is never cancellation.
     Missing, conflicting, unowned, or out-of-scope ownership remains
     account-wide terminal. Normal active-set changes remain account-wide
-    strict. Incremental top-up is a bounded exception only after an immediately
-    preceding strict whole-account reconcile and scope assertion succeeds while
-    the old active tuple and both old streams remain intact, with no order
-    mutation between proof and commit. Its post-bind reconcile still requires
+    strict. Incremental top-up is a bounded exception only after immediately
+    preceding complete account snapshots, strict reads of every owner being
+    released and a scope assertion succeed while the old active tuple and both
+    old streams remain intact, with no order mutation between proof and commit.
+    A lagging individual read belonging to a retained, positively-owned market
+    bars only that owner; it cannot block release proof for a different slot.
+    Its post-bind reconcile still requires
     complete account order/position snapshots and fresh private state, while a
     newly ambiguous positively-owned order closes only its owner's market gate.
     A failed pre-commit proof may not change scope, close a stream or cancel an
@@ -281,6 +288,11 @@ These are implementation requirements, not suggestions.
     cancellation has already been requested. Private and both-stream reconnect
     loops are bounded, but exhaustion never proves flat: only shutdown's
     independent whole-account proof may authorize restartable exit `5`.
+    Recovery must start the replacement private listener before issuing its
+    quarantine cancels, then apply buffered private events before classifying
+    owners as ambiguous. Shutdown likewise drains buffered terminal events
+    before REST reconciliation. This preserves positive cancel/fill proof
+    without treating a missing REST row as terminal.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST
@@ -332,14 +344,17 @@ These are implementation requirements, not suggestions.
     same in-process pause rather than spending the supervisor's fast-crash
     budget. Operator stop remains prompt, no pause proves flatness, and the
     active market tuple and authorized 20-slot capacity must remain unchanged.
-70. Reward-program expiry may reclaim a slot only from positive, owner-specific
-    proof. The runner must remember the exact program ID that authorized entry;
-    a later successful incentive response must contain that same ID with an
-    explicit elapsed `ends_at`. A missing row, different program or failed
-    refresh is not proof. Even after confirmation, a nonzero position, working
-    order or unresolved intent retains the market in the active ownership
-    scope. Incremental replacement preserves every healthy venue order, obeys
-    the near-flatten-deadline guard and cannot exceed the configured 20 slots.
+70. Reward authorization loss may reclaim a slot only from positive,
+    owner-specific proof. The runner must remember the exact program ID that
+    authorized entry. A later successful incentive response must still contain
+    that exact row and prove either its explicit `ends_at` elapsed or that it no
+    longer applies to freshly-read event metadata (for example, kickoff moved
+    back outside the six-hour day-of window). A missing row, different program
+    or failed refresh is not proof. Even after confirmation, a nonzero
+    position, working order, `UNKNOWN_ABSENT` order or unresolved intent retains
+    the market in the active ownership scope. Incremental replacement preserves
+    every healthy venue order, rechecks release safety at the commit boundary,
+    obeys the near-flatten-deadline guard and cannot exceed the configured 20 slots.
     Reward projection must intersect the nominal day-of clock with explicit
     program bounds so selection and runtime authorization value the same
     interval.

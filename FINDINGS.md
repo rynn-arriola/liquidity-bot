@@ -24,6 +24,39 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Twenty markets were bound on August 27, but three slots were parked by book-fault cooldown
+
+Established live at 2026-08-27T13:20Z from the exact queue scope, top-up
+timeline, per-owner log history, authenticated venue state and a read-only
+ledger sample. The 13:06 top-up released five expired markets, kept 15, added
+five and committed `active=20`; the following measurement session contained
+exactly 20 slugs. The runner remained active, with 42 actions across 11 markets
+after that commit and no new runtime-recovery, retirement, maintenance,
+rate-limit, permission, unresolved-timeout or runner-failure marker.
+
+The full count nevertheless overstated immediately productive capacity. Three
+retained WTT owners were flat, order-free and unresolved-free, but their market
+refreshes said `not open` and their books stayed empty. Their retirement reasons
+alternated between `unrecoverable_book_AdapterError` and
+`unrecoverable_book_stale`, bypassing the same-reason no-escalation guard and
+advancing all three to round ten between 12:58:45Z and 13:01:05Z. They remained
+inside the 20-slug queue scope with no later action. The current 1,800-second
+cooldown keeps them non-quoting until approximately 13:29-13:31Z; current
+incremental top-up releases positive expiry or reward-authorization loss, not
+a flat book-fault retirement by itself. Selector evidence still showed 77
+viable alternatives.
+
+At 13:17:34Z the venue held 22 open orders across 13 markets and two nonzero
+positions. Normal fills/actions continued; the 13:20 read-only ledger then held
+21 working orders across 12 markets, three nonzero positions, one fresh
+in-flight mutation and zero `UNKNOWN_ABSENT`. This is not the former
+account-wide recovery deadlock. The reusable interpretation is: `markets=20`
+proves bound capacity, while per-owner retirement state is required to prove
+productive capacity. On this checkpoint the correct split was 17 available
+owners plus three temporarily parked owners, not 20 healthy quoting owners.
+
+---
+
 ## Natural August 27 maintenance recovered end to end without a restart
 
 Established live at 2026-08-27T10:36Z from process state, the commissioning

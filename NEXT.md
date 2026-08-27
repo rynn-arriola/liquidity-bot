@@ -5,6 +5,24 @@
 > and [DECISIONS.md](DECISIONS.md). “ACTIVE” below is scoped to its dated
 > section unless `STATUS.md` says it is active now.
 
+## OPEN: flat book-fault retirements can occupy nominally full slots during cooldown
+
+The 2026-08-27 13:20Z capacity audit found queue scope `markets=20`, but three
+flat, order-free and unresolved-free WTT owners remained bound after empty-book
+and `not open` evidence. Alternating `unrecoverable_book_AdapterError` and
+`unrecoverable_book_stale` reasons advanced each owner to round ten, and the
+30-minute retirement cooldown kept them non-quoting while the selector still
+had 77 viable alternatives. The other 17 owners continued operating; this was
+not an account-wide recovery stall.
+
+Before proposing a fix, trace the complete retirement/top-up interaction and
+preserve positive ownership proof, retained exits, stream-rebind safety and the
+exact 20 cap. Focused regressions should decide whether equivalent permanent
+book-failure reasons belong to one retirement family and whether a positively
+flat, order-free, unresolved-free retired owner can be replaced without
+recreating the prior retire/release/re-retire churn. Do not change the live
+strategy, deploy or restart without the operator's explicit request.
+
 ## ACTIVE: August 26 recovery/slot fixes and transient location-denial recovery
 
 Do not restart from an older commit. Source commit `5825db8` and documentation

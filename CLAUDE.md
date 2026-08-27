@@ -17,7 +17,7 @@ authority.
 This dated log preserves detailed handoffs. It is evidence and history;
 [STATUS.md](STATUS.md) replaces it as the current-state page.
 
-- **FIXED LOCALLY, REVIEWED, NOT DEPLOYED OR RESTARTED — open-position hard
+- **FIXED, REVIEWED AND PUSHED; NOT DEPLOYED OR RESTARTED — open-position hard
   breach and historical account P&L.** Production evidence proved the August
   26 hard stop began with open inventory, while adjacent later-flat ET account
   boundaries and a bounded cash scan put completed trading at `-$64.4870`, not

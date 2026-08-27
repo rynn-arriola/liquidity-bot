@@ -5,7 +5,7 @@
 > and [DECISIONS.md](DECISIONS.md). “ACTIVE” below is scoped to its dated
 > section unless `STATUS.md` says it is active now.
 
-## IMPLEMENTED AND REVIEWED, PUSH PENDING — provisional hard stop and exact August 26 account row
+## IMPLEMENTED, REVIEWED AND PUSHED; NOT DEPLOYED — provisional hard stop and exact August 26 account row
 
 Production evidence shows the August 26 marked sensor crossed $80 with open
 inventory, while the later flat ET account result was `-$64.4870` and completed

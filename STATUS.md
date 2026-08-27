@@ -21,8 +21,9 @@ describe their dated event, not the bot now.
   13:36:38 UTC
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
-- **Local handoff:** provisional open-position hard-stop and historical
-  account-P&L fixes pass 651 tests; not deployed and not loaded by this runner
+- **Repository handoff:** commit `34ff5db` contains the provisional
+  open-position hard-stop and historical account-P&L fixes; 651 tests pass;
+  not deployed and not loaded by this runner
 
 The initial 13:36 ledger checkpoint held 19 working orders across 19 markets,
 zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions. The

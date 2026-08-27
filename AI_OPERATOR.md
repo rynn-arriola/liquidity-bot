@@ -11,8 +11,8 @@ Before diagnosing, changing, deploying, stopping or starting anything:
 
 1. Read [STATUS.md](STATUS.md) for the latest handoff.
 2. Read [DECISIONS.md](DECISIONS.md) for choices currently in force.
-3. Read the safety and evidence rules in [CLAUDE.md](CLAUDE.md), regardless of
-   which AI product is being used.
+3. Read the shared safety and evidence rules in
+   [AI_ENGINEERING.md](AI_ENGINEERING.md).
 4. Read the task-specific source: [FINDINGS.md](FINDINGS.md) before forming a
    theory, [BUGFIXES.md](BUGFIXES.md) for prior production defects,
    [NEXT.md](NEXT.md) for unfinished work, or [WATCHLIST.md](WATCHLIST.md) for
@@ -26,10 +26,52 @@ Before diagnosing, changing, deploying, stopping or starting anything:
 Do not silently continue from the last chat message. Chats compact and end;
 these files are the durable shared memory.
 
-The tracked root `AGENTS.md` is the automatic Codex entry point, `CLAUDE.md`
-is the automatic Claude entry point, and the top of `README.md` routes other
-agents. A workstation may also have an ignored `AGENTS.local.md`; read it when
+`AI_OPERATOR.md` is the single agent-neutral entry and routing source. The
+tracked root `AGENTS.md` is only a thin Codex auto-discovery pointer,
+`CLAUDE.md` is only a thin Claude auto-discovery pointer, and the top of
+`README.md` routes other agents here. Neither compatibility file owns separate
+rules. A workstation may also have an ignored `AGENTS.local.md`; read it when
 present, but never commit it.
+
+## Desktop, laptop, GitHub and production parity
+
+GitHub is the synchronization point between the desktop and laptop. Production
+is not a git checkout, so it is not required to equal a newer documentation-
+only GitHub commit. It must instead satisfy both of these conditions:
+
+1. its `src/` and `tests/` content matches the commit named by
+   `DEPLOYED_COMMIT` after expected Windows/Linux line-ending normalization;
+2. GitHub has no newer `src/` or `tests/` change waiting to be deployed.
+
+Run this independently from **each** workstation before starting tracked work
+and again after the final push:
+
+```powershell
+python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST> --key "$env:USERPROFILE\.ssh\makerlab_droplet"
+```
+
+The host and key may instead come from the local-only `DROPLET_HOST` and
+`DROPLET_KEY` environment variables. Never put either value in tracked files.
+The command fetches `origin/main`, automatically fast-forwards a clean
+behind-only `main` checkout, reads git and server hashes, and makes no venue
+request or bot-control call. GitHub `main` is the one source of truth for
+tracked files. Commit ancestry, never timestamps, decides which copy is newer.
+
+`PARITY OK` on one workstation proves only that workstation, GitHub and the
+server. It cannot inspect the other workstation; run it there too. If the
+worktree is dirty, behind, ahead or diverged, preserve the files and resolve
+the discrepancy rather than pulling over them. Use `git pull --ff-only` only
+from a clean behind-only checkout. Documentation/scripts newer than the server
+are allowed when runner source and tests still match the deployed marker.
+
+When the operator says **"run parity check"** or **"run four-way parity
+check"**, run this command with `--sync` on the current machine, identify which
+machine was actually checked, and explicitly say that the second workstation
+still needs its own run unless evidence from that machine is available. This
+phrase authorizes fetch and a clean fast-forward only. It does not authorize
+overwriting/committing dirty work, choosing a side of diverged history,
+deploying newer trading code, or restarting the bot. Report those conditions
+and preserve the files for review.
 
 ## How to work with the operator
 
@@ -90,7 +132,7 @@ are evidence the operator asked to see.
 |---|---|
 | [STATUS.md](STATUS.md) | The one current operational handoff; newest facts only |
 | [DECISIONS.md](DECISIONS.md) | Active choices made by the human operator |
-| [CLAUDE.md](CLAUDE.md) | Permanent engineering, safety and evidence rules |
+| [AI_ENGINEERING.md](AI_ENGINEERING.md) | Permanent engineering, safety and evidence rules |
 | [NEXT.md](NEXT.md) | Work that remains, plus detailed implementation handoffs |
 | [WATCHLIST.md](WATCHLIST.md) | Measurement-only ideas that are not authorized behavior |
 | [FINDINGS.md](FINDINGS.md) | Measured evidence and corrected interpretations |

@@ -6,7 +6,7 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 18:52 ET / 2026-08-27 22:52 UTC
+- **Time:** 2026-08-27 19:05 ET / 2026-08-27 23:05 UTC
 - **Bot:** STOPPED at the operator's request; no supervisor or runner process
 - **Stop quality:** FORCED after graceful shutdown could not obtain venue
   proof. Current orders and positions remain UNKNOWN and may be unmanaged.
@@ -27,6 +27,12 @@ describe their dated event, not the bot now.
   and positive closed-market slot replacement. All 11 deployed hashes matched;
   four deliberate reversions were detected; all 660 local tests passed in
   39.768s and all 660 stopped-server tests passed in 36.304s.
+- **Multi-machine handoff:** GitHub `main` is now the single tracked-file source
+  of truth. `AI_OPERATOR.md` is the one neutral AI entry; Codex `AGENTS.md` and
+  Claude `CLAUDE.md` are discovery pointers only. The new read-only production
+  parity flow safely fast-forwards a clean behind-only workstation and compares
+  server source/tests to `DEPLOYED_COMMIT`. Its focused tests and all 664 local
+  tests pass. Server installation/acceptance is the remaining step.
 
 The 17:10 authenticated acceptance checkpoint held 18 resting orders across 18
 markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.

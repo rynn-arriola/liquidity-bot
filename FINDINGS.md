@@ -6438,3 +6438,25 @@ deployed hashes matched exactly. The stopped server passed all 660 tests in
 check found no supervisor or runner. The bot was not restarted; exposure
 remains unknown because the earlier forced stop never received complete
 authenticated venue proof.
+
+## GitHub is the multi-machine source of truth; parity uses ancestry and normalized content
+
+The desktop, laptop and production server cannot safely inspect each other's
+uncommitted files. The durable synchronization design therefore uses GitHub
+`main` as the one tracked-file source of truth. Each workstation independently
+fetches it and may automatically fast-forward only when its `main` checkout is
+clean and strictly behind. Dirty, ahead or diverged work is preserved for AI
+review; timestamps never select a winner. Production remains an explicitly
+deployed state and is verified from `DEPLOYED_COMMIT` plus its source/test
+content. Parity does not query the venue or control the bot.
+
+The first real end-to-end trial correctly found the current workstation's
+uncommitted parity work, matched local HEAD to GitHub, and found no runner/test
+change after deployed marker `dc26c96`. It also exposed a cross-platform false
+positive: Git blobs use LF while Windows-deployed files may retain CRLF, so raw
+hashes marked otherwise identical Python files as different. The corrected
+check normalizes only CRLF/LF before SHA-256; missing, extra or materially
+changed files still fail. The second live trial matched all production
+source/tests to `dc26c96`. Four focused tests and all 664 local tests passed in
+40.664 seconds. Installation on the server and a clean post-push parity result
+remain acceptance steps at this checkpoint.

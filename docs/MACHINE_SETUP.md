@@ -13,9 +13,9 @@ not travel is SSH access to the droplet.
 
 | | how it travels |
 |---|---|
-| code, `CLAUDE.md`, `FINDINGS.md`, `BUGFIXES.md`, `NEXT.md` | `git pull` |
+| code, AI instructions, findings and handoffs | `git pull --ff-only` |
 | what is actually deployed | `DEPLOYED_COMMIT` on the droplet |
-| trading history, logs, ledger | droplet only — never copied to a workstation |
+| authoritative trading history, logs, ledger | droplet; ignored workstation backups are copies, never live authority |
 | Polymarket API keys, Discord webhooks | **droplet only — no workstation needs them** |
 | SSH access to the droplet | per-machine, set up once (below) |
 
@@ -100,13 +100,49 @@ cron line, command-line argument, log, or Markdown document.
 
 ## Keeping machines in sync
 
-**Start Claude Code from inside the repo directory.** `CLAUDE.md` is read from
-the working directory at session start; launching from anywhere else, or
-`cd`-ing in afterwards, gets a session with no context.
+There is no safe way for a command running on the desktop to inspect arbitrary
+uncommitted files on the laptop, or vice versa. GitHub is therefore the meeting
+point: each workstation proves that its clean HEAD equals `origin/main`, and
+then independently proves that production matches its deployed marker.
+
+From each Windows workstation run:
+
+```powershell
+python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST> --key "$env:USERPROFILE\.ssh\makerlab_droplet"
+```
+
+You can keep the connection details in local environment variables instead:
+
+```powershell
+$env:DROPLET_HOST = "root@<DROPLET_HOST>"
+$env:DROPLET_KEY = "$env:USERPROFILE\.ssh\makerlab_droplet"
+python -B scripts/check_parity.py --sync
+```
+
+Never commit those values. The command safely updates only one state: a clean
+`main` checkout that is strictly behind GitHub is fast-forwarded. Otherwise it
+reads git/server hashes. It does not query Polymarket, start or stop a process,
+deploy code, or alter the ledger. A successful result means:
+
+- this workstation is clean and exactly at GitHub `main`;
+- server `src/` and `tests/` content match `DEPLOYED_COMMIT` after harmless
+  Windows/Linux line-ending normalization;
+- GitHub has no newer runner/test change waiting for deployment.
+
+Documentation and analysis utilities can be newer than the deployed runtime;
+that is reported but is not code drift. Run the command on both machines before
+saying all four locations match. On a dirty or diverged checkout, stop and
+preserve the local work. Only use `git pull --ff-only` on a clean checkout that
+is simply behind.
+
+**Start every coding agent from inside the repo directory.** Codex discovers
+`AGENTS.md` and Claude discovers `CLAUDE.md`; both are thin pointers to the
+same `AI_OPERATOR.md`. Launching elsewhere can create a session with no project
+context.
 
 ```powershell
 cd <path>\liquidity-bot
-git pull
+git pull --ff-only
 claude
 ```
 
@@ -115,31 +151,32 @@ claude
 stale copy conflicts in exactly the files that exist to stop work being
 repeated.
 
-Claude's memory files are **per-machine and do not sync**. Nothing carries
-between machines except what is committed, which is why the rules, the measured
-facts and the queue all live in tracked files rather than in memory.
+AI product memory is **per-machine and does not sync**. Nothing carries between
+machines except what is committed, which is why the rules, measured facts and
+queue live in tracked files rather than product memory.
 
-To confirm context loaded on a new machine, ask the session something only
-`CLAUDE.md` would know — for example what to check before theorising about a
-bug. The answer should mention grepping `FINDINGS.md` first.
+To confirm context loaded on a new machine, ask the session what to check
+before theorising about a bug. The answer should route through
+`AI_OPERATOR.md` and mention searching `FINDINGS.md` first.
 
 ## First five minutes on a new machine
 
 ```bash
-git pull
+git pull --ff-only
+python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST>
 ssh -i ~/.ssh/makerlab_droplet root@<DROPLET_HOST> \
     'cd /root/liquidity-bot && cat DEPLOYED_COMMIT && ./scripts/status_commissioning.sh'
 ```
 
-Then read `AI_OPERATOR.md`, `STATUS.md` and `DECISIONS.md`. Use `NEXT.md` only
-for the detailed queue after the current handoff is understood. `CLAUDE.md`
-loads automatically for Claude and carries the engineering rules and traps;
-the tracked root `AGENTS.md` provides the equivalent Codex entry point. Also
-read an ignored workstation `AGENTS.local.md` when present.
+Then read `AI_OPERATOR.md` and follow its routing. `AGENTS.md` and `CLAUDE.md`
+only make different agents discover that same source. Also read an ignored
+workstation `AGENTS.local.md` when present.
 
-If `DEPLOYED_COMMIT` does not match `git rev-parse --short HEAD`, the droplet is
-running something other than what you are reading. Nothing writes that file
-automatically, so it goes stale silently.
+Do not require `DEPLOYED_COMMIT` to equal the newest GitHub HEAD: a docs-only
+commit may correctly be newer. Trust `PARITY OK`, which verifies the deployed
+file contents against the marker and separately detects newer runner/test
+changes. Nothing writes the marker automatically, so its hash proof remains
+mandatory.
 
 ## Backups
 

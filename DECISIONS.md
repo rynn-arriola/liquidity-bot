@@ -52,6 +52,24 @@ sensor independently pauses new risk as soon as closed trading reaches $80.
   workstation `AGENTS.local.md`. It is manual, never scheduled, never pushed, and
   must not stop or restart the bot.
 
+## Multi-machine operating choice
+
+- Work may be performed from the desktop or laptop, but GitHub `main` is the
+  synchronization point between them; neither workstation is independently
+  authoritative.
+- Production remains the only live runtime. It is compared to
+  `DEPLOYED_COMMIT` plus exact source/test hashes, not blindly to the newest
+  documentation-only GitHub commit.
+- “Run parity check” means run `scripts/check_parity.py --sync` on the current
+  workstation. It automatically fetches and fast-forwards a clean behind-only
+  checkout to GitHub `main`. Both workstation runs are required before claiming
+  the desktop, laptop, GitHub and server are all current.
+- Parity permission does not authorize overwriting dirty/diverged work,
+  deploying trading code or restarting production. Those remain explicit
+  review/operator decisions.
+- Local databases, recovery archives, SSH keys and other ignored files are not
+  repository parity. They remain machine-specific and must never be committed.
+
 ## Decisions explicitly not authorized
 
 - No automatic same-price cancel/repost to move a nearly-front order backward

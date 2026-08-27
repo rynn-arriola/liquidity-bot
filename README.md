@@ -5,6 +5,14 @@
 > active choices in [DECISIONS.md](DECISIONS.md). The dated status language in
 > historical files is not the current runtime state.
 
+This is a multi-agent project, primarily operated with Codex.
+`AI_OPERATOR.md` is the one agent-neutral instruction and routing source;
+`AGENTS.md` and `CLAUDE.md` are thin auto-discovery pointers only. To check
+desktop, laptop, GitHub and production consistency, ask an AI to **"run parity
+check"**; the command safely fast-forwards a clean behind-only checkout and
+must be run independently on both
+workstations.
+
 A clean, standalone Polymarket US liquidity-reward market maker.
 
 This project uses `D:\polybot\maker-lab` as a pinned code/evidence reference,

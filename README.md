@@ -47,7 +47,7 @@ restart-scoped runtime setting; the account loss limits remain hard-locked by
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
 | session loss stop | $80 realized trading loss |
-| emergency hard stop | $80 marked equity |
+| emergency hard stop | $80 adjusted marked equity; provisional with open inventory |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -56,7 +56,10 @@ restart-scoped runtime setting; the account loss limits remain hard-locked by
 
 The daily loss budget resets at midnight `America/New_York`, including DST.
 The two $80 rows are one dollar threshold with different sensors and responses,
-not duplicate calculations.
+not duplicate calculations. A marked breach blocks new entries immediately.
+With open inventory it waits for a breach-time position to close and a newer
+balance before it can clear or confirm the hard stop; realized loss can still
+pause trading while another position remains open.
 
 Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —
@@ -135,26 +138,30 @@ score. The probe never submits it.
 
 ## Seven-day reward table
 
-For one ET-dated table containing current account-realized trading, historical
-balanced-pair estimates, paid and pending liquidity reward, finalized net, and
-merged resting side-hours:
+For one ET-dated table containing current account-realized trading, proven-flat
+historical account results where available, visibly marked balanced-pair
+fallbacks, paid and pending liquidity reward, finalized net, and merged resting
+side-hours:
 
 ```bash
 .venv/bin/python -B scripts/reward_table.py --days 7
 ```
 
 The phrase **“run 7 day reward table”** means this exact command. The script
-opens `data/commissioning.db` read-only. It makes one earnings request plus a
-bounded account snapshot for `Account realized today (ET)`: two matching
-balance reads around a complete position read and no more than four cash-only
-activity pages, which must reach explicit EOF. Cash changes are assigned by
-completion time because the endpoint orders them by creation time. These calls
-share a separate 1 request/second limiter. The
+opens `data/commissioning.db` read-only. It makes one earnings request, one
+bounded historical cash-only walk of at most four pages, plus a bounded account
+snapshot for `Account realized today (ET)`: two matching balance reads around a
+complete position read and no more than four current-day cash-only pages. Every
+cash walk must reach explicit EOF. Cash changes are assigned by completion time
+because the endpoint orders them by creation time. These calls share a separate
+1 request/second limiter. The
 account figure subtracts completed rewards/deposits/other non-trading cash and
 adds current venue position basis; if the boundary or snapshot is not proved,
-it displays `Unavailable`. Historical rows keep the balanced-leg ledger method
-and can omit settled exits; the current ET row and its net use the account
-figure instead. The script performs no market
+it displays `Unavailable`. A completed historical row uses adjacent native ET
+equity boundaries only when both are flat, less non-trading cash. A row without
+that proof retains the balanced-leg ledger method, is prefixed `~`, and can
+omit settled exits. The current ET row and its net use the account figure. The
+script performs no market
 discovery, book, order or mutation call. Do not tight-loop it or schedule it
 more frequently than hourly. Pending and unposted reward are never counted as
 net, and the current ET day is marked partial.

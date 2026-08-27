@@ -93,6 +93,7 @@ class SessionRiskGuardTests(unittest.TestCase):
         self.assertFalse(guard.hard_stop_reached(now=NOW))
         guard.observe_equity("85", observed_at=NOW)
         self.assertTrue(guard.hard_stop_reached(now=NOW))
+        self.assertFalse(guard.can_add_new_risk(now=NOW))
         self.assertFalse(guard.hard_stop_reached(
             now=NOW + timedelta(seconds=11)))
 

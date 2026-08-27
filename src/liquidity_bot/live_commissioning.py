@@ -415,6 +415,17 @@ class CommissioningRunner:
         # pauses, consumed once by `_announce_loss_stop_pause`.
         self._loss_pause_pending: tuple[str, list[str], int] | None = None
         self._loss_pause_announced_day: str | None = None
+        # A marked-equity breach may be only a temporary mark on open
+        # inventory. It blocks new entries immediately, then waits until at
+        # least one position that was open during the breach is positively
+        # closed before accepting a recovered mark. The venue exposes only one
+        # account-wide equity number, so it cannot name one culprit position.
+        # A realized-loss blocker may still pause trading while other positions
+        # remain open; complete account flatness is not required for that.
+        self._provisional_hard_stop_at: datetime | None = None
+        self._provisional_hard_stop_markets: set[str] = set()
+        self._provisional_hard_stop_notice: str | None = None
+        self._provisional_hard_stop_announced = False
         # Footer identity, so an alert says which box and which build produced
         # it without the operator having to ask.
         self._host_name = socket.gethostname()
@@ -2380,7 +2391,8 @@ class CommissioningRunner:
                 self._working_orders(state.slug), False, state.reward_eligible, {}, 0)
         eligible = state.reward_eligible
         if (position == 0 and self.risk_guard is not None
-                and not self.risk_guard.can_add_new_risk(now=now)):
+                and (not self.risk_guard.can_add_new_risk(now=now)
+                     or self._provisional_hard_stop_at is not None)):
             # A stale/unknown marked balance is recoverable, but existing flat-
             # state quotes would still add risk if filled. Make them undesired
             # so the reconciler cancels them while the process stays alive.
@@ -2566,8 +2578,13 @@ class CommissioningRunner:
         # scan therefore lets the existing 15-second risk freshness expire and
         # disables new risk instead of silently falling back to masked cash.
         observed_at = self._now()
+        # Raw marked equity includes rewards, deposits and withdrawals. They
+        # are not trading performance, so apply the same proven non-trading
+        # adjustment used by the realized-cash sensor before comparing the
+        # day opening mark to the hard-stop limit.
+        adjusted_equity = self.balance.marked_equity - self._nontrading_cash
         self.risk_guard.observe_equity(
-            self.balance.marked_equity, observed_at=observed_at)
+            adjusted_equity, observed_at=observed_at)
         self.risk_guard.observe_realized(self._session_realized())
         self.risk_guard.observe_market_realized({
             slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
@@ -2693,6 +2710,11 @@ class CommissioningRunner:
 
         now = self._now()
         today = date.fromisoformat(risk_day(now))
+        if self._provisional_hard_stop_at is not None:
+            # Preserve the breached day's baseline until its position cohort
+            # closes. Resetting at ET midnight while it remains open would
+            # forgive the breach before the required confirmation.
+            return
         if self._baseline_day == today:
             return
         if self.balance is None:
@@ -2767,8 +2789,69 @@ class CommissioningRunner:
             return self._stop_requested
         if self.risk_guard is None:
             return "risk_guard_missing"
-        if self.risk_guard.hard_stop_reached(now=now):
+        open_position_slugs = {
+            str(row["market_slug"])
+            for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0")
+        }
+        hard_hit = self.risk_guard.hard_stop_reached(now=now)
+        if hard_hit and open_position_slugs:
+            if self._provisional_hard_stop_at is None:
+                self._provisional_hard_stop_at = now
+                self._provisional_hard_stop_markets = set(open_position_slugs)
+                self._provisional_hard_stop_notice = "started"
+                print(
+                    f"[hard-stop-provisional] at={now.isoformat()} "
+                    f"markets={','.join(sorted(open_position_slugs))} "
+                    "action=block_new_risk_and_wait_for_closed_position",
+                    flush=True,
+                )
+            else:
+                # An already-resting entry can fill while its cancellation is
+                # in flight. It is exposed to the same marked breach and must
+                # join the set whose closure can settle the provisional state.
+                self._provisional_hard_stop_markets.update(
+                    open_position_slugs)
+        elif hard_hit and self._provisional_hard_stop_at is None:
+            # No open inventory can explain this as temporary paper movement.
             return "EMERGENCY_EQUITY_HARD_STOP"
+
+        if self._provisional_hard_stop_at is not None:
+            reconcile_at = self.gate.last_reconcile_at
+            equity_at = self.risk_guard.equity_observed_at
+            closed: set[str] = set()
+            if (reconcile_at is not None and equity_at is not None
+                    and equity_at >= reconcile_at):
+                for slug in self._provisional_hard_stop_markets:
+                    rows = self.ledger.query(
+                        "SELECT net_qty,received_at FROM execution_positions "
+                        "WHERE market_slug=?",
+                        (slug,),
+                    )
+                    if len(rows) != 1 or Decimal(str(rows[0]["net_qty"])) != 0:
+                        continue
+                    position_at = datetime.fromisoformat(
+                        str(rows[0]["received_at"]))
+                    if (position_at.tzinfo is not None
+                            and position_at.utcoffset() is not None
+                            and reconcile_at >= position_at):
+                        closed.add(slug)
+            # A recovered mark by itself is not enough: the same open trade can
+            # bounce above and below the line. Require a breach-time position
+            # to have actually closed, then accept the fresh adjusted balance.
+            if hard_hit and closed:
+                return "EMERGENCY_EQUITY_HARD_STOP"
+            if not hard_hit and closed:
+                self._provisional_hard_stop_at = None
+                self._provisional_hard_stop_markets.clear()
+                self._provisional_hard_stop_notice = "cleared"
+                print(
+                    f"[hard-stop-cleared] at={now.isoformat()} "
+                    f"closed={','.join(sorted(closed))} "
+                    "reason=adjusted_equity_recovered_after_position_close",
+                    flush=True,
+                )
         if self.started_at is not None:
             rows = self.ledger.query(
                 "SELECT client_order_id,fee FROM execution_fills "
@@ -2863,6 +2946,28 @@ class CommissioningRunner:
             f"Consecutive loss-stop days: {streak} -- "
             f"{remaining} more and it stops for good and needs a human.",
             critical=True)
+
+    async def _announce_provisional_hard_stop(self) -> None:
+        """Announce a paper breach once, then its position-close recovery."""
+
+        notice, self._provisional_hard_stop_notice = (
+            self._provisional_hard_stop_notice, None)
+        if notice == "started" and not self._provisional_hard_stop_announced:
+            self._provisional_hard_stop_announced = True
+            await self.notifier.send_async(
+                "⚠️ Liquidity Bot marked equity crossed the hard-stop limit "
+                "with open inventory. New entries are blocked immediately; "
+                "existing positions keep their normal exits. The breach is "
+                "provisional until a breach-time position closes and the "
+                "adjusted account loss is measured again.",
+                critical=True,
+            )
+        elif notice == "cleared":
+            self._provisional_hard_stop_announced = False
+            await self.notifier.send_async(
+                "✅ Liquidity Bot cleared the provisional hard stop after a "
+                "position closed. The fresh adjusted account loss was below "
+                "the hard-stop limit, so quoting may resume.")
 
     def _stuck_mutations(
         self, now: datetime,
@@ -5903,6 +6008,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
+                await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
                 if self._streams_need_rebind:
@@ -6039,6 +6145,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
+                await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
                 # A full rotation needs a whole-account flat state, which with

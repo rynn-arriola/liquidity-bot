@@ -11,8 +11,18 @@ from unittest.mock import patch
 from scripts.reward_table import (
     AccountMetricUnavailable, AccountRealizedToday, _nontrading_cash_today,
     _opening_cash_for_day, account_realized_today, build_discord_payload,
-    render_table,
+    historical_account_trading_by_day, render_table,
     resting_side_hours_by_day)
+from liquidity_bot.cash_activity import NontradingCashChange
+
+
+class _August25Datetime(datetime):
+    """Keep rollover-sensitive account snapshots deterministic."""
+
+    @classmethod
+    def now(cls, tz=None):
+        moment = datetime(2026, 8, 25, 17, tzinfo=timezone.utc)
+        return moment if tz is None else moment.astimezone(tz)
 
 
 class RewardTableTests(unittest.TestCase):
@@ -80,16 +90,7 @@ class RewardTableTests(unittest.TestCase):
             today=date(2026, 8, 25),
             account_realized=AccountRealizedToday(
                 Decimal("-30.9844"), "ok"),
-)
-
-
-class _August25Datetime(datetime):
-    """Keep rollover-sensitive account snapshots deterministic."""
-
-    @classmethod
-    def now(cls, tz=None):
-        moment = datetime(2026, 8, 25, 17, tzinfo=timezone.utc)
-        return moment if tz is None else moment.astimezone(tz)
+        )
 
         self.assertIn("| 2026-08-23 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
         self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
@@ -169,6 +170,84 @@ class _August25Datetime(datetime):
                 elapsed_hours={}, today=date(2026, 8, 25),
                 generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
                 unbalanced_markets=0)
+
+    def test_historical_account_day_replaces_incomplete_pair_estimate(self):
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            [
+                ("2026-08-26", "772.7878", "0", "772.7878",
+                 "2026-08-26T04:00:14.133861+00:00", "fresh_et_day"),
+                ("2026-08-27", "708.3008", "0", "708.3008",
+                 "2026-08-27T04:04:10.544588+00:00", "fresh_et_day"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        result = historical_account_trading_by_day(
+            str(self.database), [date(2026, 8, 26)], ())
+
+        self.assertEqual(result["2026-08-26"], Decimal("-64.4870"))
+
+    def test_historical_account_day_subtracts_nontrading_cash(self):
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            [
+                ("2026-08-23", "500", "0", "500",
+                 "2026-08-23T04:00:01+00:00", "fresh_et_day"),
+                ("2026-08-24", "520", "0", "520",
+                 "2026-08-24T04:00:01+00:00", "fresh_et_day"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+        changes = (NontradingCashChange(
+            datetime(2026, 8, 23, 12, tzinfo=timezone.utc), Decimal("30")),)
+
+        result = historical_account_trading_by_day(
+            str(self.database), [date(2026, 8, 23)], changes)
+
+        self.assertEqual(result["2026-08-23"], Decimal("-10"))
+
+    def test_unapproved_late_boundary_cannot_create_account_history(self):
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            [
+                ("2026-08-23", "500", "0", "500",
+                 "2026-08-23T04:00:01+00:00", "fresh_et_day"),
+                ("2026-08-24", "490", "0", "490",
+                 "2026-08-24T04:04:00+00:00", "fresh_et_day"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        result = historical_account_trading_by_day(
+            str(self.database), [date(2026, 8, 23)], ())
+
+        self.assertEqual(result, {})
+
+    def test_marked_open_boundary_is_not_called_realized_history(self):
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            [
+                ("2026-08-23", "495", "0", "500",
+                 "2026-08-23T04:00:01+00:00", "fresh_et_day"),
+                ("2026-08-24", "490", "0", "490",
+                 "2026-08-24T04:00:01+00:00", "fresh_et_day"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        result = historical_account_trading_by_day(
+            str(self.database), [date(2026, 8, 23)], ())
+
+        self.assertEqual(result, {})
 
     def test_hourly_wrapper_is_bounded_locked_and_lower_priority(self):
         report = (
@@ -299,6 +378,23 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 8, 25, 4, tzinfo=timezone.utc))
 
         self.assertEqual(value, Decimal("466.0899"))
+
+    async def test_audited_delayed_flat_baseline_is_accepted_for_today(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE execution_risk_day_baselines SET risk_date=?, "
+            "opening_equity=?, opening_cash=?, created_at=?, source=?",
+            ("2026-08-27", "708.3008", "708.3008",
+             "2026-08-27T04:04:10.544588+00:00", "fresh_et_day"),
+        )
+        connection.commit()
+        connection.close()
+
+        value = _opening_cash_for_day(
+            str(self.database), date(2026, 8, 27),
+            datetime(2026, 8, 27, 4, tzinfo=timezone.utc))
+
+        self.assertEqual(value, Decimal("708.3008"))
 
     async def test_realized_fails_closed_if_cash_moves_during_snapshot(self):
         gateway = _Gateway(

@@ -5,6 +5,26 @@
 > and [DECISIONS.md](DECISIONS.md). “ACTIVE” below is scoped to its dated
 > section unless `STATUS.md` says it is active now.
 
+## IMPLEMENTED AND REVIEWED, PUSH PENDING — provisional hard stop and exact August 26 account row
+
+Production evidence shows the August 26 marked sensor crossed $80 with open
+inventory, while the later flat ET account result was `-$64.4870` and completed
+non-trading cash was zero. The historical Discord row's pair estimate was only
+`-$48.65`.
+
+Local code now blocks entries immediately on a marked breach but waits for a
+breach-time position to close and for a newer adjusted balance before clearing
+or confirming it. Realized loss can still pause while another position is open.
+The reward report uses adjacent proven-flat ET boundaries and completion-time
+cash classification for historical account truth; `~` marks fallback pair
+estimates. Six mutations were killed and all 651 local tests pass in 41.735s.
+
+Do not deploy or restart from this entry alone. The operator explicitly said
+not to restart until told. The current server runner remains on deployed marker
+`0b79a1f`; this fix is not active there.
+
+---
+
 ## OPEN: flat book-fault retirements can occupy nominally full slots during cooldown
 
 The 2026-08-27 13:20Z capacity audit found queue scope `markets=20`, but three

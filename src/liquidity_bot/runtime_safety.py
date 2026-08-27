@@ -187,7 +187,11 @@ class SessionRiskGuard:
         return tuple(result)
 
     def can_add_new_risk(self, *, now: datetime) -> bool:
-        return not self.blockers(now=now)
+        # A marked-equity breach is provisional while its open exposure is
+        # being closed, but it must still block every new entry immediately.
+        # The runner owns the later cohort-close confirmation.
+        return (not self.blockers(now=now)
+                and not self.hard_stop_reached(now=now))
 
     def hard_stop_reached(self, *, now: datetime) -> bool:
         """True only for the emergency equity ceiling, never for stale data."""

@@ -4489,6 +4489,117 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_open_position_marked_breach_waits_for_realized_close(self):
+        """A losing open mark must not force a shutdown that realizes it."""
+
+        runner, client, notifier = self.build_runner()
+        await runner.preflight()
+        slug = runner.config.market_slug
+
+        client.portfolio.rows = {slug: {
+            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "updateTime": NOW.isoformat(),
+        }}
+        await runner._rest_reconcile(NOW)
+        client.account.asset_notional = Decimal("-81")
+        await runner._refresh_balance(NOW)
+
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertEqual(runner._provisional_hard_stop_markets, {slug})
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
+        await runner._announce_provisional_hard_stop()
+        self.assertIn("provisional", str(notifier.messages[-1]).lower())
+
+        # The trade closes and the actual day result is only -$76. A complete
+        # venue reconcile followed by a fresh balance is the required proof.
+        client.portfolio.rows = {}
+        closed_at = NOW + timedelta(seconds=1)
+        runner.clock = lambda: closed_at
+        await runner._rest_reconcile(closed_at)
+        client.account.current_balance = Decimal("24")
+        client.account.asset_notional = Decimal("0")
+        measured_at = closed_at + timedelta(seconds=1)
+        runner.clock = lambda: measured_at
+        await runner._refresh_balance(measured_at)
+
+        self.assertIsNone(runner._stop_reason(measured_at))
+        self.assertIsNone(runner._provisional_hard_stop_at)
+        self.assertEqual(runner._session_realized(), Decimal("-76"))
+        await runner._announce_provisional_hard_stop()
+        self.assertIn("cleared", str(notifier.messages[-1]).lower())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_open_position_breach_stops_if_close_confirms_eighty(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.portfolio.rows = {slug: {
+            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "updateTime": NOW.isoformat(),
+        }}
+        await runner._rest_reconcile(NOW)
+        client.account.asset_notional = Decimal("-81")
+        await runner._refresh_balance(NOW)
+        self.assertIsNone(runner._stop_reason(NOW))
+
+        client.portfolio.rows = {}
+        closed_at = NOW + timedelta(seconds=1)
+        runner.clock = lambda: closed_at
+        await runner._rest_reconcile(closed_at)
+        self.assertIsNone(
+            runner._stop_reason(closed_at),
+            "the pre-close balance cannot confirm a hard loss")
+        client.account.current_balance = Decimal("19")
+        client.account.asset_notional = Decimal("0")
+        measured_at = closed_at + timedelta(seconds=1)
+        runner.clock = lambda: measured_at
+        await runner._refresh_balance(measured_at)
+
+        self.assertEqual(
+            runner._stop_reason(measured_at), "EMERGENCY_EQUITY_HARD_STOP")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_realized_stop_can_pause_with_another_position_open(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slug = runner.config.market_slug
+        client.portfolio.rows = {slug: {
+            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "updateTime": NOW.isoformat(),
+        }}
+        await runner._rest_reconcile(NOW)
+        client.account.asset_notional = Decimal("-81")
+        await runner._refresh_balance(NOW)
+        self.assertIsNone(runner._stop_reason(NOW))
+
+        # Closed trades can independently consume the realized budget even
+        # while this unrelated position remains open.
+        runner.risk_guard.observe_realized(
+            -runner.config.max_session_loss_usd)
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertIn(
+            "session loss limit reached", runner.risk_guard.blockers(now=NOW))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_hard_equity_excludes_proven_nontrading_cash(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._nontrading_cash = Decimal("100")
+        runner._nontrading_cash_observed_at = NOW
+        runner._nontrading_cash_day = runner._baseline_day
+        client.account.current_balance = Decimal("120")
+
+        await runner._refresh_balance(NOW)
+
+        self.assertEqual(runner.balance.marked_equity, Decimal("120"))
+        self.assertEqual(runner.risk_guard.current_equity, Decimal("20"))
+        self.assertTrue(runner.risk_guard.hard_stop_reached(now=NOW))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_private_recovery_listens_before_cancel_and_drains_proof(self):
         """A reconnect must not create a terminal-event visibility gap."""
 

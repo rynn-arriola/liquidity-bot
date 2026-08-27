@@ -33,6 +33,58 @@ Ground rules that came out of these:
 
 ---
 
+## 2026-08-27
+
+### FIXED LOCALLY, REVIEWED AND PUSHED; NOT DEPLOYED OR RESTARTED — open paper loss forced a terminal hard-stop shutdown
+
+**Symptom.** At 03:39Z the runner entered `EMERGENCY_EQUITY_HARD_STOP`
+shutdown while several positions were open. The final flat August 26 ET account
+result was only `-$64.4870`, so the $80 line had been crossed by temporary open
+inventory marks, not a finished $80 trading loss.
+
+**Mechanism.** `_stop_reason` treated the first fresh marked-equity threshold
+reading as terminal before asking whether inventory was open. Shutdown then
+tried to realize the very paper loss that created the reading. The hard mark
+also used raw account equity, so completed non-trading cash could mask or
+fabricate its drawdown.
+
+**Fix.** The marked sensor now blocks new entries at once but latches a
+provisional state when positions are open. Existing reducers, inventory timers
+and pre-kickoff exits keep running. A mark bounce alone cannot clear it; a
+breach-time position must be positively zero in a complete reconcile and the
+balance used for the decision must be newer than that proof. If the adjusted
+mark remains at $80, the hard stop may fire even with another position open. If
+it recovers, quoting resumes. Independently, the realized sensor can pause at
+$80 while other inventory remains. Proven rewards/deposits/withdrawals are now
+removed from marked equity as well as realized cash.
+
+### FIXED LOCALLY, REVIEWED AND PUSHED; NOT DEPLOYED — historical Discord trading loss omitted account losses
+
+**Symptom.** August 26 displayed `-$48.65` although the completed flat account
+lost `-$64.4870` in trading.
+
+**Mechanism.** Every historical row used the balanced-pair fill estimator. It
+cannot include an unbalanced market, a manual/settled close or another account
+cash consequence, so the number was a lower-fidelity estimate presented in the
+main Trading column.
+
+**Fix.** The reporter performs one additional bounded cash-only historical
+walk at 1 request/second. A completed row uses adjacent native ET account-equity
+boundaries only when both are flat and subtracts completion-time non-trading
+cash. Unproved/open boundaries keep the old value with a visible `~` prefix.
+The exact delayed August 27 boundary is accepted only when all pinned incident
+fields match. The current-day snapshot remains independently bracketed so a
+cash change during its reads still fails closed.
+
+**Proof for both fixes.** Six deliberate reversions failed their focused
+regressions: immediate marked shutdown with inventory, stale pre-close balance,
+raw transfer-contaminated equity, reversed historical delta, counted transfers
+and an open midnight boundary. The repaired reward test structure restored
+eight previously undiscovered report regressions. All **651** tests pass locally
+in **41.735 seconds**. No server file, process or loaded bot code was changed.
+
+---
+
 ## 2026-08-26
 
 ### OPERATIONAL RECOVERY, NO CODE CHANGE — transient proxy/location rejection looked like a blocked droplet

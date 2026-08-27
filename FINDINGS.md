@@ -24,6 +24,43 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## August 26 hard stop was a temporary open-position mark; flat account trading finished at -$64.49
+
+Established 2026-08-27 from the production shutdown timeline, durable ET risk
+baselines, authenticated cash activity and the execution ledger. The run began
+at `2026-08-26T22:36:22Z`. At `03:39Z` the marked-equity sensor crossed its
+$80 threshold while several positions were still nonzero; shutdown immediately
+began flattening them and eventually reported
+`stop_reason=EMERGENCY_EQUITY_HARD_STOP`, `flat=true` at `03:50:49Z`.
+Unfilled open orders did not move equity; filled inventory and its venue mark
+did.
+
+The native August 26 ET opening boundary was `$772.7878`. The next process read
+`$708.3008` equity and cash before its first order, after the prior run had
+already proved flat. A bounded six-day cash-only activity walk reached explicit
+EOF, and the exact August 26 window independently proved `$0.00` non-trading
+cash. Therefore the completed account trading result was
+`708.3008 - 772.7878 - 0 = -64.4870`, below the chosen $80 stop. The old Discord
+row printed `-$48.65` because its balanced-pair estimator excluded unbalanced
+fills, manual/settled exits and other account cash consequences.
+
+The reusable diagnostic is: compare the log's position state at the marked
+breach with adjacent flat ET account boundaries and completion-time non-trading
+cash. A marked breach with inventory is not final realized evidence. It must
+block new entries, keep exits alive and wait for a breach-time position close
+plus a newer balance. Closed realized loss may still pause or stop trading while
+another position remains open; complete account flatness is not required.
+
+Historical reporting can use adjacent ET equity boundaries only when both are
+native, timely and flat. An open-position boundary contains paper movement and
+must visibly fall back to the `~` matched-pair estimate. The delayed August 27
+boundary is accepted only through a field-pinned incident audit: shutdown
+proved flat at 03:50:49Z, its stored equity and cash both equal `$708.3008`, the
+ledger contains no fill before the first 04:04:28Z order, and the exact stored
+timestamp is `04:04:10.544588Z`.
+
+---
+
 ## Twenty markets were bound on August 27, but three slots were parked by book-fault cooldown
 
 Established live at 2026-08-27T13:20Z from the exact queue scope, top-up

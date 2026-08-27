@@ -17,6 +17,21 @@ authority.
 This dated log preserves detailed handoffs. It is evidence and history;
 [STATUS.md](STATUS.md) replaces it as the current-state page.
 
+- **FIXED LOCALLY, REVIEWED, NOT DEPLOYED OR RESTARTED — open-position hard
+  breach and historical account P&L.** Production evidence proved the August
+  26 hard stop began with open inventory, while adjacent later-flat ET account
+  boundaries and a bounded cash scan put completed trading at `-$64.4870`, not
+  the $80 threshold; Discord's pair row showed only `-$48.65`. Local code now
+  blocks entries immediately but treats a marked breach with inventory as
+  provisional until a breach-time position closes and a newer adjusted balance
+  arrives. It can then clear below $80 or confirm the hard stop while another
+  position remains; realized loss independently pauses with inventory open.
+  Historical report rows use adjacent native flat ET boundaries less completed
+  non-trading cash and mark unproved pair fallbacks with `~`. Six deliberate
+  reversions were killed and all 651 tests pass in 41.735 seconds. The running
+  server remains supervisor/runner `13125`/`13131` on deployed marker `0b79a1f`;
+  do not claim this fix is active until an authorized deploy and restart.
+
 - **PUSHED, DEPLOYED AND ACTIVE — AUGUST 26 RECOVERY/SLOT FIX; TRANSIENT
   VENUE LOCATION DENIAL CLEARED BY SERVER REBOOT.** Today a private reconnect
   canceled before the new

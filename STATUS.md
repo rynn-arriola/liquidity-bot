@@ -6,7 +6,7 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 09:36 ET / 2026-08-27 13:36 UTC
+- **Time:** 2026-08-27 11:46 ET / 2026-08-27 15:46 UTC
 - **Bot:** LIVE after an operator-authorized clean restart
 - **Supervisor / runner:** active as `13125` / `13131`; current run began
   2026-08-27 13:34:15 UTC
@@ -21,12 +21,29 @@ describe their dated event, not the bot now.
   13:36:38 UTC
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
+- **Local handoff:** provisional open-position hard-stop and historical
+  account-P&L fixes pass 651 tests; not deployed and not loaded by this runner
 
 The initial 13:36 ledger checkpoint held 19 working orders across 19 markets,
 zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions. The
 venue count rose to 24 during normal startup convergence.
 
 ## What just happened
+
+The August 26 hard-stop incident was reconstructed. Marked equity crossed $80
+while positions were open, but the adjacent flat ET account boundaries were
+`$772.7878` and `$708.3008`, and a bounded cash-only activity scan proved zero
+non-trading cash. The completed trading result was therefore `-$64.4870`; the
+Discord row's `-$48.65` was the incomplete balanced-pair estimate.
+
+Local fixes now make an open-position marked breach provisional while blocking
+all new entries, require a breach-time position close plus a newer balance, and
+remove proven non-trading cash from the hard mark. Historical report rows use
+adjacent proven-flat ET boundaries where possible and visibly mark pair
+fallbacks with `~`. Six mutation checks and all 651 tests pass in 41.735s. These changes
+are not deployed and the bot was not restarted. At 15:46 UTC supervisor 13125
+and runner 13131 retained their original 13:34:15 UTC start time on deployed
+marker `0b79a1f`.
 
 The same runner survived Polymarket maintenance from 08:41 UTC. Account health
 first succeeded at 12:20, failed once and correctly reset to `0/3`, then passed
@@ -81,8 +98,9 @@ block or need for a new droplet.
 
 The concise authoritative list is [DECISIONS.md](DECISIONS.md). Key points:
 size 10, 20 slots, six-hour horizon, 2-cent new-entry spread filter, no league
-filter, $80 realized-session and $80 marked-equity account stops, and no
-automatic queue-reset behavior.
+filter, an $80 realized-session sensor and an $80 marked-equity sensor whose
+open-position breach is provisional until a position closes, and no automatic
+queue-reset behavior.
 
 ## Next AI operator
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
@@ -29,6 +30,14 @@ LEGACY_ET_OPENING_CASH = {
 
 class CashActivityUnavailable(AdapterError):
     """A bounded cash-activity walk could not prove the requested window."""
+
+
+@dataclass(frozen=True)
+class NontradingCashChange:
+    """One positively classified completed non-trading cash movement."""
+
+    completed_at: datetime
+    amount: Decimal
 
 
 def corrected_opening_cash(
@@ -147,14 +156,14 @@ def _cash_rows(activity: dict[str, Any]) -> Iterable[tuple[dict, dict]]:
         yield change, change
 
 
-async def fetch_nontrading_cash(
+async def fetch_nontrading_cash_changes(
     gateway: AsyncReadOnlyGateway,
     *,
     boundary: datetime,
     through: datetime,
     max_pages: int = 4,
-) -> Decimal:
-    """Net completed deposits, withdrawals, rewards and transfers in a window.
+) -> tuple[NontradingCashChange, ...]:
+    """Completed deposits, withdrawals, rewards and transfers in a window.
 
     The venue sorts activity by creation time while cash moves at completion
     time. Therefore an explicit EOF is required; crossing the time boundary in
@@ -172,7 +181,7 @@ async def fetch_nontrading_cash(
 
     cursor: str | None = None
     seen_cursors: set[str] = set()
-    net = Decimal(0)
+    changes: list[NontradingCashChange] = []
     for _ in range(max_pages):
         params: dict[str, Any] = {
             "limit": 100,
@@ -216,10 +225,14 @@ async def fetch_nontrading_cash(
                 amount = _amount(row.get("amount", parent.get("amount")))
                 description = str(
                     row.get("description", parent.get("description", "")))
-                net += _cash_change_sign(activity_type, description, amount)
+                changes.append(NontradingCashChange(
+                    completed_at=row_at,
+                    amount=_cash_change_sign(
+                        activity_type, description, amount),
+                ))
         eof = response.get("eof")
         if eof is True:
-            return net
+            return tuple(changes)
         if eof is not False:
             raise CashActivityUnavailable(
                 "cash-activity pagination has no explicit eof")
@@ -234,3 +247,21 @@ async def fetch_nontrading_cash(
         cursor = next_cursor
     raise CashActivityUnavailable(
         "cash-activity scan did not reach the ET boundary")
+
+
+async def fetch_nontrading_cash(
+    gateway: AsyncReadOnlyGateway,
+    *,
+    boundary: datetime,
+    through: datetime,
+    max_pages: int = 4,
+) -> Decimal:
+    """Net completed non-trading cash in a bounded, proven window."""
+
+    changes = await fetch_nontrading_cash_changes(
+        gateway,
+        boundary=boundary,
+        through=through,
+        max_pages=max_pages,
+    )
+    return sum((change.amount for change in changes), Decimal(0))

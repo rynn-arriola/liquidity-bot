@@ -60,8 +60,14 @@ These are implementation requirements, not suggestions.
     state, or through the bounded non-flat exit in invariant 32.
 25. Losses have a **$40** per-market realized-loss threshold and one **$80**
     account threshold observed by two independent sensors: realized session
-    loss pauses new risk, while marked-account-equity loss (`currentBalance`
-    plus `assetNotional`) is the emergency hard stop. The
+    loss pauses new risk, while adjusted marked-account-equity loss
+    (`currentBalance` plus `assetNotional`, less proven non-trading cash) is the
+    emergency sensor. A marked breach blocks every new entry immediately. If
+    inventory is open it is provisional: existing exits keep running, a
+    recovered mark cannot clear until a breach-time position is positively
+    closed, and the decision requires a complete reconciliation followed by a
+    newer balance. A confirmed hard loss may stop while a different position
+    remains open. The
     market stop remains the first bound for one bad market; only losses spread
     across markets can reach the session stop. Buying power is never treated
     as P&L or marked equity. `CommissioningConfig` validates all three at
@@ -361,16 +367,19 @@ These are implementation requirements, not suggestions.
 71. The hourly seven-day reward report is operationally isolated from trading.
     It runs as a separate process, opens the execution ledger with SQLite
     `mode=ro`, and has no order, book, discovery or mutation call. For its
-    separately labeled current-day account-realized value it may make only
-    bounded account-wide reads: one earnings request, two equal balance reads
-    bracketing one complete position snapshot, and at most four cash-only
-    activity pages that must reach explicit EOF. Cash changes are assigned by
-    completion `updateTime`; feed order is only creation order and may not prove
-    an ET boundary. All use one report-local 1 request/sec limiter.
+    account trading values it may make only bounded account-wide reads: one
+    earnings request; up to four historical cash-only pages; and, for today's
+    independent snapshot, two equal balance reads bracketing one complete
+    position snapshot plus up to four current-day cash-only pages. All cash
+    walks must reach explicit EOF and share one report-local 1 request/sec
+    limiter. Cash changes are assigned by completion `updateTime`; feed order
+    is only creation order and may not prove an ET boundary.
     The value is current cash minus ET opening cash and completed non-trading
     cash, plus exact open-position basis. The current ET row and its net use
-    this value; historical daily trading rows remain explicitly balanced-pair
-    estimates. Any moving balance, absent basis, unproven
+    this value. A completed historical day uses adjacent native ET equity
+    boundaries only when both prove flat and all non-trading cash is removed;
+    otherwise it is visibly prefixed `~` and remains the balanced-pair
+    estimate. Any moving balance, absent basis, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day
     rollover must render `Unavailable`, never a partial number. A nonblocking
     file lock prevents overlap and a 90-second timeout bounds runtime. Its
@@ -411,5 +420,6 @@ These are implementation requirements, not suggestions.
     governor. Unknown transfer text, malformed pagination, page exhaustion,
     moving cash or ET-day rollover may not fall back to raw cash or renew risk
     freshness. The existing stale-equity gate must disable new risk while the
-    adjustment is unproved. This does not redefine the separate marked-equity
-    emergency sensor, which remains account-wide.
+    adjustment is unproved. The same proven non-trading adjustment is removed
+    from the separate account-wide marked-equity sensor so a reward, deposit or
+    withdrawal cannot mask or fabricate a trading drawdown.

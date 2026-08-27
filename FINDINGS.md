@@ -55,6 +55,17 @@ proves bound capacity, while per-owner retirement state is required to prove
 productive capacity. On this checkpoint the correct split was 17 available
 owners plus three temporarily parked owners, not 20 healthy quoting owners.
 
+At the operator's request, the account was restarted only after authenticated
+venue proof showed zero orders and zero positions. Graceful shutdown recorded
+`flat=true`, and a second post-stop gate found venue and ledger
+orders/positions/unresolved/unknown all zero. The unchanged `auto 10` runner
+started at 13:34:15Z, reported `markets=20` at 13:35:42Z, produced 19 initial
+placements across 19 distinct markets with no startup error marker, and the
+13:36:38Z venue checkpoint held 24 orders across 19 markets with zero position.
+None of the three parked WTT slugs was in the fresh scope. Restart therefore
+clears this session-local symptom, but it does not repair the retirement/top-up
+mechanism that allowed productive capacity to fall to 17 in the prior run.
+
 ---
 
 ## Natural August 27 maintenance recovered end to end without a restart

@@ -15,6 +15,12 @@ and `not open` evidence. Alternating `unrecoverable_book_AdapterError` and
 had 77 viable alternatives. The other 17 owners continued operating; this was
 not an account-wide recovery stall.
 
+An operator-authorized flat restart at 13:34Z cleared the session-local
+symptom: fresh selection excluded the three WTT slugs, queue scope returned to
+20, initial actions reached 19 distinct markets, and the venue held 24 orders
+across 19 markets with zero position. This is a workaround and live evidence
+for the diagnosis, not closure of the code gap.
+
 Before proposing a fix, trace the complete retirement/top-up interaction and
 preserve positive ownership proof, retained exits, stream-rebind safety and the
 exact 20 cap. Focused regressions should decide whether equivalent permanent

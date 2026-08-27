@@ -24,6 +24,32 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## Natural maintenance pause kept the August 27 runner alive and fail-closed
+
+Established live at 2026-08-27T10:36Z from process state, the commissioning
+log and a read-only ledger sample. Supervisor `8058` and runner `8064` remained
+alive from their 04:02:57Z start. Private-stream recovery entered
+`[maintenance-pause]` at 08:41:27Z after authenticated
+`GET /v1/orders/open` returned `InternalServerError`. Every one-minute probe
+through 10:36:38Z failed with `stable=0/3`; no health success had been hidden
+and no action was logged after maintenance began.
+
+This is the first natural live acceptance of the deployed maintenance hold.
+It proves the runner no longer exhausts recovery, exits and consumes the
+supervisor crash budget merely because the venue remains under maintenance.
+It does not yet prove automatic recovery: that requires three consecutive
+complete authenticated health passes, normal reconciliation, fresh streams
+and resumed safe quoting after the venue returns.
+
+The ledger then contained 27 last-known working orders, eight unresolved
+intents, zero `UNKNOWN_ABSENT` rows and one nonzero position. Because the
+authoritative account endpoint was unreadable, none of those counts proves
+current venue exposure or flatness. Restarting, force-stopping or repairing
+from that ledger would violate the positive-proof rule. The correct action is
+to leave the live process dormant and observe the existing health gate.
+
+---
+
 ## The August 26 proxy/location denial was transient and cleared after a server reboot
 
 Established 2026-08-26 from the production log, two authenticated venue

@@ -6,21 +6,24 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-26 20:48 ET / 2026-08-27 00:48 UTC
-- **Bot:** LIVE on the production server
-- **Supervisor / runner:** active; current run began 2026-08-26 22:36 UTC
+- **Time:** 2026-08-27 06:36 ET / 2026-08-27 10:36 UTC
+- **Bot:** LIVE process, deliberately `MAINTENANCE_PAUSED`; no new risk
+- **Supervisor / runner:** active as `8058` / `8064`; current run began
+  2026-08-27 04:02:57 UTC
 - **Maker-lab:** stopped
 - **Deployed marker:** `0b79a1f`; reviewed recovery source is `5825db8`
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
-- **Latest queue proof:** `markets=20`, `active_orders=31` at 00:41:57 UTC
+- **Maintenance proof:** entered from private-stream recovery at 08:41:27 UTC;
+  authenticated open-order health remains `failed`, `stable=0/3`
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
 
-Working-order and position counts change continuously. At the 00:43 UTC
-read-only ledger sample, quoting was active across the 20-slot scope. Do not
-use that sample as proof of current exposure; query the venue whenever orders
-or positions affect a decision.
+The 10:36 UTC ledger sample contains 27 last-known working orders, eight
+unresolved intents, zero `UNKNOWN_ABSENT` rows and one nonzero position. Those
+are not current venue proof: Polymarket's authenticated open-order endpoint is
+returning HTTP 500, so present exposure is unknown. Do not stop, restart,
+repair or infer flatness from the ledger while the venue is unreadable.
 
 ## What just happened
 
@@ -39,6 +42,14 @@ block or need for a new droplet.
 
 ## Current interpretation
 
+- The maintenance-aware recovery is operating as designed: the process stays
+  alive, makes no new trading decisions and probes account health once per
+  minute. Every probe through 10:36 UTC failed before reaching the first of
+  three required consecutive successes.
+- When three complete authenticated order/position/balance passes succeed
+  about one minute apart, normal reconciliation and fresh-stream gates must
+  still pass before quoting resumes automatically. No manual restart is
+  currently recommended.
 - The 20-slot scheduler is working; order count is not slot count.
 - The proxy/location incident was operational and transient. No code was
   changed to weaken uncertain-mutation safety.

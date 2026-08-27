@@ -411,8 +411,14 @@ slate still held 20. The unchanged capacity remains 20. By 12:26:15Z the run
 had 37 placements across 17 markets and 23 working orders across 12 markets,
 all at quantity 10, with zero unresolved intents, zero `UNKNOWN_ABSENT` rows
 and zero positions. No maintenance, runner-failure or risk-stop marker appeared.
-The maintenance branch itself remains for acceptance on the next natural venue
-outage; do not induce one on the funded account.
+Natural acceptance began on 2026-08-27. Private recovery entered
+`MAINTENANCE_PAUSED` at 08:41:27Z while `GET /v1/orders/open` returned HTTP 500.
+Supervisor and runner remained alive through the 10:36Z checkpoint, with
+one-minute probes correctly held at `stable=0/3` and no post-entry trading
+action. This accepts the long-outage dormant half. Automatic recovery remains
+unaccepted until the same process records three complete health passes,
+reconciles, rebinds fresh streams and safely resumes quoting. Do not restart or
+induce recovery while authoritative venue exposure is unreadable.
 
 ## DEPLOYED AND RESTARTED: dual-stream recovery no longer waits on one absent cancel
 

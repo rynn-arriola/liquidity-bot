@@ -8,9 +8,9 @@ real account.** Every change can lose it.
 Update this block when it stops being true. It is here so a new session starts
 from fact rather than from the last thing someone remembers.
 
-- **PUSHED AND DEPLOYED; BOT STOPPED — AUGUST 26 RECOVERY/SLOT FIX.** The
-  operator canceled all orders, flattened and asked for the
-  runner to be shut down. Today a private reconnect canceled before the new
+- **PUSHED, DEPLOYED AND ACTIVE — AUGUST 26 RECOVERY/SLOT FIX; TRANSIENT
+  VENUE LOCATION DENIAL CLEARED BY SERVER REBOOT.** Today a private reconnect
+  canceled before the new
   private listener existed, losing terminal events and retiring fourteen
   owners through acknowledged-cancel/`UNKNOWN_ABSENT` timeouts. The fix listens
   before cancel, drains buffered proof in recovery/shutdown, scopes top-up ID
@@ -21,8 +21,23 @@ from fact rather than from the last thing someone remembers.
   loss limits or the rule that absence is never cancellation. Six deliberate
   reversions are killed by regressions and all 638 local tests pass in 40.584
   seconds. Source commit `5825db8` and documentation/deploy commit `b738d8c`
-  are pushed. All 13 deployed hashes matched and the stopped server passed all
-  638 tests in 58.686 seconds. Maker-lab, supervisor and runner remained
+  are pushed. All 13 deployed hashes matched and the server passed all 638
+  tests in 58.686 seconds. The first post-deploy start reached queue scope
+  `markets=20`, but five creates were rejected with `PermissionDeniedError:
+  Your connection looks like a VPN or proxy, so we can't verify your
+  location`. They were conservatively recorded `UNCERTAIN`; the supervisor was
+  stopped and the stuck runner was force-stopped only after two authenticated
+  venue snapshots three seconds apart both proved zero orders and positions.
+  A subsequent startup correctly refused the five unresolved intents. With
+  the runner stopped, `scripts/resolve_orphan_places.py` independently proved
+  zero venue orders/positions and resolved exactly those five creates to
+  `FAILED`. After an operator server reboot, the same server/IP started
+  supervisor `1074` and runner `1083`; queue telemetry at 22:37:13Z again
+  proved `markets=20`, creates returned real exchange IDs, and the 22:38Z
+  ledger checkpoint held 20 `OPEN` orders, zero nonzero positions and no new
+  `UNCERTAIN` intent. This disproves an account ban or permanent droplet-IP
+  block; treat recurrence as a transient venue/connection classification and
+  stop promptly rather than letting it retire all slots. Maker-lab remains
   stopped. For future low-order diagnosis ask
   to **"run the 20-slot scheduler audit"** and use the exact recipe at the top
   of FINDINGS rather than treating working-order count as slot count.

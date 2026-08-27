@@ -1,10 +1,10 @@
 # Next session — outstanding fixes
 
-## PUSHED AND DEPLOYED; BOT STOPPED: August 26 recovery and slot defects
+## ACTIVE: August 26 recovery/slot fixes and transient location-denial recovery
 
-The operator canceled all venue orders, flattened the account and requested a
-shutdown. The runner and supervisor are stopped. Do not restart from an older
-commit.
+Do not restart from an older commit. Source commit `5825db8` and documentation
+commit `b738d8c` remain the deployed code; the final stopped-server acceptance
+marker is `0b79a1f`.
 
 Local source commit `5825db8` fixes five production defects found in the full
 August 26 timeline:
@@ -29,8 +29,27 @@ and progress by owner. Raw order count is not capacity.
 Focused regressions pass, six deliberate reversions were killed and all 638
 local tests pass in 40.584 seconds. Commits `5825db8` and `b738d8c` are pushed;
 all 13 deployed hashes matched and the stopped server passed all 638 tests in
-58.686 seconds. Maker-lab, supervisor and runner remained stopped. Do not
-restart unless the operator separately asks after a fresh flat/ownership gate.
+58.686 seconds.
+
+The operator then authorized a restart. The first run proved queue
+`markets=20` but Polymarket rejected five creates with an explicit
+VPN/proxy/location `PermissionDeniedError`; all five were recorded `UNCERTAIN`.
+The supervisor was stopped immediately. After two authenticated whole-account
+snapshots proved zero orders and positions, the blocked cleanup runner was
+force-stopped. A retry correctly refused the unresolved ledger. The reviewed
+`resolve_orphan_places.py` utility, while stopped, independently proved zero
+venue orders and positions and changed exactly those five no-ID PLACE intents
+to `FAILED`, leaving zero unresolved.
+
+The operator rebooted the server and authorized one clean retry. Supervisor
+`1074` / runner `1083` started at 22:36Z. Queue telemetry at 22:37:13Z proved
+all 20 measurement slots; creates immediately returned exchange order IDs. At
+the 22:38Z ledger checkpoint there were 20 open orders, zero nonzero positions
+and no new uncertain placement. The same host/IP working after reboot means
+this was not evidence of an account ban or permanent droplet block. If the
+exact permission error returns, stop promptly, prove venue state
+authenticated, and never resolve or force-stop from absence or ledger state
+alone. Do not buy/migrate a droplet on this incident alone.
 
 ---
 

@@ -31,6 +31,32 @@ Ground rules that came out of these:
 
 ## 2026-08-26
 
+### OPERATIONAL RECOVERY, NO CODE CHANGE — transient proxy/location rejection looked like a blocked droplet
+
+**Symptom.** A reviewed restart reached the configured 20-market queue scope,
+then every attempted create raised `PermissionDeniedError` saying the
+connection looked like a VPN or proxy and its location could not be verified.
+Five PLACE intents had no exchange ID and remained `UNCERTAIN`; the runner's
+safety shutdown could not infer failure from their absence. A first retry
+correctly refused to start with those unresolved intents.
+
+**Mechanism.** This was a transient venue/connection classification, not the
+20-slot scheduler and not evidence of an account ban or permanent IP block.
+The same server and IP accepted creates after a full server reboot. Treating a
+mutation exception as uncertain was conservative and was not weakened.
+
+**Recovery.** Stop the supervisor immediately. Force-stop a cleanup runner
+only after authenticated whole-account venue reads prove zero open orders and
+zero positions. With no runner alive, run `scripts/resolve_orphan_places.py`
+dry first; `--apply` is allowed only when its own fresh venue proof finds no
+corresponding order or position. On this incident it resolved exactly five
+no-ID creates to `FAILED` and left zero unresolved. After the operator rebooted
+the server, supervisor `1074` / runner `1083` reached queue `markets=20`,
+creates returned exchange IDs, the ledger held 20 open orders and zero nonzero
+positions, and no new uncertain create appeared. No source change was made.
+
+---
+
 ### FIXED, PUSHED AND DEPLOYED; BOT STOPPED — reconnect cancellation discarded terminal proof and retired healthy owners
 
 **Symptom.** Fourteen markets retired together for

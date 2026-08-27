@@ -20,6 +20,40 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## The August 26 proxy/location denial was transient and cleared after a server reboot
+
+Established 2026-08-26 from the production log, two authenticated venue
+snapshots, the intent/order ledger and the post-reboot acceptance run. The
+first reviewed start reached queue telemetry `markets=20`, proving that the
+scheduler and active scope initialized normally. Five creates then raised the
+exact venue error `PermissionDeniedError: Your connection looks like a VPN or
+proxy, so we can't verify your location`; none returned an exchange order ID.
+They became `UNCERTAIN`, as every ambiguous create must, and the runner could
+not prove a clean shutdown from absence.
+
+The supervisor was stopped. Two authenticated whole-account venue snapshots
+three seconds apart both returned zero open orders and zero positions before
+the runner was force-stopped. A later startup refused because the five intents
+were still unresolved. With no runner alive, the existing orphan-PLACE utility
+performed its own fresh authenticated proof, found zero orders and positions,
+and resolved exactly the five no-ID creates to `FAILED`; unresolved count
+became zero.
+
+After the operator rebooted the server, the same host/IP started supervisor
+`1074` and runner `1083`. Queue telemetry at 22:37:13Z again showed
+`markets=20`. Beginning at 22:37:29Z, creates returned concrete exchange IDs
+instead of permission errors. At the 22:38Z ledger checkpoint there were 20
+`OPEN` orders, zero nonzero positions and no new `UNCERTAIN` intent. Therefore
+the incident does not support an account-ban, permanent-IP-block or 20-slot
+defect conclusion. A new droplet is not justified by this observation alone.
+
+The reusable recovery signature is: queue scope succeeds, every create fails
+with the same location permission text, no exchange IDs exist, and orphan
+intents accumulate. Stop promptly. Venue state—not ledger absence—must prove
+flat before any force-stop or orphan resolution.
+
+---
+
 ## The August 26 mass retirements were a private-stream visibility gap, not a 20-slot cap
 
 Established 2026-08-26 from the production log beginning at byte 75,132,372,

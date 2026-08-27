@@ -6,12 +6,12 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 19:05 ET / 2026-08-27 23:05 UTC
+- **Time:** 2026-08-27 19:08 ET / 2026-08-27 23:08 UTC
 - **Bot:** STOPPED at the operator's request; no supervisor or runner process
 - **Stop quality:** FORCED after graceful shutdown could not obtain venue
   proof. Current orders and positions remain UNKNOWN and may be unmanaged.
 - **Maker-lab:** stopped
-- **Deployed marker:** `dc26c96`
+- **Deployed marker:** `e97e231`; latest trading-source change is `dc26c96`
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
 - **Latest queue proof:** `markets=20` at 17:09:37 UTC
@@ -29,10 +29,11 @@ describe their dated event, not the bot now.
   39.768s and all 660 stopped-server tests passed in 36.304s.
 - **Multi-machine handoff:** GitHub `main` is now the single tracked-file source
   of truth. `AI_OPERATOR.md` is the one neutral AI entry; Codex `AGENTS.md` and
-  Claude `CLAUDE.md` are discovery pointers only. The new read-only production
-  parity flow safely fast-forwards a clean behind-only workstation and compares
-  server source/tests to `DEPLOYED_COMMIT`. Its focused tests and all 664 local
-  tests pass. Server installation/acceptance is the remaining step.
+  Claude `CLAUDE.md` are discovery pointers only. The parity flow safely
+  fast-forwards a clean behind-only workstation and compares server
+  source/tests to `DEPLOYED_COMMIT`. Four focused tests, all 664 local tests and
+  all 664 stopped-server tests pass. Desktop `Rynn-PC`, GitHub and production
+  return `PARITY OK`; the laptop requires its own run when next used.
 
 The 17:10 authenticated acceptance checkpoint held 18 resting orders across 18
 markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.

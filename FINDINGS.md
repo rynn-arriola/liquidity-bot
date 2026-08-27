@@ -6458,5 +6458,10 @@ hashes marked otherwise identical Python files as different. The corrected
 check normalizes only CRLF/LF before SHA-256; missing, extra or materially
 changed files still fail. The second live trial matched all production
 source/tests to `dc26c96`. Four focused tests and all 664 local tests passed in
-40.664 seconds. Installation on the server and a clean post-push parity result
-remain acceptance steps at this checkpoint.
+40.664 seconds. Commit `e97e231` was pushed, all 11 changed files matched the
+server byte-for-byte, and all 664 stopped-server tests passed in 39.835
+seconds. After advancing `DEPLOYED_COMMIT` to `e97e231`, the command reported
+clean local/GitHub equality, server source/test equality and no deployment lag:
+`PARITY OK` for desktop `Rynn-PC`, GitHub and production. The bot remained
+stopped. The laptop is not proved by this run and must execute the same command
+when next used.

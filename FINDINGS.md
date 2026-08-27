@@ -24,7 +24,7 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
-## Natural maintenance pause kept the August 27 runner alive and fail-closed
+## Natural August 27 maintenance recovered end to end without a restart
 
 Established live at 2026-08-27T10:36Z from process state, the commissioning
 log and a read-only ledger sample. Supervisor `8058` and runner `8064` remained
@@ -37,12 +37,22 @@ and no action was logged after maintenance began.
 This is the first natural live acceptance of the deployed maintenance hold.
 It proves the runner no longer exhausts recovery, exits and consumes the
 supervisor crash budget merely because the venue remains under maintenance.
-It does not yet prove automatic recovery: that requires three consecutive
-complete authenticated health passes, normal reconciliation, fresh streams
-and resumed safe quoting after the venue returns.
+The recovery half was subsequently proved. A first complete health read at
+12:20:48Z produced `stable=1/3`; a failure at 12:21:48Z correctly reset the
+streak. Complete passes at 12:22:49Z, 12:23:50Z and 12:24:50Z reached `3/3`,
+followed immediately by `state=health_gate_passed`. The same runner then
+reconciled, restored fresh streams and resumed live PLACE/CANCEL/exit actions.
+Queue telemetry at 12:50:48Z again proved `markets=20`.
 
-The ledger then contained 27 last-known working orders, eight unresolved
-intents, zero `UNKNOWN_ABSENT` rows and one nonzero position. Because the
+An authenticated checkpoint at 13:04:37Z found 19 venue orders across ten
+markets and zero positions. Seconds later the ledger matched 19 working orders
+across the same market count, zero unresolved intents, zero `UNKNOWN_ABSENT`
+and zero positions. This naturally accepts both dormant outage survival and
+automatic post-maintenance recovery without a restart; it does not claim all
+20 slots must have an eligible order simultaneously.
+
+During maintenance the ledger contained 27 last-known working orders, eight
+unresolved intents, zero `UNKNOWN_ABSENT` rows and one nonzero position. Because the
 authoritative account endpoint was unreadable, none of those counts proves
 current venue exposure or flatness. Restarting, force-stopping or repairing
 from that ledger would violate the positive-proof rule. The correct action is

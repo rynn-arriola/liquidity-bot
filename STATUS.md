@@ -6,26 +6,34 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 06:36 ET / 2026-08-27 10:36 UTC
-- **Bot:** LIVE process, deliberately `MAINTENANCE_PAUSED`; no new risk
+- **Time:** 2026-08-27 09:04 ET / 2026-08-27 13:04 UTC
+- **Bot:** LIVE and quoting after automatic maintenance recovery
 - **Supervisor / runner:** active as `8058` / `8064`; current run began
   2026-08-27 04:02:57 UTC
 - **Maker-lab:** stopped
 - **Deployed marker:** `0b79a1f`; reviewed recovery source is `5825db8`
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
-- **Maintenance proof:** entered from private-stream recovery at 08:41:27 UTC;
-  authenticated open-order health remains `failed`, `stable=0/3`
+- **Latest queue proof:** `markets=20`, `active_orders=21` at 12:50:48 UTC
+- **Venue proof:** 19 open orders across 10 markets and zero positions at
+  13:04:37 UTC
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
 
-The 10:36 UTC ledger sample contains 27 last-known working orders, eight
-unresolved intents, zero `UNKNOWN_ABSENT` rows and one nonzero position. Those
-are not current venue proof: Polymarket's authenticated open-order endpoint is
-returning HTTP 500, so present exposure is unknown. Do not stop, restart,
-repair or infer flatness from the ledger while the venue is unreadable.
+The 13:04 UTC ledger sample converged to the same 19 working orders across ten
+markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero nonzero
+positions. Nineteen orders does not mean nineteen slots: current queue
+telemetry positively binds all 20 slots, while only ten markets presently have
+eligible/resting sides.
 
 ## What just happened
+
+The same runner survived Polymarket maintenance from 08:41 UTC. Account health
+first succeeded at 12:20, failed once and correctly reset to `0/3`, then passed
+three consecutive complete checks at 12:22, 12:23 and 12:24. The gate recorded
+`state=health_gate_passed` at 12:24:50, normal reconciliation and fresh-stream
+recovery completed, and quoting resumed without a process restart. This is the
+first natural live acceptance of both halves of maintenance-aware recovery.
 
 The August 26 recovery/slot fixes are pushed and deployed. The first reviewed
 restart initialized all 20 slots, but five order creates were rejected because
@@ -42,14 +50,10 @@ block or need for a new droplet.
 
 ## Current interpretation
 
-- The maintenance-aware recovery is operating as designed: the process stays
-  alive, makes no new trading decisions and probes account health once per
-  minute. Every probe through 10:36 UTC failed before reaching the first of
-  three required consecutive successes.
-- When three complete authenticated order/position/balance passes succeed
-  about one minute apart, normal reconciliation and fresh-stream gates must
-  still pass before quoting resumes automatically. No manual restart is
-  currently recommended.
+- Maintenance-aware recovery is now naturally live-accepted end to end: the
+  process stayed dormant during the outage, reset its success streak after an
+  intervening failure, passed three consecutive checks, reconciled and resumed
+  safe quoting without a restart.
 - The 20-slot scheduler is working; order count is not slot count.
 - The proxy/location incident was operational and transient. No code was
   changed to weaken uncertain-mutation safety.

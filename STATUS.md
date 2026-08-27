@@ -6,12 +6,12 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 18:41 ET / 2026-08-27 22:41 UTC
+- **Time:** 2026-08-27 18:52 ET / 2026-08-27 22:52 UTC
 - **Bot:** STOPPED at the operator's request; no supervisor or runner process
 - **Stop quality:** FORCED after graceful shutdown could not obtain venue
   proof. Current orders and positions remain UNKNOWN and may be unmanaged.
 - **Maker-lab:** stopped
-- **Deployed marker:** `a974d68`; hard-stop/report implementation is `34ff5db`
+- **Deployed marker:** `dc26c96`
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
 - **Latest queue proof:** `markets=20` at 17:09:37 UTC
@@ -22,10 +22,11 @@ describe their dated event, not the bot now.
   must not be used to call the account flat.
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
-- **Repository handoff:** three August 27 fixes are reviewed locally and not
-  deployed: dashboard unavailable-state truth, bounded maintenance tracebacks,
-  and positive closed-market slot replacement. Four deliberate reversions were
-  detected and all 660 local tests pass in 39.768s.
+- **Repository handoff:** the three August 27 fixes are pushed and deployed as
+  `dc26c96`: dashboard unavailable-state truth, bounded maintenance tracebacks,
+  and positive closed-market slot replacement. All 11 deployed hashes matched;
+  four deliberate reversions were detected; all 660 local tests passed in
+  39.768s and all 660 stopped-server tests passed in 36.304s.
 
 The 17:10 authenticated acceptance checkpoint held 18 resting orders across 18
 markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.
@@ -56,7 +57,8 @@ freshly re-read as closed/not-open plus complete position/order/intent proof is
 clear. Equivalent `unrecoverable_book_*` observations now remain one
 retirement family instead of advancing to abandonment. The exact 20 cap,
 retained orders, near-flatten guard and stream transaction boundary are
-unchanged. These changes are not yet deployed and no restart is authorized.
+unchanged. These changes are deployed as `dc26c96`; the bot has not been
+restarted and no restart is authorized.
 
 Polymarket US account service became unavailable during the current run. The
 runner entered its maintenance pause at 20:13:34 UTC and remained dormant
@@ -65,12 +67,13 @@ authorized while exposure cannot be proved. The process is behaving safely:
 it will require three consecutive complete authenticated account checks and
 then the normal reconciliation/stream recovery before it can quote again.
 
-Today's audit found a separate dashboard defect: when the authenticated venue
-read raises, the dashboard labels the venue unreachable but still renders its
-default counters as `positions 0 (flat)`, zero resting orders and empty slots.
+Today's audit found and fixed a separate dashboard defect: when the
+authenticated venue read raises, the dashboard labels the venue unreachable
+but still renders its default counters as `positions 0 (flat)`, zero resting
+orders and empty slots.
 That is false certainty while exposure is unknown. It is reporting-only; the
-runner itself remains fail-closed. No code fix has yet been authorized or
-applied.
+runner itself remains fail-closed. The repair is included in deployed commit
+`dc26c96` and needs no trading-process start to remain safely dormant.
 
 At 17:42 UTC Polymarket rejected trade and market WebSocket startup with HTTP
 503 during a slot top-up. Both streams recovered in-process. Seven flat markets

@@ -35,7 +35,7 @@ Ground rules that came out of these:
 
 ## 2026-08-27
 
-### FIXED AND REVIEWED LOCALLY; NOT DEPLOYED — dashboard converted an account outage into false flatness
+### FIXED, REVIEWED AND DEPLOYED; BOT STOPPED — dashboard converted an account outage into false flatness
 
 **Symptom.** During Polymarket maintenance the dashboard simultaneously said
 `venue unreachable` and `positions 0 (flat)`, with zero resting orders and
@@ -52,7 +52,7 @@ an explicit unavailable state through slots, positions, resting orders and the
 Discord embed. It never says flat or derives free capacity. This is reporting
 only and has no runner, ledger, selector or mutation path.
 
-### FIXED AND REVIEWED LOCALLY; NOT DEPLOYED — closed markets and alternating book faults parked nominal slots
+### FIXED, REVIEWED AND DEPLOYED; BOT STOPPED — closed markets and alternating book faults parked nominal slots
 
 **Symptom.** Three flat, order-free WTT owners stayed inside a nominally full
 20-market tuple while 77 alternatives were viable. Exact market refreshes said
@@ -73,7 +73,7 @@ reopening, inventory or any owned ambiguity aborts before active tuple or
 healthy stream changes. Retained venue orders are never cancelled and the cap
 remains exactly 20.
 
-### FIXED AND REVIEWED LOCALLY; NOT DEPLOYED — maintenance logged the same full traceback every minute
+### FIXED, REVIEWED AND DEPLOYED; BOT STOPPED — maintenance logged the same full traceback every minute
 
 **Symptom.** One outage produced 129 failed probes and 129 copies of the same
 stack trace, adding log volume and burying distinct errors.
@@ -89,6 +89,13 @@ top-up scheduling and exact-string permanent retirement identity. Tests also
 cover failure at each account-read stage, Discord output, exact-cap replacement,
 position/working-order retention, missing status and reopen-at-commit. All 660
 local tests pass in 39.768 seconds.
+
+**Deployment acceptance.** Commit `dc26c96` was pushed and all 11 deployed
+file hashes matched exactly. The stopped server passed all 660 tests in 36.304
+seconds. A separate process check found neither the supervisor nor runner; no
+restart occurred. Because the earlier forced stop never obtained a complete
+authenticated account snapshot, venue exposure remains unknown and restart
+still requires fresh proof plus explicit operator authorization.
 
 ### FIXED, REVIEWED, DEPLOYED AND ACTIVE — open paper loss forced a terminal hard-stop shutdown
 

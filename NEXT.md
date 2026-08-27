@@ -28,7 +28,7 @@ positions, zero unresolved intents and zero `UNKNOWN_ABSENT` rows.
 
 ---
 
-## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: dashboard unavailable state
+## DEPLOYED; BOT STOPPED: dashboard unavailable state
 
 The 2026-08-27 maintenance audit found a clear operator-safety reporting
 defect. `scripts/dashboard.py` initializes venue orders, positions and equity
@@ -46,14 +46,14 @@ every venue-backed terminal and Discord field `unknown`, omits `flat`, and does
 not calculate empty slots. Two dashboard tests cover failure at all three read
 stages and the Discord payload. This remains reporting-only.
 
-## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: duplicate maintenance tracebacks
+## DEPLOYED; BOT STOPPED: duplicate maintenance tracebacks
 
 The local fix keeps the full traceback for attempt 1 and every 30th attempt.
 Every probe still emits its concise numbered runtime line plus the maintenance
 health/stable marker. Poll cadence, three-pass recovery, failure reset, active
 tuple and mutation behavior are unchanged.
 
-## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: closed owners parked 20-slot capacity
+## DEPLOYED; BOT STOPPED: closed owners parked 20-slot capacity
 
 The 2026-08-27 13:20Z capacity audit found queue scope `markets=20`, but three
 flat, order-free and unresolved-free WTT owners remained bound after empty-book
@@ -82,9 +82,11 @@ working order, missing status, reopen-at-commit and no cancellation of retained
 orders.
 
 Four deliberate reversions were detected and all 660 local tests pass in
-39.768s. Remaining work is operator authorization to deploy while stopped,
-server hash/test verification, and later live acceptance after authenticated
-venue proof permits a restart.
+39.768s. Commit `dc26c96` was pushed; all 11 server file hashes matched and all
+660 stopped-server tests passed in 36.304s. The deployment marker is
+`dc26c96`, and a final process check proved the supervisor and runner remained
+stopped. Remaining work is fresh authenticated venue proof, explicit operator
+authorization to restart, and later live acceptance of the 20-slot behavior.
 
 ## HISTORICAL: August 26 recovery/slot fixes and transient location-denial recovery
 

@@ -6432,5 +6432,9 @@ Maintenance log cleanup is observability-only. All failed probe attempt and
 stable-state lines remain; only duplicate tracebacks are reduced to the first
 and every 30th attempt. Four deliberate reversions were detected, the affected
 285-test set passed, compilation passed, and the complete suite passed all 660
-tests in 39.768 seconds. The fixes were not deployed or restarted at this
-checkpoint.
+tests locally in 39.768 seconds. Commit `dc26c96` was then pushed and all 11
+deployed hashes matched exactly. The stopped server passed all 660 tests in
+36.304 seconds and `DEPLOYED_COMMIT` now reads `dc26c96`. A separate process
+check found no supervisor or runner. The bot was not restarted; exposure
+remains unknown because the earlier forced stop never received complete
+authenticated venue proof.

@@ -6,28 +6,29 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 11:53 ET / 2026-08-27 15:53 UTC
-- **Bot:** LIVE after an operator-authorized clean restart
-- **Supervisor / runner:** active as `13125` / `13131`; current run began
-  2026-08-27 13:34:15 UTC
+- **Time:** 2026-08-27 13:10 ET / 2026-08-27 17:10 UTC
+- **Bot:** LIVE after an operator-authorized reviewed deployment and restart
+- **Supervisor / runner:** active as `16632` / `16638`; current run began
+  2026-08-27 17:08:30/17:08:31 UTC
 - **Maker-lab:** stopped
-- **Deployed marker:** `0b79a1f`; reviewed recovery source is `5825db8`
+- **Deployed marker:** `a974d68`; hard-stop/report implementation is `34ff5db`
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
-- **Latest queue proof:** `markets=20` at 13:35:42 UTC
-- **Effective slot state:** fresh scope of 20; actions reached 19 distinct
-  owners with no startup retirement or recovery error
-- **Venue proof:** 24 open orders across 19 markets and zero positions at
-  13:36:38 UTC
+- **Latest queue proof:** `markets=20` at 17:09:37 UTC
+- **Effective slot state:** all 20 bound; 18 quoting and two temporarily bound
+  without an order at the 17:10 acceptance snapshot
+- **Venue proof:** 18 resting orders across 18 markets and zero positions at
+  17:10 UTC; zero unresolved intents and zero `UNKNOWN_ABSENT` rows
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
-- **Repository handoff:** commit `34ff5db` contains the provisional
-  open-position hard-stop and historical account-P&L fixes; 651 tests pass;
-  not deployed and not loaded by this runner
+- **Repository handoff:** provisional open-position hard-stop and historical
+  account-P&L fixes are deployed and active; all 15 deployed hashes matched and
+  all 651 server tests passed in 42.288s before restart
 
-The initial 13:36 ledger checkpoint held 19 working orders across 19 markets,
-zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions. The
-venue count rose to 24 during normal startup convergence.
+The 17:10 authenticated acceptance checkpoint held 18 resting orders across 18
+markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.
+Raw order count is not slot count; queue telemetry independently proved all 20
+markets bound.
 
 ## What just happened
 
@@ -37,15 +38,18 @@ while positions were open, but the adjacent flat ET account boundaries were
 non-trading cash. The completed trading result was therefore `-$64.4870`; the
 Discord row's `-$48.65` was the incomplete balanced-pair estimate.
 
-Local fixes now make an open-position marked breach provisional while blocking
-all new entries, require a breach-time position close plus a newer balance, and
+The deployed fixes now make an open-position marked breach provisional while
+blocking all new entries, require a breach-time position close plus a newer balance, and
 remove proven non-trading cash from the hard mark. Historical report rows use
 adjacent proven-flat ET boundaries where possible and visibly mark pair
-fallbacks with `~`. Six mutation checks and all 651 tests pass in 41.735s. These changes
-are not deployed and the bot was not restarted. At 15:53 UTC supervisor 13125
-and runner 13131 retained their original 13:34:15 UTC start time on deployed
-marker `0b79a1f`; the commissioning log was still advancing through normal
-reconciliation and quote actions.
+fallbacks with `~`. Six mutation checks and all 651 local tests pass in 41.735s.
+At the operator's request, the old runner gracefully stopped `flat=true` at
+17:05:44 UTC. Post-stop authenticated proof showed zero venue orders and
+positions plus zero unresolved/unknown ledger state. All 15 deployed hashes
+matched, all 651 server tests passed in 42.288s, and the unchanged `auto 10`
+runner restarted at 17:08:31 UTC. It reached `markets=20`, ordinary live order
+actions and the clean 17:10 acceptance state above without a risk or recovery
+fault.
 
 The same runner survived Polymarket maintenance from 08:41 UTC. Account health
 first succeeded at 12:20, failed once and correctly reset to `0/3`, then passed

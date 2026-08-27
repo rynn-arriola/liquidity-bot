@@ -59,6 +59,15 @@ proved flat at 03:50:49Z, its stored equity and cash both equal `$708.3008`, the
 ledger contains no fill before the first 04:04:28Z order, and the exact stored
 timestamp is `04:04:10.544588Z`.
 
+Deployment acceptance on 2026-08-27 used an authenticated pre-stop position
+check, graceful `flat=true` shutdown at 17:05:44Z, and a second stopped-account
+check proving zero venue orders/positions and zero unresolved/unknown ledger
+state. All 15 hashes matched and all 651 server tests passed in 42.288 seconds.
+The unchanged `auto 10` runner restarted at 17:08:31Z on marker `a974d68`;
+queue measurement proved `markets=20` and the 17:10Z authenticated snapshot
+showed 18 resting orders across 18 markets, zero positions, zero unresolved
+intents, zero `UNKNOWN_ABSENT` rows and no risk/recovery fault.
+
 ---
 
 ## Twenty markets were bound on August 27, but three slots were parked by book-fault cooldown

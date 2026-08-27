@@ -17,7 +17,7 @@ authority.
 This dated log preserves detailed handoffs. It is evidence and history;
 [STATUS.md](STATUS.md) replaces it as the current-state page.
 
-- **FIXED, REVIEWED AND PUSHED; NOT DEPLOYED OR RESTARTED — open-position hard
+- **FIXED, REVIEWED, DEPLOYED AND ACTIVE — open-position hard
   breach and historical account P&L.** Production evidence proved the August
   26 hard stop began with open inventory, while adjacent later-flat ET account
   boundaries and a bounded cash scan put completed trading at `-$64.4870`, not
@@ -28,9 +28,11 @@ This dated log preserves detailed handoffs. It is evidence and history;
   position remains; realized loss independently pauses with inventory open.
   Historical report rows use adjacent native flat ET boundaries less completed
   non-trading cash and mark unproved pair fallbacks with `~`. Six deliberate
-  reversions were killed and all 651 tests pass in 41.735 seconds. The running
-  server remains supervisor/runner `13125`/`13131` on deployed marker `0b79a1f`;
-  do not claim this fix is active until an authorized deploy and restart.
+  reversions were killed and all 651 local tests pass in 41.735 seconds. All
+  15 deployment hashes matched and all 651 server tests passed in 42.288s. The
+  reviewed `auto 10` restart began at 17:08:31Z on marker `a974d68`, bound all
+  20 markets, and reached a clean zero-position/zero-unresolved acceptance
+  snapshot with 18 markets resting.
 
 - **PUSHED, DEPLOYED AND ACTIVE — AUGUST 26 RECOVERY/SLOT FIX; TRANSIENT
   VENUE LOCATION DENIAL CLEARED BY SERVER REBOOT.** Today a private reconnect

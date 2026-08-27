@@ -35,7 +35,7 @@ Ground rules that came out of these:
 
 ## 2026-08-27
 
-### FIXED LOCALLY, REVIEWED AND PUSHED; NOT DEPLOYED OR RESTARTED — open paper loss forced a terminal hard-stop shutdown
+### FIXED, REVIEWED, DEPLOYED AND ACTIVE — open paper loss forced a terminal hard-stop shutdown
 
 **Symptom.** At 03:39Z the runner entered `EMERGENCY_EQUITY_HARD_STOP`
 shutdown while several positions were open. The final flat August 26 ET account
@@ -58,7 +58,7 @@ it recovers, quoting resumes. Independently, the realized sensor can pause at
 $80 while other inventory remains. Proven rewards/deposits/withdrawals are now
 removed from marked equity as well as realized cash.
 
-### FIXED LOCALLY, REVIEWED AND PUSHED; NOT DEPLOYED — historical Discord trading loss omitted account losses
+### FIXED, REVIEWED, DEPLOYED AND ACTIVE — historical Discord trading loss omitted account losses
 
 **Symptom.** August 26 displayed `-$48.65` although the completed flat account
 lost `-$64.4870` in trading.
@@ -81,7 +81,11 @@ regressions: immediate marked shutdown with inventory, stale pre-close balance,
 raw transfer-contaminated equity, reversed historical delta, counted transfers
 and an open midnight boundary. The repaired reward test structure restored
 eight previously undiscovered report regressions. All **651** tests pass locally
-in **41.735 seconds**. No server file, process or loaded bot code was changed.
+in **41.735 seconds**. All 15 deployment hashes matched and all 651 server tests
+passed in **42.288 seconds**. After an authenticated flat gate, the unchanged
+`auto 10` runner restarted on marker `a974d68`; its 17:10Z acceptance snapshot
+showed 20 bound markets, 18 resting markets, zero positions, zero unresolved
+intents and zero `UNKNOWN_ABSENT` orders.
 
 ---
 

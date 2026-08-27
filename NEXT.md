@@ -5,7 +5,7 @@
 > and [DECISIONS.md](DECISIONS.md). “ACTIVE” below is scoped to its dated
 > section unless `STATUS.md` says it is active now.
 
-## IMPLEMENTED, REVIEWED AND PUSHED; NOT DEPLOYED — provisional hard stop and exact August 26 account row
+## DEPLOYED AND ACTIVE — provisional hard stop and exact August 26 account row
 
 Production evidence shows the August 26 marked sensor crossed $80 with open
 inventory, while the later flat ET account result was `-$64.4870` and completed
@@ -19,9 +19,12 @@ The reward report uses adjacent proven-flat ET boundaries and completion-time
 cash classification for historical account truth; `~` marks fallback pair
 estimates. Six mutations were killed and all 651 local tests pass in 41.735s.
 
-Do not deploy or restart from this entry alone. The operator explicitly said
-not to restart until told. The current server runner remains on deployed marker
-`0b79a1f`; this fix is not active there.
+The operator authorized deployment and restart while flat. The old runner
+gracefully proved `flat=true`; post-stop venue and ledger checks were clean.
+All 15 hashes matched and all 651 server tests passed in 42.288s. The `auto 10`
+runner restarted on marker `a974d68` at 17:08:31Z, bound 20 markets, and the
+17:10Z acceptance snapshot showed 18 resting orders across 18 markets, zero
+positions, zero unresolved intents and zero `UNKNOWN_ABSENT` rows.
 
 ---
 
@@ -49,11 +52,11 @@ flat, order-free, unresolved-free retired owner can be replaced without
 recreating the prior retire/release/re-retire churn. Do not change the live
 strategy, deploy or restart without the operator's explicit request.
 
-## ACTIVE: August 26 recovery/slot fixes and transient location-denial recovery
+## HISTORICAL: August 26 recovery/slot fixes and transient location-denial recovery
 
-Do not restart from an older commit. Source commit `5825db8` and documentation
-commit `b738d8c` remain the deployed code; the final stopped-server acceptance
-marker is `0b79a1f`.
+These fixes remain included in the newer deployed marker `a974d68`. Their
+original source commit was `5825db8`, documentation commit `b738d8c`, and final
+stopped-server acceptance marker `0b79a1f`.
 
 Local source commit `5825db8` fixes five production defects found in the full
 August 26 timeline:

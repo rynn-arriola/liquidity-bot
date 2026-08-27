@@ -6394,3 +6394,43 @@ through exact-order reread; and the 19:01 market-stream disconnect recovered.
 The later uncertain create and execution-state retirements coincided with the
 venue outage and were conservatively contained. Do not weaken mutation proof
 or restart while authenticated exposure remains unavailable.
+
+## August 27 fixes preserve unknown exposure and reclaim only proven closed slots
+
+The operator first requested a normal stop. The supervisor exited and SIGTERM
+reached the runner at about 22:24 UTC, but shutdown's authenticated reconciliation
+continued returning `AuthenticationError`. It retried the same owned market
+fourteen times and never produced positive flat proof. At the operator's later
+explicit direction, only verified runner PID `16638` was force-killed. A 22:31
+UTC process check found neither supervisor nor runner. This is a stopped but
+unproved account state: possible venue orders remain unmanaged, and the stale
+ledger must not be used to call it flat.
+
+The completed code review found the dashboard published a partially built
+account snapshot. Defaults were zero and each successful read mutated them
+before the remaining reads completed. The repair commits the values only after
+orders, positions and balance all succeed and carries `None` through terminal
+and Discord output. Failure at the first, middle or final account read now says
+unknown for slot counts, positions and resting orders; no flat label or empty
+capacity is calculated.
+
+The 20-slot flow had two independent defects. First, exact-string retirement
+comparison treated `unrecoverable_book_AdapterError` and
+`unrecoverable_book_stale` as separate permanent failures, so alternating
+observations advanced rounds and extended cooldown. Permanent failures now
+compare by their book/plan/action family. Second, exact market metadata already
+proved some parked owners closed/not-open, but top-up had no predicate for that
+proof. Closed release now requires flat, zero working orders, zero
+`UNKNOWN_ABSENT`, zero unresolved intents, complete account reconciliation and
+a new exact market read immediately before commit. A failed/missing/reopened
+read aborts while the old tuple, healthy streams and retained venue orders are
+still intact. This adds at most one governed exact market read per closed
+release candidate and does not change selection policy, quote size, six-hour
+horizon, loss limits or the 20 cap.
+
+Maintenance log cleanup is observability-only. All failed probe attempt and
+stable-state lines remain; only duplicate tracebacks are reduced to the first
+and every 30th attempt. Four deliberate reversions were detected, the affected
+285-test set passed, compilation passed, and the complete suite passed all 660
+tests in 39.768 seconds. The fixes were not deployed or restarted at this
+checkpoint.

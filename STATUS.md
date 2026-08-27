@@ -6,11 +6,10 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 18:22 ET / 2026-08-27 22:22 UTC
-- **Bot:** process LIVE but deliberately DORMANT in the maintenance pause;
-  authenticated Polymarket US account reads remain unavailable
-- **Supervisor / runner:** active as `16632` / `16638`; current run began
-  2026-08-27 17:08:30/17:08:31 UTC
+- **Time:** 2026-08-27 18:41 ET / 2026-08-27 22:41 UTC
+- **Bot:** STOPPED at the operator's request; no supervisor or runner process
+- **Stop quality:** FORCED after graceful shutdown could not obtain venue
+  proof. Current orders and positions remain UNKNOWN and may be unmanaged.
 - **Maker-lab:** stopped
 - **Deployed marker:** `a974d68`; hard-stop/report implementation is `34ff5db`
 - **Quote size:** 10 contracts
@@ -23,9 +22,10 @@ describe their dated event, not the bot now.
   must not be used to call the account flat.
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
-- **Repository handoff:** provisional open-position hard-stop and historical
-  account-P&L fixes are deployed and active; all 15 deployed hashes matched and
-  all 651 server tests passed in 42.288s before restart
+- **Repository handoff:** three August 27 fixes are reviewed locally and not
+  deployed: dashboard unavailable-state truth, bounded maintenance tracebacks,
+  and positive closed-market slot replacement. Four deliberate reversions were
+  detected and all 660 local tests pass in 39.768s.
 
 The 17:10 authenticated acceptance checkpoint held 18 resting orders across 18
 markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.
@@ -37,6 +37,26 @@ unresolved intent, zero `UNKNOWN_ABSENT` rows and zero nonzero positions. It is
 retained ownership/recovery state, not current venue proof.
 
 ## What just happened
+
+The operator requested a stop during the maintenance outage. The supervisor
+stopped and sent SIGTERM at about 22:24 UTC. Graceful shutdown retried the same
+owned market fourteen times, but authenticated account reconciliation kept
+returning `AuthenticationError`; it therefore could not prove flat. At the
+operator's explicit direction, verified runner PID `16638` was force-killed.
+At 22:31 UTC no liquidity supervisor or runner process remained. Because the
+venue never supplied a complete account snapshot, no one may describe this as
+a flat stop; possible venue orders are unmanaged until a later authenticated
+reconciliation.
+
+The reviewed local fixes now preserve `unknown` through every dashboard field
+when any account read fails; keep one full maintenance traceback at attempt 1
+and every 30 attempts while retaining every concise attempt/health marker; and
+let incremental top-up replace an owner only after exact market metadata is
+freshly re-read as closed/not-open plus complete position/order/intent proof is
+clear. Equivalent `unrecoverable_book_*` observations now remain one
+retirement family instead of advancing to abandonment. The exact 20 cap,
+retained orders, near-flatten guard and stream transaction boundary are
+unchanged. These changes are not yet deployed and no restart is authorized.
 
 Polymarket US account service became unavailable during the current run. The
 runner entered its maintenance pause at 20:13:34 UTC and remained dormant

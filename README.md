@@ -303,9 +303,12 @@ unresolved intents. Only then is the active private/public subscription set
 rebound. Incremental top-up retains every healthy market/order and fills only
 safe free slots. It also releases a flat owner when the exact reward program
 that authorized it is positively observed no longer to apply after an event
-reschedule. A lagging GET for a retained owner cannot freeze unrelated free-slot
-replacement, but that owner remains locally barred until terminal proof. During
-stream recovery the replacement private listener is established before
+reschedule, or when an exact market read is freshly confirmed closed/not-open
+and the owner is flat, order-free and intent-free. Missing metadata or a market
+that reopened aborts before scope changes. A lagging GET for a retained owner
+cannot freeze unrelated free-slot replacement, but that owner remains locally
+barred until terminal proof. During stream recovery the replacement private
+listener is established before
 quarantine cancels, so their terminal events are observable. The launcher
 refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior

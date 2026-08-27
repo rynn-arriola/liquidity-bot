@@ -237,6 +237,9 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
     if failures:
         colour, icon = RED, "\U0001f6d1"
         state = "NOT WORKING \u00b7 " + ", ".join(failures)
+    elif quoted is None:
+        colour, icon = ORANGE, "\U0001f7e0"
+        state = "WORKING \u00b7 venue state unavailable"
     elif idle_bound:
         colour, icon = ORANGE, "\U0001f7e0"
         state = "WORKING \u00b7 {} slot(s) wasted".format(len(idle_bound))
@@ -288,17 +291,22 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
     health_text = "".join(
         "{:<14}{:>6}\n".format(name[:14], level) for level, name, _ in health)
 
-    slots_text = (row("quoting", len(quoted), 5)
-                  + row("bound, not quoting", len(idle_bound), 5)
-                  + row("empty", free, 5))
+    if quoted is None:
+        slots_text = (row("quoting", "unknown", 8)
+                      + row("bound, not quoting", "unknown", 8)
+                      + row("empty", "unknown", 8))
+    else:
+        slots_text = (row("quoting", len(quoted), 5)
+                      + row("bound, not quoting", len(idle_bound), 5)
+                      + row("empty", free, 5))
     if viable is not None:
         slots_text += (row("viable now", viable, 5)
                        + row("rewarded <2h", rewarded, 5)
                        + row("refused, tight", tight, 5))
 
     headroom = session_cap - session_loss
-    risk_text = (row("positions", positions)
-                 + row("resting orders", orders)
+    risk_text = (row("positions", "unknown" if positions is None else positions)
+                 + row("resting orders", "unknown" if orders is None else orders)
                  + row("trades today", fills_today)
                  + row("trades lifetime", "{:,}".format(fills_all))
                  + "\n"
@@ -542,9 +550,13 @@ async def main() -> int:
     health.append(("warn" if stops else "ok", "risk stops",
                    f"{stops} in the recent log" if stops else "none"))
 
-    orders = positions = 0
-    quoted: set[str] = set()
-    equity = Decimal(0)
+    # None is materially different from zero. During a venue outage zero would
+    # claim the account is flat and order-free even though the read that could
+    # prove that state did not complete.
+    orders: int | None = None
+    positions: int | None = None
+    quoted: set[str] | None = None
+    equity: Decimal | None = None
     venue_ok = False
     try:
         from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway
@@ -553,12 +565,14 @@ async def main() -> int:
         gateway = AsyncReadOnlyGateway(client_from_environment())
         account = AsyncAccountSnapshotGateway(gateway)
         live = await account.fetch_open_orders(observed_at=now)
+        held = await account.fetch_positions(observed_at=now)
+        balance = await account.fetch_balance(observed_at=now)
+        # Publish the snapshot atomically only after every account component
+        # succeeds. A later-read failure must not leak a partial order count.
         orders = len(live)
         quoted = {o.market_slug for o in live}
-        held = await account.fetch_positions(observed_at=now)
         positions = sum(1 for p in held
                         if abs(float(getattr(p, "net_qty", 0) or 0)) > 1e-9)
-        balance = await account.fetch_balance(observed_at=now)
         equity = (_money(balance.current_balance)
                   + _money(balance.asset_notional))
         venue_ok = True
@@ -630,21 +644,30 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
         found = re.search(r"at=(\S+).*?market=([a-z0-9-]+)", row)
         if found and found.group(1) >= recent_cut:
             touched.add(found.group(2))
-    idle_bound = sorted(touched - set(quoted))
+    venue_available = quoted is not None
+    idle_bound = sorted(touched - quoted) if venue_available else []
 
     print(box_top("SLOTS"))
-    print(line(bar(len(quoted), MAX_MARKETS, 40,
-                   "y" if idle_bound else "g")
-               + f"   {len(quoted)} / {MAX_MARKETS}"))
-    print(line())
-    print(line(f"{dot('ok')} quoting              {len(quoted):<4} resting at the venue"))
-    print(line(f"{dot('warn' if idle_bound else 'idle')} bound, not quoting   "
-               f"{len(idle_bound):<4} " + (paint('y', 'wasted slots')
-                                           if idle_bound else 'none')))
-    free = max(0, MAX_MARKETS - len(quoted) - len(idle_bound))
-    print(line(f"{dot('idle')} empty                {free:<4} nothing qualifies"))
-    for slug in idle_bound[:5]:
-        print(line("     " + paint("y", slug[:58])))
+    if not venue_available:
+        free = None
+        print(line(paint("y", "venue data unavailable — slot counts unknown")))
+        print(line())
+        print(line(f"{dot('warn')} quoting              unknown"))
+        print(line(f"{dot('warn')} bound, not quoting   unknown"))
+        print(line(f"{dot('warn')} empty                unknown"))
+    else:
+        print(line(bar(len(quoted), MAX_MARKETS, 40,
+                       "y" if idle_bound else "g")
+                   + f"   {len(quoted)} / {MAX_MARKETS}"))
+        print(line())
+        print(line(f"{dot('ok')} quoting              {len(quoted):<4} resting at the venue"))
+        print(line(f"{dot('warn' if idle_bound else 'idle')} bound, not quoting   "
+                   f"{len(idle_bound):<4} " + (paint('y', 'wasted slots')
+                                               if idle_bound else 'none')))
+        free = max(0, MAX_MARKETS - len(quoted) - len(idle_bound))
+        print(line(f"{dot('idle')} empty                {free:<4} nothing qualifies"))
+        for slug in idle_bound[:5]:
+            print(line("     " + paint("y", slug[:58])))
     if viable is not None:
         print(line())
         print(line(paint("d", f"supply   {rewarded} rewarded within 2h \u00b7 "
@@ -654,8 +677,12 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
     print("")
 
     print(box_top("POSITION & RISK"))
-    print(line(f"positions  {positions} " + ("(flat)" if not positions else "")
-               + f"      resting  {orders}        trades  {fills_today} today"))
+    if positions is None or orders is None:
+        print(line(f"positions  unknown      resting  unknown"
+                   f"        trades  {fills_today} today"))
+    else:
+        print(line(f"positions  {positions} " + ("(flat)" if positions == 0 else "")
+                   + f"      resting  {orders}        trades  {fills_today} today"))
     print(line(" " * 46 + f"{fills_all:,} lifetime"))
     print(line())
     try:

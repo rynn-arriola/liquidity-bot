@@ -120,10 +120,13 @@ every owner it will release before it changes the active tuple or closes
 healthy streams. A failed proof leaves the old tuple, streams and resting venue
 orders untouched. A lagging ID in a retained, positively-owned market bars only
 that retained owner. Release predicates are checked again immediately before
-commit. After that pre-commit proof, the socket handoff still requires complete
-account snapshots and fresh private state; missing/conflicting/unowned/out-of-
-scope state stays terminal. Logs distinguish `[top-up-plan]` from an actual
-`[top-up] ... committed=yes` transition.
+commit. A closed/not-open owner additionally requires a fresh exact metadata
+read at that boundary; missing status, read failure, reopened state, position,
+working/unknown order or unresolved intent retains it. After that pre-commit
+proof, the socket handoff still requires complete account snapshots and fresh
+private state; missing/conflicting/unowned/out-of-scope state stays terminal.
+Logs distinguish `[top-up-plan]` from an actual `[top-up] ... committed=yes`
+transition and include the positively closed release count.
 
 Shutdown carries its own three-attempt flatten budget, independent of whatever
 the quoting loop already spent, so reaching the runtime ceiling can never stop

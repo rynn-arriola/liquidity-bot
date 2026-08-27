@@ -5079,6 +5079,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_maintenance_keeps_each_attempt_but_throttles_tracebacks(self):
+        """A long outage must not bury new faults in duplicate stack traces."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        outages = [
+            AdapterError("GET /v1/orders/open failed: ServiceUnavailable")
+            for _ in range(3)
+        ]
+        runner.account.fetch_open_orders = AsyncMock(
+            side_effect=outages + [(), (), ()])
+        runner.account.fetch_positions = AsyncMock(return_value=())
+        runner.account.fetch_balance = AsyncMock(
+            wraps=runner.account.fetch_balance)
+        runner.sleep = AsyncMock()
+
+        with patch(
+                "liquidity_bot.live_commissioning.traceback.print_tb") as trace:
+            stop = await runner._wait_for_venue_recovery(
+                "private_stream",
+                AdapterError("private WebSocket disconnected"),
+            )
+
+        self.assertIsNone(stop)
+        self.assertEqual(
+            runner.account.fetch_open_orders.await_count, 6,
+            "three failures must still be followed by three complete reads")
+        self.assertEqual(
+            trace.call_count, 1,
+            "the first failed probe keeps its traceback; ordinary repeated "
+            "attempts retain concise markers only")
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_maintenance_probe_contract_error_is_not_hidden(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -5528,6 +5563,29 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner._now() - timedelta(seconds=1))
         runner._release_retired_if_flat("market-one")
         self.assertNotIn("market-one", runner._retired)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_equivalent_book_faults_do_not_escalate_retirement_rounds(self):
+        """AdapterError/stale alternation is one fault, not ten exit rounds."""
+
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+
+        await runner._retire_market(
+            slug, "unrecoverable_book_AdapterError")
+        original_until = runner._retired_until[slug]
+        await runner._retire_market(slug, "unrecoverable_book_stale")
+
+        self.assertEqual(runner._retired[slug].rounds, 1)
+        self.assertEqual(
+            runner._retired[slug].reason,
+            "unrecoverable_book_AdapterError",
+            "an equivalent observation must not rewrite the original cause")
+        self.assertEqual(
+            runner._retired_until[slug], original_until,
+            "equivalent failures must not keep extending the cooldown")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7426,6 +7484,111 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
             minimum_trade_qty=1,
             sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE",
         )
+
+    def closed_metadata(self, slug, now):
+        return replace(
+            self.metadata(slug, now), active=False, closed=True,
+            status="MARKET_STATUS_CLOSED")
+
+    async def test_closed_flat_owner_is_replaced_at_the_exact_cap(self):
+        """Positive not-open metadata must not park a productive slot."""
+
+        runner = await self.armed(replacements=(
+            "market-three", "market-four"))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", runner._now())
+        runner.state_for("market-two").market = self.closed_metadata(
+            "market-two", runner._now())
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.closed_metadata("market-two", runner._now()))
+
+        self.assertTrue(runner._active_set_needs_top_up(runner._now()))
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "market-three"))
+        self.assertEqual(len(runner.active_slugs), 2)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_closed_owner_with_position_is_never_released(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        runner.state_for(slug).market = self.closed_metadata(
+            slug, runner._now())
+        runner.ledger.apply_position_event(
+            "ws", "closed-position",
+            PositionState(slug, Decimal("5"), runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._closed_and_flat(slug))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_missing_status_is_not_closed_market_proof(self):
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        runner.state_for(slug).market = replace(
+            self.metadata(slug, runner._now()), status="")
+
+        self.assertFalse(runner._closed_and_flat(slug))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_closed_owner_with_working_order_is_never_released(self):
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        runner.state_for(slug).market = self.closed_metadata(
+            slug, runner._now())
+        runner.ledger.apply_order_event(
+            "ws", "closed-open-order",
+            OrderState(
+                client_order_id="closed-client",
+                exchange_order_id="closed-exchange",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._closed_and_flat(slug))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_closed_owner_reopening_aborts_before_scope_changes(self):
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", runner._now())
+        runner.state_for("market-two").market = self.closed_metadata(
+            "market-two", runner._now())
+        before_slugs = runner.active_slugs
+        before_private = runner.private_stream
+        before_market = runner.market_stream
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.metadata("market-two", runner._now()))
+
+        with self.assertRaisesRegex(
+                AdapterError, "release proof changed"):
+            await runner._top_up_active_markets(runner._now())
+
+        self.assertEqual(runner.active_slugs, before_slugs)
+        self.assertIs(runner.private_stream, before_private)
+        self.assertIs(runner.market_stream, before_market)
+        self.assertFalse(before_private.closed)
+        self.assertFalse(before_market.closed)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     def ended_incentive(self, slug, now, *, program_id=None):
         return MarketIncentive(slug=slug, periods=(IncentivePeriod(

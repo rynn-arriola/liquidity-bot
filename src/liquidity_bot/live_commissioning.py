@@ -4065,7 +4065,8 @@ class CommissioningRunner:
             critical=True)
 
     async def _report_runtime_error(
-        self, component: str, exc: Exception, attempt: int | None = None,
+        self, component: str, exc: Exception, attempt: int | None = None, *,
+        include_traceback: bool = True,
     ) -> None:
         if attempt is None:
             attempt = self._runtime_error_counts.get(component, 0) + 1
@@ -4082,7 +4083,7 @@ class CommissioningRunner:
             f"attempt={attempt} error={type(exc).__name__}: {detail}",
             flush=True,
         )
-        if exc.__traceback__ is not None:
+        if include_traceback and exc.__traceback__ is not None:
             traceback.print_tb(exc.__traceback__)
         # Keep Discord useful during a long outage while every occurrence is
         # still retained in commissioning.log.
@@ -4351,11 +4352,36 @@ class CommissioningRunner:
 
         if not self._retired_past_kickoff(slug, now):
             return False
+        return self._owner_is_flat_and_clear(slug)
+
+    def _owner_is_flat_and_clear(self, slug: str) -> bool:
+        """Whether releasing this owner would strand no execution state."""
+
         return (self.ledger.position(slug) == 0
                 and not self.ledger.working_orders(slug)
                 and not self.ledger.absent_orders(slug)
                 and not any(str(row["market_slug"]) == slug
                             for row in self.ledger.unresolved_intents()))
+
+    def _closed_and_flat(self, slug: str) -> bool:
+        """True only when exact market metadata says this owner cannot quote.
+
+        A failed metadata read is not proof, and a missing status field is not
+        proof. The top-up transaction refreshes this exact market again before
+        committing a release; this cached predicate only schedules the scan.
+        """
+
+        state = self._markets.get(slug)
+        market = getattr(state, "market", None)
+        if market is None:
+            return False
+        status = getattr(market, "status", None)
+        positively_closed = (
+            getattr(market, "closed", False) is True
+            or getattr(market, "active", True) is False
+            or (bool(status) and status not in OPEN_MARKET_STATUSES)
+        )
+        return positively_closed and self._owner_is_flat_and_clear(slug)
 
     def _reward_authorization_lost_and_flat(
         self, slug: str, now: datetime,
@@ -4386,11 +4412,7 @@ class CommissioningRunner:
             # Past kickoff belongs to `_expired_and_flat`, whose separate
             # lifecycle rule is already covered and logged.
             return False
-        return (self.ledger.position(slug) == 0
-                and not self.ledger.working_orders(slug)
-                and not self.ledger.absent_orders(slug)
-                and not any(str(row["market_slug"]) == slug
-                            for row in self.ledger.unresolved_intents()))
+        return self._owner_is_flat_and_clear(slug)
 
     def _reward_ended_and_flat(self, slug: str, now: datetime) -> bool:
         """Compatibility name for the broader authorization-loss predicate."""
@@ -4439,6 +4461,8 @@ class CommissioningRunner:
             len(self.active_slugs) < self.config.max_markets
             or any(self._expired_and_flat(slug, now)
                    for slug in self.active_slugs)
+            or any(self._closed_and_flat(slug)
+                   for slug in self.active_slugs)
             or any(self._reward_authorization_lost_and_flat(slug, now)
                    for slug in self.active_slugs)
         )
@@ -4480,14 +4504,15 @@ class CommissioningRunner:
         much as for the retirement ban.
 
         This path is deliberately narrower. It releases ONLY markets that are
-        past kickoff and flat, or whose exact reward program is positively
-        confirmed ended and which are flat with no order ownership left. It
-        keeps every other market and its resting orders exactly where they
-        are, fills any capacity startup validation left free, and never
-        quarantines. Streams are restarted because they cannot subscribe
-        incrementally, but a stream restart does not touch resting orders --
-        those live on the venue and keep earning through it. That is the whole
-        difference from full rotation, which cancels them.
+        past kickoff and flat, are positively reported closed/not-open and
+        flat, or whose exact reward program is positively confirmed ended and
+        which are flat with no order ownership left. It keeps every other
+        market and its resting orders exactly where they are, fills any
+        capacity startup validation left free, and never quarantines. Streams
+        are restarted because they cannot subscribe incrementally, but a
+        stream restart does not touch resting orders -- those live on the venue
+        and keep earning through it. That is the whole difference from full
+        rotation, which cancels them.
         """
 
         if not self.config.auto_select_reward_markets:
@@ -4498,17 +4523,20 @@ class CommissioningRunner:
             return False
         expired = [slug for slug in self.active_slugs
                    if self._expired_and_flat(slug, now)]
+        closed = [slug for slug in self.active_slugs
+                  if slug not in expired and self._closed_and_flat(slug)]
         reward_ended = [
             slug for slug in self.active_slugs
-            if (slug not in expired
+            if (slug not in expired and slug not in closed
                 and self._reward_authorization_lost_and_flat(slug, now)
                 and self.state_for(slug).reward_period_end_confirmed_at
                 is not None)]
         reward_inactive = [
             slug for slug in self.active_slugs
-            if (slug not in expired and slug not in reward_ended
+            if (slug not in expired and slug not in closed
+                and slug not in reward_ended
                 and self._reward_authorization_lost_and_flat(slug, now))]
-        released = expired + reward_ended + reward_inactive
+        released = expired + closed + reward_ended + reward_inactive
         keep = tuple(slug for slug in self.active_slugs
                      if slug not in released)
         free = max(0, self.config.max_markets - len(keep))
@@ -4530,7 +4558,8 @@ class CommissioningRunner:
             f"[top-up-plan] at={self._now().isoformat()} "
             f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} free_slots={free} "
-            f"expired={len(expired)} reward_ended={len(reward_ended)} "
+            f"expired={len(expired)} closed={len(closed)} "
+            f"reward_ended={len(reward_ended)} "
             f"reward_inactive={len(reward_inactive)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
@@ -4542,7 +4571,8 @@ class CommissioningRunner:
             # `_refresh_book(now)` among them -- takes the run loop down.
             print(
                 f"[top-up] at={self._now().isoformat()} skipped=nothing_retained "
-                f"expired={len(expired)} reward_ended={len(reward_ended)}",
+                f"expired={len(expired)} closed={len(closed)} "
+                f"reward_ended={len(reward_ended)}",
                 flush=True,
             )
             return False
@@ -4563,6 +4593,12 @@ class CommissioningRunner:
         # scope change, cancellation or rebind.
         await self._rest_reconcile(
             self._now(), strict_order_markets=frozenset(released))
+        # Closed/not-open is positive lifecycle proof, not an inference from a
+        # missing selector row. Re-read each exact owner at the transaction
+        # boundary; a failed read or a market that reopened aborts before the
+        # active tuple or either healthy stream changes.
+        for slug in closed:
+            self.state_for(slug).market = await self.gateway.fetch_market(slug)
         self._assert_runtime_scope()
         # The complete snapshot above can discover a fill, a newly absent
         # order, or another unresolved mutation. Recheck the release predicate
@@ -4571,6 +4607,7 @@ class CommissioningRunner:
         no_longer_releasable = [
             slug for slug in released
             if not (self._expired_and_flat(slug, self._now())
+                    or self._closed_and_flat(slug)
                     or self._reward_authorization_lost_and_flat(
                         slug, self._now()))]
         if no_longer_releasable:
@@ -4597,7 +4634,8 @@ class CommissioningRunner:
             f"[top-up] at={self._now().isoformat()} committed=yes "
             f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} active={len(self.active_slugs)} "
-            f"expired={len(expired)} reward_ended={len(reward_ended)} "
+            f"expired={len(expired)} closed={len(closed)} "
+            f"reward_ended={len(reward_ended)} "
             f"reward_inactive={len(reward_inactive)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
@@ -5151,8 +5189,15 @@ class CommissioningRunner:
                         "maintenance_probe_terminal", probe_exc)
                     raise
                 stable = 0
+                attempt = self._runtime_error_counts.get(
+                    "maintenance_probe", 0) + 1
                 await self._report_runtime_error(
-                    "maintenance_probe", probe_exc)
+                    "maintenance_probe", probe_exc, attempt=attempt,
+                    # Preserve the first diagnosis and a periodic full sample,
+                    # but do not print the identical stack every minute of a
+                    # long venue outage. The concise attempt line and health
+                    # marker remain present for every probe.
+                    include_traceback=(attempt == 1 or attempt % 30 == 0))
                 print(
                     f"[maintenance-pause] at={self._now().isoformat()} "
                     f"component={component} health=failed stable=0/"
@@ -5328,9 +5373,11 @@ class CommissioningRunner:
         # and quoting nothing. Measured 2026-08-15: 50 markets retired and 30
         # abandoned in one session, past the max_markets limit that stops the
         # session outright.
-        if (existing is not None
-                and existing.reason == reason
-                and str(reason).startswith(self.PERMANENT_RETIREMENT_PREFIXES)):
+        existing_family = self._permanent_retirement_family(
+            existing.reason) if existing is not None else None
+        new_family = self._permanent_retirement_family(reason)
+        if (existing is not None and existing_family is not None
+                and existing_family == new_family):
             return None
         if existing is None:
             self._retired[slug] = RetiredMarket(
@@ -5427,6 +5474,14 @@ class CommissioningRunner:
     # ~45 seconds.
     PERMANENT_RETIREMENT_PREFIXES = ("unrecoverable_book", "plan_failed",
                                      "action_failed")
+
+    @classmethod
+    def _permanent_retirement_family(cls, reason: str) -> str | None:
+        """Group equivalent permanent failures without escalating rounds."""
+
+        text = str(reason)
+        return next((prefix for prefix in cls.PERMANENT_RETIREMENT_PREFIXES
+                     if text.startswith(prefix)), None)
 
     def _book_refresh_would_be_pointless(self, slug: str, now: datetime) -> bool:
         """Is there anything left that a fresh book for this market could serve?

@@ -423,3 +423,17 @@ These are implementation requirements, not suggestions.
     adjustment is unproved. The same proven non-trading adjustment is removed
     from the separate account-wide marked-equity sensor so a reward, deposit or
     withdrawal cannot mask or fabricate a trading drawdown.
+75. An unavailable account read is not zero exposure. Operator reporting must
+    publish venue orders, positions, balance and quoted markets only after the
+    complete account snapshot succeeds. A first or later read failure must
+    render every dependent venue field `unknown`/`unavailable`, must never say
+    `flat`, and must not derive empty-slot arithmetic from default counters.
+    Reporting availability cannot alter runner, ledger, selector or risk state.
+76. Explicit closed-market lifecycle proof may reclaim a slot only through the
+    incremental top-up transaction. A cached exact market row may schedule the
+    scan, but the exact owner must be freshly read as closed, inactive or a
+    non-open explicit status after complete account reconciliation and before
+    tuple/stream commit. Missing status, failed read or a reopened market is no
+    proof. Nonzero position, working or `UNKNOWN_ABSENT` order, or unresolved
+    intent retains the owner. Retained orders are not cancelled, the near-exit
+    deadline guard remains, and the active tuple cannot exceed 20.

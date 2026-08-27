@@ -28,7 +28,7 @@ positions, zero unresolved intents and zero `UNKNOWN_ABSENT` rows.
 
 ---
 
-## OPEN: dashboard falsely renders flat/zero state when venue reads fail
+## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: dashboard unavailable state
 
 The 2026-08-27 maintenance audit found a clear operator-safety reporting
 defect. `scripts/dashboard.py` initializes venue orders, positions and equity
@@ -40,24 +40,20 @@ the observed outage, the retained local ledger still had 31 working rows and
 one unresolved intent; neither local state nor a prior successful snapshot is
 proof of current venue state.
 
-Fix this as an unavailable-data state, not as inferred zero: unavailable
-venue-backed counts must render `unknown`/`unavailable`, must never include the
-word `flat`, and must not manufacture empty-slot arithmetic. Add a regression
-that makes the first or a later account read fail and proves every dependent
-field remains unknown. This is a dashboard-only fix and must not alter the
-runner, selector, 20-slot cap, ledger or recovery behavior.
+The local fix commits order, position, balance and quoted-market values only
+after all three account reads succeed. Any first or later read failure keeps
+every venue-backed terminal and Discord field `unknown`, omits `flat`, and does
+not calculate empty slots. Two dashboard tests cover failure at all three read
+stages and the Discord payload. This remains reporting-only.
 
-## OPEN: maintenance probes produce a full duplicate traceback every minute
+## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: duplicate maintenance tracebacks
 
-The same outage produced 129 expected failed probes and a full repeated stack
-trace for each one. The one-minute authenticated probe cadence is appropriate,
-but the repeated traceback adds avoidable log volume and can bury a distinct
-error. A low-priority logging-only improvement could retain the first full
-traceback, state transitions and periodic summaries while keeping every probe
-attempt/stable counter observable. Do not change the probe interval or recovery
-gate as part of this cleanup.
+The local fix keeps the full traceback for attempt 1 and every 30th attempt.
+Every probe still emits its concise numbered runtime line plus the maintenance
+health/stable marker. Poll cadence, three-pass recovery, failure reset, active
+tuple and mutation behavior are unchanged.
 
-## OPEN: flat book-fault retirements can occupy nominally full slots during cooldown
+## FIXED AND REVIEWED LOCALLY; NOT DEPLOYED: closed owners parked 20-slot capacity
 
 The 2026-08-27 13:20Z capacity audit found queue scope `markets=20`, but three
 flat, order-free and unresolved-free WTT owners remained bound after empty-book
@@ -73,13 +69,22 @@ symptom: fresh selection excluded the three WTT slugs, queue scope returned to
 across 19 markets with zero position. This is a workaround and live evidence
 for the diagnosis, not closure of the code gap.
 
-Before proposing a fix, trace the complete retirement/top-up interaction and
-preserve positive ownership proof, retained exits, stream-rebind safety and the
-exact 20 cap. Focused regressions should decide whether equivalent permanent
-book-failure reasons belong to one retirement family and whether a positively
-flat, order-free, unresolved-free retired owner can be replaced without
-recreating the prior retire/release/re-retire churn. Do not change the live
-strategy, deploy or restart without the operator's explicit request.
+The full flow review found two mechanisms. Equivalent permanent book failures
+were compared by exact string, so AdapterError/stale alternation advanced ten
+rounds and extended cooldown. They now compare by permanent failure family.
+Separately, top-up did not recognize explicit closed/not-open metadata as a
+release reason. It now schedules that candidate only when ownership state is
+flat and clear, performs complete account reconciliation, freshly reads the
+exact market again, and aborts before tuple/stream changes if the read fails or
+the market reopened. Working orders, `UNKNOWN_ABSENT`, unresolved intents and
+positions all retain the owner. Tests cover exact-cap replacement, position,
+working order, missing status, reopen-at-commit and no cancellation of retained
+orders.
+
+Four deliberate reversions were detected and all 660 local tests pass in
+39.768s. Remaining work is operator authorization to deploy while stopped,
+server hash/test verification, and later live acceptance after authenticated
+venue proof permits a restart.
 
 ## HISTORICAL: August 26 recovery/slot fixes and transient location-denial recovery
 

@@ -1,5 +1,10 @@
 # Working from a second machine
 
+Every AI session on every machine begins with
+[AI_OPERATOR.md](../AI_OPERATOR.md), [STATUS.md](../STATUS.md) and
+[DECISIONS.md](../DECISIONS.md). `STATUS.md` is the handoff snapshot, but the
+server and venue remain authoritative for live state.
+
 The goal: open a laptop, desktop or phone and pick up exactly where the last
 session stopped. Most of that already works through git. The one thing that does
 not travel is SSH access to the droplet.
@@ -126,8 +131,11 @@ ssh -i ~/.ssh/makerlab_droplet root@<DROPLET_HOST> \
     'cd /root/liquidity-bot && cat DEPLOYED_COMMIT && ./scripts/status_commissioning.sh'
 ```
 
-Then read `NEXT.md` for what is queued and why. `CLAUDE.md` loads automatically
-and carries the rules and the traps.
+Then read `AI_OPERATOR.md`, `STATUS.md` and `DECISIONS.md`. Use `NEXT.md` only
+for the detailed queue after the current handoff is understood. `CLAUDE.md`
+loads automatically for Claude and carries the engineering rules and traps;
+the tracked root `AGENTS.md` provides the equivalent Codex entry point. Also
+read an ignored workstation `AGENTS.local.md` when present.
 
 If `DEPLOYED_COMMIT` does not match `git rev-parse --short HEAD`, the droplet is
 running something other than what you are reading. Nothing writes that file

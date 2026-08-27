@@ -1,5 +1,10 @@
 # Next session — outstanding fixes
 
+> This is a detailed work/history log, not the current runtime state. Every AI
+> session starts with [AI_OPERATOR.md](AI_OPERATOR.md), [STATUS.md](STATUS.md)
+> and [DECISIONS.md](DECISIONS.md). “ACTIVE” below is scoped to its dated
+> section unless `STATUS.md` says it is active now.
+
 ## ACTIVE: August 26 recovery/slot fixes and transient location-denial recovery
 
 Do not restart from an older commit. Source commit `5825db8` and documentation

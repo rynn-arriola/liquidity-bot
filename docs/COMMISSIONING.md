@@ -1,5 +1,10 @@
 # Liquidity commissioning
 
+This file defines the live execution lifecycle; it does not state whether the
+bot is running now. AI operators must begin with
+[AI_OPERATOR.md](../AI_OPERATOR.md), [STATUS.md](../STATUS.md) and the human
+operator's choices in [DECISIONS.md](../DECISIONS.md).
+
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 

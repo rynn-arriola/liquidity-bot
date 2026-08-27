@@ -1,5 +1,9 @@
 # Bug log
 
+> This is production-defect history, not current bot status. Start every AI
+> session with [AI_OPERATOR.md](AI_OPERATOR.md), [STATUS.md](STATUS.md) and
+> [DECISIONS.md](DECISIONS.md).
+
 One entry per bug that reached production. Newest first. The point is that a
 bug fixed once should never have to be diagnosed twice — so each entry records
 the **symptom you would see**, the **mechanism**, and the **fix**, not just a

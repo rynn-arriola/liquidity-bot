@@ -1,5 +1,9 @@
 # Findings — liquidity-bot
 
+> Measured evidence lives here; current operational state does not. Start with
+> [AI_OPERATOR.md](AI_OPERATOR.md) and [STATUS.md](STATUS.md). Any older
+> “current status” heading below is historical as of its stated date.
+
 Empirically established facts, with the measurement that produced each one.
 Nothing here is a plan or an intention. If a number appears without a source,
 it does not belong in this file.

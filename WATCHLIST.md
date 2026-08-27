@@ -1,5 +1,9 @@
 # WATCHLIST
 
+> Everything here is measurement or a proposal, not authorized live behavior.
+> Start with [AI_OPERATOR.md](AI_OPERATOR.md), [STATUS.md](STATUS.md) and the
+> human operator's active choices in [DECISIONS.md](DECISIONS.md).
+
 Open questions that **cannot be answered yet** because there is not enough
 data. Each entry records the baseline as it stood when the question was
 raised, exactly what to measure, and the rule that decides the change — so

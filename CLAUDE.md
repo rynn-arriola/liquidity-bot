@@ -3,10 +3,19 @@
 A live Polymarket US liquidity-reward market maker. **It trades real money on a
 real account.** Every change can lose it.
 
-## Where things stand — 2026-08-26
+## Mandatory AI handoff
 
-Update this block when it stops being true. It is here so a new session starts
-from fact rather than from the last thing someone remembers.
+Read [AI_OPERATOR.md](AI_OPERATOR.md), [STATUS.md](STATUS.md) and
+[DECISIONS.md](DECISIONS.md) before doing anything. The operator makes business
+and risk decisions and should never be assumed to write code. Explain the bot's
+state, evidence, recommendation and tradeoff in plain language. `STATUS.md` is
+the only current operational handoff; live venue and server checks remain the
+authority.
+
+## Historical status log — do not use as current state
+
+This dated log preserves detailed handoffs. It is evidence and history;
+[STATUS.md](STATUS.md) replaces it as the current-state page.
 
 - **PUSHED, DEPLOYED AND ACTIVE — AUGUST 26 RECOVERY/SLOT FIX; TRANSIENT
   VENUE LOCATION DENIAL CLEARED BY SERVER REBOOT.** Today a private reconnect

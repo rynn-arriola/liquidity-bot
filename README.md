@@ -1,5 +1,10 @@
 # liquidity-bot
 
+> **AI operators:** Start with [AI_OPERATOR.md](AI_OPERATOR.md), then read the
+> one canonical live handoff in [STATUS.md](STATUS.md) and the human operator's
+> active choices in [DECISIONS.md](DECISIONS.md). The dated status language in
+> historical files is not the current runtime state.
+
 A clean, standalone Polymarket US liquidity-reward market maker.
 
 This project uses `D:\polybot\maker-lab` as a pinned code/evidence reference,

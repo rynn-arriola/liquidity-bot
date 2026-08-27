@@ -6360,3 +6360,37 @@ intents, `UNKNOWN_ABSENT` orders and nonzero positions were all zero. No
 maintenance-pause, runner-failure or risk-stop marker appeared. The new outage
 branch therefore remains pending natural live acceptance; forcing maintenance
 or disconnecting a funded bot solely to exercise it is not justified.
+
+# 2026-08-27 maintenance audit: safe pause, unsafe dashboard certainty
+
+At 22:22 UTC the existing supervisor and runner were still alive, but the
+runner had been deliberately dormant in maintenance mode since 20:13:34 UTC.
+Authenticated `GET /v1/orders/open` continued to return a venue HTTP 5xx;
+probe attempt 129 remained `stable=0/3`. No fresh create activity followed the
+pause. The maintenance gate therefore did what it was designed to do and is
+not the defect in this incident.
+
+The dashboard did expose a real reporting defect. Its venue variables begin at
+zero, and an exception leaves those values unchanged. It then reports `venue
+unreachable` alongside `positions 0 (flat)`, zero resting orders and derived
+empty slots. Those claims are not valid during an authenticated account outage:
+exposure is unknown. The retained local ledger happened to show 31 working
+rows, one unresolved intent, zero `UNKNOWN_ABSENT` rows and zero nonzero
+positions, but retained ledger state cannot replace current venue proof. The
+dashboard must preserve an explicit unavailable state through all dependent
+sections and never translate failed reads into flatness.
+
+The full current-run audit also reinforced, rather than newly discovered, the
+open retirement/top-up availability gap. Multiple markets that became `not
+open` or `no longer pregame` were retried 10--14 times while other viable
+supply existed. This can reduce productive use of the nominal 20 slots but is
+separate from the maintenance pause and from raw order count. Any fix still
+requires the full retirement/top-up ownership review specified in `NEXT.md`.
+
+Other errors observed today were handled recoveries, not code defects: the
+17:42 WebSocket HTTP 503 recovered; seven affected flat retirements obtained
+positive proof and released by 17:46; a later `UNKNOWN_ABSENT` cancel cleared
+through exact-order reread; and the 19:01 market-stream disconnect recovered.
+The later uncertain create and execution-state retirements coincided with the
+venue outage and were conservatively contained. Do not weaken mutation proof
+or restart while authenticated exposure remains unavailable.

@@ -28,6 +28,35 @@ positions, zero unresolved intents and zero `UNKNOWN_ABSENT` rows.
 
 ---
 
+## OPEN: dashboard falsely renders flat/zero state when venue reads fail
+
+The 2026-08-27 maintenance audit found a clear operator-safety reporting
+defect. `scripts/dashboard.py` initializes venue orders, positions and equity
+to zero. If an authenticated account read raises, it correctly adds `venue
+unreachable` but passes those default zero values into the slot and risk
+sections. The resulting display can say `positions 0 (flat)`, zero resting
+orders and empty slots even though current venue exposure is unknown. During
+the observed outage, the retained local ledger still had 31 working rows and
+one unresolved intent; neither local state nor a prior successful snapshot is
+proof of current venue state.
+
+Fix this as an unavailable-data state, not as inferred zero: unavailable
+venue-backed counts must render `unknown`/`unavailable`, must never include the
+word `flat`, and must not manufacture empty-slot arithmetic. Add a regression
+that makes the first or a later account read fail and proves every dependent
+field remains unknown. This is a dashboard-only fix and must not alter the
+runner, selector, 20-slot cap, ledger or recovery behavior.
+
+## OPEN: maintenance probes produce a full duplicate traceback every minute
+
+The same outage produced 129 expected failed probes and a full repeated stack
+trace for each one. The one-minute authenticated probe cadence is appropriate,
+but the repeated traceback adds avoidable log volume and can bury a distinct
+error. A low-priority logging-only improvement could retain the first full
+traceback, state transitions and periodic summaries while keeping every probe
+attempt/stable counter observable. Do not change the probe interval or recovery
+gate as part of this cleanup.
+
 ## OPEN: flat book-fault retirements can occupy nominally full slots during cooldown
 
 The 2026-08-27 13:20Z capacity audit found queue scope `markets=20`, but three

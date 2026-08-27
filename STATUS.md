@@ -6,8 +6,9 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 14:01 ET / 2026-08-27 18:01 UTC
-- **Bot:** LIVE after an operator-authorized reviewed deployment and restart
+- **Time:** 2026-08-27 18:22 ET / 2026-08-27 22:22 UTC
+- **Bot:** process LIVE but deliberately DORMANT in the maintenance pause;
+  authenticated Polymarket US account reads remain unavailable
 - **Supervisor / runner:** active as `16632` / `16638`; current run began
   2026-08-27 17:08:30/17:08:31 UTC
 - **Maker-lab:** stopped
@@ -17,9 +18,9 @@ describe their dated event, not the bot now.
 - **Latest queue proof:** `markets=20` at 17:09:37 UTC
 - **Effective slot state:** latest authenticated sample had 18 quoting markets;
   queue scope remains 20
-- **Venue proof:** 35 resting orders across 18 markets and zero positions at
-  17:59 UTC; ledger returned to zero unresolved intents and zero
-  `UNKNOWN_ABSENT` rows by 18:01 UTC
+- **Venue proof:** UNKNOWN now. `GET /v1/orders/open` still returned HTTP 5xx
+  at 22:21 UTC. The last successful account proof predates this outage and
+  must not be used to call the account flat.
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
 - **Repository handoff:** provisional open-position hard-stop and historical
@@ -31,7 +32,25 @@ markets, zero unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.
 Raw order count is not slot count; queue telemetry independently proved all 20
 markets bound.
 
+Local ledger state during the outage last showed 31 working rows, one
+unresolved intent, zero `UNKNOWN_ABSENT` rows and zero nonzero positions. It is
+retained ownership/recovery state, not current venue proof.
+
 ## What just happened
+
+Polymarket US account service became unavailable during the current run. The
+runner entered its maintenance pause at 20:13:34 UTC and remained dormant
+through probe attempt 129 at 22:21:48 UTC, with `stable=0/3`. No restart is
+authorized while exposure cannot be proved. The process is behaving safely:
+it will require three consecutive complete authenticated account checks and
+then the normal reconciliation/stream recovery before it can quote again.
+
+Today's audit found a separate dashboard defect: when the authenticated venue
+read raises, the dashboard labels the venue unreachable but still renders its
+default counters as `positions 0 (flat)`, zero resting orders and empty slots.
+That is false certainty while exposure is unknown. It is reporting-only; the
+runner itself remains fail-closed. No code fix has yet been authorized or
+applied.
 
 At 17:42 UTC Polymarket rejected trade and market WebSocket startup with HTTP
 503 during a slot top-up. Both streams recovered in-process. Seven flat markets

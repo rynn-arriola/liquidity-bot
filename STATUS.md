@@ -6,7 +6,7 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 11:46 ET / 2026-08-27 15:46 UTC
+- **Time:** 2026-08-27 11:53 ET / 2026-08-27 15:53 UTC
 - **Bot:** LIVE after an operator-authorized clean restart
 - **Supervisor / runner:** active as `13125` / `13131`; current run began
   2026-08-27 13:34:15 UTC
@@ -42,9 +42,10 @@ all new entries, require a breach-time position close plus a newer balance, and
 remove proven non-trading cash from the hard mark. Historical report rows use
 adjacent proven-flat ET boundaries where possible and visibly mark pair
 fallbacks with `~`. Six mutation checks and all 651 tests pass in 41.735s. These changes
-are not deployed and the bot was not restarted. At 15:46 UTC supervisor 13125
+are not deployed and the bot was not restarted. At 15:53 UTC supervisor 13125
 and runner 13131 retained their original 13:34:15 UTC start time on deployed
-marker `0b79a1f`.
+marker `0b79a1f`; the commissioning log was still advancing through normal
+reconciliation and quote actions.
 
 The same runner survived Polymarket maintenance from 08:41 UTC. Account health
 first succeeded at 12:20, failed once and correctly reset to `0/3`, then passed

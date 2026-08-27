@@ -24,6 +24,27 @@ decision, or it took real work to learn, it belongs here with its measurement.
 
 ---
 
+## August 27 WebSocket HTTP 503 recovered without restart or residual unknown state
+
+Established live from the commissioning log, authenticated venue dashboard and
+read-only ledger at 17:42-18:01 UTC. During incremental top-up, Polymarket
+rejected public trade and market WebSocket startup with HTTP 503. The first
+rebind left both streams closed, and a second market-stream start also received
+503. The runner remained alive and recovered the streams in-process.
+
+Seven flat markets retired at round one for `unresolved_mutation_timeout`
+between 17:43:44 and 17:44:06. Each later obtained positive terminal proof and
+logged `released=flat` by 17:46:47. At 17:59 the authenticated dashboard showed
+35 resting orders across 18 markets and zero positions. One later cancel briefly
+became `UNKNOWN_ABSENT` at 18:00:37 because it was missing from a complete
+snapshot; the normal exact-order reread cleared it. At 18:01 the ledger had zero
+`UNKNOWN_ABSENT` rows and zero unresolved intents while the same runner was
+still placing orders. No restart, hard stop, permission error or code mutation
+occurred. This was a recovered venue availability incident, not evidence that
+the provisional hard-stop fix caused a fault.
+
+---
+
 ## August 26 hard stop was a temporary open-position mark; flat account trading finished at -$64.49
 
 Established 2026-08-27 from the production shutdown timeline, durable ET risk

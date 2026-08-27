@@ -6,7 +6,7 @@ describe their dated event, not the bot now.
 
 ## Last verified
 
-- **Time:** 2026-08-27 13:10 ET / 2026-08-27 17:10 UTC
+- **Time:** 2026-08-27 14:01 ET / 2026-08-27 18:01 UTC
 - **Bot:** LIVE after an operator-authorized reviewed deployment and restart
 - **Supervisor / runner:** active as `16632` / `16638`; current run began
   2026-08-27 17:08:30/17:08:31 UTC
@@ -15,10 +15,11 @@ describe their dated event, not the bot now.
 - **Quote size:** 10 contracts
 - **Capacity:** 20 market slots
 - **Latest queue proof:** `markets=20` at 17:09:37 UTC
-- **Effective slot state:** all 20 bound; 18 quoting and two temporarily bound
-  without an order at the 17:10 acceptance snapshot
-- **Venue proof:** 18 resting orders across 18 markets and zero positions at
-  17:10 UTC; zero unresolved intents and zero `UNKNOWN_ABSENT` rows
+- **Effective slot state:** latest authenticated sample had 18 quoting markets;
+  queue scope remains 20
+- **Venue proof:** 35 resting orders across 18 markets and zero positions at
+  17:59 UTC; ledger returned to zero unresolved intents and zero
+  `UNKNOWN_ABSENT` rows by 18:01 UTC
 - **Rewards API:** pending `$0.00`; bot-era paid `$634.97` when checked on
   2026-08-26
 - **Repository handoff:** provisional open-position hard-stop and historical
@@ -31,6 +32,14 @@ Raw order count is not slot count; queue telemetry independently proved all 20
 markets bound.
 
 ## What just happened
+
+At 17:42 UTC Polymarket rejected trade and market WebSocket startup with HTTP
+503 during a slot top-up. Both streams recovered in-process. Seven flat markets
+temporarily retired for `unresolved_mutation_timeout`; positive terminal proof
+released all seven by 17:46. At 18:00 one later canceled order was briefly
+`UNKNOWN_ABSENT`, so the dashboard correctly labeled rotation blocked. The
+exact-order reread resolved it automatically by 18:01. The runner never stopped,
+continued placing orders, held zero positions, and had no loss-stop event.
 
 The August 26 hard-stop incident was reconstructed. Marked equity crossed $80
 while positions were open, but the adjacent flat ET account boundaries were
@@ -85,6 +94,9 @@ block or need for a new droplet.
 
 ## Current interpretation
 
+- The 17:42 error was a transient venue HTTP 503 during WebSocket startup, not
+  the newly deployed hard-stop/account-P&L code. Recovery restored streams,
+  resolved every affected order and continued trading without restart.
 - Maintenance-aware recovery is now naturally live-accepted end to end: the
   process stayed dormant during the outage, reset its success streak after an
   intervening failure, passed three consecutive checks, reconciled and resumed

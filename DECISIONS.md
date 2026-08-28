@@ -26,21 +26,22 @@ show the operator the discrepancy.
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
-| Market loss stop | $40 |
-| Account loss threshold | $80 realized-session sensor and $80 marked-equity sensor; an open-position marked breach is provisional until a breach-time position closes |
+| Portfolio exposure | `30 × quote size`: 20 slot-notionals plus a proportional 10-notional cushion; $300 at size 10 |
+| Market loss stop | `4 × quote size`; $40 at size 10 |
+| Account loss threshold | `8 × quote size`; $80 at size 10 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Measurement only; never cancel/repost automatically |
 | Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
 | Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, plus a bounded pure-volume fixed-GTC-to-settlement cohort; no orders or strategy gate |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
 
-The two $80 sensors protect against different evidence and responses; they are
-one chosen dollar threshold, not permission to remove either safety sensor.
+The two account sensors protect against different evidence and responses; they
+share one size-scaled threshold, not permission to remove either sensor.
 The marked sensor blocks new entries immediately. When inventory is open, it
 must not force a loss-realizing shutdown from paper movement alone: it waits
 for a breach-time position to close and a later adjusted balance. A confirmed
-$80 result may stop even while another position remains open. The realized
-sensor independently pauses new risk as soon as closed trading reaches $80.
+A confirmed result may stop even while another position remains open. The
+realized sensor independently pauses new risk at the same scaled threshold.
 
 ## Reporting and data choices
 

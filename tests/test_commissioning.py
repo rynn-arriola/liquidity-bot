@@ -46,24 +46,15 @@ class CommissioningTests(unittest.TestCase):
         # Returned with size so it keeps its contract-level meaning.
         self.assertEqual(
             self.authorized().max_early_exit_loss_usd, Decimal("4.0"))
-        # Operator decisions: session/hard $40/$45 -> $50/$60 on 2026-08-23,
-        # then $70/$80 on 2026-08-24 and $80/$80 on 2026-08-25. The per-market
-        # stop deliberately stayed
-        # at $40, so it still binds before the session budget for one market.
-        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "80")
-        self.assertEqual(str(self.authorized().max_session_loss_usd), "80")
-        self.assertEqual(str(self.authorized().max_market_loss_usd), "40")
-        # Deliberately NOT doubled with size. The stops protect the account and
-        # equity did not double: $40 is ~9% of ~$467, $80 would be ~18%. They
-        # still have room to work -- matched-pair trading ran -47.24 over seven
-        # days, ~-6.75/day at size 5, so ~-13.50/day here against a $40 stop.
-        # Exposure budgets are separate from the loss stops above: "stop after
-        # losing $40" and "never hold more than $40 of worst case" are
-        # different statements and cannot share a number once size grows.
+        # The safe missing-file fallback remains size 5, so every quantity-linked
+        # risk control is half of its live size-10 baseline.
+        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "40")
+        self.assertEqual(str(self.authorized().max_session_loss_usd), "40")
+        self.assertEqual(str(self.authorized().max_market_loss_usd), "20")
         self.assertEqual(
             str(self.authorized().max_market_exposure_usd), "45")
         self.assertEqual(
-            str(self.authorized().max_portfolio_exposure_usd), "340")
+            str(self.authorized().max_portfolio_exposure_usd), "150")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
         self.assertEqual(self.authorized().max_hard_exit_retry_seconds, 30)
         self.assertEqual(
@@ -195,10 +186,31 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(
                     config.reward_selection_policy().quote_size, float(size))
                 self.assertEqual(config.max_markets, 20)
-                self.assertEqual(config.max_portfolio_exposure_usd, Decimal("340"))
-                self.assertEqual(config.max_market_loss_usd, Decimal("40"))
-                self.assertEqual(config.max_session_loss_usd, Decimal("80"))
-                self.assertEqual(config.hard_stop_loss_usd, Decimal("80"))
+                self.assertEqual(
+                    config.max_portfolio_exposure_usd,
+                    Decimal(size) * Decimal("30"))
+                self.assertEqual(
+                    config.max_market_loss_usd, Decimal(size) * Decimal("4"))
+                self.assertEqual(
+                    config.max_session_loss_usd, Decimal(size) * Decimal("8"))
+                self.assertEqual(
+                    config.hard_stop_loss_usd, Decimal(size) * Decimal("8"))
+
+    def test_size_ten_and_twenty_match_operator_risk_profiles(self):
+        expected = {
+            10: ("300", "40", "80", "80"),
+            20: ("600", "80", "160", "160"),
+        }
+        for size, values in expected.items():
+            with self.subTest(size=size):
+                config = self.authorized(quote_size=Decimal(size))
+                actual = tuple(str(value) for value in (
+                    config.max_portfolio_exposure_usd,
+                    config.max_market_loss_usd,
+                    config.max_session_loss_usd,
+                    config.hard_stop_loss_usd,
+                ))
+                self.assertEqual(actual, values)
 
     def test_runtime_size_file_drives_diagnostics_and_rejects_bad_values(self):
         with TemporaryDirectory() as directory:

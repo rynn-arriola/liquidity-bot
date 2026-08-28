@@ -58,7 +58,7 @@ def next_six_am_new_york(now: datetime) -> datetime:
 
 @dataclass(frozen=True)
 class CommissioningConfig:
-    """Non-scalable, bounded experimental authorization.
+    """Bounded experimental authorization derived from one quote quantity.
 
     Three loss limits. ``max_market_loss_usd`` and ``max_session_loss_usd``
     are both stops -- they appear in ``runtime_safety.blockers()`` and halt
@@ -66,18 +66,10 @@ class CommissioningConfig:
     equity. It may share the session stop's dollar threshold because the two
     sensors still cover different losses and trigger different responses.
 
-    They sat at $40/$40/$45 until 2026-08-23, deliberately equal so exactly one
-    number could fire. The operator raised the session/hard limits to $50/$60
-    that day, then to $70/$80 on 2026-08-24 and $80/$80 on 2026-08-25, while
-    leaving the per-market stop at $40. A single market losing $40 therefore
-    still pauses trading before
-    the session budget is spent; the session limit is reachable only through
-    losses spread across several markets. "Which stop fired" is a real
-    question, and the alert names it.
-
-    This docstring previously quoted $30 and $35 against code that had said
-    $40 and $45 for weeks. Numbers in prose go stale; the fields below are the
-    source.
+    The size-10 baseline is $40 per market and one $80 threshold for both the
+    realized-session and marked-equity sensors. The operator chose proportional
+    scaling on 2026-08-28: 4x, 8x and 8x quote quantity. The two $80-equivalent
+    sensors remain independent even though their thresholds match.
     """
 
     market_slug: str
@@ -101,12 +93,8 @@ class CommissioningConfig:
     # when no runtime setting file exists.
     #
     # Everything derived from contract count moves with it or the config stops
-    # being coherent -- the exposure budget below, and `max_early_exit_loss_usd`
-    # above all, whose $4 was calibrated on size-5 crossed losses.
-    #
-    # The LOSS STOPS deliberately do NOT move. They protect the account, not
-    # the position. The size-dependent limits that move back with quote size
-    # are the early-exit cap and the per-market exposure budget below.
+    # being coherent. This includes the portfolio cap and all loss thresholds;
+    # size is restart-scoped so none can move under live orders.
     quote_size: Decimal = DEFAULT_QUOTE_SIZE
     # Eight is the measured ceiling, not a preference. The private
     # WebSocket accepts 10 subscriptions per connection; positions must be
@@ -132,8 +120,8 @@ class CommissioningConfig:
     # riding toward settlement -- how maker-lab lost $443.88.
     #
     # Worst case exposure: both sides of a market risk quote_size x p +
-    # quote_size x (1 - p) = quote_size, so 20 size-10 markets is $200 against
-    # the $340 cap.
+    # quote_size x (1 - p) = quote_size. Twenty markets consume 20x size; the
+    # portfolio control adds a proportional 10x cushion for 30x total.
     max_markets: int = 20
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
@@ -146,25 +134,9 @@ class CommissioningConfig:
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
-    # Raised to $40 on 2026-08-14 alongside quote size 5, both tiers equal so
-    # exactly one threshold could fire.
-    #
-    # **Operator decisions: session/hard $40/$45 -> $50/$60 on 2026-08-23,
-    # then $70/$80 on 2026-08-24 and $80/$80 on 2026-08-25.** The per-market
-    # stop was NOT raised, so it
-    # remains binding for a single bad market and the session budget is only
-    # reachable across several -- see the class docstring.
-    #
-    # Scale, so this is judgeable rather than a bare number: marked equity was
-    # $419.91 at 2026-08-23T02:20Z, so these are 11.9% and 14.3%, up from 9.5%
-    # and 10.7%. Trading loss at size 10 has run -$27.40 to -$35.14 per day, so
-    # 2026-08-21 spent 88% of the OLD $40 budget on an ordinary day.
-    #
-    # Quote size returned to 10 by operator decision on 2026-08-24. Loss stops
-    # remain account budgets and do not derive from quote size.
-    max_market_loss_usd: Decimal = Decimal("40")
-    max_session_loss_usd: Decimal = Decimal("80")
-    hard_stop_loss_usd: Decimal = Decimal("80")
+    # Loss limits are computed properties below. At size 10 they remain the
+    # accepted $40 market and $80 session/hard values. Proportional scaling
+    # preserves the same risk per contract at every authorized whole size.
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
     # `max_market_loss_usd` and so could never fire, because five contracts
@@ -206,24 +178,11 @@ class CommissioningConfig:
     # session budget daily forever with nothing forcing attention -- and the
     # emergency ceiling cannot catch it either, because that re-baselines each
     # morning too. One bad day is variance; three in a row is a broken model.
-    # At the current $80 session limit, the bound is about $240.
+    # At live size 10 the $80 session limit bounds three days near $240.
     max_consecutive_loss_stop_days: int = 3
-    # Exposure budgets, distinct from the loss stops above. Until 2026-08-14
-    # one pair of numbers served as both, which is incoherent once size grows:
-    # "stop after losing $40" and "never hold more than $40 of worst case" are
-    # different statements, and capital cannot be deployed while they share a
-    # value. The stops stay at $40 of *realised* loss; these bound *open*
-    # worst-case exposure and are sized to the $385.88 balance with a ~10%
-    # buffer, following maker-lab's CAPITAL_BUFFER_PCT.
-    #
-    # Per-market doubled 45 -> 90 with quote_size on 2026-08-20, returned to
-    # $45 with size 5, then back to $90 when size 10 was restored. Worst case
-    # on one market is
-    # `size x p + size x (1 - p)` = one quote quantity, so this preserves the
-    # same nine-times headroom. The PORTFOLIO budget stays at $340 -- it is
-    # sized to the account, not to the position, and 20 size-10 markets are
-    # $200 of worst-case open exposure.
-    max_portfolio_exposure_usd: Decimal = Decimal("340")
+    # Exposure budgets remain distinct from realized-loss stops. Per-market
+    # exposure has nine-times headroom. Portfolio exposure funds 20 fully
+    # two-sided slots plus the operator-approved 50% proportional cushion.
     rest_requests_per_second: Decimal = Decimal("4")
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: int = 30
@@ -315,10 +274,34 @@ class CommissioningConfig:
         return self.quote_size * Decimal("0.8")
 
     @property
+    def max_market_loss_usd(self) -> Decimal:
+        """Keep the size-10 $40 per-market loss policy proportional."""
+
+        return self.quote_size * Decimal("4")
+
+    @property
+    def max_session_loss_usd(self) -> Decimal:
+        """Keep the size-10 $80 realized-session policy proportional."""
+
+        return self.quote_size * Decimal("8")
+
+    @property
+    def hard_stop_loss_usd(self) -> Decimal:
+        """Keep the size-10 $80 marked-equity policy proportional."""
+
+        return self.quote_size * Decimal("8")
+
+    @property
     def max_market_exposure_usd(self) -> Decimal:
         """Keep nine quote-notionals of headroom in each market."""
 
         return self.quote_size * Decimal("9")
+
+    @property
+    def max_portfolio_exposure_usd(self) -> Decimal:
+        """Fund twenty slots plus a proportional ten-quote cushion."""
+
+        return self.quote_size * Decimal("30")
 
     @property
     def max_session_execution_fees_usd(self) -> Decimal:
@@ -400,19 +383,11 @@ class CommissioningConfig:
         if self.max_markets != 20:
             problems.append(
                 "commissioning is hard-locked to at most twenty markets")
-        if self.max_portfolio_exposure_usd != 340:
-            problems.append(
-                "commissioning portfolio exposure budget must remain $340")
         if self.max_portfolio_exposure_usd < self.max_market_exposure_usd:
             problems.append(
                 "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if (self.max_session_loss_usd != 80 or self.max_market_loss_usd != 40
-                or self.hard_stop_loss_usd != 80):
-            problems.append(
-                "commissioning must keep a $40 per-market stop and one $80 "
-                "threshold for both session loss and emergency equity loss")
         if self.max_consecutive_loss_stop_days != 3:
             problems.append(
                 "a paused loss stop must become terminal after three "

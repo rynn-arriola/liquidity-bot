@@ -24,12 +24,11 @@ These are implementation requirements, not suggestions.
     across at most 20 concurrently bound markets**. Quote size is a whole,
     restart-scoped value bounded to 5-30; the persisted live setting is 10 and
     5 is only the missing-file fallback.
-    Breadth and the six-hour selection horizon did not change. Early-exit loss
-    (`0.8 × size`), per-market exposure (`9 × size`) and the session execution-
-    fee cap (`0.30 × size`) are computed properties, not independent knobs, so
-    they cannot drift from quantity. The account loss stops deliberately do
-    not move -- they bound the account, not the position. The $340 portfolio
-    cap also remains capital-sized, so larger quotes may reduce resting breadth.
+    Breadth and the six-hour selection horizon do not change. Early-exit loss
+    (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
+    (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`)
+    and the session fee cap (`0.30 × size`) are computed properties. Portfolio
+    exposure funds 20 slot-notionals plus a proportional ten-notional cushion.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
     invariant 57 but was **disproved** -- 29 subscriptions were later sustained
@@ -59,7 +58,7 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. Losses have a **$40** per-market realized-loss threshold and one **$80**
+25. Losses have a **4 × size** per-market threshold and one **8 × size**
     account threshold observed by two independent sensors: realized session
     loss pauses new risk, while adjusted marked-account-equity loss
     (`currentBalance` plus `assetNotional`, less proven non-trading cash) is the
@@ -71,8 +70,8 @@ These are implementation requirements, not suggestions.
     remains open. The
     market stop remains the first bound for one bad market; only losses spread
     across markets can reach the session stop. Buying power is never treated
-    as P&L or marked equity. `CommissioningConfig` validates all three at
-    startup and refuses to arm if they drift.
+    as P&L or marked equity. Derived properties prevent all three from drifting
+    independently of the restart-scoped quote quantity.
 26. A restart may mutate only persisted, identified orders/positions in one
     ledger-selected recovery market, and then only to recover flat. Unowned or cross-market
     state refuses without mutation.

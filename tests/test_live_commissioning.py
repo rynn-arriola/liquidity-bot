@@ -4987,13 +4987,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, client, notifier = self.build_runner()
         await runner.preflight()
         slug = runner.config.market_slug
+        ceiling = runner.config.hard_stop_loss_usd
 
         client.portfolio.rows = {slug: {
             "netPosition": "10", "netPositionDecimal": "10.0000",
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = Decimal("-81")
+        client.account.asset_notional = -(ceiling + Decimal("1"))
         await runner._refresh_balance(NOW)
 
         self.assertIsNone(runner._stop_reason(NOW))
@@ -5002,13 +5003,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._announce_provisional_hard_stop()
         self.assertIn("provisional", str(notifier.messages[-1]).lower())
 
-        # The trade closes and the actual day result is only -$76. A complete
+        # The trade closes four dollars inside the scaled limit. A complete
         # venue reconcile followed by a fresh balance is the required proof.
         client.portfolio.rows = {}
         closed_at = NOW + timedelta(seconds=1)
         runner.clock = lambda: closed_at
         await runner._rest_reconcile(closed_at)
-        client.account.current_balance = Decimal("24")
+        recovered_loss = ceiling - Decimal("4")
+        client.account.current_balance = Decimal("100") - recovered_loss
         client.account.asset_notional = Decimal("0")
         measured_at = closed_at + timedelta(seconds=1)
         runner.clock = lambda: measured_at
@@ -5016,22 +5018,23 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(runner._stop_reason(measured_at))
         self.assertIsNone(runner._provisional_hard_stop_at)
-        self.assertEqual(runner._session_realized(), Decimal("-76"))
+        self.assertEqual(runner._session_realized(), -recovered_loss)
         await runner._announce_provisional_hard_stop()
         self.assertIn("cleared", str(notifier.messages[-1]).lower())
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_open_position_breach_stops_if_close_confirms_eighty(self):
+    async def test_open_position_breach_stops_if_close_confirms_scaled_limit(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         slug = runner.config.market_slug
+        ceiling = runner.config.hard_stop_loss_usd
         client.portfolio.rows = {slug: {
             "netPosition": "10", "netPositionDecimal": "10.0000",
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = Decimal("-81")
+        client.account.asset_notional = -(ceiling + Decimal("1"))
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
@@ -5042,7 +5045,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             runner._stop_reason(closed_at),
             "the pre-close balance cannot confirm a hard loss")
-        client.account.current_balance = Decimal("19")
+        client.account.current_balance = Decimal("99") - ceiling
         client.account.asset_notional = Decimal("0")
         measured_at = closed_at + timedelta(seconds=1)
         runner.clock = lambda: measured_at
@@ -5062,7 +5065,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = Decimal("-81")
+        client.account.asset_notional = -(
+            runner.config.hard_stop_loss_usd + Decimal("1"))
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 

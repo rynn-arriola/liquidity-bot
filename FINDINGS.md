@@ -27,7 +27,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
 - **Twenty-slot health is not raw order count.** Use queue `markets=20`, active owners,
   eligibility, resting coverage and unresolved/position state; a healthy slot can temporarily hold no order.
-- **Quote size is not portfolio capital.** `5165fc4` scales quantity-linked limits through 30; fixed $340/$40/$80 controls may reduce breadth at higher sizes.
+- **Risk now has one quantity authority.** The approved profile derives portfolio/market/account limits as `30×/4×/8×` size; 20 slots and six hours stay fixed.
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.
 - **Bound capacity can remain economically idle.** Lifecycle repairs do not

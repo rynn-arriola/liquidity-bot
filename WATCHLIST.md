@@ -62,10 +62,9 @@ Live size 20 is not selected. Continue the measurement-only comparison using
 complete ET reward days, resting side-hours, projected share multiplier,
 maker-fill rate and stressed-exit sensitivity.
 
-Before any staged live proposal, review capital, the $340 portfolio exposure
-cap, per-market exposure, market/account stops, exit depth and whether reward
-gain remains materially below 2x. Adding capital alone changes none of those
-controls.
+Before any staged live proposal, review capital against the `30 × size`
+portfolio cap, scaled market/account stops, exit depth and whether reward gain
+remains materially below 2x. Adding capital alone does not authorize size 20.
 
 ## 5. Ledger growth slope
 

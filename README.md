@@ -52,19 +52,20 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
-permits only a non-scalable commissioning process. It joins the active sports
+permits only a bounded commissioning process. It joins the active sports
 catalog to reward programs and binds one executor across at most 20 selected
 markets. The operative authorized limits are below. Quote size is read from the
-restart-scoped runtime setting; the account loss limits remain hard-locked by
-`CommissioningConfig`:
+restart-scoped runtime setting; quantity-linked limits are derived and
+hard-locked by `CommissioningConfig`:
 
 | limit | value |
 |---|---|
 | quote size | 10 contracts (restart-scoped, allowed whole values 5-30) |
 | concurrently bound markets | 20 |
-| market loss stop | $40 |
-| session loss stop | $80 realized trading loss |
-| emergency hard stop | $80 adjusted marked equity; provisional with open inventory |
+| portfolio exposure | $300 at size 10 (`30 × size`) |
+| market loss stop | $40 at size 10 (`4 × size`) |
+| session loss stop | $80 at size 10 (`8 × size`) realized trading loss |
+| emergency hard stop | $80 at size 10 (`8 × size`) adjusted marked equity; provisional with open inventory |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -72,8 +73,8 @@ restart-scoped runtime setting; the account loss limits remain hard-locked by
 | REST budget | 4 requests/second |
 
 The daily loss budget resets at midnight `America/New_York`, including DST.
-The two $80 rows are one dollar threshold with different sensors and responses,
-not duplicate calculations. A marked breach blocks new entries immediately.
+The two size-10 $80 rows share one scaled threshold but use different sensors
+and responses. A marked breach blocks new entries immediately.
 With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop; realized loss can still
 pause trading while another position remains open.
@@ -327,10 +328,9 @@ The server launcher remains deliberately explicit and also retains a static
 market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
 30; when supplied as the second argument it is persisted under `data/` so the
 supervisor and read-only diagnostics use the same value. Size never changes
-under live orders. The early-exit cap, per-market exposure and session fee cap
-derive automatically from it. The $340 portfolio cap and $40/$80 account loss
-protections remain capital controls, so a larger size can reduce how many of
-the 20 bound markets may quote simultaneously:
+under live orders. The early-exit cap, per-market and portfolio exposure, loss
+stops and session fee cap derive automatically from it. Portfolio exposure is
+`30 × size`: 20 quote-notionals plus a proportional ten-notional cushion:
 
 ```bash
 ./scripts/start_commissioning.sh

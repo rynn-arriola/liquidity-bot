@@ -3,12 +3,12 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Deploy but do not restart the 403/no-ID repair
+## 0. Restart the deployed 403/no-ID repair only when authorized
 
 The bot is stopped after authenticated recovery proved zero working orders and
-the authoritative ledger snapshot proved zero nonzero positions. Finish the
-full suite, docs audit and diff review; then commit, push and deploy reviewed
-source/tests/docs. Do not restart without a new operator instruction.
+the authoritative ledger snapshot proved zero nonzero positions. Commit
+`31f815c` is pushed and deployed; all 13 hashes matched and all 776 local/server
+tests passed. Do not restart without a new operator instruction.
 
 On the next authorized start, require `[startup-intent-repair] ... intents=20`
 before the ordinary orphan gate. Natural acceptance then requires one denied

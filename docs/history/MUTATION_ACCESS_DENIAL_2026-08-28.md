@@ -76,6 +76,8 @@ This is the detailed evidence record for the 20-slot collapse that began near
 
 ## Activation state
 
-The bot is stopped. No restart is authorized in this repair turn. Pushing or
-staging files will not activate anything; activation and natural acceptance
-require a separately authorized restart after venue/account state is reviewed.
+Commit `31f815c` is pushed and deployed. All 13 file hashes matched, all 776
+local/server tests passed and the server documentation audit found no issue.
+The bot remains stopped and still has `2ece3c3` as its last loaded source.
+Activation and natural acceptance require a separately authorized restart
+after venue/account state is reviewed.

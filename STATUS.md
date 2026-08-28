@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 18:41 ET / 22:41 UTC
+- **Verified:** 2026-08-28 18:54 ET / 22:54 UTC
 - **Liquidity bot:** STOPPED; supervisor and runner are absent
 - **Stop proof:** latest authenticated recovery found zero working orders;
   authoritative ledger snapshot found zero nonzero positions. Twenty legacy
@@ -13,9 +13,9 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   no-ID repair loop starved its callback; after flat/order-free proof, the
   reviewed force path terminated PID 51989. Nothing was restarted.
 - **Last loaded source:** `2ece3c3`; it did not contain today's repair
-- **Local repair:** classifier, entry circuit, risk-action bypass, legacy
+- **Deployed repair:** `31f815c`; classifier, entry circuit, risk-action bypass, legacy
   startup repair and cooperative-loop backoff are implemented; focused tests and three deliberate
-  reversals plus all 776 local tests pass; not pushed or deployed
+  reversals plus all 776 local/server tests pass; all 13 deployed hashes matched
 - **Maker-lab:** stopped
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
 - **Measurement:** spread-scalp collector is isolated; adverse-fill and queue
@@ -38,7 +38,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Active incident and dormant repair
+## Active incident and deployed dormant repair
 
 From 22:07 UTC, Retail order mutations returned structured HTTP 403/code 7
 location/VPN denials. The old gateway mislabeled these positive rejections as
@@ -46,7 +46,7 @@ ambiguous, creating no-ID `UNCERTAIN` PLACE intents. Retirement then consumed
 all 20 owners. Private-shard silence recovered safely and the post-flat fast
 path never ran, so neither caused this collapse.
 
-The dormant repair fails a response-backed 403 intent, opens a 60-second
+The deployed repair fails a response-backed 403 intent, opens a 60-second
 new-entry circuit, alerts once, and probes recovery with one later desired
 entry. Cancels and reducers bypass an entry denial; only a rejection of their
 own request opens a short 10-second risk-mutation circuit. Each circuit clears
@@ -62,8 +62,8 @@ adds a 250ms idle backoff without adding API calls or changing strategy.
 
 ## Current operating instruction
 
-Keep the bot stopped. Finish review, push and deploy only after all gates pass;
-do not restart without separate operator authorization. On the next authorized
+Keep the bot stopped; do not restart without separate operator authorization.
+On the next authorized
 start, verify the exact 20 legacy rows repair before the orphan gate, then prove
 20-slot recovery and mutation-access circuit behavior from natural evidence.
 

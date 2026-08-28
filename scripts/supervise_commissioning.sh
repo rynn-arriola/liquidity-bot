@@ -7,12 +7,15 @@ cd "$(dirname "$0")/.." || exit 1
 
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-5}
-case "$QUOTE_SIZE" in
-    5|6|7|8|9|10) ;;
-    *) echo "[supervisor] refused invalid quote size: $QUOTE_SIZE"; exit 2 ;;
-esac
-
 PY=.venv/bin/python
+if [ ! -x "$PY" ]; then
+    echo "[supervisor] refused: $PY is missing"
+    exit 2
+fi
+if ! QUOTE_SIZE=$("$PY" -B -m liquidity_bot.quote_size "$QUOTE_SIZE"); then
+    echo "[supervisor] refused invalid quote size"
+    exit 2
+fi
 MAX_FAST_CRASHES=3
 FAST_CRASH_SECONDS=120
 FAST=0

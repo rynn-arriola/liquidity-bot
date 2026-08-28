@@ -22,13 +22,14 @@ These are implementation requirements, not suggestions.
 13. Commissioning is pregame only and uses one exclusively held API key with
     maker-lab stopped. Size and breadth are **the persisted operator quantity
     across at most 20 concurrently bound markets**. Quote size is a whole,
-    restart-scoped value bounded to 5-10; the persisted live setting is 10 and
+    restart-scoped value bounded to 5-30; the persisted live setting is 10 and
     5 is only the missing-file fallback.
     Breadth and the six-hour selection horizon did not change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`) and the session execution-
     fee cap (`0.30 × size`) are computed properties, not independent knobs, so
     they cannot drift from quantity. The account loss stops deliberately do
-    not move -- they bound the account, not the position.
+    not move -- they bound the account, not the position. The $340 portfolio
+    cap also remains capital-sized, so larger quotes may reduce resting breadth.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
     invariant 57 but was **disproved** -- 29 subscriptions were later sustained

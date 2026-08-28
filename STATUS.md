@@ -17,6 +17,8 @@ snapshots are under [docs/history/](docs/history/README.md).
   fix `1c82778` is deployed for hourly/new report processes
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
+- **Dynamic size capability:** whole values 5-30 and one shared validator pass
+  748 local tests plus reversal; deployment is pending and live size stays 10
 - **Verification:** all 745 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow

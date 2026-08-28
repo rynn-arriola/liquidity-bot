@@ -7741,7 +7741,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
-            "--quote-size", "7",
+            "--quote-size", "30",
             "--arm-live",
             "--accept-one-contract-risk",
             "--exclusive-api-key",
@@ -7757,13 +7757,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         args = mocked.await_args.args[0]
         self.assertTrue(args.auto_select_rewards)
         self.assertIsNone(args.market_slug)
-        self.assertEqual(args.quote_size, 7)
+        self.assertEqual(args.quote_size, 30)
 
     def test_cli_rejects_quote_size_outside_the_reviewed_range(self):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
-            "--quote-size", "4",
+            "--quote-size", "31",
         ]
         with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
             main()

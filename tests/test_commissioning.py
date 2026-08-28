@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from tempfile import TemporaryDirectory
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,6 +14,7 @@ from liquidity_bot.commissioning import (
     configured_quote_size,
     next_six_am_new_york,
 )
+from liquidity_bot.quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, main
 
 
 class CommissioningTests(unittest.TestCase):
@@ -115,9 +117,9 @@ class CommissioningTests(unittest.TestCase):
             self.authorized(
                 minimum_entry_spread=Decimal("0.01")).assert_authorized(
                     now=overnight)
-        for invalid_size in (Decimal("4"), Decimal("11"), Decimal("5.5")):
+        for invalid_size in (Decimal("4"), Decimal("31"), Decimal("5.5")):
             with self.subTest(invalid_size=invalid_size), self.assertRaisesRegex(
-                    CommissioningRefused, "whole number from 5 to 10"):
+                    CommissioningRefused, "whole number from 5 to 30"):
                 self.authorized(quote_size=invalid_size).assert_authorized(
                     now=overnight)
 
@@ -178,7 +180,7 @@ class CommissioningTests(unittest.TestCase):
             2026, 8, 13, 5, 0, tzinfo=timezone.utc)))
 
     def test_size_coupled_limits_derive_for_every_authorized_size(self):
-        for size in range(5, 11):
+        for size in range(int(MIN_QUOTE_SIZE), int(MAX_QUOTE_SIZE) + 1):
             with self.subTest(size=size):
                 config = self.authorized(quote_size=Decimal(size))
                 config.assert_authorized(now=datetime(
@@ -193,6 +195,10 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(
                     config.reward_selection_policy().quote_size, float(size))
                 self.assertEqual(config.max_markets, 20)
+                self.assertEqual(config.max_portfolio_exposure_usd, Decimal("340"))
+                self.assertEqual(config.max_market_loss_usd, Decimal("40"))
+                self.assertEqual(config.max_session_loss_usd, Decimal("80"))
+                self.assertEqual(config.hard_stop_loss_usd, Decimal("80"))
 
     def test_runtime_size_file_drives_diagnostics_and_rejects_bad_values(self):
         with TemporaryDirectory() as directory:
@@ -204,10 +210,32 @@ class CommissioningTests(unittest.TestCase):
                     runtime_quote_size_path=path).quote_size,
                 Decimal("7"),
             )
-            path.write_text("11\n", encoding="utf-8")
+            path.write_text("30\n", encoding="utf-8")
+            self.assertEqual(configured_quote_size(path), Decimal("30"))
+            path.write_text("31\n", encoding="utf-8")
             with self.assertRaisesRegex(
-                    CommissioningRefused, "whole number from 5 to 10"):
+                    CommissioningRefused, "whole number from 5 to 30"):
                 configured_quote_size(path)
+
+    def test_shell_launchers_use_the_single_quote_size_authority(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in ("start_commissioning.sh", "supervise_commissioning.sh"):
+            with self.subTest(name=name):
+                contents = (root / "scripts" / name).read_text(encoding="utf-8")
+                self.assertIn("-m liquidity_bot.quote_size", contents)
+                self.assertNotIn("5|6|7|8|9|10", contents)
+
+    def test_quote_size_shell_authority_normalizes_authorized_integers(self):
+        for raw in ("5", "13", "29", "30", "13.0"):
+            with self.subTest(raw=raw), patch("builtins.print") as output:
+                self.assertEqual(main([raw]), 0)
+                output.assert_called_once_with(int(Decimal(raw)))
+
+    def test_quote_size_shell_authority_refuses_bad_values(self):
+        for raw in ("4", "30.5", "31", "nan", "not-a-number"):
+            with self.subTest(raw=raw), patch("builtins.print") as output:
+                self.assertEqual(main([raw]), 2)
+                self.assertIn("REFUSED", output.call_args.args[0])
 
 
 if __name__ == "__main__":

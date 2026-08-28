@@ -62,7 +62,7 @@ Gate: a multi-hour dry run produces no path where unmatched inventory can outliv
 - One local process lease and fresh private-stream state
 - All executable sports markets joined to their rewards; one selected market at a time for commissioning
 - 5 contracts per quote by default across at most 20 bound markets for
-  commissioning. Size is restart-scoped and bounded to whole values 5-10;
+  commissioning. Size is restart-scoped and bounded to whole values 5-30;
   its early-exit, market-exposure and execution-fee caps derive automatically.
 - Pregame only
 - Detached supervision, persisted recovery-only restart, and graceful operator

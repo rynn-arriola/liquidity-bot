@@ -40,15 +40,11 @@ if [ -z "$QUOTE_SIZE" ]; then
         QUOTE_SIZE=5
     fi
 fi
-case "$QUOTE_SIZE" in
-    5|6|7|8|9|10) ;;
-    *)
-        echo "REFUSED: quote size must be a whole number from 5 to 10"
-        exit 2
-        ;;
-esac
 if [ ! -x .venv/bin/python ]; then
     echo "REFUSED: .venv/bin/python is missing"
+    exit 2
+fi
+if ! QUOTE_SIZE=$(.venv/bin/python -B -m liquidity_bot.quote_size "$QUOTE_SIZE"); then
     exit 2
 fi
 if [ ! -f ../maker-lab/credentials.py ] \

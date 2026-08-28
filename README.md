@@ -60,7 +60,7 @@ restart-scoped runtime setting; the account loss limits remain hard-locked by
 
 | limit | value |
 |---|---|
-| quote size | 10 contracts (restart-scoped, allowed 5-10) |
+| quote size | 10 contracts (restart-scoped, allowed whole values 5-30) |
 | concurrently bound markets | 20 |
 | market loss stop | $40 |
 | session loss stop | $80 realized trading loss |
@@ -81,8 +81,8 @@ pause trading while another position remains open.
 Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —
 one contract, eight markets, a 30-second inventory age, and $2/$5/$15 or
-$30/$35 stops are all stale. `commissioning.py` is the only authority; it
-validates these values at startup and refuses to arm if they are changed. Live
+$30/$35 stops are all stale. `quote_size.py` owns the quantity range and
+`CommissioningConfig` owns the remaining envelope; startup refuses drift. Live
 entry is nevertheless fail-closed on lifecycle, structure, spread, target
 depth/cutoff, fresh state, exitability, exposure, ownership, and loss limits.
 The 30-second reward/no-fill/stressed-exit model is still calculated and logged,
@@ -325,10 +325,12 @@ only a read-saving prefilter; the fresh full book is authoritative.
 
 The server launcher remains deliberately explicit and also retains a static
 market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
-10; when supplied as the second argument it is persisted under `data/` so the
+30; when supplied as the second argument it is persisted under `data/` so the
 supervisor and read-only diagnostics use the same value. Size never changes
 under live orders. The early-exit cap, per-market exposure and session fee cap
-derive automatically from it:
+derive automatically from it. The $340 portfolio cap and $40/$80 account loss
+protections remain capital controls, so a larger size can reduce how many of
+the 20 bound markets may quote simultaneously:
 
 ```bash
 ./scripts/start_commissioning.sh

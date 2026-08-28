@@ -19,9 +19,9 @@ strategy is profitable and not permission to scale.
   spreads, and drawable outcomes remain discovery-only;
 - 5 contracts per quote by default across at most 20 concurrently bound
   markets (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 10; the live operator setting
+  restart-scoped whole number from 5 through 30; the live operator setting
   returned to 10 on 2026-08-24 without changing the 20-slot breadth.
-  `commissioning.py` is the authority;
+  `quote_size.py` is the single quantity authority;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
@@ -75,7 +75,7 @@ The command refuses before order entry unless all of these are true:
 3. Either an explicit market is named, or automatic discovery selects an open
    rewarded market in a documented lifecycle applying now and before event
    start.
-4. The configured quantity is a whole 5-10 contracts and meets the current
+4. The configured quantity is a whole 5-30 contracts and meets the current
    venue minimum.
 5. The whole account has no open order, nonzero position, unresolved mutation,
    or unowned state.
@@ -207,10 +207,11 @@ order; `WOULD_QUEUE_RESET` is a shadow label only. Any drops, decode failures
 or stream errors invalidate affected order coverage but do not stop quoting.
 
 The optional second argument is quote size. It must be a whole number from 5
-through 10 and is persisted in `data/commissioning_quote_size`. Omitting it
+through 30 and is persisted in `data/commissioning_quote_size`. Omitting it
 reuses the persisted value, or 5 if the file does not exist. The launcher
 refuses while a runner or supervisor exists, so size can change only between
-flat sessions. The supervisor and diagnostics read the same persisted value.
+flat sessions. The supervisor, runner and diagnostics share one validator.
+The active size remains 10 until the operator authorizes another safe restart.
 
 The launcher reads the existing sibling `../maker-lab/credentials.py` as
 literal data. The credential file, environment files, databases, locks, and

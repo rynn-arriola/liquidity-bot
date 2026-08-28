@@ -2,7 +2,7 @@
 
 The economic evidence gate remains red. This runner exists only for the
 operator-accepted experiment and is mechanically constrained to 20 selected
-rewarded markets, a restart-scoped whole quote size from 5 to 10 contracts, an
+rewarded markets, a restart-scoped whole quote size from 5 to 30 contracts, an
 operator-controlled stop, an $80 normal session stop, and an $80 emergency hard
 stop.
 
@@ -64,6 +64,7 @@ from .market_selector import (
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
+from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .readiness import ReadinessVerdict
 from .reward_calendar import (
     NEW_YORK, reward_day, risk_day, split_reward_day_interval)
@@ -6900,7 +6901,9 @@ def main() -> int:
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
     parser.add_argument(
-        "--quote-size", type=int, choices=range(5, 11), default=5,
+        "--quote-size", type=int,
+        choices=range(int(MIN_QUOTE_SIZE), int(MAX_QUOTE_SIZE) + 1),
+        default=int(MIN_QUOTE_SIZE),
         help="whole contracts per quote; size-coupled risk limits derive automatically",
     )
     args = parser.parse_args()

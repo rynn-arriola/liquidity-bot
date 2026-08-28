@@ -17,7 +17,8 @@ damage, and the damage was not the fills:
 
   * The venue's history is the **account's**, not this bot's. It reached back to
     June and imported ~700 markets of maker-lab trading at 1000+ contracts a
-    side, against this bot's 5-10. There is no field that separates them, so
+    side, against this bot's bounded 5-30 range. There is no field that
+    separates them, so
     "backfill everything" cannot produce a liquidity-bot-only ledger.
   * `apply_execution` rebuilds **positions**, not just fills. Replaying the
     fills of a market that has since settled leaves the ledger holding a

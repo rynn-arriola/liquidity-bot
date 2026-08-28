@@ -13,12 +13,11 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .quote_size import (
+    DEFAULT_QUOTE_SIZE, MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, parse_quote_size)
 
 NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
-DEFAULT_QUOTE_SIZE = Decimal("5")
-MIN_QUOTE_SIZE = Decimal("5")
-MAX_QUOTE_SIZE = Decimal("10")
 RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
 
 
@@ -394,15 +393,10 @@ class CommissioningConfig:
         elif (not self.market_slug.strip()
               or self.market_slug == AUTO_REWARD_MARKET):
             problems.append("one explicit market slug is required")
-        size_is_valid = (
-            isinstance(self.quote_size, Decimal)
-            and self.quote_size.is_finite()
-            and self.quote_size == self.quote_size.to_integral_value()
-            and MIN_QUOTE_SIZE <= self.quote_size <= MAX_QUOTE_SIZE
-        )
-        if not size_is_valid:
-            problems.append(
-                "commissioning quote size must be a whole number from 5 to 10")
+        try:
+            parse_quote_size(self.quote_size)
+        except ValueError as exc:
+            problems.append(f"commissioning {exc}")
         if self.max_markets != 20:
             problems.append(
                 "commissioning is hard-locked to at most twenty markets")
@@ -490,13 +484,6 @@ def configured_quote_size(
         return DEFAULT_QUOTE_SIZE
     raw = path.read_text(encoding="utf-8").strip()
     try:
-        size = Decimal(raw)
-    except Exception as exc:
-        raise CommissioningRefused(
-            f"runtime quote size is invalid: {raw!r}") from exc
-    if (not size.is_finite()
-            or size != size.to_integral_value()
-            or not MIN_QUOTE_SIZE <= size <= MAX_QUOTE_SIZE):
-        raise CommissioningRefused(
-            "runtime quote size must be a whole number from 5 to 10")
-    return size
+        return parse_quote_size(raw)
+    except ValueError as exc:
+        raise CommissioningRefused(f"runtime {exc}") from exc

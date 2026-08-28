@@ -5,18 +5,19 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 16:27 ET / 2026-08-28 20:27 UTC
+- **Verified:** 2026-08-28 16:33 ET / 2026-08-28 20:33 UTC
 - **Liquidity bot:** LIVE; supervisor PID 47601 / runner PID 47608, size 10
-- **Live exposure:** first post-start snapshot: 0 positions, 17 resting
-- **20-slot health:** 17/20 quoting; three empty slots report no supply
+- **Live exposure:** 1 position, 32 resting, 0 absent, 1 current submitting intent
+- **20-slot health:** 18/20 quoting; two bound owners are temporarily not quoting
 - **Maker-lab:** stopped
-- **Deployed source:** server marker/runner source is `b7fe3fd`
+- **Deployed source:** runner has `b7fe3fd` trading code; dashboard/reporting fix
+  was deployed afterward without restarting or changing the runner PID
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
 - **Risk scaling:** active size-10 configuration is $300 portfolio, $40 market,
-  $80 session and $80 hard; 756 local/server tests and four reversals passed
-- **Verification:** all 755 local and server tests, Linux shell syntax,
-  compilation, documentation audit, three reversals and four-way parity pass
+  $80 session and $80 hard
+- **Verification:** 757 local tests, 756 server tests, focused server dashboard
+  tests, compilation, docs audit and four multiplier reversals pass
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
@@ -47,31 +48,21 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Latest stop/restart outcome
 
-The operator-authorized restart on 2026-08-28 stopped supervisor 34772, but
-runner 34778 could not complete its 300-second shutdown because one ambiguous
-PLACE had no exchange order ID. After authenticated flat/order-free proof, it
-was force-stopped. Three replacement runners then died in 11-12 seconds on
-`book is empty on both sides`: startup had bound the no-ID intent's finished
-market as live recovery risk. The supervisor gave up after its three-fast-death
-bound. The underlying mutation was a Polymarket/Cloudflare 504 at 18:35:11Z.
-
-The reviewed stopped-only recovery was run dry and then applied. Its fresh
-snapshot returned zero live orders and zero position markets, so exactly that
-intent moved `UNCERTAIN -> FAILED`; zero unresolved remain. Deployed `c28aba2`
-now makes future startups refuse once with the correct recovery instruction
-instead of loading the stale market and entering a misleading transport-failure
-loop. The authorized 19:54Z start passed live acceptance: the runner remained
-up, placed 19 resting orders across 19/20 slots, stayed flat and reported no
-unresolved/absent mutation or risk stop. Old `book is empty on both sides`
-lines at 19:23Z belong to the failed pre-fix run, not the current process.
+At 20:22Z authenticated proof showed zero positions/orders and no unresolved or
+absent state. The old process stopped gracefully, `b7fe3fd` deployed, and all
+756 server tests passed before the authorized size-10 restart. The new runner
+loaded `$300/$40/$80/$80`; after seven minutes it had 18/20 quoting, 32 resting,
+one managed position, no absent order and no risk stop. Startup exposed a
+dashboard-only defect: property-based limits fell into stale `$40/$40/$45`
+fallbacks. The dashboard now reads the configured instance and displays the
+same scaled limits as the runner; it was deployed without another restart.
 
 ## Current operating instruction
 
 Keep the current runner live unless the operator directs otherwise or a safety
-condition requires a stop. Do not restart merely because the historical 19:23Z
-empty-book failures remain in the append-only log. Avoid repeated authenticated
-probes; the 19:56Z dashboard is the accepted post-start snapshot. Do not change
-strategy, size, slots or stops from this availability repair.
+condition requires a stop. The one 20:33Z submitting intent was current order
+flow, not persistent ambiguity; investigate only if it ages instead of
+reconciling. Do not restart for the dashboard-only repair already on disk.
 
 ## Current records
 

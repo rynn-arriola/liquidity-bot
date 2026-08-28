@@ -3,21 +3,41 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Current server is not authorized for trading
+## 0. Migrate the only live runtime to the laptop
 
 The bot is stopped after authenticated recovery proved zero working orders and
 the authoritative ledger snapshot proved zero nonzero positions. Commit
 `31f815c` is pushed and deployed; all 13 hashes matched and all 776 local/server
-tests passed. Do not restart without a new operator instruction.
+tests passed. Do not restart the current server or either workstation without a
+new operator instruction.
 
 The authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
 zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
-Do not restart on this host. Obtain Polymarket US guidance on permitted hosting
-and resolve the server egress/location classification without a residential
-proxy or disguised IP. A replacement runtime requires an explicit decision,
-credential-safe migration, flat/order-free proof and normal parity/start gates.
+Do not restart on this host. The operator selected the laptop as the next
+primary live runtime and the desktop as a manual cold standby. At 23:21Z the
+desktop received a direct online snapshot of the production ledger plus a
+restricted credential file and recovery archive; all three validated. The
+laptop still needs its own direct verified pull rather than a cloud-synced copy.
+
+Before laptop activation:
+
+1. run parity on the laptop and establish its supported Linux/WSL production
+   environment, dependencies, power/network settings and no-VPN home egress;
+2. install the ignored local backup helper and a machine-specific SSH key, then
+   pull and verify the latest stopped production ledger, recovery archive and
+   credentials directly from the server;
+3. prove the server and desktop have no runner, verify current account state,
+   and make the laptop the sole writable ledger/API owner;
+4. move authenticated reports and backups off DigitalOcean before live use so
+   the rejected host does not keep sharing credentials or REST budget; and
+5. start only after the operator explicitly authorizes it, then observe the
+   startup, 20-slot state, orders, streams and errors.
+
+Never use GitHub or a general file-sync service for the live SQLite database or
+credentials. Any later desktop failover is manual and repeats the stopped-
+runtime snapshot and known-account-state gates.
 
 ## 1. Remaining natural acceptance
 

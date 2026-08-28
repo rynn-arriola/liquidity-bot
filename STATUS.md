@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 19:01 ET / 23:01 UTC
+- **Verified:** 2026-08-28 19:21 ET / 23:21 UTC
 - **Liquidity bot:** STOPPED; supervisor and runner are absent
 - **Stop proof:** 23:00Z authenticated dashboard found zero positions/orders;
   the 23:01Z graceful-stop record ended `flat=true`
@@ -14,6 +14,10 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   startup repair and cooperative-loop backoff are implemented; focused tests and three deliberate
   reversals plus all 776 local/server tests pass; all 13 deployed hashes matched
 - **Maker-lab:** stopped
+- **Recovery copy on desktop:** the 23:21Z online SQLite snapshot passed
+  integrity verification (`31,038` orders, `2,642` fills, 139.1 MB); the
+  restricted credential backup and 352-file recovery archive also validated
+  against deployed marker `31f815c`
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
 - **Measurement:** spread-scalp collector is isolated; adverse-fill and queue
   studies remain observational; scheduled reports/backups remain independent
@@ -23,7 +27,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 | Setting | Current decision |
 |---|---|
-| Production runtime | Trading disabled on current server; no local runner |
+| Production runtime | Current server stopped/disabled; laptop selected as the next primary but not started; desktop is cold standby |
 | Quote size | 10 contracts |
 | Concurrent capacity | 20 market slots |
 | Entry horizon | Six hours |
@@ -65,10 +69,11 @@ adds a 250ms idle backoff without adding API calls or changing strategy.
 
 ## Current operating instruction
 
-Keep trading disabled on this server; no manual restart. Polymarket still
-rejects its mutations as VPN/proxy traffic. Do not use a residential proxy to
-evade that control. Contact Polymarket US support for permitted-host guidance;
-any replacement runtime needs explicit operator approval and a safe migration.
+Keep trading disabled on this server; no manual restart. The laptop is the
+selected next primary and the desktop its cold standby, but no local runner is
+authorized yet. Complete the laptop's independent parity, direct verified
+recovery pull, runtime/network preflight and single-owner handoff before an
+explicit start. Do not use a residential proxy or run both machines at once.
 
 ## Current records
 

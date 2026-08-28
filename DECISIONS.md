@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | Trading is disabled on the current server after repeated Polymarket VPN/proxy 403s; no local live runner. Any replacement runtime and restart require explicit operator approval plus compliant access confirmation |
+| Production runtime | Trading is disabled on the current server after repeated Polymarket VPN/proxy 403s. The laptop is the selected next primary runtime and the desktop is its cold standby, but neither may start until the credential-safe ledger migration, parity and compliant-access preflight are complete and the operator explicitly authorizes the start |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
@@ -61,9 +61,17 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.
-- Production remains the only live runtime. It is compared to
-  `DEPLOYED_COMMIT` plus exact source/test hashes, not blindly to the newest
-  documentation-only GitHub commit.
+- The laptop is the intended primary live runtime. The desktop is for
+  development, monitoring and manual cold standby. Exactly one machine may own
+  the live API credentials and active ledger at a time; there is no automatic
+  failover and the two machines must never run the bot concurrently.
+- The active SQLite ledger follows the live runtime. It must move only as a
+  verified stopped-runtime snapshot during a deliberate handoff and must never
+  be bidirectionally synchronized through GitHub, OneDrive, Dropbox or another
+  live file-sync service. Backups on the inactive machine are recovery copies,
+  not a second writable authority.
+- The selected runtime is compared to `DEPLOYED_COMMIT` plus exact source/test
+  hashes, not blindly to the newest documentation-only GitHub commit.
 - “Run parity check” means run `scripts/check_parity.py --sync` on the current
   workstation. It automatically fetches and fast-forwards a clean behind-only
   checkout to GitHub `main`. Both workstation runs are required before claiming
@@ -88,7 +96,9 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - No new droplet based solely on the transient August 26 location denial.
 - No residential proxy, disguised IP or other attempt to evade Polymarket's
   location/access controls; obtain support confirmation before changing hosts.
-- The operator's laptop is a last-resort runtime, not the preferred 24/7 host.
+- No unattended or automatic desktop/laptop failover; a handoff requires the
+  old runner to be absent, known account state, a verified ledger snapshot and
+  an explicit operator start decision on the new owner.
 
 When the operator changes one of these choices, update this file and
 [STATUS.md](STATUS.md) in the same task and record the evidence or implementation

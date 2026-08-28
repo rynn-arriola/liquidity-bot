@@ -9,12 +9,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ```
 ## Current high-value findings
 
-- **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one
-  `UNCERTAIN` create; its finished market caused three fast empty-book deaths,
-  not a slot defect. Stopped repair blocks same-market orders because Retail
-  never receives the local client ID.
-- **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed
-  180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
+- **Desktop recovery is verified.** The 23:21Z snapshot passed integrity (31,038 orders/2,642 fills); restricted credentials and the 352-file `31f815c` archive validated. It is a recovery copy, not permission for a second bot.
+- **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one `UNCERTAIN` create; its finished market caused three fast empty-book deaths, not a slot defect. Stopped repair blocks same-market orders because Retail never receives the local client ID.
+- **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed 180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
 - **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;
   balance proves each socket and complete REST proves empty orders.
 - **A 429 during shard proof can erase the slate.** At 15:02:46Z shard 3 overlap

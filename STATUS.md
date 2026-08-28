@@ -5,15 +5,15 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 11:28 ET / 2026-08-28 15:28 UTC
-- **Liquidity bot:** STOPPED by operator request; no supervisor or runner, persisted
-  size 10
-- **Live exposure:** post-stop authenticated dashboard proved zero positions,
-  zero resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
-- **20-slot health:** inactive while stopped; no claim about live slot capacity
+- **Verified:** 2026-08-28 11:39 ET / 2026-08-28 15:39 UTC
+- **Liquidity bot:** LIVE; supervisor PID 34772 / runner PID 34778, size 10
+- **Live exposure:** authenticated dashboard proved zero positions and 37
+  resting orders; the following read-only ledger check proved zero unresolved
+  and zero `UNKNOWN_ABSENT`
+- **20-slot health:** 20/20 owners quoting, zero bound-idle and zero empty
 - **Maker-lab:** stopped
-- **Running source:** none; server/GitHub stage `a8d91d0` loads on the next
-  authorized start
+- **Running source:** `a8d91d0` behavior is loaded; deployed documentation marker
+  is `d1d4384`
 - **Verification:** all 744 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
@@ -42,22 +42,20 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Latest stop outcome
+## Latest start outcome
 
-At 15:27Z the operator redirected the pending restart into a graceful stop.
-The pre-stop authenticated snapshot proved zero positions but 17 resting orders.
-The stop disabled supervisor PID 31621, signaled runner PID 31627, cancelled the
-orders and exited in 27 seconds with the runner's final record `flat=true` and
-`stop_reason=operator_sigterm`. The independent post-stop authenticated snapshot
-at 15:28Z proved zero positions, zero resting orders, zero unresolved mutations
-and zero `UNKNOWN_ABSENT` rows.
+The operator-authorized start followed a 15:34Z authenticated flat/order-free
+preflight. The new runner completed discovery without restart, loaded the staged
+429 handoff correction and reached 20/20 quoting with 37 resting orders by
+15:38Z. One just-acknowledged PLACE was visible during that snapshot and cleared
+normally; the 15:39Z ledger check showed zero unresolved and zero absent orders.
+No new-run traceback, critical, 429, quarantine or recovery event was logged.
 
 ## Current operating instruction
 
-Keep the liquidity bot stopped until the operator explicitly authorizes a new
-start. The isolated spread-scalp collector remains independent. On the next
-authorized start, staged commit `a8d91d0` becomes active; do not induce a
-180-second private-stream failure to test it. Avoid repeated authenticated
+Keep the liquidity bot and isolated spread-scalp collector running. Commit
+`a8d91d0` is active, but do not induce a 180-second private-stream failure to
+test it. Avoid repeated authenticated
 dashboard probes during live recovery because their separate process does not
 share the runner limiter. Do not change strategy, size, slots or stops from
 measurement output.

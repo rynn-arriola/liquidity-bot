@@ -34,12 +34,12 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   Failed proof retains global quarantine; reversals reproduced both defects.
   Commit `2831026` passed 740 local/server tests and live startup acceptance.
 
-- **Staged for next restart:** natural handoff reconciled 34 orders, then final
+- **Active; natural fault-path acceptance pending:** a handoff reconciled 34 orders, then final
   balance Cloudflare `1015`/429 drove quarantine. Frozen handoff now gives only
   confirmed 429 reads four slower proof attempts (15/30/60 or bounded
   `Retry-After`) while draining events/rechecking liveness with zero cancels.
   Non-429, stale or exhausted proof retains global quarantine. `a8d91d0` is
-  deployed; 744 local/server tests and reversal passed; stopped until activation.
+  active; 744 local/server tests, reversal and clean 20/20 startup passed.
 
 ## Latest deployment additions
 

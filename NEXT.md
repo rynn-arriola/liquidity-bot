@@ -5,8 +5,8 @@ This file contains unfinished work. Completed implementation history is in
 
 ## 0. Remaining natural acceptance
 
-The live runner still has source `2831026` loaded. Continue accepting these paths only
-when they occur naturally; do not induce a live failure:
+The live runner has `a8d91d0` behavior loaded. Continue accepting these paths
+only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
   without touching retained orders or reducing active count;
@@ -18,14 +18,11 @@ when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-## 1. Activate and accept rate-limited private-shard recovery
+## 1. Accept rate-limited private-shard recovery
 
-The bot is stopped and flat. Commit `2831026` passed startup acceptance with
-Polymarket's real empty-subscription pattern. The first natural overlap then proved a confirmed
-429 on the final balance read still caused global quarantine. Correction
-`a8d91d0` is deployed and activates only on the next authorized start. Do not
-start without explicit operator authorization and do not induce a fault.
-Natural acceptance must show
+Commit `a8d91d0` is active. Its clean startup reached 20/20 quoting, 37 resting
+orders, zero positions, zero absent and zero persistent unresolved state without
+a restart-window error. Do not induce a fault. Natural acceptance must show
 `[private-shard-handoff-rate-limit] ... cancels=0`, followed by
 `[private-shard-recovery] ... cancels=0`, unchanged PID/owners and no persistent
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the

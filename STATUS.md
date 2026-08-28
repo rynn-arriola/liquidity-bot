@@ -5,24 +5,22 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 08:10 ET / 2026-08-28 12:10 UTC
+- **Verified:** 2026-08-28 08:23 ET / 2026-08-28 12:23 UTC
 - **Liquidity bot:** LIVE; supervisor PID 21783 / runner PID 21791, size 10
-- **Live exposure:** 12:06Z authenticated dashboard showed zero positions,
-  37 resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
-- **20-slot health:** queue telemetry proved `markets=20`; 19 owners were
-  quoting and one was bound but economically blocked, so raw order count is not
-  evidence of a missing scheduler slot
+- **Live exposure:** authenticated dashboard showed zero positions, 35 resting
+  orders, zero `UNKNOWN_ABSENT` and one seconds-old acknowledged PLACE
+- **20-slot health:** 20/20 owners quoting, zero bound-idle and zero empty
 - **Maker-lab:** stopped
-- **GitHub/server:** `main` and marker `53fa838`; all deployed hashes matched
-- **Verification:** all 724 tests passed on the server before restart; the
-  documentation audit passed
+- **GitHub/server:** `main` and marker `de1478b`; all deployed hashes matched
+- **Verification:** all 726 local and reduced-priority server tests passed;
+  documentation audit and deliberate reversal check passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 22836
   started 12:04:58Z; separate database/socket, one-read-per-second cap and no
   order path
-- **Fixed GTC:** 17 `PURE_VOLUME_GTC` trials appeared after the required
-  five-minute book warm-up with 17/17 pre-placement feature coverage
+- **Fixed GTC:** 20 trials appeared after warm-up; 20/20 feature rows and 20
+  clean paths, with zero false historical-gap exclusions
 - **Other collection:** adverse-fill and queue studies run inside the bot;
   daily probe, hourly rewards/changelog and nightly backup schedules are active
 
@@ -56,14 +54,15 @@ The old scalp collector needed isolated SIGTERM after its graceful flush did
 not finish; it has no trading path and `PRAGMA quick_check` returned `ok` before
 the new collector started. The first GTC report exposed an offline-reporting
 defect: one cumulative historical run gap censored every later clean pair.
-The scoped repair is under verification and does not alter trading behavior.
+Commit `de1478b` scopes reports to overlapping intervals; its report is active.
+The collector started before that commit, so forward decode/drop interval
+closure loads on its next natural supervisor restart.
 
 ## Current operating instruction
 
-Keep the bot and measurement collector running. Do not change strategy, size,
-slots or stops from measurement output. Finish and deploy the GTC gap-scoping
-repair without restarting the bot; restart only the isolated collector if its
-forward stream-gap marking changes.
+Keep the bot and collector running. Do not interrupt the 20 clean GTC trials
+only to reload measurement code. Do not change strategy, size, slots or stops
+from measurement output; collect three complete days plus one held-out day.
 
 ## Current repositories and records
 

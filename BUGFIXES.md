@@ -45,8 +45,8 @@ Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server
   deployed and active; natural replacement acceptance remains pending.
 - Fixed-GTC excluded 17 post-reconnect pairs because one cumulative old gap was
   treated as episode-local. Coverage now uses overlapping stream intervals;
-  legacy evidence stays conservative and decode/drop closes the affected
-  interval before reconnecting. This is measurement-only.
+  legacy evidence stays conservative. The report is active; decode/drop closes
+  its interval after the next collector reload. This is measurement-only.
 
 ## Deployed and active; natural fault-path acceptance pending
 

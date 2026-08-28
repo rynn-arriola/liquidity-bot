@@ -18,18 +18,17 @@ when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-## 1. Finish GTC coverage-gap scoping
+## 1. Collect fixed-GTC evidence
 
-The 12:10Z report proved 17 GTC starts and 17/17 feature rows, but incorrectly
-excluded all of them because one cumulative pre-start run gap was treated as
-if it overlapped every future pair. The repair must use market/time-overlapping
-stream intervals, retain the aggregate counter only for legacy runs without
-intervals, and close/reconnect a collector interval on future decode/drop gaps.
+Commit `de1478b` repaired the cumulative-gap defect and is deployed. The live
+report proves 20 GTC starts, 20/20 feature rows, 20 clean paths and zero false
+exclusions. The combined public scope is 98/100, no post-start 429 or collector
+exit occurred, and bot PID 21791 was unchanged through 17-minute acceptance.
 
-Required acceptance: focused edge cases, full local/server suite, exact hashes,
-read-only report showing the post-12:10 trials clean, collector restart only,
-combined public scope at most 100, no new REST 429, and trading PID unchanged.
-Then collect three complete days plus one held-out day before any strategy idea.
+The collector began before `de1478b`; do not invalidate its 20 clean trials just
+to load forward decode/drop interval closure. It loads on the next natural
+supervisor restart. Collect three complete days plus one held-out day before
+any strategy proposal, and never add overlapping cohorts as separate profit.
 
 ## 2. Unknown PLACE without an exchange order ID needs a human path
 

@@ -24,10 +24,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
 - **Twenty-slot health is not raw order count.** Use queue `markets=20`, active owners,
   eligibility, resting coverage and unresolved/position state; a healthy slot can temporarily hold no order.
-- **Closed owners parked capacity.** The deployed repair releases only after
-  fresh exact closed/not-open metadata plus complete flat/order-free ownership
-  proof. The 2026-08-28 reviewed restart reached 20/20 quoting; natural closed-
-  owner replacement remains uninduced and pending observation.
+- **Closed owners parked capacity.** The repair requires fresh closed/not-open
+  metadata plus flat/order-free proof; natural replacement remains uninduced.
 - **Bound capacity can remain economically idle.** Lifecycle repairs do not
   cover a pregame owner continuously blocked on current-book economics. The
   local repair adds a 10-minute dwell and one-for-one supply; deploy is pending.
@@ -40,9 +38,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   close/newer-balance evidence arrives.
 - **Resting side-hours are the reward-facing time metric.** Reward-score seconds
   and process-session hours answer different questions.
-- **Current-day account-boundary trading is more complete than matched pairs,**
-  but per-market P&L remains incomplete when settlements/manual closes are not
-  attributable.
+- **Historical reward reporting currently discards proven account truth.** The
+  audited August 26 result is `-$64.487`, but a post-window cash activity makes
+  the scan drop all boundaries and show `~-$48.65`, understating loss by $15.84.
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
   authority.

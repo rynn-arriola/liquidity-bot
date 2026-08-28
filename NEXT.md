@@ -66,8 +66,12 @@ end with `flat=false`. Decide whether the script should fail when the final
 record lacks flat proof. Until then, every stop requires final-record plus an
 authenticated venue snapshot.
 
-## 6. Per-market trading attribution remains incomplete
+## 6. Historical reward rows discard proven account boundaries
 
-Settlements, manual closes and unattributed account fills can be absent from
-the execution ledger. Account-boundary reporting is better than matched pairs,
-but never use one ledger P&L figure alone to authorize a strategy change.
+The historical cash scan rejects a normal activity completed after its fixed
+`through` boundary, then the caller clears the entire account-history map.
+August 26 therefore shows `~-$48.65` instead of audited `-$64.4870`. Separate
+fixed historical-window filtering from the strict current snapshot, preserve
+the current fail-closed rule, expose the fallback reason, and test post-window
+activity plus the corrected August 26 net. Per-market attribution remains
+incomplete; never use it alone for a strategy decision.

@@ -112,9 +112,9 @@ cancel/flat/rebind downtime can be measured before any concurrency change.
 During runtime, an explicitly recoverable private, market, or order adapter
 error enters a dormant recovery state instead of ending the process. The runner
 records the error and stack. A heartbeat-silent private shard is overlap-
-replaced while decisions are frozen; each exact-scope order EOF and one account-
-global balance snapshot from the healthy pool must be consumed, buffered events
-applied, and REST balance, orders and positions refreshed before quotes are
+replaced while decisions are frozen; each replacement must deliver private
+balance, any order pages are scope-checked/buffered, and REST balance, orders
+and positions are refreshed before quotes are
 preserved. All-shard silence, any failed proof, and
 other private recovery, establishes replacement visibility, cancels known
 quotes, applies buffered terminal events, reconciles the whole account, backs

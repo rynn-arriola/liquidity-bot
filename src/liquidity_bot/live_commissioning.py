@@ -5065,10 +5065,12 @@ class CommissioningRunner:
         # A heartbeat-silent shard can be replaced under an overlapping
         # listener without sacrificing every resting order. The decision
         # coroutine owns the loop here, so no new mutation can occur. The
-        # replacement first proves its own initial snapshots; buffered events
-        # are then applied and a complete REST order/position snapshot bridges
-        # the old connection's gap. Any failed proof falls through to the
-        # older global cancel/quarantine recovery below.
+        # Every replacement first proves that it is receiving private state
+        # with its account-balance delivery. The venue can omit an order EOF
+        # for an empty scoped subscription, so buffered order pages are useful
+        # but optional. A complete REST balance/order/position proof bridges
+        # the old connection's gap. Any failed proof falls through to the older
+        # global cancel/quarantine recovery below.
         repair_stale = getattr(self.private_stream, "repair_stale_shards", None)
         if (callable(repair_stale)
                 and "private WebSocket shard silence:" in str(initial)):
@@ -5087,10 +5089,9 @@ class CommissioningRunner:
                 await self._rest_reconcile(
                     self._now(), tag="private-shard-handoff",
                     strict_order_markets=frozenset())
-                # Balance is account-global rather than shard-scoped. Refresh
-                # it once through the shared REST governor so recovery does
-                # not depend on the venue redundantly replaying the same
-                # balance snapshot on every replacement connection.
+                # The WebSocket balance deliveries above prove each new socket
+                # is live; this separate account-global REST read proves the
+                # current value and closes the handoff gap before decisions.
                 await self._refresh_balance(self._now())
                 await self._drain_private_events()
                 self.private_stream.assert_live(

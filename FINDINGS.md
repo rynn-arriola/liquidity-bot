@@ -17,9 +17,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   also acted account-complete across shards. Detect with `private WebSocket
   shard silence`, `[private-shard-recovery]`, PID, owners, cancels, unresolved
   state and post-recovery orders—not raw order count alone.
-- **Private balance is account-global, not per shard.** Requiring its redundant
-  initial snapshot on all three connections timed out live startup; require all
-  scoped order EOFs but one pool-wide balance, reported as explicit `x/y` counts.
+- **Empty private order subscriptions emit no synthetic EOF.** Live startup
+  measured `order_eof=0/3 account_balance=3/3`; each balance delivery proves its
+  socket, while complete REST proves empty orders. Both remain explicit `x/y`.
 - **Twenty-slot health is not raw order count.** Use queue `markets=20`, active
   owners, eligibility, resting-time coverage, unresolved ownership and
   positions. A slot can be healthy while temporarily holding no order.

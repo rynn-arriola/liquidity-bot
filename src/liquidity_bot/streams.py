@@ -392,9 +392,9 @@ class PrivateReadOnlyStream:
 
     @property
     def initial_state_ready(self) -> bool:
-        """Whether this connection delivered its complete initial proof."""
+        """Whether this connection proved it is receiving private state."""
 
-        return self._order_snapshot_complete and self._balance_snapshot_seen
+        return self._balance_snapshot_seen
 
     @property
     def initial_state_status(self) -> str:
@@ -700,19 +700,19 @@ class PrivateStreamPool:
 
     @property
     def initial_state_ready(self) -> bool:
-        """Require every scoped order EOF and one account balance proof.
+        """Require a delivered private-state proof from every connection.
 
-        Account balance is global. The venue may emit its initial snapshot on
-        only one of several equivalent private connections, so requiring the
-        same global snapshot redundantly on every shard deadlocks startup.
+        Live wire evidence shows the venue emits an initial account-balance
+        snapshot on every shard, but may emit no order snapshot at all when a
+        scoped order subscription is empty. Complete REST orders and positions
+        already prove empty account state; each shard's balance delivery proves
+        that connection is alive without inventing a nonexistent order EOF.
         """
 
         return (
             bool(self._streams)
-            and len(self._shard_order_snapshot_delivered) == len(self._streams)
             and len(self._shard_balance_snapshot_delivered) == len(self._streams)
-            and all(self._shard_order_snapshot_delivered)
-            and any(self._shard_balance_snapshot_delivered)
+            and all(self._shard_balance_snapshot_delivered)
         )
 
     @property
@@ -739,23 +739,19 @@ class PrivateStreamPool:
     ) -> tuple[tuple[str, ...] | None, ...]:
         """Overlap-replace silent shards without touching venue orders.
 
-        Each replacement must deliver its exact-scope complete order snapshot
-        before it can displace the old connection. Account balance is global
-        and remains proven by a healthy shard; all-shard silence uses global
-        recovery. The caller still freezes decisions and performs whole-account
-        REST reconciliation before resuming. If any replacement cannot prove
-        its initial state, no shard is swapped and the runner falls back to
-        global quarantine.
+        Each replacement must deliver its account-balance snapshot before it
+        can displace the old connection. The venue may omit an order snapshot
+        for an empty scoped subscription, so any order pages received are
+        buffered and scope-checked but are not required. The caller still
+        freezes decisions and performs whole-account REST reconciliation before
+        resuming. If any replacement cannot prove its initial state, no shard
+        is swapped and the runner falls back to global quarantine.
         """
 
         stale = self.stale_shards(
             now=now, max_silence_seconds=max_silence_seconds)
         if not stale:
             return ()
-        if len(stale) == len(self._streams):
-            raise AdapterError(
-                "all private shards are stale; global recovery is required")
-
         async def stage(index: int):
             scope = self._shard_slugs[index]
             replacement = self._factory(self._client)
@@ -764,22 +760,21 @@ class PrivateStreamPool:
                 await replacement.start(scope)
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + snapshot_timeout_seconds
-                order_complete = False
-                while not order_complete:
+                balance_seen = False
+                while not balance_seen:
                     remaining = deadline - loop.time()
                     if remaining <= 0:
                         raise TimeoutError(
                             "replacement private shard initial state timed out")
                     event = await replacement.next_event(timeout=remaining)
                     events.append(event)
-                    if (event.kind == PrivateEventKind.ORDER_SNAPSHOT
-                            and isinstance(event.payload, dict)
-                            and event.payload.get("eof") is True):
+                    if event.kind == PrivateEventKind.ORDER_SNAPSHOT:
                         if event.market_scope != scope:
                             raise AdapterError(
                                 "replacement private shard order snapshot "
                                 "scope does not match its subscription")
-                        order_complete = True
+                    elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
+                        balance_seen = True
                     elif event.kind == PrivateEventKind.ERROR:
                         raise AdapterError(
                             f"replacement private shard error: {event.payload}")

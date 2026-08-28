@@ -39,7 +39,7 @@ class FakeStream:
 
 
 class SnapshotStream(FakeStream):
-    """A shard that immediately supplies the two required initial proofs."""
+    """A shard that supplies both messages even though only balance is required."""
 
     async def start(self, slugs):
         await super().start(slugs)
@@ -186,28 +186,25 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tuple(pool._streams), old)
         self.assertFalse(any(stream.closed for stream in old))
 
-    async def test_initial_state_is_ready_only_after_every_snapshot_is_delivered(self):
+    async def test_initial_state_waits_for_each_shards_balance_delivery(self):
         pool = PrivateStreamPool(object(), factory=SnapshotStream)
         await pool.start([f"market-{i}" for i in range(16)])
         self.addAsyncCleanup(pool.close)
         await asyncio.sleep(0)
 
-        # Socket receipt alone is insufficient: the runner must consume every
-        # scoped order EOF and an account-global balance proof before mutation.
+        # Socket receipt alone is insufficient: the runner must consume the
+        # private-state proof from every connection before mutation.
         self.assertFalse(pool.initial_state_ready)
-        delivered_order_scopes = set()
-        while len(delivered_order_scopes) < 2:
+        balances = 0
+        while balances < 2:
             item = await pool.next_event(timeout=1)
-            if item.kind == PrivateEventKind.ORDER_SNAPSHOT:
-                if not delivered_order_scopes:
+            if item.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
+                balances += 1
+                if balances < 2:
                     self.assertFalse(pool.initial_state_ready)
-                delivered_order_scopes.add(item.market_scope)
-        # Consume until the one required account-global balance proof arrives.
-        while not pool.initial_state_ready:
-            await pool.next_event(timeout=1)
         self.assertTrue(pool.initial_state_ready)
 
-    async def test_one_global_balance_snapshot_is_enough_for_all_shards(self):
+    async def test_one_balance_snapshot_cannot_prove_three_connections(self):
         starts = 0
 
         class OneBalanceStream(SnapshotStream):
@@ -232,12 +229,33 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         for _ in range(4):
             await pool.next_event(timeout=1)
-        self.assertTrue(pool.initial_state_ready)
+        self.assertFalse(pool.initial_state_ready)
         self.assertEqual(
             pool.initial_state_status,
             "order_eof=3/3 account_balance=1/3")
 
-    async def test_all_stale_shards_require_global_recovery(self):
+    async def test_empty_order_subscriptions_need_no_synthetic_order_eof(self):
+        class BalanceOnlyStream(FakeStream):
+            async def start(self, slugs):
+                await super().start(slugs)
+                self.queue.put_nowait(PrivateEvent(
+                    PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+                    {"balances": []}, request_id="balance",
+                    received_at=datetime.now(timezone.utc)))
+
+        pool = PrivateStreamPool(object(), factory=BalanceOnlyStream)
+        await pool.start([f"market-{i}" for i in range(20)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        for _ in range(3):
+            await pool.next_event(timeout=1)
+
+        self.assertTrue(pool.initial_state_ready)
+        self.assertEqual(
+            pool.initial_state_status,
+            "order_eof=0/3 account_balance=3/3")
+
+    async def test_all_stale_shards_can_overlap_recover_with_balance_proof(self):
         pool = PrivateStreamPool(object(), factory=SnapshotStream)
         await pool.start([f"market-{i}" for i in range(16)])
         self.addAsyncCleanup(pool.close)
@@ -246,7 +264,75 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
         pool._shard_last_message_at = [
             now - timedelta(seconds=181) for _ in old]
 
-        with self.assertRaisesRegex(AdapterError, "global recovery"):
+        scopes = await pool.repair_stale_shards(now=now)
+
+        self.assertEqual(len(scopes), 2)
+        self.assertTrue(all(stream.closed for stream in old))
+        self.assertTrue(all(
+            replacement is not prior for replacement, prior
+            in zip(pool._streams, old, strict=True)))
+
+    async def test_silent_empty_order_shard_repairs_from_balance_delivery(self):
+        class BalanceOnlyStream(FakeStream):
+            async def start(self, slugs):
+                await super().start(slugs)
+                self.queue.put_nowait(PrivateEvent(
+                    PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+                    {"balances": []}, request_id="balance",
+                    received_at=datetime.now(timezone.utc)))
+
+        pool = PrivateStreamPool(object(), factory=BalanceOnlyStream)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        old = tuple(pool._streams)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+
+        scopes = await pool.repair_stale_shards(
+            now=now, snapshot_timeout_seconds=0.1)
+
+        self.assertEqual(scopes, (tuple(f"market-{i}" for i in range(8, 16)),))
+        self.assertIs(pool._streams[0], old[0])
+        self.assertIsNot(pool._streams[1], old[1])
+        self.assertFalse(old[0].closed)
+        self.assertTrue(old[1].closed)
+
+    async def test_repair_rejects_wrong_scope_on_nonterminal_order_page(self):
+        starts = 0
+
+        class WrongScopePageStream(FakeStream):
+            async def start(self, slugs):
+                nonlocal starts
+                starts += 1
+                await super().start(slugs)
+                scope = None if slugs is None else tuple(slugs)
+                if starts <= 2:
+                    self.queue.put_nowait(PrivateEvent(
+                        PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+                        {"balances": []}, request_id=f"balance-{starts}",
+                        received_at=datetime.now(timezone.utc)))
+                    return
+                self.queue.put_nowait(PrivateEvent(
+                    PrivateEventKind.ORDER_SNAPSHOT,
+                    {"orders": [], "eof": False}, request_id="orders-page",
+                    market_scope=("wrong-market",),
+                    received_at=datetime.now(timezone.utc)))
+                self.queue.put_nowait(PrivateEvent(
+                    PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+                    {"balances": []}, request_id="replacement-balance",
+                    market_scope=scope,
+                    received_at=datetime.now(timezone.utc)))
+
+        pool = PrivateStreamPool(object(), factory=WrongScopePageStream)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        old = tuple(pool._streams)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+
+        with self.assertRaisesRegex(AdapterError, "overlap repair failed"):
             await pool.repair_stale_shards(now=now)
 
         self.assertEqual(tuple(pool._streams), old)

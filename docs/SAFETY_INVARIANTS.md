@@ -300,14 +300,14 @@ These are implementation requirements, not suggestions.
     before REST reconciliation. This preserves positive cancel/fill proof
     without treating a missing REST row as terminal. Heartbeat-silence recovery
     may preserve resting orders only under the frozen decision loop: overlap-
-    start only stale shards, consume each exact-scope order EOF, retain one
-    account-global balance proof from the healthy pool, swap them, apply
-    buffered events, refresh REST balance, complete whole-account REST order and
+    start only stale shards, require each replacement's balance delivery, swap
+    them, apply scope-checked buffered events, refresh REST balance, and complete
+    whole-account REST order and
     position reconciliation, and prove every shard live. A heartbeat that
     arrives during handoff uses the same REST/liveness proof. Any failed step
-    falls back to global quarantine. If every shard is stale, global recovery
-    is required. A filtered shard snapshot is complete only for its market
-    scope and cannot clear state owned by another shard.
+    falls back to global quarantine. An empty scoped order subscription need not
+    invent an EOF; complete REST proves empty state. A filtered shard snapshot
+    is complete only for its market scope and cannot clear another shard.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST

@@ -33,9 +33,9 @@ Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server
 - Two silent private shards caused global cancellation and a transient zero-
   order slate although the runner and 20 owners survived; filtered snapshots
   could also clear another shard's state. Stale shards now overlap-replace only
-  after exact-scope order EOF per replaced shard, one account-global balance
-  proof, buffered events, fresh REST balance/account proof and all-shard
-  liveness. Late
+  after each replacement delivers private balance, followed by buffered events,
+  fresh REST balance/account proof and all-shard liveness. Empty order streams
+  need no invented EOF; received pages remain scope-checked and applied. Late
   heartbeats use the same no-cancel proof; any failure retains global quarantine.
   Scoped snapshots clear only their markets. Focused 20-slot, partial/failure,
   race, startup and cross-shard regressions passed; reversals reproduced defects.

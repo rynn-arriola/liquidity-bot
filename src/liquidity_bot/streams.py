@@ -396,6 +396,12 @@ class PrivateReadOnlyStream:
 
         return self._order_snapshot_complete and self._balance_snapshot_seen
 
+    @property
+    def initial_state_status(self) -> str:
+        return (
+            f"order_eof={int(self._order_snapshot_complete)}/1 "
+            f"account_balance={int(self._balance_snapshot_seen)}/1")
+
     def _mark_delivered(self, event: PrivateEvent) -> None:
         if (event.kind == PrivateEventKind.ORDER_SNAPSHOT
                 and isinstance(event.payload, dict)
@@ -694,14 +700,28 @@ class PrivateStreamPool:
 
     @property
     def initial_state_ready(self) -> bool:
-        """Require the runner to receive initial proof from every shard."""
+        """Require every scoped order EOF and one account balance proof.
+
+        Account balance is global. The venue may emit its initial snapshot on
+        only one of several equivalent private connections, so requiring the
+        same global snapshot redundantly on every shard deadlocks startup.
+        """
 
         return (
             bool(self._streams)
             and len(self._shard_order_snapshot_delivered) == len(self._streams)
             and len(self._shard_balance_snapshot_delivered) == len(self._streams)
             and all(self._shard_order_snapshot_delivered)
-            and all(self._shard_balance_snapshot_delivered)
+            and any(self._shard_balance_snapshot_delivered)
+        )
+
+    @property
+    def initial_state_status(self) -> str:
+        total = len(self._streams)
+        return (
+            f"order_eof={sum(self._shard_order_snapshot_delivered)}/{total} "
+            "account_balance="
+            f"{sum(self._shard_balance_snapshot_delivered)}/{total}"
         )
 
     def _mark_delivered(self, shard_index: int, event: PrivateEvent) -> None:
@@ -719,17 +739,22 @@ class PrivateStreamPool:
     ) -> tuple[tuple[str, ...] | None, ...]:
         """Overlap-replace silent shards without touching venue orders.
 
-        Each replacement must deliver a complete order snapshot and an account
-        balance snapshot before it can displace the old connection. The caller
-        still freezes decisions and performs whole-account REST reconciliation
-        before resuming. If any replacement cannot prove its initial state, no
-        shard is swapped and the runner falls back to global quarantine.
+        Each replacement must deliver its exact-scope complete order snapshot
+        before it can displace the old connection. Account balance is global
+        and remains proven by a healthy shard; all-shard silence uses global
+        recovery. The caller still freezes decisions and performs whole-account
+        REST reconciliation before resuming. If any replacement cannot prove
+        its initial state, no shard is swapped and the runner falls back to
+        global quarantine.
         """
 
         stale = self.stale_shards(
             now=now, max_silence_seconds=max_silence_seconds)
         if not stale:
             return ()
+        if len(stale) == len(self._streams):
+            raise AdapterError(
+                "all private shards are stale; global recovery is required")
 
         async def stage(index: int):
             scope = self._shard_slugs[index]
@@ -740,8 +765,7 @@ class PrivateStreamPool:
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + snapshot_timeout_seconds
                 order_complete = False
-                balance_seen = False
-                while not (order_complete and balance_seen):
+                while not order_complete:
                     remaining = deadline - loop.time()
                     if remaining <= 0:
                         raise TimeoutError(
@@ -756,8 +780,6 @@ class PrivateStreamPool:
                                 "replacement private shard order snapshot "
                                 "scope does not match its subscription")
                         order_complete = True
-                    elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
-                        balance_seen = True
                     elif event.kind == PrivateEventKind.ERROR:
                         raise AdapterError(
                             f"replacement private shard error: {event.payload}")

@@ -121,9 +121,11 @@ Official references:
 - A shard-filtered order or position snapshot is complete only for the exact
   subscribed market scope; it may never mark another shard's order absent or
   position zero. On heartbeat silence, replacements overlap only stale shards
-  and must deliver exact-scope order EOF plus balance proof before swap. The
-  frozen runner then applies buffered events and completes whole-account REST
-  order/position reconciliation before resuming without cancels. Any failed
+  and each must deliver exact-scope order EOF before swap. Account balance is
+  global: one healthy pool shard plus the existing account gate proves it; all-
+  shard silence uses global recovery. The frozen runner then applies buffered
+  events and refreshes REST balance plus whole-account order/position state
+  before resuming without cancels. Any failed
   proof falls back to the global listener-first quarantine path.
 - Each private connection has its own last-message clock. Heartbeats and
   account events refresh only the shard that delivered them; 180 seconds of

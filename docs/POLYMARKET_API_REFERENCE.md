@@ -134,9 +134,10 @@ REST freshness may prove current account state, but it should not silently
 certify that every WebSocket connection is alive. The 20-slot private stream is
 sharded across three connections, so liveness is per shard. Official
 application heartbeats retain the 180-second silence alarm. A silent shard may
-be overlap-replaced without cancelling resting orders only after its scoped
-order EOF and balance snapshot are consumed and a frozen whole-account REST
-order/position reconciliation succeeds. Filtered snapshots are complete only
+be overlap-replaced without cancelling resting orders only after each scoped
+order EOF, one account-global pool balance snapshot and a frozen REST balance/
+order/position reconciliation succeed. All-shard silence uses global
+recovery. Filtered snapshots are complete only
 within their subscribed markets; any failed handoff proof uses global
 quarantine.
 

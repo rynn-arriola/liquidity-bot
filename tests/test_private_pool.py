@@ -192,14 +192,65 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(pool.close)
         await asyncio.sleep(0)
 
-        # Socket receipt alone is insufficient: the runner must consume and
-        # apply both initial proofs from every shard before it may mutate.
+        # Socket receipt alone is insufficient: the runner must consume every
+        # scoped order EOF and an account-global balance proof before mutation.
         self.assertFalse(pool.initial_state_ready)
-        for _ in range(3):
+        delivered_order_scopes = set()
+        while len(delivered_order_scopes) < 2:
+            item = await pool.next_event(timeout=1)
+            if item.kind == PrivateEventKind.ORDER_SNAPSHOT:
+                if not delivered_order_scopes:
+                    self.assertFalse(pool.initial_state_ready)
+                delivered_order_scopes.add(item.market_scope)
+        # Consume until the one required account-global balance proof arrives.
+        while not pool.initial_state_ready:
             await pool.next_event(timeout=1)
-            self.assertFalse(pool.initial_state_ready)
-        await pool.next_event(timeout=1)
         self.assertTrue(pool.initial_state_ready)
+
+    async def test_one_global_balance_snapshot_is_enough_for_all_shards(self):
+        starts = 0
+
+        class OneBalanceStream(SnapshotStream):
+            async def start(self, slugs):
+                nonlocal starts
+                starts += 1
+                await FakeStream.start(self, slugs)
+                scope = None if slugs is None else tuple(slugs)
+                self.queue.put_nowait(PrivateEvent(
+                    PrivateEventKind.ORDER_SNAPSHOT,
+                    {"orders": [], "eof": True}, request_id=f"orders-{starts}",
+                    market_scope=scope, received_at=datetime.now(timezone.utc)))
+                if starts == 1:
+                    self.queue.put_nowait(PrivateEvent(
+                        PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+                        {"balances": []}, request_id="balance",
+                        received_at=datetime.now(timezone.utc)))
+
+        pool = PrivateStreamPool(object(), factory=OneBalanceStream)
+        await pool.start([f"market-{i}" for i in range(20)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        for _ in range(4):
+            await pool.next_event(timeout=1)
+        self.assertTrue(pool.initial_state_ready)
+        self.assertEqual(
+            pool.initial_state_status,
+            "order_eof=3/3 account_balance=1/3")
+
+    async def test_all_stale_shards_require_global_recovery(self):
+        pool = PrivateStreamPool(object(), factory=SnapshotStream)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        old = tuple(pool._streams)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at = [
+            now - timedelta(seconds=181) for _ in old]
+
+        with self.assertRaisesRegex(AdapterError, "global recovery"):
+            await pool.repair_stale_shards(now=now)
+
+        self.assertEqual(tuple(pool._streams), old)
+        self.assertFalse(any(stream.closed for stream in old))
 
     async def test_close_closes_every_connection(self):
         pool = self.pool()

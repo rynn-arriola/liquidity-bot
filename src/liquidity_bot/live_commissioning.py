@@ -1571,7 +1571,14 @@ class CommissioningRunner:
         deadline = loop.time() + timeout_seconds
         while loop.time() < deadline:
             remaining = deadline - loop.time()
-            event = await self.private_stream.next_event(timeout=remaining)
+            try:
+                event = await self.private_stream.next_event(timeout=remaining)
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                status = getattr(
+                    self.private_stream, "initial_state_status", "unavailable")
+                raise CommissioningUnavailable(
+                    "private stream did not become reconciled and fresh; "
+                    f"initial_state={status}") from exc
             now = self._now()
             await self._observe_private(event, now)
             # `session_ready`, not `ready`: a bind proves we can SEE the venue.
@@ -1586,7 +1593,9 @@ class CommissioningRunner:
                     and bool(pool_ready)):
                 return
         raise CommissioningUnavailable(
-            "private stream did not become reconciled and fresh")
+            "private stream did not become reconciled and fresh; "
+            "initial_state="
+            f"{getattr(self.private_stream, 'initial_state_status', 'unavailable')}")
 
     def _startup_recovery_is_scoped(self, blockers: tuple[str, ...]) -> bool:
         """Allow restart only to retire this bot's identified risk.
@@ -5078,6 +5087,11 @@ class CommissioningRunner:
                 await self._rest_reconcile(
                     self._now(), tag="private-shard-handoff",
                     strict_order_markets=frozenset())
+                # Balance is account-global rather than shard-scoped. Refresh
+                # it once through the shared REST governor so recovery does
+                # not depend on the venue redundantly replaying the same
+                # balance snapshot on every replacement connection.
+                await self._refresh_balance(self._now())
                 await self._drain_private_events()
                 self.private_stream.assert_live(
                     now=self._now(),

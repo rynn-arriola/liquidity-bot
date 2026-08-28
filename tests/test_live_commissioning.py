@@ -4678,6 +4678,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         old_stream.repair_stale_shards = AsyncMock(return_value=(
             tuple(slugs[:8]), tuple(slugs[8:16])))
         old_stream.assert_live = lambda **_kwargs: None
+        runner._refresh_balance = AsyncMock()
         runner.ledger.apply_order_event(
             "ws", "open-before-shard-repair",
             OrderState(
@@ -4712,6 +4713,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(old_stream.closed)
         self.assertEqual(runner.active_slugs, slugs)
         self.assertEqual(client.orders.cancel_calls, [])
+        runner._refresh_balance.assert_awaited_once()
         self.assertEqual(
             len(runner.ledger.working_orders("market-one")), 1)
         self.assertTrue(runner.gate.session_ready(
@@ -4721,6 +4723,17 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             for message, _ in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_initial_private_timeout_is_recoverable_startup_state(self):
+        """A missing initial event must not escape as process-fatal TimeoutError."""
+
+        runner, _, _ = self.build_runner()
+        runner.private_stream.next_event = AsyncMock(
+            side_effect=asyncio.TimeoutError())
+
+        with self.assertRaisesRegex(
+                CommissioningUnavailable, "reconciled and fresh"):
+            await runner._wait_for_initial_private_state(timeout_seconds=0.01)
 
     async def test_late_heartbeat_avoids_global_quarantine(self):
         """A shard that recovers during handoff must not trigger cancels."""

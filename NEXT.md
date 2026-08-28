@@ -20,11 +20,12 @@ when they occur naturally; do not induce a live failure:
 
 ## 1. Activate and accept rate-limited private-shard recovery
 
-Commit `2831026` is active and startup acceptance passed with Polymarket's real
-empty-subscription pattern. The first natural overlap then proved a confirmed
+The bot is stopped and flat. Commit `2831026` passed startup acceptance with
+Polymarket's real empty-subscription pattern. The first natural overlap then proved a confirmed
 429 on the final balance read still caused global quarantine. Correction
-`a8d91d0` is deployed without restarting and activates only on the next
-authorized restart. Do not induce a fault. Natural acceptance must show
+`a8d91d0` is deployed and activates only on the next authorized start. Do not
+start without explicit operator authorization and do not induce a fault.
+Natural acceptance must show
 `[private-shard-handoff-rate-limit] ... cancels=0`, followed by
 `[private-shard-recovery] ... cancels=0`, unchanged PID/owners and no persistent
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the

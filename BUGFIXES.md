@@ -39,7 +39,7 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   confirmed 429 reads four slower proof attempts (15/30/60 or bounded
   `Retry-After`) while draining events/rechecking liveness with zero cancels.
   Non-429, stale or exhausted proof retains global quarantine. `a8d91d0` is
-  deployed; 744 local/server tests and reversal passed; runtime is still old.
+  deployed; 744 local/server tests and reversal passed; stopped until activation.
 
 ## Latest deployment additions
 

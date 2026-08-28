@@ -7,13 +7,12 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 - **Verified:** 2026-08-28 07:40 ET / 2026-08-28 11:40 UTC
 - **Liquidity bot:** STOPPED; no commissioning supervisor or runner remains
-- **Live exposure:** the 11:40Z authenticated stopped-state dashboard proved
-  zero positions, zero resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
+- **Live exposure:** the 11:40Z authenticated stopped-state dashboard proved zero positions, zero resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes reviewed economic-idle repair `dc71ae8`
+- **GitHub:** `main` includes webhook-routing repair `1d48584`
 - **Server marker:** `8e348eb`; source/tests match the marker
 - **Latest deployed trading source:** `1ff0e42`, on disk but not running
-- **Parity:** desktop/GitHub match `dc71ae8`; server matches marker `8e348eb`.
+- **Parity:** desktop/GitHub source match `1d48584`; server matches marker `8e348eb`.
   Undeployed source and unrelated local measurement work leave expected drift
 - **Deployed verification:** all 706 local and reduced-priority server tests passed
 - **Official API remediation:** seven prioritized reliability fixes and the
@@ -25,6 +24,7 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
   8382 is active against `data/scalp.db`; it has no order path
 - **Pending strategy repair:** pushed commit `dc71ae8` safely replaces
   continuously economically idle slots; it is not deployed or active
+- **Pending notification repair:** pushed `1d48584` routes operations to error/status with no summary fallback; it is not deployed
 
 ## Active operating envelope
 
@@ -69,7 +69,8 @@ marker remains `8e348eb`, and the separate scalp measurement stayed running.
 
 Keep the liquidity bot stopped. Do not deploy or restart until the operator
 explicitly authorizes both. The reviewed economic-idle repair remains pushed
-and undeployed; any future restart must re-run the authenticated exposure gate.
+and undeployed; webhook repair `1d48584` is pushed and undeployed. Any restart
+must re-run the authenticated exposure gate.
 
 ## Current repositories and records
 

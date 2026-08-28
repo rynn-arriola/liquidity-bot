@@ -31,6 +31,11 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
 
 ## Reviewed locally; deployment pending
 
+- The summary webhook accepted routine notices because default routing followed
+  severity, and missing error config fell back to summary. Operations now use
+  error/status with no fallback; live, shadow and dashboard summaries opt in,
+  and supervisor alerts select errors. Exact reversal failed; restoration and
+  all 724 local tests passed. Commit `1d48584` is pushed; production is unchanged.
 - Pregame owners blocked on both sides by named current-book economics could
   retain a nominal slot indefinitely because incremental top-up recognized only
   lifecycle loss. The local repair tracks a 10-minute continuous flat/clear

@@ -5,13 +5,15 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 08:23 ET / 2026-08-28 12:23 UTC
+- **Verified:** 2026-08-28 08:25 ET / 2026-08-28 12:25 UTC
 - **Liquidity bot:** LIVE; supervisor PID 21783 / runner PID 21791, size 10
-- **Live exposure:** authenticated dashboard showed zero positions, 35 resting
-  orders, zero `UNKNOWN_ABSENT` and one seconds-old acknowledged PLACE
+- **Live exposure:** authenticated dashboard showed zero positions and 35
+  resting orders; the following ledger check had zero unresolved and zero
+  `UNKNOWN_ABSENT`
 - **20-slot health:** 20/20 owners quoting, zero bound-idle and zero empty
 - **Maker-lab:** stopped
-- **GitHub/server:** `main` and marker `de1478b`; all deployed hashes matched
+- **GitHub:** `main` at docs commit `5ad5fd8`; server marker `de1478b` with no
+  source/test deploy lag, exact changed-file hashes and current docs copied
 - **Verification:** all 726 local and reduced-priority server tests passed;
   documentation audit and deliberate reversal check passed
 - **Webhook routing:** operations use error/status only; routine live, shadow

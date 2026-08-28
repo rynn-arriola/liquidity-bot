@@ -11,18 +11,18 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 
 ## Current high-value findings
 
-- **Private-shard silence erased the reward slate.** At 13:50Z on 2026-08-28,
-  two shards correctly crossed the 180-second alarm, but recovery needlessly
-  cancelled all orders before the same runner rebuilt to 34. Filtered snapshots
-  also acted account-complete across shards. Detect with `private WebSocket
-  shard silence`, `[private-shard-recovery]`, PID, owners, cancels, unresolved
-  state and post-recovery orders—not raw order count alone.
-- **Empty private order subscriptions emit no synthetic EOF.** Live startup
-  measured `order_eof=0/3 account_balance=3/3`; each balance delivery proves its
-  socket, while complete REST proves empty orders. Both remain explicit `x/y`.
+- **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed
+  180 seconds, but recovery canceled all before the same PID rebuilt to 34; filtered
+  snapshots also acted account-complete. Search silence/recovery/quarantine/PID.
+- **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;
+  balance proves each socket and complete REST proves empty orders.
+- **A 429 during shard proof can erase the slate.** At 15:02:46Z shard 3 overlap
+  reconciled 34 orders, then Cloudflare `1015`/429 on balance drove quarantine;
+  the same PID rebuilt. Dashboards do not share the runner limiter; avoid repeated
+  recovery probes. Search handoff-rate-limit/quarantine.
 - **Twenty-slot health is not raw order count.** Use queue `markets=20`, active
-  owners, eligibility, resting-time coverage, unresolved ownership and
-  positions. A slot can be healthy while temporarily holding no order.
+  owners, eligibility, resting coverage and unresolved/position state; a healthy
+  slot can temporarily hold no order.
 - **Closed owners parked capacity.** The deployed repair releases only after
   fresh exact closed/not-open metadata plus complete flat/order-free ownership
   proof. The 2026-08-28 reviewed restart reached 20/20 quoting; natural closed-

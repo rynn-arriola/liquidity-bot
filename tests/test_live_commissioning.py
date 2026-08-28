@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from liquidity_bot.account_snapshots import ExecutionHistoryBatch
 from liquidity_bot.commissioning import (
@@ -4734,6 +4734,146 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
                 CommissioningUnavailable, "reconciled and fresh"):
             await runner._wait_for_initial_private_state(timeout_seconds=0.01)
+
+    async def test_rate_limited_handoff_proof_preserves_orders_until_retry(self):
+        """A temporary read throttle must not turn into global cancellation."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        old_stream = runner.private_stream
+        old_stream.repair_stale_shards = AsyncMock(
+            return_value=((runner.market_slug,),))
+        old_stream.assert_live = lambda **_kwargs: None
+        runner.sleep = AsyncMock()
+        throttled = AdapterError(
+            "GET /v1/account/balances failed: rate limited",
+            operation="GET /v1/account/balances", status_code=429,
+            retry_after_seconds=7.0)
+        runner._refresh_balance = AsyncMock(side_effect=[throttled, None])
+        runner.ledger.apply_order_event(
+            "ws", "open-during-rate-limit",
+            OrderState(
+                client_order_id="liquidity-rate-limit",
+                exchange_order_id="exchange-rate-limit",
+                market_slug=runner.market_slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        client.orders.rows["exchange-rate-limit"] = {
+            "id": "exchange-rate-limit",
+            "clientOrderId": "liquidity-rate-limit",
+            "marketSlug": runner.market_slug,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "10",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+
+        stop = await runner._recover_private_stream(AdapterError(
+            "private WebSocket shard silence: 1(1 markets)"))
+
+        self.assertIsNone(stop)
+        self.assertIs(runner.private_stream, old_stream)
+        self.assertFalse(old_stream.closed)
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertEqual(runner._refresh_balance.await_count, 2)
+        runner.sleep.assert_awaited_once_with(7.0)
+        self.assertEqual(
+            len(runner.ledger.working_orders(runner.market_slug)), 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_exhausted_handoff_rate_limit_keeps_global_fallback(self):
+        """Bounded retries preserve safety when the read never recovers."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        old_stream = runner.private_stream
+        old_stream.repair_stale_shards = AsyncMock(return_value=((slug,),))
+        old_stream.assert_live = lambda **_kwargs: None
+        runner.sleep = AsyncMock()
+        throttled = AdapterError(
+            "GET /v1/account/balances failed: rate limited",
+            operation="GET /v1/account/balances", status_code=429)
+        # Four handoff attempts exhaust the preservation window; the fifth call
+        # is the existing global recovery's best-effort balance refresh.
+        runner._refresh_balance = AsyncMock(
+            side_effect=[throttled, throttled, throttled, throttled, None])
+        runner.ledger.apply_order_event(
+            "ws", "open-before-exhausted-rate-limit",
+            OrderState(
+                client_order_id="liquidity-rate-limit-fallback",
+                exchange_order_id="exchange-rate-limit-fallback",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        client.orders.rows["exchange-rate-limit-fallback"] = {
+            "id": "exchange-rate-limit-fallback",
+            "clientOrderId": "liquidity-rate-limit-fallback",
+            "marketSlug": slug,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "10",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+
+        stop = await runner._recover_private_stream(AdapterError(
+            "private WebSocket shard silence: 1(1 markets)"))
+
+        self.assertIsNone(stop)
+        self.assertTrue(old_stream.closed)
+        self.assertEqual(
+            [call[0] for call in client.orders.cancel_calls],
+            ["exchange-rate-limit-fallback"])
+        self.assertEqual(runner.sleep.await_count, 3)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_handoff_retry_never_retries_a_non_429_failure(self):
+        runner, _, _ = self.build_runner()
+        runner.sleep = AsyncMock()
+        read = AsyncMock(side_effect=AdapterError(
+            "GET /v1/account/balances failed: server error",
+            status_code=500))
+
+        with self.assertRaisesRegex(AdapterError, "server error"):
+            await runner._retry_private_handoff_read("balance", read)
+
+        read.assert_awaited_once()
+        runner.sleep.assert_not_awaited()
+
+    async def test_handoff_retry_aborts_when_replacement_is_not_live(self):
+        runner, _, _ = self.build_runner()
+        runner.sleep = AsyncMock()
+        runner._drain_private_events = AsyncMock()
+        runner.private_stream.assert_live = Mock(
+            side_effect=AdapterError("replacement shard is stale"))
+        read = AsyncMock(side_effect=AdapterError(
+            "GET /v1/account/balances failed: rate limited",
+            status_code=429))
+
+        with self.assertRaisesRegex(AdapterError, "replacement shard is stale"):
+            await runner._retry_private_handoff_read("balance", read)
+
+        read.assert_awaited_once()
+        runner._drain_private_events.assert_awaited_once()
+        runner.sleep.assert_not_awaited()
 
     async def test_late_heartbeat_avoids_global_quarantine(self):
         """A shard that recovers during handoff must not trigger cancels."""

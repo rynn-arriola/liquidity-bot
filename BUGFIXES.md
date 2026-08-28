@@ -1,7 +1,6 @@
 # Production defect index
 
-The complete defect record through 2026-08-27 is preserved at
-[docs/history/BUGFIXES_THROUGH_2026-08-27.md](docs/history/BUGFIXES_THROUGH_2026-08-27.md).
+History through 2026-08-27: [archive](docs/history/BUGFIXES_THROUGH_2026-08-27.md).
 
 Search it before designing a repair:
 
@@ -26,20 +25,20 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   reporting uses bounded account truth when its prerequisites are proved and
   visibly marks fallbacks.
 
-Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server.
-
 ## Latest deployed private-stream repair
 
-- Two silent private shards caused global cancellation and a transient zero-
-  order slate although the runner and 20 owners survived; filtered snapshots
-  could also clear another shard's state. Stale shards now overlap-replace only
-  after each replacement delivers private balance, followed by buffered events,
-  fresh REST balance/account proof and all-shard liveness. Empty order streams
-  need no invented EOF; received pages remain scope-checked and applied. Late
-  heartbeats use the same no-cancel proof; any failure retains global quarantine.
-  Scoped snapshots clear only their markets. Focused 20-slot, partial/failure,
-  race, startup and cross-shard regressions passed; reversals reproduced defects.
+- Silent shards caused global cancellation and cross-shard snapshot clearing.
+  Stale shards now overlap-replace after per-connection balance, scope-checked
+  buffered events, fresh REST account proof and all-shard liveness. Empty order
+  streams need no invented EOF; scoped snapshots clear only their markets.
+  Failed proof retains global quarantine; reversals reproduced both defects.
   Commit `2831026` passed 740 local/server tests and live startup acceptance.
+
+- **Staged for next restart:** natural handoff reconciled 34 orders, then final
+  balance Cloudflare `1015`/429 drove quarantine. Frozen handoff now gives only
+  confirmed 429 reads four slower proof attempts (15/30/60 or bounded
+  `Retry-After`) while draining events/rechecking liveness with zero cancels.
+  Non-429, stale or exhausted proof retains global quarantine.
 
 ## Latest deployment additions
 

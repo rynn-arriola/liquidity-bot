@@ -114,11 +114,13 @@ error enters a dormant recovery state instead of ending the process. The runner
 records the error and stack. A heartbeat-silent private shard is overlap-
 replaced while decisions are frozen; each replacement must deliver private
 balance, any order pages are scope-checked/buffered, and REST balance, orders
-and positions are refreshed before quotes are
-preserved. All-shard silence, any failed proof, and
-other private recovery, establishes replacement visibility, cancels known
-quotes, applies buffered terminal events, reconciles the whole account, backs
-off exponentially, and only then permits new risk. Unknown
+and positions are refreshed before quotes are preserved. A confirmed 429 on
+those reads receives a slower bounded retry while private events keep draining,
+replacement liveness is checked and no decision or cancel can run. All-shard
+silence, non-429/stale/exhausted proof, and other private recovery establishes
+replacement visibility, cancels known quotes, applies buffered terminal events,
+reconciles the whole account, backs off exponentially, and only then permits
+new risk. Unknown
 strategy conditions default to terminal. Ownership, cross-market identity,
 exact-position, planning, and unexitable-inventory failures end maker quoting
 and enter cancel/flatten shutdown; they are not downgraded to warnings. A

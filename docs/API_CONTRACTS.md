@@ -124,9 +124,11 @@ Official references:
   On heartbeat silence, replacements overlap only stale shards and each must
   deliver its account-balance event before swap; received order pages remain
   scope-checked and buffered. The frozen runner then refreshes REST balance plus
-  whole-account order/position state
-  before resuming without cancels. Any failed
-  proof falls back to the global listener-first quarantine path.
+  whole-account order/position state before resuming without cancels. A
+  confirmed HTTP 429 during those reads receives a slower bounded handoff retry
+  while private events are drained and every replacement remains live. Other
+  failures, stale replacements, operator stop and exhausted 429 proof fall back
+  to the global listener-first quarantine path.
 - Each private connection has its own last-message clock. Heartbeats and
   account events refresh only the shard that delivered them; 180 seconds of
   silence on any shard fails the whole private pool into bounded recovery.
@@ -231,6 +233,9 @@ Official references:
 - The documented account-level ceiling is 20 requests/second.
 - This project defaults to 4 REST requests/second through one shared async gate,
   including trading and reconciliation calls.
+- The gate is process-local. Server dashboards and other authenticated tools do
+  not share the live runner's limiter; operators must avoid repeated probes
+  during recovery and interpret them as additional account/IP request load.
 - Every attempt passes through that gate exactly once; callers do not pace
   manually.
 - Only a confirmed HTTP 429 receives bounded read retry/backoff. State-changing

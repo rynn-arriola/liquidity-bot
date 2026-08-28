@@ -5,7 +5,7 @@ This file contains unfinished work. Completed implementation history is in
 
 ## 0. Remaining natural acceptance
 
-The live runner uses marker `2831026`. Continue accepting these paths only
+The live runner still has source `2831026` loaded. Continue accepting these paths only
 when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
@@ -18,15 +18,17 @@ when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-## 1. Naturally accept private-shard overlap recovery
+## 1. Activate and accept rate-limited private-shard recovery
 
 Commit `2831026` is active and startup acceptance passed with Polymarket's real
-empty-subscription pattern: `order_eof=0/3 account_balance=3/3`. Do not induce a
-private-stream failure. On a natural 180-second silence, acceptance must show
-`[private-shard-recovery] ... cancels=0`, unchanged runner PID, retained active
-owners and no unresolved/`UNKNOWN_ABSENT` state. The fallback must still
-quarantine globally if any replacement balance, scope, REST or liveness proof
-fails.
+empty-subscription pattern. The first natural overlap then proved a confirmed
+429 on the final balance read still caused global quarantine. The correction is
+to be deployed without restarting and activated only on the next authorized
+restart. Do not induce a fault. Natural acceptance must show
+`[private-shard-handoff-rate-limit] ... cancels=0`, followed by
+`[private-shard-recovery] ... cancels=0`, unchanged PID/owners and no persistent
+unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
+global fallback.
 
 ## 2. Collect fixed-GTC evidence
 

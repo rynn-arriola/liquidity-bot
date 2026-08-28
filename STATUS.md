@@ -1,19 +1,18 @@
 # Current operator status
 
-Only current operational facts belong here. Verify them live before acting.
-Historical snapshots are under [docs/history/](docs/history/README.md).
+Only current operational facts belong here; verify live before acting. Historical
+snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 10:58 ET / 2026-08-28 14:58 UTC
+- **Verified:** 2026-08-28 11:04 ET / 2026-08-28 15:04 UTC
 - **Liquidity bot:** LIVE; supervisor PID 31621 / runner PID 31627, size 10
-- **Live exposure:** authenticated dashboard showed zero positions, 32 resting
+- **Live exposure:** authenticated dashboard showed zero positions, 27 resting
   orders, zero unresolved and zero `UNKNOWN_ABSENT`; no risk stop is active
-- **20-slot health:** 18/20 owners quoting, one bound-not-quoting owner and one
-  empty because its market did not qualify; 33 recent placements
+- **20-slot health:** 18/20 owners quoting and two bound-not-quoting owners;
+  zero slots empty and the same runner continued placing
 - **Maker-lab:** stopped
-- **GitHub/server:** `main`, deployed marker and source/tests match commit
-  `2831026`; parity reports no source/test deploy lag
+- **Running source:** `2831026`; staged 429 correction needs a later restart
 - **Verification:** all 740 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
@@ -50,8 +49,7 @@ and ambiguity-free. Commit `2831026` started at about 14:55Z after passing the
 startup failure, bound all 20 markets and reached 18 quoting owners with 32
 resting orders. A normal in-flight mutation briefly displayed as one unresolved
 row and cleared on the next proof; final acceptance was zero positions, absent
-orders and unresolved intents. The new-run log contained no traceback, startup
-retry, shard-recovery failure or critical condition.
+orders and unresolved intents.
 
 Live wire evidence from the failed prior start was
 `order_eof=0/3 account_balance=3/3`: Polymarket sends a balance snapshot on each
@@ -61,16 +59,22 @@ balance delivery as liveness proof, retain any order pages with exact-scope
 validation, and require frozen whole-account REST balance/order/position proof
 before decisions resume.
 
+The first natural silence occurred on shard 3 at 15:02:46Z. Its overlap and
+34-order reconciliation succeeded, but the final balance read hit Cloudflare
+`1015`/HTTP 429. The generic failed-proof fallback quarantined the slate at
+15:02:57Z without restarting PID 31627; it then rebuilt automatically. This
+proves the base replacement works but exposes a second defect in rate-limited
+proof handling. The staged correction retries only confirmed 429 reads while
+decisions remain frozen and orders/private visibility are preserved.
+
 ## Current operating instruction
 
 Keep the bot and collector running. Do not induce a 180-second private-stream
-failure to test the new recovery; accept it only when a real fault occurs. Do
-not change strategy, size, slots or stops from measurement output; collect
-three complete days plus one held-out day.
+failure to test recovery. Avoid repeated authenticated dashboard probes during
+live recovery because their separate process does not share the runner limiter.
+The staged 429 correction is not active until an authorized restart. Do not
+change strategy, size, slots or stops from measurement output.
 
-## Current repositories and records
+## Current records
 
-- Open work: [NEXT.md](NEXT.md)
-- Active measurements: [WATCHLIST.md](WATCHLIST.md)
-- Findings index: [FINDINGS.md](FINDINGS.md)
-- Production defects index: [BUGFIXES.md](BUGFIXES.md)
+[NEXT](NEXT.md) · [WATCHLIST](WATCHLIST.md) · [FINDINGS](FINDINGS.md) · [BUGFIXES](BUGFIXES.md)

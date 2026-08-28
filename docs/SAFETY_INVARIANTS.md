@@ -305,9 +305,13 @@ These are implementation requirements, not suggestions.
     whole-account REST order and
     position reconciliation, and prove every shard live. A heartbeat that
     arrives during handoff uses the same REST/liveness proof. Any failed step
-    falls back to global quarantine. An empty scoped order subscription need not
-    invent an EOF; complete REST proves empty state. A filtered shard snapshot
-    is complete only for its market scope and cannot clear another shard.
+    falls back to global quarantine except a confirmed HTTP 429 read: while the
+    decision loop stays frozen it receives a slower bounded retry, with private
+    events drained and replacement liveness checked before every wait. No
+    mutation uses that retry. Non-429, stale, stopped or exhausted proof still
+    quarantines. An empty scoped order subscription need not invent an EOF;
+    complete REST proves empty state. A filtered shard snapshot is complete only
+    for its market scope and cannot clear another shard.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST

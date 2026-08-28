@@ -138,6 +138,17 @@ MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
 MAX_MARKET_STREAM_RECOVERY_ATTEMPTS = 12
 MAX_BOUND_STREAM_RECOVERY_ATTEMPTS = 12
 
+# The ordinary read gateway already retries a confirmed 429 three times. A
+# Cloudflare 1015 can outlive those short retries, and immediately converting
+# that temporary read throttle into global quarantine erased 34 healthy orders
+# on 2026-08-28. During an overlap handoff the decision coroutine is frozen and
+# the replacement private sockets remain live, so use a second, slower bounded
+# read-only retry tier before taking the destructive fallback. Mutations never
+# use this path.
+PRIVATE_HANDOFF_RATE_LIMIT_ATTEMPTS = 4
+PRIVATE_HANDOFF_RATE_LIMIT_BASE_SECONDS = 15.0
+PRIVATE_HANDOFF_RATE_LIMIT_MAX_SECONDS = 60.0
+
 # A venue outage is different from an unsafe account.  After the ordinary
 # bounded reconnect has proved that the failure persists, keep this process
 # dormant and probe only complete authenticated reads.  Three passes one
@@ -5059,18 +5070,67 @@ class CommissioningRunner:
             "remained read-only.")
         return True
 
+    async def _retry_private_handoff_read(
+        self, name: str, read: Callable[[], Any],
+    ) -> Any:
+        """Retry only confirmed 429 reads while a shard handoff is frozen.
+
+        Existing resting orders remain visible through the replacement private
+        sockets, and no decision can run from this coroutine. Each wait drains
+        authoritative private events and re-proves socket liveness. Any other
+        failure, stale replacement, operator stop, or exhausted retry budget
+        returns to the existing global quarantine path.
+        """
+
+        for attempt in range(1, PRIVATE_HANDOFF_RATE_LIMIT_ATTEMPTS + 1):
+            try:
+                return await read()
+            except AdapterError as exc:
+                if (exc.status_code != 429
+                        or attempt >= PRIVATE_HANDOFF_RATE_LIMIT_ATTEMPTS):
+                    raise
+                await self._drain_private_events()
+                self.private_stream.assert_live(
+                    now=self._now(),
+                    max_silence_seconds=STREAM_SILENCE_TIMEOUT_SECONDS)
+                if self._stop_requested:
+                    raise CommissioningUnavailable(
+                        "operator stopped during private shard handoff") from exc
+                retry_after = exc.retry_after_seconds
+                delay = (
+                    min(max(float(retry_after), 0.0),
+                        PRIVATE_HANDOFF_RATE_LIMIT_MAX_SECONDS)
+                    if retry_after is not None
+                    else min(
+                        PRIVATE_HANDOFF_RATE_LIMIT_BASE_SECONDS
+                        * (2 ** (attempt - 1)),
+                        PRIVATE_HANDOFF_RATE_LIMIT_MAX_SECONDS,
+                    )
+                )
+                print(
+                    f"[private-shard-handoff-rate-limit] "
+                    f"at={self._now().isoformat()} read={name} "
+                    f"attempt={attempt}/{PRIVATE_HANDOFF_RATE_LIMIT_ATTEMPTS} "
+                    f"delay={delay:.1f}s cancels=0",
+                    flush=True,
+                )
+                await self.sleep(delay)
+        raise AssertionError("unreachable private handoff retry loop")
+
     async def _recover_private_stream(self, initial: Exception) -> str | None:
         """Stay alive but dormant until private state is proven again."""
 
         # A heartbeat-silent shard can be replaced under an overlapping
         # listener without sacrificing every resting order. The decision
-        # coroutine owns the loop here, so no new mutation can occur. The
-        # Every replacement first proves that it is receiving private state
+        # coroutine owns the loop here, so no new mutation can occur. Every
+        # replacement first proves that it is receiving private state
         # with its account-balance delivery. The venue can omit an order EOF
         # for an empty scoped subscription, so buffered order pages are useful
         # but optional. A complete REST balance/order/position proof bridges
-        # the old connection's gap. Any failed proof falls through to the older
-        # global cancel/quarantine recovery below.
+        # the old connection's gap. Confirmed read throttles receive a slower,
+        # bounded retry while orders and the decision freeze are preserved.
+        # Any other or exhausted proof falls through to the older global
+        # cancel/quarantine recovery below.
         repair_stale = getattr(self.private_stream, "repair_stale_shards", None)
         if (callable(repair_stale)
                 and "private WebSocket shard silence:" in str(initial)):
@@ -5086,13 +5146,15 @@ class CommissioningRunner:
                 # canceling the whole slate. The account-wide REST proof and
                 # final liveness gate below are still mandatory.
                 await self._drain_private_events()
-                await self._rest_reconcile(
-                    self._now(), tag="private-shard-handoff",
-                    strict_order_markets=frozenset())
+                await self._retry_private_handoff_read(
+                    "account_state", lambda: self._rest_reconcile(
+                        self._now(), tag="private-shard-handoff",
+                        strict_order_markets=frozenset()))
                 # The WebSocket balance deliveries above prove each new socket
-                # is live; this separate account-global REST read proves the
-                # current value and closes the handoff gap before decisions.
-                await self._refresh_balance(self._now())
+                # is live; this final account-global REST read proves a current
+                # decision balance after any slower account-state retry.
+                await self._retry_private_handoff_read(
+                    "balance", lambda: self._refresh_balance(self._now()))
                 await self._drain_private_events()
                 self.private_stream.assert_live(
                     now=self._now(),

@@ -12,17 +12,18 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ## Current high-value findings
 
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed
-  180 seconds, but recovery canceled all before the same PID rebuilt to 34; filtered
-  snapshots also acted account-complete. Search silence/recovery/quarantine/PID.
+  180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
 - **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;
   balance proves each socket and complete REST proves empty orders.
 - **A 429 during shard proof can erase the slate.** At 15:02:46Z shard 3 overlap
   reconciled 34 orders, then Cloudflare `1015`/429 on balance drove quarantine;
   the same PID rebuilt. Dashboards do not share the runner limiter; avoid repeated
   recovery probes. Search handoff-rate-limit/quarantine.
-- **Twenty-slot health is not raw order count.** Use queue `markets=20`, active
-  owners, eligibility, resting coverage and unresolved/position state; a healthy
-  slot can temporarily hold no order.
+- **Private-only and whole-stream silence have different order cost.** Six natural
+  private-shard repairs preserved 32-35 orders with `cancels=0`; simultaneous
+  251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
+- **Twenty-slot health is not raw order count.** Use queue `markets=20`, active owners,
+  eligibility, resting coverage and unresolved/position state; a healthy slot can temporarily hold no order.
 - **Closed owners parked capacity.** The deployed repair releases only after
   fresh exact closed/not-open metadata plus complete flat/order-free ownership
   proof. The 2026-08-28 reviewed restart reached 20/20 quoting; natural closed-
@@ -96,5 +97,4 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Rolling scalp episodes are not leave-it orders.** Untouched pairs renew at
   five minutes and can rotate out of scope. Exact GTC evidence therefore needs
   the bounded retained cohort; it excludes coverage loss and uses no future row.
-- **A cumulative gap counter is not episode-level coverage evidence.** One old gap censored 17 later clean GTC pairs. Strict replay uses overlapping stream
-  intervals; future decode/drop gaps close only their affected interval.
+- **A cumulative gap counter is not episode-level coverage evidence.** One old gap censored 17 later clean GTC pairs; strict replay uses overlapping intervals.

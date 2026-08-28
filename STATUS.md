@@ -5,12 +5,13 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 11:39 ET / 2026-08-28 15:39 UTC
+- **Verified:** 2026-08-28 12:25 ET / 2026-08-28 16:25 UTC
 - **Liquidity bot:** LIVE; supervisor PID 34772 / runner PID 34778, size 10
-- **Live exposure:** authenticated dashboard proved zero positions and 37
-  resting orders; the following read-only ledger check proved zero unresolved
-  and zero `UNKNOWN_ABSENT`
-- **20-slot health:** 20/20 owners quoting, zero bound-idle and zero empty
+- **Live exposure:** authenticated dashboard proved zero positions and 30
+  resting orders, zero `UNKNOWN_ABSENT` and three just-submitted unresolved
+  intents; no risk stop is active
+- **20-slot health:** rebuilding after whole-stream recovery: 16/20 quoting,
+  two bound-idle and two empty; same runner remains active
 - **Maker-lab:** stopped
 - **Running source:** `a8d91d0` behavior is loaded; deployed documentation marker
   is `d1d4384`
@@ -49,7 +50,13 @@ preflight. The new runner completed discovery without restart, loaded the staged
 429 handoff correction and reached 20/20 quoting with 37 resting orders by
 15:38Z. One just-acknowledged PLACE was visible during that snapshot and cleared
 normally; the 15:39Z ledger check showed zero unresolved and zero absent orders.
-No new-run traceback, critical, 429, quarantine or recovery event was logged.
+No startup-window traceback, critical, 429, quarantine or recovery event was logged.
+
+Private-only silence then recovered repeatedly with `cancels=0`, proving the
+overlap handoff preserves orders. At 16:22Z both the market stream and one
+private shard were silent together; the designed whole-stream fallback globally
+quarantined the slate and rebuilt under unchanged PID 34778. By 16:25Z it had
+restored 30 orders. This was not a 429 or 20-slot capacity change.
 
 ## Current operating instruction
 

@@ -18,6 +18,11 @@ only when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
+Private-only silence now has natural acceptance with unchanged PID and
+`cancels=0`. Simultaneous market/private silence still uses the documented
+global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
+only if recurrence shows a local liveness defect rather than venue/network loss.
+
 ## 1. Accept rate-limited private-shard recovery
 
 Commit `a8d91d0` is active. Its clean startup reached 20/20 quoting, 37 resting

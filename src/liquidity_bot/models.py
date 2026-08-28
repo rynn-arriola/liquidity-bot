@@ -46,6 +46,9 @@ class MarketMetadata:
     sports_market_type_v2: str | None = None
     catalog_best_bid: float | None = None
     catalog_best_offer: float | None = None
+    catalog_volume_usd: float | None = None
+    catalog_volume_24h_usd: float | None = None
+    catalog_liquidity_usd: float | None = None
 
     @property
     def is_supported_moneyline(self) -> bool:
@@ -68,6 +71,11 @@ class BookSnapshot:
     transact_time: datetime | None = None
     # Local socket receipt, distinct from the exchange transaction clock.
     received_at: datetime | None = None
+    # Optional documented market statistics. They are measurement metadata and
+    # never participate in order planning or account reconciliation.
+    shares_traded: float | None = None
+    open_interest: float | None = None
+    notional_traded_usd: float | None = None
 
     def has_side(self, side: str) -> bool:
         """Whether this book can price that side at all.

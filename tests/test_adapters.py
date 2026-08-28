@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,7 @@ class FakeMarkets:
         self.list_responses = []
         self.market_response = None
         self.book_response = None
+        self.settlement_response = None
         self.list_calls = []
 
     async def list(self, params):
@@ -42,10 +44,25 @@ class FakeMarkets:
         self.book_slug = slug
         return self.book_response
 
+    async def settlement(self, slug):
+        self.settlement_slug = slug
+        return self.settlement_response
+
+
+class FakeEvents:
+    def __init__(self):
+        self.list_responses = []
+        self.list_calls = []
+
+    async def list(self, params):
+        self.list_calls.append(params)
+        return self.list_responses.pop(0)
+
 
 class FakeClient:
     def __init__(self):
         self.markets = FakeMarkets()
+        self.events = FakeEvents()
         self.get_responses = []
         self.get_calls = []
 
@@ -374,6 +391,52 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(rows[0].status, "MARKET_STATE_OPEN")
         self.assertIsNone(rows[1].game_start)
         self.assertEqual([call["offset"] for call in client.markets.list_calls], [0, 2])
+
+    def test_measurement_catalog_uses_one_bounded_upcoming_event_page(self):
+        client = FakeClient()
+        row = dict(fixture("market.json")["market"], volume="123.5",
+                   liquidity="80")
+        client.events.list_responses = [{"events": [{"markets": [row]}]}]
+        start = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        markets = self.run_async(
+            AsyncReadOnlyGateway(client).list_upcoming_sports_markets(
+                start=start, end=end, limit=50))
+
+        self.assertEqual(len(markets), 1)
+        self.assertEqual(markets[0].catalog_volume_usd, 123.5)
+        self.assertEqual(markets[0].catalog_liquidity_usd, 80)
+        self.assertEqual(client.events.list_calls, [{
+            "categories": ["sports"], "active": True, "closed": False,
+            "startTimeMin": start.isoformat(), "startTimeMax": end.isoformat(),
+            "limit": 50, "offset": 0,
+        }])
+
+    def test_measurement_can_batch_fetch_reward_markets_by_slug(self):
+        client = FakeClient()
+        one = fixture("market.json")["market"]
+        client.markets.list_responses = [{"markets": [
+            one, dict(one, slug="not-requested")]}]
+
+        result = self.run_async(
+            AsyncReadOnlyGateway(client).fetch_markets_by_slugs(["market-one"]))
+
+        self.assertEqual(set(result), {"market-one"})
+        self.assertEqual(client.markets.list_calls[0], {
+            "slug": ["market-one"], "limit": 1, "offset": 0})
+
+    def test_measurement_settlement_requires_matching_bounded_value(self):
+        client = FakeClient()
+        client.markets.settlement_response = {
+            "marketSlug": "market-one",
+            "settlementPrice": {"value": "1", "currency": "USD"}}
+
+        value = self.run_async(
+            AsyncReadOnlyGateway(client).fetch_settlement("market-one"))
+
+        self.assertEqual(value, 1)
+        self.assertEqual(client.markets.settlement_slug, "market-one")
 
     def test_trade_wrapper_preserves_contract_quantity_and_maker_side(self):
         row = parse_trade_response(fixture("trade.json"), expected_slug="market-one")

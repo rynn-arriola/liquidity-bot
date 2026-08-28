@@ -419,38 +419,80 @@ class PrivateReadOnlyStream:
 class ShadowMarketStream:
     """Ordered full-book and public-trade events for shadow evaluation."""
 
-    def __init__(self, client: Any):
+    MAX_PENDING_EVENTS = 8192
+
+    def __init__(self, client: Any, *, max_pending: int | None = None):
         self._socket = client.ws.markets()
-        self._queue: asyncio.Queue[BookSnapshot | TradePrint | Exception] = asyncio.Queue()
+        capacity = self.MAX_PENDING_EVENTS if max_pending is None else int(max_pending)
+        if capacity <= 0:
+            raise ValueError("max_pending must be positive")
+        self._queue: asyncio.Queue[BookSnapshot | TradePrint | Exception] = (
+            asyncio.Queue(maxsize=capacity))
         self._slugs: set[str] = set()
         self._started = False
+        self._dropped_events = 0
+        self._decode_failures = 0
+        self._last_message_at: datetime | None = None
+        self._socket.on("message", self._on_message)
         self._socket.on("market_data", self._on_book)
         self._socket.on("trade", self._on_trade)
         self._socket.on("error", self._on_error)
         self._socket.on("close", self._on_close)
 
     def _put(self, item: BookSnapshot | TradePrint | Exception) -> None:
-        self._queue.put_nowait(item)
+        try:
+            self._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            if isinstance(item, Exception):
+                try:
+                    self._queue.get_nowait()
+                    self._dropped_events += 1
+                except asyncio.QueueEmpty:  # pragma: no cover - race guard
+                    pass
+                self._queue.put_nowait(item)
+            else:
+                self._dropped_events += 1
+
+    @property
+    def dropped_events(self) -> int:
+        return self._dropped_events
+
+    @property
+    def decode_failures(self) -> int:
+        return self._decode_failures
+
+    @property
+    def last_message_at(self) -> datetime | None:
+        return self._last_message_at
+
+    def _on_message(self, _message: Any) -> None:
+        self._last_message_at = datetime.now(timezone.utc)
 
     def _on_book(self, message: Any) -> None:
         try:
             item = parse_book_response(message)
             if item.slug not in self._slugs:
-                raise AdapterError(f"received book for unsubscribed slug {item.slug}")
+                self._put(AdapterError(
+                    f"received book for unsubscribed slug {item.slug}"))
+                return
             self._put(item)
+        except AdapterError:
+            self._decode_failures += 1
         except Exception as exc:
-            self._put(exc if isinstance(exc, AdapterError)
-                      else AdapterError(f"shadow book decode failed: {exc}"))
+            self._put(AdapterError(f"shadow book decode failed: {exc}"))
 
     def _on_trade(self, message: Any) -> None:
         try:
             item = parse_trade_response(message)
             if item.slug not in self._slugs:
-                raise AdapterError(f"received trade for unsubscribed slug {item.slug}")
+                self._put(AdapterError(
+                    f"received trade for unsubscribed slug {item.slug}"))
+                return
             self._put(item)
+        except AdapterError:
+            self._decode_failures += 1
         except Exception as exc:
-            self._put(exc if isinstance(exc, AdapterError)
-                      else AdapterError(f"shadow trade decode failed: {exc}"))
+            self._put(AdapterError(f"shadow trade decode failed: {exc}"))
 
     def _on_error(self, error: Any) -> None:
         self._put(AdapterError(f"shadow market WebSocket error: {error}"))
@@ -479,6 +521,7 @@ class ShadowMarketStream:
                 pass
             raise AdapterError(f"shadow market WebSocket startup failed: {exc}") from exc
         self._started = True
+        self._last_message_at = datetime.now(timezone.utc)
 
     async def next_event(
         self, *, timeout: float | None = None
@@ -495,6 +538,7 @@ class ShadowMarketStream:
         finally:
             self._started = False
             self._slugs.clear()
+            self._last_message_at = None
 
 
 class PrivateStreamPool:

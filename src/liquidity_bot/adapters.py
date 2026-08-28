@@ -149,6 +149,19 @@ def _market(row: Any, *, expected_slug: str | None = None,
         # full book remains responsible for the trading decision.
         best_bid = None
         best_offer = None
+
+    def optional_nonnegative(*fields: str) -> float | None:
+        for field in fields:
+            raw = row.get(field)
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                value = _amount(raw, field=f"market.{field}")
+            except AdapterError:
+                continue
+            return value if value >= 0 else None
+        return None
+
     return MarketMetadata(
         slug=slug,
         game_start=clock,
@@ -165,6 +178,9 @@ def _market(row: Any, *, expected_slug: str | None = None,
             if row.get("sportsMarketTypeV2") is not None else None),
         catalog_best_bid=best_bid,
         catalog_best_offer=best_offer,
+        catalog_volume_usd=optional_nonnegative("volumeNum", "volume"),
+        catalog_volume_24h_usd=optional_nonnegative("volume24hr"),
+        catalog_liquidity_usd=optional_nonnegative("liquidityNum", "liquidity"),
     )
 
 
@@ -219,6 +235,18 @@ def parse_book_response(response: Any, *, expected_slug: str | None = None) -> B
     # the offer side. Callers that need both check `has_side` themselves.
     if not bids and not offers:
         raise AdapterError("book is empty on both sides")
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+
+    def optional_stat(field: str) -> float | None:
+        raw = stats.get(field)
+        if raw is None or str(raw).strip() == "":
+            return None
+        try:
+            value = _amount(raw, field=f"book.stats.{field}")
+        except AdapterError:
+            return None
+        return value if value >= 0 else None
+
     return BookSnapshot(
         slug=actual_slug,
         bids=bids,
@@ -227,6 +255,9 @@ def parse_book_response(response: Any, *, expected_slug: str | None = None) -> B
         transact_time=_timestamp(
             _wire_value(data, "transactTime", "transact_time"),
             field="book.transactTime"),
+        shares_traded=optional_stat("sharesTraded"),
+        open_interest=optional_stat("openInterest"),
+        notional_traded_usd=optional_stat("notionalTraded"),
     )
 
 
@@ -620,6 +651,24 @@ class AsyncReadOnlyGateway:
             f"markets.book({slug})", lambda: self.client.markets.book(slug))
         return parse_book_response(response, expected_slug=slug)
 
+    async def fetch_settlement(self, slug: str) -> float:
+        response = await self._call(
+            f"markets.settlement({slug})",
+            lambda: self.client.markets.settlement(slug),
+        )
+        if not isinstance(response, dict):
+            raise AdapterError("market settlement response is not an object")
+        actual = str(_wire_value(response, "marketSlug", "slug") or slug).strip()
+        if actual != slug:
+            raise AdapterError(
+                f"settlement slug mismatch: expected {slug}, got {actual}")
+        value = _amount(
+            _wire_value(response, "settlementPrice", "settlement"),
+            field="market.settlementPrice")
+        if not 0 <= value <= 1:
+            raise AdapterError("market settlement must be within [0, 1]")
+        return value
+
     async def list_sports_markets(self) -> tuple[MarketMetadata, ...]:
         out: list[MarketMetadata] = []
         seen: set[str] = set()
@@ -652,3 +701,75 @@ class AsyncReadOnlyGateway:
             if len(page) < self.catalog_page_size:
                 return tuple(out)
         raise AdapterError("market catalog pagination exceeded max_pages")
+
+    async def list_upcoming_sports_markets(
+        self, *, start: datetime, end: datetime, limit: int = 500,
+    ) -> tuple[MarketMetadata, ...]:
+        """One bounded event page, flattened to upcoming market metadata.
+
+        The observed 2026-08-28 Retail market/event list wire shape omits the
+        documented volume fields even when ordered by volume.  This method is
+        therefore only a low-cost discovery read.  The scalp collector ranks
+        candidates later from book ``sharesTraded``/``notionalTraded`` stats.
+        """
+
+        if not 1 <= int(limit) <= 500:
+            raise ValueError("upcoming event limit must be within [1, 500]")
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise ValueError("upcoming event bounds must be aware and increasing")
+        params = {
+            "categories": ["sports"],
+            "active": True,
+            "closed": False,
+            "startTimeMin": start.isoformat(),
+            "startTimeMax": end.isoformat(),
+            "limit": int(limit),
+            "offset": 0,
+        }
+        response = await self._call(
+            "events.list(upcoming-sports)",
+            lambda: self.client.events.list(params),
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("events"), list):
+            raise AdapterError("upcoming sports response has no events list")
+        out: list[MarketMetadata] = []
+        seen: set[str] = set()
+        for event in response["events"]:
+            if not isinstance(event, dict) or not isinstance(event.get("markets"), list):
+                continue
+            for row in event["markets"]:
+                try:
+                    market = _market(row, require_clock=False)
+                except AdapterError:
+                    continue
+                if market.slug not in seen:
+                    seen.add(market.slug)
+                    out.append(market)
+        return tuple(out)
+
+    async def fetch_markets_by_slugs(
+        self, slugs: Iterable[str],
+    ) -> dict[str, MarketMetadata]:
+        clean = list(dict.fromkeys(str(slug).strip() for slug in slugs
+                                   if str(slug).strip()))
+        if not clean:
+            return {}
+        if len(clean) > 100:
+            raise ValueError("slug-filtered market read supports at most 100 markets")
+        params = {"slug": clean, "limit": len(clean), "offset": 0}
+        response = await self._call(
+            "markets.list(slug-filtered)",
+            lambda: self.client.markets.list(params),
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("markets"), list):
+            raise AdapterError("slug-filtered market response has no markets list")
+        out: dict[str, MarketMetadata] = {}
+        expected = set(clean)
+        for row in response["markets"]:
+            try:
+                market = _market(row, require_clock=False)
+            except AdapterError:
+                continue
+            if market.slug in expected:
+                out[market.slug] = market
+        return out

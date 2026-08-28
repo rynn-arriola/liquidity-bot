@@ -464,3 +464,15 @@ These are implementation requirements, not suggestions.
     notification preserves unseen state for retry, and a nonblocking lock plus
     timeout prevents overlap. Its failure cannot stop, restart, delay or alter
     trading.
+81. Spread-scalp measurement is a separate observation process with its own
+    SQLite database and no order, portfolio, balance or incentive-mutation
+    path. It may open the commissioning ledger only with SQLite `mode=ro` to
+    copy the current queue labels. Its combined public book/trade scope cannot
+    exceed 100 markets; catalog reads are capped locally at 1 request/second
+    and normally occur only every 15 minutes. A pair is successful only after
+    the full original quantity fills on both fixed-price sides using
+    conservative public-trade/queue evidence. Partial/one-side/no-fill states,
+    decode failures, drops, reconnects and stale exit books remain explicit.
+    None may select, delay, cancel, replace, resize or otherwise affect the
+    20-slot runner. A measurement restart restores durable unfinished first-
+    leg episodes; it never turns them into venue positions.

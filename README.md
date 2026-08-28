@@ -266,6 +266,30 @@ Do not run this with another process using the same API key. A future controlled
 trial requires an exclusive handoff: maker-lab stopped, one local process lease,
 and a whole-account flat/open-order reconciliation before any new risk.
 
+## Strict spread-scalp measurement
+
+This is a separate observation process. It cannot place orders and does not
+change the liquidity bot's selection, 20 slots, quote size or exits. It tracks
+pure high-volume moneylines and the exact current reward-slot markets in
+separate cohorts; a success requires the full requested quantity on both fixed
+maker sides.
+
+```bash
+./scripts/start_scalp_measurement.sh
+./scripts/status_scalp_measurement.sh
+PYTHONPATH=src .venv/bin/python -B scripts/scalp_measurement_report.py \
+  --database data/scalp.db --horizons 30,60,300,900,3600
+./scripts/stop_scalp_measurement.sh
+```
+
+The collector keeps compressed full books, public trades, queue-ahead/fill
+signals, selection ranks, stream coverage and settlement. Exit horizons are
+chosen when reporting, so waiting for the second leg, crossing after any later
+time, and holding unmatched inventory to settlement can be compared from the
+same raw path. Coverage gaps and partial fills are never counted as successful
+pairs. The server launcher caps its separate REST reads at 1 request/second and
+uses at most one 100-market public socket.
+
 ## Liquidity commissioning
 
 Automatic selection is the default. It bulk-loads active sports metadata,

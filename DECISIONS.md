@@ -30,6 +30,7 @@ show the operator the discrepancy.
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Measurement only; never cancel/repost automatically |
 | Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
+| Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, no orders or strategy gate |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
 
 The two $80 sensors protect against different evidence and responses; they are
@@ -76,6 +77,8 @@ sensor independently pauses new risk as soon as closed trading reaches $80.
   in the queue.
 - No size-20 live rollout yet.
 - No removal of the 2-cent spread gate.
+- No live spread-scalping orders or automatic early-exit rule; collected scalp
+  evidence must be reviewed before any separate strategy proposal.
 - No league-based reward-market filter.
 - No inference that an absent venue order is canceled.
 - No new droplet based solely on the transient August 26 location denial.

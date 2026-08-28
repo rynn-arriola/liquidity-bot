@@ -389,6 +389,55 @@ class StreamTests(unittest.TestCase):
             [call[0] for call in client.market_socket.calls],
             ["connect", "market_data", "trades", "close"])
 
+    def test_shadow_stream_counts_an_empty_book_without_reconnecting(self):
+        async def scenario():
+            client = FakeClient()
+            stream = ShadowMarketStream(client)
+            await stream.start(["market-one"])
+            client.market_socket.emit("market_data", {"marketData": {
+                "marketSlug": "market-one", "bids": [], "offers": []}})
+            client.market_socket.emit("market_data", fixture("book.json"))
+            try:
+                event = await stream.next_event(timeout=0.1)
+                return stream, event
+            finally:
+                await stream.close()
+
+        stream, event = self.run_async(scenario())
+        self.assertIsInstance(event, BookSnapshot)
+        self.assertEqual(stream.decode_failures, 1)
+
+    def test_shadow_stream_keeps_out_of_scope_book_fatal(self):
+        async def scenario():
+            client = FakeClient()
+            stream = ShadowMarketStream(client)
+            await stream.start(["market-two"])
+            client.market_socket.emit("market_data", fixture("book.json"))
+            try:
+                await stream.next_event(timeout=0.1)
+            finally:
+                await stream.close()
+
+        with self.assertRaisesRegex(AdapterError, "unsubscribed slug"):
+            self.run_async(scenario())
+
+    def test_shadow_stream_bounds_measurement_backlog(self):
+        async def scenario():
+            client = FakeClient()
+            stream = ShadowMarketStream(client, max_pending=1)
+            await stream.start(["market-one"])
+            client.market_socket.emit("trade", fixture("trade.json"))
+            client.market_socket.emit("trade", fixture("trade.json"))
+            try:
+                event = await stream.next_event(timeout=0.1)
+                return stream, event
+            finally:
+                await stream.close()
+
+        stream, event = self.run_async(scenario())
+        self.assertIsInstance(event, TradePrint)
+        self.assertEqual(stream.dropped_events, 1)
+
     def test_trade_stream_is_separate_bounded_and_trade_only(self):
         async def scenario():
             client = FakeClient()

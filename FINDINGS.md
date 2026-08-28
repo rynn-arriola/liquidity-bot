@@ -82,7 +82,16 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   mutation timeout, runtime recovery or stream-silence event; destructive
   fault injection remains prohibited, so bust/rejection/silence branches await
   natural evidence.
-
+- **Retail list volume fields were absent on the observed 2026-08-28 wire.**
+  `markets.list` and `events.list` returned active market metadata but omitted
+  documented `volume`/`volumeNum` values, so a server-ranked implementation
+  silently selected zero pure-scalp markets. The corrected measurement uses a
+  bounded upcoming-event discovery read and ranks only homogeneous observed
+  full-book `sharesTraded` values. A two-minute smoke then captured 379 books,
+  one trade, three strict pure-volume episodes and the 20 reward-slot labels on
+  43 subscribed markets, with zero reconnects/errors and zero orders. Nineteen
+  empty-book messages were retained as coverage gaps rather than reconnecting
+  or masquerading as usable data.
 ## How to add a finding
 
 Add a concise, dated fact here while it is current. Move detailed incident

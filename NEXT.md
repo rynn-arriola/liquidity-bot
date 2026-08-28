@@ -61,3 +61,13 @@ better than the old matched-pair-only row, but per-market realized attribution
 is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
+
+## 5. Spread-scalp collection needs a prospective cohort
+
+The isolated strict two-sided collector is implemented and locally smoke-
+tested. Continue it without changing live orders. Do not judge profitability
+from startup snapshots: require complete observation coverage, enough full-
+quantity both-side and one-side episodes across multiple days, and compare
+several predeclared early-exit horizons plus settlement. Keep `PURE_VOLUME`
+and `REWARD_SLOTS` separate; overlapping markets may appear in both analyses
+but must not be summed as independent profit.

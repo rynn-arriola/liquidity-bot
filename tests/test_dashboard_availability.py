@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import unittest
 from contextlib import redirect_stdout
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,6 +14,12 @@ from scripts import dashboard
 
 
 class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
+    def test_risk_caps_follow_the_restart_scoped_quantity(self):
+        config = dashboard.CommissioningConfig.diagnostic_defaults(
+            quote_size=Decimal("20"))
+
+        self.assertEqual(dashboard._risk_caps(config), (160.0, 80.0, 160.0))
+
     async def _render_with_failure(self, fail_at: str) -> str:
         class FailingAccount:
             def __init__(self, _gateway):

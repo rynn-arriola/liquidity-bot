@@ -59,6 +59,16 @@ W = 70
 # that.
 STALE_ACTION_SECONDS = 600.0
 
+
+def _risk_caps(config: CommissioningConfig = CONFIG) -> tuple[float, float, float]:
+    """Read scaled caps from one configured instance, never class defaults."""
+
+    return (
+        float(config.max_session_loss_usd),
+        float(config.max_market_loss_usd),
+        float(config.hard_stop_loss_usd),
+    )
+
 C = {"g": "\033[32m", "y": "\033[33m", "r": "\033[31m",
      "d": "\033[90m", "b": "\033[1m", "x": "\033[0m"}
 
@@ -691,14 +701,7 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                    + f"      resting  {orders}        trades  {fills_today} today"))
     print(line(" " * 46 + f"{fills_all:,} lifetime"))
     print(line())
-    try:
-        from liquidity_bot.commissioning import CommissioningConfig
-        session_cap = float(CommissioningConfig.max_session_loss_usd)
-        market_cap = float(CommissioningConfig.max_market_loss_usd)
-        hard_cap = float(CommissioningConfig.hard_stop_loss_usd)
-    except Exception:
-        session_cap = market_cap = 40.0
-        hard_cap = 45.0
+    session_cap, market_cap, hard_cap = _risk_caps()
     # Realised P&L for today, matched-pair priced: one YES plus one NO settles
     # at exactly 1.0000, so a completed pair realises `1.00 - paid`. This is an
     # INDEPENDENT estimate, not what the runner's stop reads -- the stop uses

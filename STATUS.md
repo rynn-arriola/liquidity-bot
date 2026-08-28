@@ -5,18 +5,16 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 15:56 ET / 2026-08-28 19:56 UTC
-- **Liquidity bot:** LIVE; supervisor PID 46008 / runner PID 46019, size 10
-- **Live exposure:** dashboard: 0 positions, 19 resting, 0 absent/unresolved
-- **20-slot health:** 19/20 quoting; one empty slot reports no qualifying
-  supply. No slot, size, horizon or strategy setting changed in this repair
+- **Verified:** 2026-08-28 16:27 ET / 2026-08-28 20:27 UTC
+- **Liquidity bot:** LIVE; supervisor PID 47601 / runner PID 47608, size 10
+- **Live exposure:** first post-start snapshot: 0 positions, 17 resting
+- **20-slot health:** 17/20 quoting; three empty slots report no supply
 - **Maker-lab:** stopped
-- **Deployed source:** server marker is `f2b501e`; runner has the `c28aba2`
-  no-ID startup repair loaded
+- **Deployed source:** server marker/runner source is `b7fe3fd`
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
-- **Pending risk scaling:** reviewed 30×/4×/8× build passed 756 tests and four
-  reversals; live remains $340/$40/$80 until deployment and restart
+- **Risk scaling:** active size-10 configuration is $300 portfolio, $40 market,
+  $80 session and $80 hard; 756 local/server tests and four reversals passed
 - **Verification:** all 755 local and server tests, Linux shell syntax,
   compilation, documentation audit, three reversals and four-way parity pass
 - **Webhook routing:** operations use error/status only; routine live, shadow
@@ -41,7 +39,7 @@ snapshots are under [docs/history/](docs/history/README.md).
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2 cents; 1.5-cent retention hysteresis |
-| Portfolio / market loss | $340 / $40 |
+| Portfolio / market loss | $300 / $40 (`30× / 4×` size) |
 | Account threshold | $80 realized sensor and $80 marked-equity sensor |
 | Risk day | `America/New_York`, DST-aware |
 

@@ -16,15 +16,13 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   stop alternating book errors from advancing rounds. Maintenance traces are
   bounded. Open paper loss is provisional until post-close evidence. Historical
   scans skip only post-cutoff cash; `1c82778` passed 745 local/server tests.
+- Scaled limits became properties, but the dashboard read class attributes;
+  its exception fallback silently displayed stale `$40/$40/$45`. It now reads
+  the configured instance, and size-20 regression expects `$80/$160/$160`.
 
 ## Latest deployed no-ID startup repair
 
-- Startup now refuses a no-ID PLACE once after account reconciliation and before
-  book binding; it never clears/retries ambiguity. The stopped-only resolver
-  blocks on any live order in that market, not the unsent local client ID. Stop
-  progress prints every 30 seconds; flat/order-free proof resolved the 18:35Z
-  intent. `c28aba2` passed 755 local/server tests, three reversals and parity.
-  At 19:54Z: 19/20 quoting, 19 resting, 0 positions/absent/unresolved, no risk stop; old 19:23Z failures did not recur.
+- Startup refuses a no-ID PLACE before book binding and never clears/retries it; repair blocks any same-market live order. Flat proof resolved the 18:35Z intent; `c28aba2` passed 755 tests, three reversals and parity. Its 19:54Z start reached 19/20 quoting, 19 resting, 0 positions/absent/unresolved and no risk stop.
 
 ## Latest deployed private-stream repair
 

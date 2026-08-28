@@ -3,13 +3,7 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Activate quantity-scaled risk only after review
-
-The reviewed build derives portfolio/market/account controls as `30×/4×/8×`
-quote size and passed 756 tests plus four reversals. The size-10 runner remains
-on `$340/$40/$80`; activate only through an explicitly authorized safe restart.
-
-## 1. Remaining natural acceptance
+## 0. Remaining natural acceptance
 
 The live runner has `a8d91d0` behavior loaded. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
@@ -29,7 +23,7 @@ Private-only silence now has natural acceptance with unchanged PID and
 global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
 only if recurrence shows a local liveness defect rather than venue/network loss.
 
-## 2. Accept rate-limited private-shard recovery
+## 1. Accept rate-limited private-shard recovery
 
 Commit `a8d91d0` is active. Its clean startup reached 20/20 quoting, 37 resting
 orders, zero positions, zero absent and zero persistent unresolved state without
@@ -39,7 +33,7 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 3. Collect fixed-GTC evidence
+## 2. Collect fixed-GTC evidence
 
 Commit `de1478b` repaired the cumulative-gap defect and is deployed. The live
 report proves 20 GTC starts, 20/20 feature rows, 20 clean paths and zero false
@@ -51,14 +45,14 @@ to load forward decode/drop interval closure. It loads on the next natural
 supervisor restart. Collect three complete days plus one held-out day before
 any strategy proposal, and never add overlapping cohorts as separate profit.
 
-## 4. One unresolved mutation can have account-wide availability cost
+## 3. One unresolved mutation can have account-wide availability cost
 
 Review whether unrelated proven-safe markets can continue while one owner is
 ambiguous without weakening the account-wide unowned-order invariant. Raising
 a timeout is not a fix; the venue has hidden accepted state longer than prior
 timeout values.
 
-## 5. Graceful stop success is not proof of flatness
+## 4. Graceful stop success is not proof of flatness
 
 `stop_commissioning.sh` primarily proves process termination; the runner can
 end with `flat=false`. Decide whether the script should fail when the final

@@ -18,7 +18,8 @@ from typing import Any
 
 from polymarket_us import AsyncPolymarketUS
 
-from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .adapters import (
+    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
 from .errors import AdapterError
 from .rewards import evaluate_order_score, select_applicable_period
 from .runtime_secrets import RuntimeSecretError, load_runtime_secrets
@@ -33,7 +34,8 @@ def client_from_environment() -> AsyncPolymarketUS:
     except RuntimeSecretError as exc:
         raise SystemExit(str(exc)) from exc
     return AsyncPolymarketUS(
-        key_id=secrets.key_id, secret_key=secrets.secret_key)
+        key_id=secrets.key_id, secret_key=secrets.secret_key,
+        timeout=REST_REQUEST_TIMEOUT_SECONDS)
 
 
 def _score_dict(result) -> dict[str, Any]:

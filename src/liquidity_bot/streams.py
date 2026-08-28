@@ -28,6 +28,10 @@ MAX_PRIVATE_SUBSCRIPTIONS = 10
 # adding subscriptions one at a time, the eleventh returns `max subscriptions
 # per connection reached`.
 MARKETS_PER_PRIVATE_CONNECTION = 8
+# Official connection guidance requires reconnecting after 180 seconds with no
+# stream data. REST may bridge a short socket gap, but cannot prove that each
+# WebSocket connection itself remains alive.
+STREAM_SILENCE_TIMEOUT_SECONDS = 180.0
 
 
 class MarketReadOnlyStream:
@@ -45,11 +49,21 @@ class MarketReadOnlyStream:
         # raised, so a rising number is visible without stopping the feed.
         self._dropped_books = 0
         self._last_drop: str | None = None
+        self._last_message_at: datetime | None = None
+        self._socket.on("message", self._on_message)
         self._socket.on("market_data", self._on_market_data)
         self._socket.on("error", self._on_error)
         self._socket.on("close", self._on_close)
 
+    @property
+    def last_message_at(self) -> datetime | None:
+        return self._last_message_at
+
+    def _on_message(self, _message: Any) -> None:
+        self._last_message_at = datetime.now(timezone.utc)
+
     def _on_market_data(self, message: Any) -> None:
+        self._last_message_at = datetime.now(timezone.utc)
         try:
             book = parse_book_response(message)
         except AdapterError as exc:
@@ -108,6 +122,20 @@ class MarketReadOnlyStream:
                 pass
             raise AdapterError(f"market WebSocket startup failed: {exc}") from exc
         self._started = True
+        self._last_message_at = datetime.now(timezone.utc)
+
+    def assert_live(
+        self, *, now: datetime,
+        max_silence_seconds: float = STREAM_SILENCE_TIMEOUT_SECONDS,
+    ) -> None:
+        """Raise when the connected market socket has gone silently dark."""
+
+        if not self._started or self._last_message_at is None:
+            raise AdapterError("market WebSocket liveness is unknown")
+        age = (now - self._last_message_at).total_seconds()
+        if age < 0 or age > max_silence_seconds:
+            raise AdapterError(
+                f"market WebSocket silent for {max(0.0, age):.1f}s")
 
     async def next_book(self, *, timeout: float | None = None) -> BookSnapshot:
         item = (await self._queue.get() if timeout is None
@@ -138,6 +166,7 @@ class MarketReadOnlyStream:
             self._started = False
             self._slugs.clear()
             self._pending_books.clear()
+            self._last_message_at = None
 
 
 class TradeReadOnlyStream:
@@ -499,6 +528,8 @@ class PrivateStreamPool:
         self._markets_per_connection = markets_per_connection
         self._streams: list[Any] = []
         self._readers: list[asyncio.Task[None]] = []
+        self._shard_last_message_at: list[datetime | None] = []
+        self._shard_slugs: list[tuple[str, ...] | None] = []
         self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
         self._started = False
 
@@ -506,11 +537,14 @@ class PrivateStreamPool:
     def connection_count(self) -> int:
         return len(self._streams)
 
-    async def _pump(self, stream: Any) -> None:
+    async def _pump(self, shard_index: int, stream: Any) -> None:
         """Forward one connection's events onto the shared queue."""
         while True:
             try:
-                self._queue.put_nowait(await stream.next_event())
+                event = await stream.next_event()
+                self._shard_last_message_at[shard_index] = datetime.now(
+                    timezone.utc)
+                self._queue.put_nowait(event)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -541,9 +575,51 @@ class PrivateStreamPool:
         except Exception:
             await self.close()
             raise
-        for stream in self._streams:
-            self._readers.append(asyncio.create_task(self._pump(stream)))
+        started_at = datetime.now(timezone.utc)
+        self._shard_last_message_at = [started_at for _ in self._streams]
+        self._shard_slugs = [
+            tuple(shard) if shard is not None else None for shard in shards]
+        for index, stream in enumerate(self._streams):
+            self._readers.append(asyncio.create_task(self._pump(index, stream)))
         self._started = True
+
+    def stale_shards(
+        self, *, now: datetime,
+        max_silence_seconds: float = STREAM_SILENCE_TIMEOUT_SECONDS,
+    ) -> tuple[int, ...]:
+        """Return every private connection whose own traffic is stale."""
+
+        if not self._started or len(self._shard_last_message_at) != len(
+                self._streams):
+            return tuple(range(len(self._streams) or 1))
+        stale: list[int] = []
+        for index, observed_at in enumerate(self._shard_last_message_at):
+            if observed_at is None:
+                stale.append(index)
+                continue
+            age = (now - observed_at).total_seconds()
+            if age < 0 or age > max_silence_seconds:
+                stale.append(index)
+        return tuple(stale)
+
+    def assert_live(
+        self, *, now: datetime,
+        max_silence_seconds: float = STREAM_SILENCE_TIMEOUT_SECONDS,
+    ) -> None:
+        """Fail the whole pool loudly when even one shard goes dark."""
+
+        stale = self.stale_shards(
+            now=now, max_silence_seconds=max_silence_seconds)
+        if not stale:
+            return
+        details = []
+        for index in stale:
+            scope = (self._shard_slugs[index]
+                     if index < len(self._shard_slugs) else None)
+            size = len(scope) if scope is not None else "account"
+            details.append(f"{index + 1}({size} markets)")
+        raise AdapterError(
+            "private WebSocket shard silence: " + ", ".join(details))
 
     async def next_event(self, *, timeout: float | None = None) -> PrivateEvent:
         item = (await self._queue.get() if timeout is None
@@ -582,4 +658,6 @@ class PrivateStreamPool:
             except Exception:
                 pass
         self._streams.clear()
+        self._shard_last_message_at.clear()
+        self._shard_slugs.clear()
         self._started = False

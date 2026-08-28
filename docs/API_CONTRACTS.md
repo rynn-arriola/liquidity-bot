@@ -118,7 +118,13 @@ Official references:
   Terminal order events produced before the listener exists are not replayable
   by contract, and GET-by-ID can temporarily answer NotFound. Recovery and
   shutdown drain already-buffered private events before relying on REST.
-- Heartbeat silence beyond the configured freshness window disables new risk.
+- Each private connection has its own last-message clock. Heartbeats and
+  account events refresh only the shard that delivered them; 180 seconds of
+  silence on any shard fails the whole private pool into bounded recovery.
+- The market connection has a separate last-message clock and the same
+  180-second deadline. A fresh REST reconcile cannot refresh either WebSocket
+  clock. If both stream families are stale they are rebuilt together; if one
+  is stale its existing scoped recovery path applies.
 - The authenticated account stream can also be change-driven after its initial
   balance snapshot. While the socket remains connected, a complete whole-
   account REST order/position reconciliation every ten seconds can refresh
@@ -142,6 +148,37 @@ Official references:
 - Terminal retrieve responses can omit `updateTime`; the observed terminal
   clock is `lastTransactTime`. Order normalization prefers `updateTime`, then
   `lastTransactTime`, and only then creation/insertion clocks.
+- A new-risk post-only quote requires cached `buyingPower` at least equal to
+  `price * quantity`. A successful submission reserves that notional locally
+  for later markets in the same decision sweep until the normal authenticated
+  balance refresh replaces the cache.
+- The latest structured rejection delays only a flat market's new entry:
+  post-only races wait one second, balance/risk failures wait 15 seconds and an
+  unknown validation rejection waits 60 seconds. A nonzero-position reducing
+  quote, cancel or IOC exit bypasses both buying-power and rejection delays.
+
+## Execution and trade lifecycle
+
+- Execution ID identifies one fill leg. Trade ID identifies the separate venue
+  trade lifecycle; either can arrive before the other and both are durable.
+- Retained portfolio activity can report `TRADE_STATE_BUSTED`. Each linked
+  unreversed fill is marked reversed exactly once and is thereafter excluded
+  from inventory basis, known-fill totals, realized P&L, fee/fill telemetry and
+  reports. A repeated BUSTED observation may repair a fill linked later but may
+  not reverse it twice.
+- Trade and fill market identity must agree. A conflict fails closed. A BUSTED
+  trade may not silently transition back to an active state.
+- A complete current venue position whose authoritative boundary is at or
+  after the bust already includes the reversal and outranks arithmetic. The
+  ledger marks the fill reversed without changing that newer position again.
+- Portfolio execution history is retained venue data, not durable negative
+  evidence. It may be pruned or reset; an empty page never proves no fill,
+  cancellation or flatness. The local ledger preserves only history already
+  observed by this project.
+- Rolling deployment may expose read-only reports to the pre-migration fill
+  schema while the old runner is still active. Reports inspect SQLite metadata
+  without writing: before `reversed` exists all legacy fills remain visible;
+  after the additive migration they exclude rows where `reversed=1`.
 
 ## Execution commission
 
@@ -176,8 +213,9 @@ Official references:
 - `currentBalance`, `assetNotional`, and `buyingPower` are all required finite
   decimals. A missing field fails closed.
 - Commissioning marked equity is `currentBalance + assetNotional`, matching the
-  API's cash plus marked securities values. `buyingPower` is retained for
-  diagnostics but is never substituted for equity or P&L.
+  API's cash plus marked securities values. `buyingPower` is an affordability
+  gate only for a flat market's new post-only entry; it is never substituted
+  for equity or P&L and never gates risk reduction.
 
 ## Request budget
 
@@ -187,7 +225,13 @@ Official references:
 - Every attempt passes through that gate exactly once; callers do not pace
   manually.
 - Only a confirmed HTTP 429 receives bounded read retry/backoff. State-changing
-  requests never auto-retry.
+  requests never auto-retry. A parseable numeric or HTTP-date `Retry-After` is
+  honored up to 60 seconds; otherwise the existing bounded exponential delay
+  applies.
+- Every owned official-SDK client uses a 15-second REST request timeout.
+  Adapter errors preserve safe operation, HTTP status, structured error code,
+  trace/request ID and parsed retry delay when available; secrets and arbitrary
+  response bodies are not copied into logs.
 - Market books and trades are streamed after startup rather than polled.
 - Because the market WebSocket is change-driven, a quiet one-market book is
   refreshed by REST before its five-second decision freshness limit. The

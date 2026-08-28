@@ -437,3 +437,30 @@ These are implementation requirements, not suggestions.
     proof. Nonzero position, working or `UNKNOWN_ABSENT` order, or unresolved
     intent retains the owner. Retained orders are not cancelled, the near-exit
     deadline guard remains, and the active tuple cannot exceed 20.
+77. Venue execution history is positive retained evidence only. It may be
+    reset or pruned, so an empty activity result can never prove no execution,
+    cancellation or flatness. Execution ID and trade ID are separate durable
+    identities. A linked `TRADE_STATE_BUSTED` fill must be marked reversed
+    exactly once and excluded from position basis, known-fill totals, P&L,
+    fees and reports. Trade/market identity conflict or reactivation after
+    BUSTED fails closed. A newer complete authoritative position already
+    contains the reversal and must not be arithmetically reversed again.
+78. Buying power may constrain only a flat market's new post-only entry. The
+    required notional is `price * quantity`, and a successful submission must
+    reserve cached capacity for the remainder of that 20-slot decision sweep.
+    Rejection backoff is structured, bounded and market-local. A reducer,
+    cancel or IOC exit may never be blocked or delayed by buying power or a
+    prior entry rejection. Buying power is never equity, P&L or flat proof.
+79. REST account freshness cannot certify WebSocket liveness. Every private
+    shard and the market connection owns an independent last-message clock;
+    180 seconds of silence enters the existing bounded scoped recovery. If both
+    stream families are stale they are rebuilt together. REST requests use a
+    15-second timeout. Only confirmed 429 reads may honor bounded
+    `Retry-After`; ambiguous mutations remain durable and never auto-retry.
+80. Changelog monitoring is operationally isolated. It may read only the
+    public RSS feed and notify the existing error channel; it has no API key,
+    execution-ledger access, REST-governor share, WebSocket subscription or
+    runner mutation path. First run establishes a no-spam baseline, failed
+    notification preserves unseen state for retry, and a nonblocking lock plus
+    timeout prevents overlap. Its failure cannot stop, restart, delay or alter
+    trading.

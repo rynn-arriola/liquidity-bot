@@ -41,6 +41,7 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from liquidity_bot.reward_calendar import reward_day  # noqa: E402
+from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
 # Fills before this are unusable: see the module docstring.
 CLEAN_FROM = "2026-08-18"
@@ -65,9 +66,11 @@ def main() -> int:
     markets: dict[str, dict] = defaultdict(
         lambda: {"lq": Decimal(0), "sq": Decimal(0), "paid": Decimal(0),
                  "first": None, "last": None, "day": None})
+    active_fills = active_fills_predicate(connection)
     for row in connection.execute(
             "SELECT market_slug, intent, qty, price, received_at "
-            "FROM execution_fills WHERE intent IS NOT NULL AND received_at>=? "
+            f"FROM execution_fills WHERE {active_fills} "
+            "AND intent IS NOT NULL AND received_at>=? "
             "ORDER BY received_at", (args.since,)):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         cell = markets[row["market_slug"]]

@@ -4,6 +4,7 @@ import asyncio
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from liquidity_bot.adapters import (
     AdapterError,
@@ -63,6 +64,15 @@ class CountingLimiter:
 
 class RateLimited(Exception):
     status_code = 429
+
+
+class StructuredHTTPError(Exception):
+    def __init__(self, status_code, *, headers=None, body=None):
+        super().__init__("structured failure")
+        self.status_code = status_code
+        self.response = SimpleNamespace(
+            status_code=status_code, headers=headers or {})
+        self.body = body
 
 
 class GatewayTests(unittest.TestCase):
@@ -174,6 +184,41 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual(limiter.calls, 2)
         self.assertEqual(sleeps, [0.25])
+
+    def test_429_honors_retry_after_and_preserves_diagnostics(self):
+        class Client(FakeClient):
+            async def get(self, path, *, query=None, authenticated=False):
+                response = self.get_responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        client = Client()
+        client.get_responses = [StructuredHTTPError(
+            429,
+            headers={"Retry-After": "2.5", "X-Trace-Id": "trace-429"},
+            body={"code": "RATE_LIMITED"}), fixture("earnings.json")]
+        rows = self.run_async(AsyncReadOnlyGateway(
+            client, retry_attempts=2, retry_base_seconds=.25,
+            sleep=fake_sleep).fetch_earnings())
+
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sleeps, [2.5])
+
+        client.get_responses = [StructuredHTTPError(
+            422, headers={"X-Trace-Id": "trace-422"},
+            body={"errorCode": "INVALID_QUANTITY"})]
+        with self.assertRaises(AdapterError) as raised:
+            self.run_async(AsyncReadOnlyGateway(client).fetch_earnings())
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(raised.exception.error_code, "INVALID_QUANTITY")
+        self.assertEqual(raised.exception.trace_id, "trace-422")
+        self.assertIn("trace=trace-422", str(raised.exception))
 
     def test_unconfirmed_global_limit_text_is_not_treated_as_429(self):
         class Client(FakeClient):

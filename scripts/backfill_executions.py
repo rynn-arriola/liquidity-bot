@@ -143,7 +143,12 @@ async def main() -> int:
                 # a conflicting rewrite. It is not -- the execution id is the
                 # identity, and we already hold it.
                 conflicts += 1
+        reversed_trades = sum(
+            int(ledger.apply_trade_state(state, received_at=now))
+            for state in executions.trade_states)
         print(f"applied {added} new fills ({conflicts} already held)")
+        print(
+            f"applied/repaired {reversed_trades} trade-state observation(s)")
 
     ledger.close()
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -163,12 +168,12 @@ async def main() -> int:
         print("  *** runner will place real exit orders against it.")
         print("  *** Restore the backup above if they do not match the venue.")
     print("")
-    print("fills per day, with the MAKER share -- a day well below the others")
+    print("active fills per day, with the MAKER share -- a day well below the others")
     print("is a day whose passive legs are still missing:")
     for row in conn.execute(
             "SELECT substr(event_at,1,10) d, COUNT(*) n, "
             "SUM(CASE WHEN liquidity='MAKER' THEN 1 ELSE 0 END) mk "
-            "FROM execution_fills GROUP BY d ORDER BY d"):
+            "FROM execution_fills WHERE reversed=0 GROUP BY d ORDER BY d"):
         share = (100.0 * row[2] / row[1]) if row[1] else 0.0
         print(f"   {row[0]}  fills={row[1]:<5d} maker={row[2]:<5d} ({share:.0f}%)")
     conn.close()

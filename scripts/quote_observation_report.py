@@ -15,6 +15,8 @@ from pathlib import Path
 from statistics import median
 from typing import Callable, Iterable
 
+from liquidity_bot.sqlite_compat import active_fills_predicate
+
 
 TERMINAL = {"FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}
 
@@ -40,6 +42,7 @@ def _rows(
         cutoff = datetime.now(timezone.utc) - timedelta(hours=recent_hours)
         where = "WHERE q.observed_at>=?"
         params = (cutoff.isoformat(),)
+    active_fills = active_fills_predicate(connection)
     return list(connection.execute(
         f"""
         WITH first_fill AS (
@@ -49,7 +52,7 @@ def _rows(
                    MAX(CASE WHEN UPPER(COALESCE(liquidity,''))='MAKER'
                             THEN 1 ELSE 0 END) AS has_maker_fill
             FROM execution_fills
-            WHERE client_order_id IS NOT NULL
+            WHERE client_order_id IS NOT NULL AND {active_fills}
             GROUP BY client_order_id
         )
         SELECT q.*, o.status AS order_status, o.reject_reason,

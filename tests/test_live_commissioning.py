@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from liquidity_bot.account_snapshots import ExecutionHistoryBatch
 from liquidity_bot.commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
@@ -21,7 +22,9 @@ from liquidity_bot.commissioning import (
 )
 from liquidity_bot.discord_summary import GRAY, RED
 from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
-from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState
+from liquidity_bot.execution_ledger import (
+    Execution, ExecutionLedger, LedgerConflict, OrderState, PositionState,
+    TradeStateObservation)
 from liquidity_bot.live_commissioning import (
     MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
     MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
@@ -43,7 +46,8 @@ from liquidity_bot.market_selector import (
 )
 from liquidity_bot.market_state import MarketState
 from liquidity_bot.models import (
-    BookLevel, BookSnapshot, MarketIncentive, MarketMetadata, TradePrint,
+    AccountBalance, BookLevel, BookSnapshot, MarketIncentive, MarketMetadata,
+    TradePrint,
 )
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
@@ -653,6 +657,119 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_entry_is_blocked_before_mutation_when_buying_power_is_low(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.balance = AccountBalance(
+            Decimal("100"), Decimal("0"), Decimal("4"), NOW)
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one",
+            "reward_positive_candidate", side="bid", price=.49,
+            qty=Decimal("10"))
+
+        with patch.object(runner.reconciler, "plan", return_value=[action]), \
+                patch.object(runner.driver, "apply_one", new=AsyncMock()) as apply:
+            stop, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, runner.BUYING_POWER_RECHECK_SECONDS)
+        apply.assert_not_awaited()
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_successful_entry_reserves_power_for_later_slots_in_sweep(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.balance = AccountBalance(
+            Decimal("100"), Decimal("0"), Decimal("10"), NOW)
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one",
+            "reward_positive_candidate", side="bid", price=.50,
+            qty=Decimal("10"))
+
+        result = SimpleNamespace(submitted=object())
+        with patch.object(runner.reconciler, "plan", return_value=[action]), \
+                patch.object(runner, "_quote_observation_for_action",
+                             return_value=None), \
+                patch.object(runner.driver, "apply_one",
+                             new=AsyncMock(return_value=result)):
+            stop, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 0)
+        self.assertEqual(runner.balance.buying_power, Decimal("5.0"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_structured_post_only_rejection_has_brief_local_backoff(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.apply_order_event(
+            "test", "rejected-post-only", OrderState(
+                client_order_id="rejected-client",
+                exchange_order_id="rejected-exchange",
+                market_slug="market-one", side="BUY",
+                price=Decimal("0.49"), original_qty=Decimal("10"),
+                filled_qty=Decimal("0"), status="REJECTED", event_at=NOW,
+                reject_reason="ORD_REJECT_REASON_POST_ONLY"),
+            received_at=NOW)
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one",
+            "reward_positive_candidate", side="bid", price=.49,
+            qty=Decimal("10"))
+
+        with patch.object(runner.reconciler, "plan", return_value=[action]), \
+                patch.object(runner.driver, "apply_one", new=AsyncMock()) as apply:
+            stop, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 1.0)
+        apply.assert_not_awaited()
+        self.assertEqual(
+            runner._rejection_cooldown_seconds(
+                "ORD_REJECT_REASON_INSUFFICIENT_BALANCE"), 15.0)
+        self.assertEqual(
+            runner._rejection_cooldown_seconds(
+                "ORD_REJECT_REASON_INVALID_QUANTITY"), 60.0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_rejection_and_buying_power_never_delay_a_reducing_quote(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.balance = AccountBalance(
+            Decimal("0"), Decimal("5"), Decimal("0"), NOW)
+        runner.ledger.apply_position_event(
+            "test", "held-position",
+            PositionState("market-one", Decimal("10"), NOW),
+            received_at=NOW)
+        runner.ledger.apply_order_event(
+            "test", "old-rejection", OrderState(
+                client_order_id="rejected-client",
+                exchange_order_id="rejected-exchange",
+                market_slug="market-one", side="BUY",
+                price=Decimal("0.49"), original_qty=Decimal("10"),
+                filled_qty=Decimal("0"), status="REJECTED", event_at=NOW,
+                reject_reason="ORD_REJECT_REASON_INVALID_QUANTITY"),
+            received_at=NOW)
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one", "passive_reducer",
+            side="offer", price=.51, qty=Decimal("10"))
+        result = SimpleNamespace(submitted=object())
+
+        with patch.object(runner.reconciler, "plan", return_value=[action]), \
+                patch.object(runner.driver, "apply_one",
+                             new=AsyncMock(return_value=result)) as apply:
+            stop, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 0)
+        apply.assert_awaited_once()
+        self.assertEqual(runner.balance.buying_power, Decimal("0"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_operator_stop_interrupts_an_in_progress_decision_sweep(self):
         """A delivered SIGTERM must bar the next ordinary venue mutation.
 
@@ -779,6 +896,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 await runner._refresh_execution_state_for_decision(stale)
 
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=stale))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_trade_identity_conflict_revokes_rest_authority(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.apply_execution(Execution(
+            execution_id="fill-conflict",
+            client_order_id="client-conflict",
+            exchange_order_id="exchange-conflict",
+            market_slug="market-one",
+            side="BUY",
+            price=Decimal("0.50"),
+            qty=Decimal("1"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=NOW,
+            trade_id="trade-conflict",
+        ), received_at=NOW)
+        conflict = ExecutionHistoryBatch((), (TradeStateObservation(
+            trade_id="trade-conflict",
+            market_slug="market-two",
+            state="TRADE_STATE_BUSTED",
+            update_at=NOW + timedelta(seconds=1),
+        ),))
+
+        with patch.object(
+                runner.account, "fetch_executions",
+                new=AsyncMock(return_value=conflict)):
+            with self.assertRaisesRegex(LedgerConflict, "market identities"):
+                await runner._rest_reconcile(NOW + timedelta(seconds=2))
+
+        self.assertFalse(runner.gate.rest_reconciled)
+        self.assertIsNone(runner.gate.last_reconcile_at)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -8121,6 +8273,50 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
                 seconds=runner.config.market_selection_refresh_seconds))
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_silent_private_shard_enters_normal_recovery(self):
+        """REST freshness must not hide a dead private connection."""
+
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        old_private = runner.private_stream
+
+        def silent(**_kwargs):
+            raise AdapterError("private WebSocket shard silence: 2")
+
+        old_private.assert_live = silent
+        recovered = []
+
+        async def recover(exc):
+            recovered.append(str(exc))
+            replacement = FakePrivateStream(None)
+            await replacement.start(list(runner.active_slugs))
+            runner.private_stream = replacement
+            return None
+
+        runner._recover_private_stream = recover
+        market_task = asyncio.create_task(runner.market_stream.next_book())
+        private_task = asyncio.create_task(old_private.next_event())
+        try:
+            new_market, new_private, stop = (
+                await runner._consume_ready_stream_tasks(
+                    market_task, private_task))
+            self.assertIsNone(stop)
+            self.assertIs(new_market, market_task)
+            self.assertIsNot(new_private, private_task)
+            self.assertTrue(private_task.cancelled())
+            self.assertEqual(
+                recovered, ["private WebSocket shard silence: 2"])
+        finally:
+            for task in (market_task, locals().get("new_private")):
+                if task is not None:
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (market_task, locals().get("new_private"))
+                  if task is not None),
+                return_exceptions=True)
+            await runner.private_stream.close()
+            await runner.market_stream.close()
 
     async def test_recovery_rebinds_both_streams_and_resumes(self):
         """`_recover_bound_streams` must fix BOTH sides. The two existing

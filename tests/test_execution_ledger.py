@@ -14,6 +14,7 @@ from liquidity_bot.execution_ledger import (
     OrderState,
     PositionState,
     QuoteObservation,
+    TradeStateObservation,
 )
 from liquidity_bot.models import RewardEarning
 
@@ -37,7 +38,8 @@ def order(*, filled="0", status="OPEN", at=T0) -> OrderState:
 
 
 def execution(execution_id: str, qty: str, *, side="BUY",
-              intent="ORDER_INTENT_BUY_LONG", at=T0) -> Execution:
+              intent="ORDER_INTENT_BUY_LONG", at=T0,
+              trade_id=None, trade_state=None) -> Execution:
     return Execution(
         execution_id=execution_id,
         client_order_id="client-one",
@@ -50,6 +52,8 @@ def execution(execution_id: str, qty: str, *, side="BUY",
         liquidity="MAKER",
         intent=intent,
         event_at=at,
+        trade_id=trade_id,
+        trade_state=trade_state,
     )
 
 
@@ -281,6 +285,93 @@ class ExecutionLedgerTests(unittest.TestCase):
         with self.assertRaises(LedgerConflict):
             self.ledger.apply_execution(
                 execution("fill-one", "0.250"), received_at=T0)
+
+    def test_busted_trade_reverses_position_and_economics_exactly_once(self):
+        fill = execution("fill-busted", "2", trade_id="trade-one")
+        self.ledger.apply_execution(fill, received_at=T0)
+        bust = TradeStateObservation(
+            "trade-one", "market-one", "BUSTED",
+            T0 + timedelta(seconds=10))
+
+        self.assertTrue(self.ledger.apply_trade_state(
+            bust, received_at=T0 + timedelta(seconds=11)))
+        self.assertFalse(self.ledger.apply_trade_state(
+            bust, received_at=T0 + timedelta(seconds=12)))
+
+        row = self.ledger.query(
+            "SELECT reversed,trade_state FROM execution_fills")[0]
+        self.assertEqual((row["reversed"], row["trade_state"]),
+                         (1, "TRADE_STATE_BUSTED"))
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+        self.assertEqual(self.ledger.realized_pnl("market-one"), Decimal("0"))
+
+    def test_newer_position_snapshot_prevents_double_bust_reversal(self):
+        self.ledger.apply_execution(
+            execution("fill-before-snapshot", "2", trade_id="trade-two"),
+            received_at=T0)
+        snapshot_at = T0 + timedelta(seconds=20)
+        self.ledger.apply_position_snapshot(
+            "post-bust-snapshot", [], as_of=snapshot_at,
+            observed_at=snapshot_at, complete_account=True)
+
+        self.ledger.apply_trade_state(TradeStateObservation(
+            "trade-two", "market-one", "TRADE_STATE_BUSTED",
+            T0 + timedelta(seconds=10)), received_at=snapshot_at)
+
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+        self.assertEqual(
+            self.ledger.query("SELECT reversed FROM execution_fills")[0][0], 1)
+
+    def test_bust_before_fill_marks_late_fill_reversed_without_position(self):
+        bust = TradeStateObservation(
+            "trade-three", "market-one", "BUSTED", T0)
+        self.ledger.apply_trade_state(bust, received_at=T0)
+
+        self.ledger.apply_execution(
+            execution("late-busted-fill", "2", trade_id="trade-three"),
+            received_at=T0 + timedelta(seconds=1))
+
+        row = self.ledger.query(
+            "SELECT reversed,trade_state FROM execution_fills")[0]
+        self.assertEqual((row["reversed"], row["trade_state"]),
+                         (1, "TRADE_STATE_BUSTED"))
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+
+    def test_late_trade_link_repairs_known_bust_immediately(self):
+        original = execution("fill-linked-late", "2")
+        self.ledger.apply_execution(original, received_at=T0)
+        bust = TradeStateObservation(
+            "trade-four", "market-one", "BUSTED",
+            T0 + timedelta(seconds=10))
+        self.ledger.apply_trade_state(bust, received_at=T0)
+        self.assertEqual(self.ledger.position("market-one"), Decimal("2"))
+
+        enriched = execution(
+            "fill-linked-late", "2", trade_id="trade-four",
+            trade_state="BUSTED")
+        self.assertFalse(self.ledger.apply_execution(
+            enriched, received_at=T0 + timedelta(seconds=11)))
+
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+        self.assertEqual(
+            self.ledger.query("SELECT reversed FROM execution_fills")[0][0], 1)
+        self.assertFalse(self.ledger.apply_trade_state(
+            bust, received_at=T0 + timedelta(seconds=12)))
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+
+    def test_trade_market_identity_mismatch_fails_without_reversal(self):
+        self.ledger.apply_execution(
+            execution("fill-market-one", "2", trade_id="trade-mismatch"),
+            received_at=T0)
+
+        with self.assertRaisesRegex(LedgerConflict, "market identities"):
+            self.ledger.apply_trade_state(TradeStateObservation(
+                "trade-mismatch", "market-two", "BUSTED",
+                T0 + timedelta(seconds=10)), received_at=T0)
+
+        self.assertEqual(self.ledger.position("market-one"), Decimal("2"))
+        self.assertEqual(
+            self.ledger.query("SELECT reversed FROM execution_fills")[0][0], 0)
 
     def test_buy_short_intent_reduces_position_even_with_buy_side(self):
         self.ledger.apply_execution(

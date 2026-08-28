@@ -54,6 +54,7 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
+from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
 BUY_LONG = "ORDER_INTENT_BUY_LONG"
 BUY_SHORT = "ORDER_INTENT_BUY_SHORT"
@@ -78,8 +79,10 @@ def _from_ledger(db: str):
                  "S_q": Decimal(0), "S_c": Decimal(0), "S_out": None})
     spent = fees = Decimal(0)
     unknown_intent = 0
-    for row in conn.execute("SELECT market_slug,intent,price,qty,fee,outcome "
-                            "FROM execution_fills"):
+    active_fills = active_fills_predicate(conn)
+    for row in conn.execute(
+            "SELECT market_slug,intent,price,qty,fee,outcome "
+            f"FROM execution_fills WHERE {active_fills}"):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         fees += Decimal(str(row["fee"] or 0))
         book = per_market[row["market_slug"]]

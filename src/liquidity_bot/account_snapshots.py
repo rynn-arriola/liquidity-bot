@@ -2,17 +2,44 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError
-from .execution_ledger import OrderState, PositionState
+from .execution_ledger import OrderState, PositionState, TradeStateObservation
 from .models import AccountBalance
 from .execution_ledger import Execution
 from .venue_state import (
     ClientIdResolver, normalize_execution, normalize_order, normalize_position)
+
+
+@dataclass(frozen=True)
+class ExecutionHistoryBatch:
+    """Positive fill legs plus independent lifecycle state observations."""
+
+    executions: tuple[Execution, ...]
+    trade_states: tuple[TradeStateObservation, ...]
+
+    def __iter__(self) -> Iterator[Execution]:
+        return iter(self.executions)
+
+    def __len__(self) -> int:
+        return len(self.executions)
+
+
+def _activity_time(value: Any, *, fallback: datetime) -> datetime:
+    if value in (None, ""):
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AdapterError("trade activity updateTime is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise AdapterError("trade activity updateTime must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 class AsyncAccountSnapshotGateway:
@@ -44,10 +71,18 @@ class AsyncAccountSnapshotGateway:
 
     async def fetch_executions(
         self, *, observed_at: datetime, max_pages: int = 2,
-    ) -> tuple[Execution, ...]:
-        """Every fill the venue has recorded for this account.
+    ) -> ExecutionHistoryBatch:
+        """Recent fills still retained by the venue for this account.
 
-        A third source for fills, and the only one that survives a restart.
+        A third source for fills, and a restart backfill only while the venue
+        still retains the applicable execution history.  Polymarket may prune
+        or explicitly reset that history (changelog v0.0.79 did so during the
+        2026-08-27 maintenance window).  The durable local execution ledger is
+        the only history this project controls across both process restarts and
+        venue-history resets.  An empty activity response is therefore never
+        proof that no fill occurred, that an order was canceled, or that the
+        account is flat.
+
         The other two are the order-create response, which carries executions
         only when the match completes before it returns, and the private
         WebSocket. A shutdown IOC satisfies neither: it returns before its
@@ -61,12 +96,16 @@ class AsyncAccountSnapshotGateway:
         """
 
         rows: dict[str, Execution] = {}
+        trade_states: dict[str, TradeStateObservation] = {}
         cursor: str | None = None
         # Deliberately shallow. This runs on every reconcile and shares the one
         # 4 req/s governor with book refreshes and order placement, so walking
         # the whole history would spend the budget quotes need -- and there is
-        # no point: anything older is already recorded, and apply_execution
-        # dedupes. Two pages is recent activity with headroom for a burst.
+        # no point during normal operation: anything older that we observed is
+        # already recorded locally, and apply_execution dedupes. Two pages is
+        # recent activity with headroom for a burst. A venue reset can make
+        # this legitimately empty; callers may use it only as positive fill
+        # evidence, never as a complete negative snapshot.
         for _ in range(max(1, min(max_pages, self.gateway.max_pages))):
             params: dict[str, Any] = {"limit": 100}
             if cursor:
@@ -84,6 +123,25 @@ class AsyncAccountSnapshotGateway:
                 trade = activity.get("trade")
                 if not isinstance(trade, dict):
                     continue
+                trade_id = str(trade.get("id") or "").strip()
+                trade_state = str(trade.get("state") or "").strip().upper()
+                if trade_state and not trade_state.startswith("TRADE_STATE_"):
+                    trade_state = "TRADE_STATE_" + trade_state
+                if trade_id and trade_state:
+                    market_slug = str(
+                        trade.get("marketSlug")
+                        or trade.get("market_slug") or "").strip()
+                    if market_slug:
+                        update_at = _activity_time(
+                            trade.get("updateTime", trade.get("update_time")),
+                            fallback=observed_at)
+                        prior = trade_states.get(trade_id)
+                        if prior is None or update_at >= prior.update_at:
+                            trade_states[trade_id] = TradeStateObservation(
+                                trade_id=trade_id,
+                                market_slug=market_slug,
+                                state=trade_state,
+                                update_at=update_at)
                 # A trade has two legs and the venue reports BOTH -- ours and
                 # the counterparty's. `isAggressor` says which one is ours,
                 # and it is exact: checked against our own order ids over 25
@@ -116,6 +174,10 @@ class AsyncAccountSnapshotGateway:
                             execution = normalize_execution(
                                 leg, observed_at=observed_at,
                                 resolve_client_id=self.resolve_client_id)
+                            execution = replace(
+                                execution,
+                                trade_id=trade_id or execution.trade_id,
+                                trade_state=trade_state or None)
                         except AdapterError:
                             # Malformed rather than foreign. Failing the whole
                             # sweep over one leg would lose our own fills too.
@@ -133,7 +195,8 @@ class AsyncAccountSnapshotGateway:
             cursor = str(response.get("nextCursor") or "").strip() or None
             if not cursor or response.get("eof"):
                 break
-        return tuple(rows.values())
+        return ExecutionHistoryBatch(
+            tuple(rows.values()), tuple(trade_states.values()))
 
     async def fetch_positions(
         self, *, observed_at: datetime,

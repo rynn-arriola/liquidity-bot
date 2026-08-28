@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from liquidity_bot.errors import AdapterError
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
@@ -102,6 +103,29 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(AdapterError):
             await pool.next_event(timeout=1)
+
+    async def test_one_silent_shard_is_detected_independently(self):
+        pool = self.pool()
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+
+        with self.assertRaisesRegex(
+                AdapterError, r"shard silence: 2\(8 markets\)"):
+            pool.assert_live(now=now)
+
+        # Traffic on shard one cannot hide that shard two is stale.
+        FakeStream.instances[0].queue.put_nowait(event("market-0"))
+        await pool.next_event(timeout=1)
+        with self.assertRaisesRegex(AdapterError, r"shard silence: 2"):
+            pool.assert_live(now=datetime.now(timezone.utc))
+
+        # Its own heartbeat repairs only its own liveness clock.
+        FakeStream.instances[1].queue.put_nowait(PrivateEvent(
+            PrivateEventKind.HEARTBEAT, {}, request_id="heartbeat"))
+        await pool.next_event(timeout=1)
+        pool.assert_live(now=datetime.now(timezone.utc))
 
     async def test_close_closes_every_connection(self):
         pool = self.pool()

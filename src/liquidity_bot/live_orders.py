@@ -173,8 +173,15 @@ class AsyncTradingGateway:
         try:
             return await call()
         except Exception as exc:
+            detail = self.gateway._adapter_error(operation, exc)
             raise AdapterError(
-                f"{operation} outcome uncertain: {type(exc).__name__}: {exc}") from exc
+                f"{operation} outcome uncertain: {detail}",
+                operation=operation,
+                status_code=detail.status_code,
+                error_code=detail.error_code,
+                trace_id=detail.trace_id,
+                retry_after_seconds=detail.retry_after_seconds,
+            ) from exc
 
     async def create(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         response = await self._mutation(

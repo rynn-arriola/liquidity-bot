@@ -55,6 +55,25 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   during that window. A post-maintenance empty pre-window history result is not
   positive proof of no fill, cancellation or flatness; retain normal durable-
   ledger and current authenticated-state requirements.
+- **Trade state is independent of fill delivery.** Retail activity can retain a
+  trade as `TRADE_STATE_BUSTED` after its execution leg was booked. Trade ID,
+  lifecycle state and an exactly-once reversal are therefore separate durable
+  facts; a current authoritative position snapshot outranks fill arithmetic.
+- **REST freshness cannot certify WebSocket liveness.** The 20-market private
+  feed spans three connections, so each shard and the market socket needs its
+  own last-message clock. A complete REST snapshot can bridge a brief gap but
+  cannot hide 180 seconds of stream silence.
+- **Buying power is an entry constraint, not an equity value or exit gate.** A
+  successful entry must reserve cached buying power within the same 20-slot
+  sweep. Insufficient-power and validation rejections should pause only that
+  market's new entries; reducers, cancels and IOC exits remain available.
+- **Official HTTP guidance is compatible with mutation safety.** Confirmed 429
+  reads can honor bounded `Retry-After`; order mutations still never retry
+  automatically. Status, structured error code and trace/request ID are safe
+  diagnostics, and owned SDK clients use the recommended 15-second timeout.
+- **Changelog monitoring belongs outside trading.** The public RSS feed can be
+  polled by a lock/timeout-bounded process with independent state and Discord
+  notification. It needs no API key, ledger access, REST budget or runner hook.
 
 ## How to add a finding
 

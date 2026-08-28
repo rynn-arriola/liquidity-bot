@@ -24,6 +24,9 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
   only from the laptop's own output
 - **Documentation acceptance:** local and stopped-server audits plus all 667
   tests passed; server AI files are installed and no bot restart occurred
+- **Official API remediation:** seven prioritized reliability fixes and the
+  safe rolling-report compatibility repair passed final local review; rollout
+  is authorized but not yet deployed or active in production
 
 ## Active operating envelope
 
@@ -56,6 +59,10 @@ Let the current run continue. Judge slot health from queue scope, distinct
 owners, ownership state and resting coverage, not raw order count. Any future
 stop/restart remains a separate operator decision and must use the normal
 authenticated exposure gate.
+
+The local official-API remediation must not be treated as live until it is
+committed, deployed, migrated and accepted after an explicitly authorized safe
+restart. Until then the server continues to run the earlier deployed source.
 
 ## Current repositories and records
 

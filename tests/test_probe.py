@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from liquidity_bot.probe import inspect_markets
+from liquidity_bot.adapters import REST_REQUEST_TIMEOUT_SECONDS
+from liquidity_bot.probe import client_from_environment, inspect_markets
 
 
 class FakeMarkets:
@@ -31,6 +34,17 @@ class FakeClient:
 
 
 class ProbeTests(unittest.TestCase):
+    def test_project_clients_use_official_rest_timeout(self):
+        with patch(
+                "liquidity_bot.probe.load_runtime_secrets",
+                return_value=SimpleNamespace(key_id="key", secret_key="secret")), \
+                patch("liquidity_bot.probe.AsyncPolymarketUS") as client:
+            client_from_environment()
+
+        client.assert_called_once_with(
+            key_id="key", secret_key="secret",
+            timeout=REST_REQUEST_TIMEOUT_SECONDS)
+
     def test_probe_composes_clock_program_book_score_and_paid_totals(self):
         start = datetime.now(timezone.utc) + timedelta(hours=2)
         program = {

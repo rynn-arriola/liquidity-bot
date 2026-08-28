@@ -29,6 +29,42 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 The latest trading-source repair is `dc26c96`; current deployment and runtime
 state must always be read from [STATUS.md](STATUS.md) and the server.
 
+## Reviewed locally; not yet deployed
+
+- Venue execution history can be reset, so an empty activity page was wrongly
+  described as restart-surviving history. The adapter now exposes only positive
+  retained fills and independent trade-state observations; empty history is
+  never negative account evidence.
+- REST reconciliation could keep the risk gate fresh while one of three private
+  WebSocket shards, or the market socket, was silently dead. Each connection
+  now has an independent 180-second last-message deadline and scoped recovery.
+- A later `TRADE_STATE_BUSTED` event left the original fill in position basis,
+  realized P&L and reports. Trade identity/state are durable and the linked
+  fill reverses exactly once; market-identity conflicts fail closed and newer
+  authoritative position snapshots prevent double reversal.
+- Twenty entry decisions could reuse one stale buying-power observation, while
+  persistent rejects could hot-loop. Successful entries now reserve cached
+  power during the sweep and structured rejection delays are market-local.
+  Reducing post-only orders, cancels and IOC exits bypass both protections.
+- Read errors discarded useful HTTP context and confirmed 429 reads ignored
+  `Retry-After`. Adapters now preserve safe status/code/trace metadata and use
+  bounded numeric or HTTP-date retry guidance; mutations remain non-retrying.
+- Owned SDK clients used the 30-second default instead of the official
+  15-second REST recommendation. Commissioning, probe and reward census now
+  construct clients with the same explicit 15-second timeout.
+- Changelog checks were manual only. A public-RSS-only monitor now establishes
+  a no-spam baseline, durably retries failed notifications and runs under an
+  isolated lock/timeout wrapper. Automatic scheduling remains pending rollout.
+- The pre-deploy server still has the old fill schema, so immediately deployed
+  read-only reports would have failed on the new `reversed` column before the
+  next runner startup migrated it. Reports now detect the column read-only:
+  old schema treats every historical fill as active, while migrated schema
+  excludes busted fills. Trading and migration behavior are unchanged.
+
+Focused regressions, edge cases and deliberate reversal mutations passed for
+each defect. Complete-suite rerun, commit, deployment, schema migration and
+natural live acceptance remain pending; production behavior is unchanged.
+
 ## Required entry format
 
 Every production defect must record:

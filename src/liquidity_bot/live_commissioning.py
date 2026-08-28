@@ -29,7 +29,8 @@ from polymarket_us import AsyncPolymarketUS
 
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .bot_era import bot_era_rewards_by_status
-from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .adapters import (
+    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
 from .cash_activity import corrected_opening_cash, fetch_nontrading_cash
 from .commissioning import (
     AUTO_REWARD_MARKET,
@@ -89,7 +90,12 @@ from .runtime_safety import SessionRiskGuard, SingleInstanceLease
 from .runtime_secrets import load_runtime_secrets
 from .shadow_math import cross_exit
 from .queue_measurement import QueueMeasurementTracker
-from .streams import MarketReadOnlyStream, PrivateStreamPool, TradeReadOnlyStream
+from .streams import (
+    MarketReadOnlyStream,
+    PrivateStreamPool,
+    STREAM_SILENCE_TIMEOUT_SECONDS,
+    TradeReadOnlyStream,
+)
 from .venue_state import PrivateLedgerProjector
 
 
@@ -246,6 +252,16 @@ class CommissioningRunner:
     })
 
     CANCEL_RETRY_SECONDS = 10.0
+
+    # Async rejection is a terminal state, but immediately recreating the same
+    # invalid order turns a useful structured reason into hot-loop churn.
+    # Post-only is an ordinary book race and gets only a one-second local wait;
+    # balance/risk rejects wait for multiple five-second balance refreshes;
+    # an unfamiliar validation reject is isolated to that market for a minute.
+    POST_ONLY_REJECTION_COOLDOWN_SECONDS = 1.0
+    BALANCE_REJECTION_COOLDOWN_SECONDS = 15.0
+    VALIDATION_REJECTION_COOLDOWN_SECONDS = 60.0
+    BUYING_POWER_RECHECK_SECONDS = 5.0
 
     # Background terminal repair is grouped by owner, not by order. Five
     # owners lets a twenty-slot recovery complete one fair circuit in four
@@ -1413,14 +1429,17 @@ class CommissioningRunner:
             if key in absent_ids}
         orders = await self.account.fetch_open_orders(observed_at=now)
         positions = await self.account.fetch_positions(observed_at=now)
-        # Fills, from the one source that survives a restart. Without this the
+        # Recent venue-retained fills backfill gaps while available. The local
+        # ledger is the only execution history this project controls across a
+        # restart plus a venue-side history reset. Without this sweep the
         # $40 stop reads one-sided round trips: measured 2026-08-15, a $1.55
         # loss was recorded as a $3.26 gain because only the opening fill was
         # ever written. Failing this must not fail the whole reconcile -- the
         # order and position snapshots above are what gate new risk.
         try:
-            for execution in await self.account.fetch_executions(
-                    observed_at=now):
+            execution_batch = await self.account.fetch_executions(
+                observed_at=now)
+            for execution in execution_batch:
                 try:
                     self.ledger.apply_execution(execution, received_at=now)
                 except LedgerConflict:
@@ -1432,7 +1451,19 @@ class CommissioningRunner:
                     # left the position unprovable and the runner exited
                     # non-flat, refusing to restart. Observed 2026-08-15T21:24Z.
                     continue
+            # Trade lifecycle is independent of execution delivery. In
+            # particular, BUSTED can appear after a fill was already recorded;
+            # apply it after linking all execution legs in this batch.
+            for trade_state in getattr(execution_batch, "trade_states", ()):
+                self.ledger.apply_trade_state(trade_state, received_at=now)
             self._runtime_error_counts.pop("execution_backfill", None)
+        except LedgerConflict:
+            # A malformed/unavailable history page is optional positive
+            # backfill and can be retried. Contradictory trade identity is not:
+            # continuing to treat the previous REST proof as fresh could build
+            # risk while fill reversal and P&L are disputed.
+            self.gate.on_reconciliation_conflict()
+            raise
         except Exception as exc:
             await self._report_runtime_error("execution_backfill", exc)
         stamp = f"{tag}:{now.isoformat()}" if tag else now.isoformat()
@@ -2855,7 +2886,8 @@ class CommissioningRunner:
         if self.started_at is not None:
             rows = self.ledger.query(
                 "SELECT client_order_id,fee FROM execution_fills "
-                "WHERE received_at>=? AND liquidity='TAKER' AND intent IN "
+                "WHERE received_at>=? AND reversed=0 "
+                "AND liquidity='TAKER' AND intent IN "
                 "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT')",
                 (self.started_at.isoformat(),),
             )
@@ -3322,6 +3354,48 @@ class CommissioningRunner:
                 continue
         return total
 
+    @classmethod
+    def _rejection_cooldown_seconds(cls, reason: str | None) -> float:
+        """Map a structured venue rejection code to a market-local delay."""
+
+        code = str(reason or "").strip().upper()
+        if "POST_ONLY" in code:
+            return cls.POST_ONLY_REJECTION_COOLDOWN_SECONDS
+        if any(token in code for token in (
+                "INSUFFICIENT", "BALANCE", "BUYING_POWER", "RISK_LIMIT")):
+            return cls.BALANCE_REJECTION_COOLDOWN_SECONDS
+        return cls.VALIDATION_REJECTION_COOLDOWN_SECONDS
+
+    def _recent_rejection_delay(self, slug: str, now: datetime) -> float:
+        """Return the unexpired local cooldown for the latest rejection."""
+
+        row = self.ledger.latest_rejection(slug)
+        if row is None:
+            return 0.0
+        try:
+            event_at = datetime.fromisoformat(str(row["event_at"]))
+            age = (now - event_at).total_seconds()
+        except (TypeError, ValueError):
+            return self.VALIDATION_REJECTION_COOLDOWN_SECONDS
+        cooldown = self._rejection_cooldown_seconds(row["reject_reason"])
+        if age < 0:
+            return cooldown
+        return max(0.0, cooldown - age)
+
+    def _entry_buying_power(
+        self, action: PlanAction, *, position: Decimal,
+    ) -> tuple[Decimal, Decimal] | None:
+        """Required/available buying power for a quote that adds new risk."""
+
+        if (action.kind != ActionKind.PLACE_POST_ONLY or position != 0
+                or action.price is None or action.qty is None):
+            return None
+        required = Decimal(str(action.price)) * action.qty
+        available = (
+            self.balance.buying_power if self.balance is not None
+            else Decimal("-1"))
+        return required, available
+
     def _log_shutdown(self, market_slug: str, decision: str, **fields: Any) -> None:
         """Log one shutdown decision, the way `[action]` logs a live one.
 
@@ -3487,6 +3561,11 @@ class CommissioningRunner:
             self._runtime_error_counts.pop(f"{key}:{slug}", None)
         if self.driver is None or state.market is None:
             raise RuntimeError("commissioning driver is unavailable")
+        # One snapshot is reused by rejection/buying-power protection,
+        # observation classification and the action driver. A nonzero position
+        # makes PLACE_POST_ONLY reducing; no entry rejection cooldown or buying
+        # power gate may delay that exit path.
+        position = self.ledger.position(slug)
         # Log the mutation and why the planner asked for it. Without this the
         # ledger records that an order was cancelled but never the reason, so
         # the 2026-08-14 place/cancel churn could not be diagnosed from the
@@ -3508,19 +3587,52 @@ class CommissioningRunner:
                          state.expected_net_by_side.items()} }",
                 flush=True,
             )
+            if (chosen.kind == ActionKind.PLACE_POST_ONLY and position == 0):
+                rejection_delay = self._recent_rejection_delay(slug, now)
+                if rejection_delay > 0:
+                    latest = self.ledger.latest_rejection(slug)
+                    print(
+                        f"[order-rejection-backoff] at={now.isoformat()} "
+                        f"market={slug} reason="
+                        f"{latest['reject_reason'] if latest else 'unknown'} "
+                        f"seconds={rejection_delay:.1f}",
+                        flush=True,
+                    )
+                    return None, rejection_delay
         try:
             # Reuse one ledger snapshot for both observation classification
             # and the action driver.  Observation must not add another query
             # to each placement or see a different position than the driver.
-            position = self.ledger.position(slug)
+            power = self._entry_buying_power(actions[0], position=position) \
+                if actions else None
+            if power is not None and power[1] < power[0]:
+                print(
+                    f"[buying-power-block] at={now.isoformat()} market={slug} "
+                    f"required={power[0]} available={power[1]}",
+                    flush=True,
+                )
+                return None, self.BUYING_POWER_RECHECK_SECONDS
             quote_observation = (
                 self._quote_observation_for_action(
                     state, actions[0], now, position)
                 if actions else None)
-            await self.driver.apply_one(
+            result = await self.driver.apply_one(
                 actions, market=state.market,
                 position=position, now=now,
                 quote_observation=quote_observation)
+            # The venue balance refresh is periodic. Reserve successful new
+            # quote notional locally so later slots in this same sweep cannot
+            # all spend the same stale buying-power observation. A rejection or
+            # cancel is restored by the next authenticated five-second read.
+            if (power is not None and result is not None
+                    and result.submitted is not None
+                    and self.balance is not None):
+                self.balance = AccountBalance(
+                    current_balance=self.balance.current_balance,
+                    asset_notional=self.balance.asset_notional,
+                    buying_power=max(Decimal("0"), power[1] - power[0]),
+                    observed_at=self.balance.observed_at,
+                )
             self._queue_measurement_sync(observed_at=self._now())
         except Exception as exc:
             stop = await self._handle_action_failure(exc, slug)
@@ -3625,6 +3737,53 @@ class CommissioningRunner:
                 stop = await self._recover_private_stream(exc)
                 if stop:
                     return market_task, private_task, stop
+            private_task = asyncio.create_task(self.private_stream.next_event())
+
+        # A complete REST reconcile can keep the execution gate fresh while a
+        # WebSocket shard has silently died. Check transport liveness
+        # independently so REST is only a short backstop, never proof that all
+        # three private shards and the market connection still deliver data.
+        now = self._now()
+        liveness_errors: dict[str, Exception] = {}
+        for name, stream in (
+                ("market", self.market_stream),
+                ("private", self.private_stream)):
+            assert_live = getattr(stream, "assert_live", None)
+            if not callable(assert_live):
+                continue
+            try:
+                assert_live(
+                    now=now,
+                    max_silence_seconds=STREAM_SILENCE_TIMEOUT_SECONDS)
+            except Exception as exc:
+                liveness_errors[name] = exc
+        if len(liveness_errors) == 2:
+            for task in (market_task, private_task):
+                task.cancel()
+            await asyncio.gather(
+                market_task, private_task, return_exceptions=True)
+            combined = AdapterError(
+                "both WebSockets exceeded the independent silence limit: "
+                f"market={liveness_errors['market']}; "
+                f"private={liveness_errors['private']}")
+            stop = await self._recover_bound_streams(combined)
+            if stop:
+                return market_task, private_task, stop
+            market_task = asyncio.create_task(self.market_stream.next_book())
+            private_task = asyncio.create_task(self.private_stream.next_event())
+        elif "market" in liveness_errors:
+            market_task.cancel()
+            await asyncio.gather(market_task, return_exceptions=True)
+            stop = await self._recover_market_stream(liveness_errors["market"])
+            if stop:
+                return market_task, private_task, stop
+            market_task = asyncio.create_task(self.market_stream.next_book())
+        elif "private" in liveness_errors:
+            private_task.cancel()
+            await asyncio.gather(private_task, return_exceptions=True)
+            stop = await self._recover_private_stream(liveness_errors["private"])
+            if stop:
+                return market_task, private_task, stop
             private_task = asyncio.create_task(self.private_stream.next_event())
 
         return market_task, private_task, None
@@ -3836,11 +3995,11 @@ class CommissioningRunner:
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         session_start = (self.started_at or now).isoformat()
         entry_fills = self.ledger.query(
-            "SELECT COUNT(*) n FROM execution_fills WHERE intent IN "
+            "SELECT COUNT(*) n FROM execution_fills WHERE reversed=0 AND intent IN "
             "('ORDER_INTENT_BUY_LONG','ORDER_INTENT_BUY_SHORT') "
             "AND received_at>=?", (session_start,))[0]["n"]
         exit_fills = self.ledger.query(
-            "SELECT COUNT(*) n FROM execution_fills WHERE intent IN "
+            "SELECT COUNT(*) n FROM execution_fills WHERE reversed=0 AND intent IN "
             "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT') "
             "AND received_at>=?", (session_start,))[0]["n"]
         observed = [self.state_for(slug).book_observed_at
@@ -6436,7 +6595,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     lease = SingleInstanceLease(args.lock_file)
     lease.acquire()
     client = AsyncPolymarketUS(
-        key_id=secrets.key_id, secret_key=secrets.secret_key)
+        key_id=secrets.key_id, secret_key=secrets.secret_key,
+        timeout=REST_REQUEST_TIMEOUT_SECONDS)
     ledger = ExecutionLedger(args.database)
     runner = CommissioningRunner(
         client, config, ledger, DiscordNotifier(secrets))

@@ -34,7 +34,8 @@ from typing import Any, Iterable
 
 from polymarket_us import AsyncPolymarketUS
 
-from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .adapters import (
+    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
 from .errors import AdapterError
 from .fill_hazard import league_from_slug
 from .market_selector import (
@@ -300,7 +301,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     except RuntimeSecretError as exc:
         raise SystemExit(str(exc)) from exc
     client = AsyncPolymarketUS(
-        key_id=secrets.key_id, secret_key=secrets.secret_key)
+        key_id=secrets.key_id, secret_key=secrets.secret_key,
+        timeout=REST_REQUEST_TIMEOUT_SECONDS)
     gateway = AsyncReadOnlyGateway(
         client,
         limiter=AsyncIntervalLimiter.from_rate(args.requests_per_second))

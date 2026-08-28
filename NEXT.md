@@ -4,14 +4,17 @@ This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 Do not add deployment narratives here after their remaining action is closed.
 
-## 0. Safe restart and live acceptance
+## 0. Reviewed rollout and live acceptance
 
-The bot is stopped after a forced termination during an authenticated venue
-outage. Before restart, obtain complete venue orders and positions, reconcile
-unresolved/unknown ownership, and satisfy the normal startup gates. Restart
-requires explicit operator authorization.
+The production bot remains on its earlier deployed source. The local official-
+API remediation is not active until final tests pass, it is committed and
+deployed, the additive ledger migration runs, and the operator separately
+authorizes a restart after complete authenticated flat/order-free proof.
+Read-only reports remain compatible with the pre-migration schema during this
+deployment window and begin excluding busted fills after migration.
 
-After a safe start, accept the latest slot repair from natural behavior:
+After that safe start, accept both the existing slot repair and the new
+reliability behavior from natural operation:
 
 - queue scope reaches exactly 20 when viable supply permits;
 - positively closed, flat/order-free owners release without touching retained
@@ -19,6 +22,12 @@ After a safe start, accept the latest slot repair from natural behavior:
 - alternating `unrecoverable_book_*` variants remain one failure family;
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or nonzero
   position is hidden by the dashboard;
+- each private WebSocket shard and the market stream remains independently
+  live, or enters bounded recovery after 180 seconds of silence;
+- low buying power or a rejected entry affects only new risk in that market;
+  reducing orders and exits continue normally;
+- a venue `TRADE_STATE_BUSTED` observation reverses its linked fill once and
+  removes it from P&L, basis and fill counts;
 - no induced disconnect or synthetic live failure is used for testing.
 
 ## 1. Unknown PLACE without an exchange order ID still needs a human path
@@ -57,18 +66,15 @@ is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
 
-## 5. Official API follow-up is documented but not authorized
+## 5. Official API remediation awaits rollout
 
-The 2026-08-27 comparison of official Retail and Institutional documentation is
-in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md). It
-identified three grouped engineering reviews:
+The ordered review in
+[docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) is
+implemented locally: venue-history reset semantics, independent stream
+liveness, busted-trade reversal, entry-only buying-power/rejection protection,
+structured HTTP diagnostics with `Retry-After`, a 15-second REST timeout and an
+isolated changelog RSS monitor. Focused regressions and deliberate mutation
+checks passed; the complete final regression remains the rollout gate.
 
-- preserve `tradeId` and trade state and reverse `TRADE_STATE_BUSTED` entries;
-- use buying power and rejection reasons to prevent persistent invalid retry
-  without blocking ordinary post-only collisions;
-- monitor heartbeat liveness per private-stream shard and on the market stream,
-  separate it from REST freshness, and review the 30s SDK timeout against the
-  documented 15s recommendation.
-
-No implementation, deployment or restart is authorized by this entry. Review
-each flow and obtain the operator's decision before changing behavior.
+The RSS monitor is code only until an isolated server schedule is explicitly
+installed. Deployment and restart remain separate operator decisions.

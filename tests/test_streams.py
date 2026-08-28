@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from liquidity_bot.errors import AdapterError
@@ -123,6 +124,21 @@ class StreamTests(unittest.TestCase):
         queued, event = self.run_async(scenario())
         self.assertEqual(queued, 1)
         self.assertEqual(event.best_bid.price, .51)
+
+    def test_market_heartbeat_prevents_a_false_silence_alarm(self):
+        async def scenario():
+            client = FakeClient()
+            stream = MarketReadOnlyStream(client)
+            await stream.start(["market-one"])
+            now = datetime.now(timezone.utc)
+            stream._last_message_at = now - timedelta(seconds=181)
+            with self.assertRaisesRegex(AdapterError, "silent"):
+                stream.assert_live(now=now)
+            client.market_socket.emit("message", {"heartbeat": {}})
+            stream.assert_live(now=datetime.now(timezone.utc))
+            await stream.close()
+
+        self.run_async(scenario())
 
     def test_market_stream_drains_latest_books_for_all_pending_slugs(self):
         async def scenario():

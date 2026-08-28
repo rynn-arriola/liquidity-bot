@@ -23,10 +23,13 @@ class DailyPnlRewardCalendarTests(unittest.TestCase):
                 qty TEXT NOT NULL,
                 price TEXT NOT NULL,
                 received_at TEXT NOT NULL,
-                event_at TEXT NOT NULL
+                event_at TEXT NOT NULL,
+                reversed INTEGER NOT NULL DEFAULT 0
             )""")
         connection.executemany(
-            "INSERT INTO execution_fills VALUES (?,?,?,?,?,?)",
+            "INSERT INTO execution_fills"
+            "(market_slug,intent,qty,price,received_at,event_at) "
+            "VALUES (?,?,?,?,?,?)",
             [
                 ("before-et-midnight", "ORDER_INTENT_BUY_LONG", "1", "0.40",
                  "2026-08-22T03:59:59+00:00", "2026-08-22T03:59:59+00:00"),

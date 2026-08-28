@@ -102,6 +102,12 @@ class PrivateStateGate:
         self.rest_reconciled = True
         self.last_reconcile_at = at
 
+    def on_reconciliation_conflict(self) -> None:
+        """Immediately revoke risk authority after contradictory venue truth."""
+
+        self.rest_reconciled = False
+        self.last_reconcile_at = None
+
     def on_disconnect(self) -> None:
         self.connected = False
         self.rest_reconciled = False

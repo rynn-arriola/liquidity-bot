@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
+from liquidity_bot.sqlite_compat import active_fills_predicate
+
 
 def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
@@ -42,6 +44,7 @@ def render_report(
         cutoff = datetime.now(timezone.utc) - timedelta(hours=recent_hours)
         where = "WHERE qm.started_at>=?"
         params = (cutoff.isoformat(),)
+    active_fills = active_fills_predicate(connection)
     rows = list(connection.execute(
         f"""
         WITH first_fill AS (
@@ -50,7 +53,7 @@ def render_report(
                    MAX(CASE WHEN UPPER(COALESCE(liquidity,''))='MAKER'
                             THEN 1 ELSE 0 END) AS has_maker_fill
             FROM execution_fills
-            WHERE client_order_id IS NOT NULL
+            WHERE client_order_id IS NOT NULL AND {active_fills}
             GROUP BY client_order_id
         )
         SELECT qm.*,f.first_fill_at,f.filled_qty,f.has_maker_fill

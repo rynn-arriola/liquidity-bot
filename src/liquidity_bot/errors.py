@@ -4,6 +4,23 @@
 class AdapterError(RuntimeError):
     """A remote response cannot be safely interpreted."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str | None = None,
+        status_code: int | None = None,
+        error_code: str | None = None,
+        trace_id: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        self.operation = operation
+        self.status_code = status_code
+        self.error_code = error_code
+        self.trace_id = trace_id
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
 
 class RuntimeInvariantViolation(RuntimeError):
     """A local ownership, identity, or exact-risk invariant was violated.

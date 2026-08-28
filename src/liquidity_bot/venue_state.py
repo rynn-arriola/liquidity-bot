@@ -172,6 +172,8 @@ def normalize_execution(
                 or {"value": "0"},
                 "execution.commissionNotionalCollected"),
             liquidity="TAKER" if bool(raw.get("aggressor")) else "MAKER",
+            trade_id=(
+                str(_wire(raw, "tradeId", "trade_id") or "").strip() or None),
             event_at=_timestamp(
                                 _wire(raw, "transactTime", "transact_time"),
                                 "execution.transactTime",

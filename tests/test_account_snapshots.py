@@ -35,6 +35,10 @@ class Portfolio:
         self.calls.append(params)
         return self.responses.pop(0)
 
+    async def activities(self, params):
+        self.calls.append(params)
+        return self.responses.pop(0)
+
 
 class Account:
     def __init__(self, response=None):
@@ -110,6 +114,40 @@ class SnapshotGatewayTests(unittest.TestCase):
         account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
         with self.assertRaisesRegex(AdapterError, "assetNotional"):
             self.run_async(account.fetch_balance(observed_at=NOW))
+
+    def test_empty_reset_execution_history_produces_no_synthetic_evidence(self):
+        """A venue history reset is an absence of evidence, nothing more."""
+
+        client = Client({"orders": []}, [{"activities": [], "eof": True}])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+
+        executions = self.run_async(account.fetch_executions(observed_at=NOW))
+
+        self.assertEqual(tuple(executions), ())
+        self.assertEqual(executions.trade_states, ())
+        self.assertEqual(client.portfolio.calls, [{"limit": 100}])
+
+    def test_busted_trade_is_observed_even_without_an_execution_leg(self):
+        client = Client({"orders": []}, [{"activities": [{
+            "type": "ACTIVITY_TYPE_TRADE",
+            "trade": {
+                "id": "trade-busted",
+                "marketSlug": "market-one",
+                "state": "TRADE_STATE_BUSTED",
+                "updateTime": "2026-08-13T03:01:00Z",
+                "isAggressor": True,
+            },
+        }], "eof": True}])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+
+        batch = self.run_async(account.fetch_executions(observed_at=NOW))
+
+        self.assertEqual(tuple(batch), ())
+        self.assertEqual(len(batch.trade_states), 1)
+        state = batch.trade_states[0]
+        self.assertEqual(state.trade_id, "trade-busted")
+        self.assertEqual(state.state, "TRADE_STATE_BUSTED")
+        self.assertEqual(state.market_slug, "market-one")
 
 
 if __name__ == "__main__":

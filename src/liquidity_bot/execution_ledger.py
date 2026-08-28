@@ -85,7 +85,18 @@ CREATE TABLE IF NOT EXISTS execution_fills (
     event_at TEXT NOT NULL,
     received_at TEXT NOT NULL
 ,
-    outcome TEXT);
+    outcome TEXT,
+    trade_id TEXT,
+    trade_state TEXT,
+    reversed INTEGER NOT NULL DEFAULT 0,
+    reversed_at TEXT);
+CREATE TABLE IF NOT EXISTS execution_trade_states (
+    trade_id TEXT PRIMARY KEY,
+    market_slug TEXT NOT NULL,
+    state TEXT NOT NULL,
+    update_at TEXT NOT NULL,
+    received_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_positions (
     market_slug TEXT PRIMARY KEY,
     net_qty TEXT NOT NULL,
@@ -343,6 +354,11 @@ class Execution:
     # (aec-valorant-ff-ep, 2026-08-15), and realized_pnl is what the $40 stop
     # reads. Recorded now so the frame is recoverable; see task 24.
     outcome: str | None = None
+    # Trade identity/state are separate from the execution-leg identity. The
+    # private stream normally supplies trade_id but not a terminal trade state;
+    # portfolio activity later supplies CLEARED/BUSTED state for the trade.
+    trade_id: str | None = None
+    trade_state: str | None = None
 
     def __post_init__(self) -> None:
         if not self.execution_id or not self.market_slug:
@@ -362,6 +378,21 @@ class Execution:
         if not 0 < price < 1 or qty <= 0:
             raise ValueError("execution values are invalid")
         _time(self.event_at, "event_at")
+
+
+@dataclass(frozen=True)
+class TradeStateObservation:
+    """One venue trade-lifecycle observation from portfolio activity."""
+
+    trade_id: str
+    market_slug: str
+    state: str
+    update_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.trade_id or not self.market_slug or not self.state:
+            raise ValueError("trade-state identity is required")
+        _time(self.update_at, "trade update_at")
 
 
 @dataclass(frozen=True)
@@ -486,6 +517,9 @@ class ExecutionLedger:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.executescript(SCHEMA)
         self._add_missing_columns()
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_execution_fills_trade_id "
+            "ON execution_fills(trade_id)")
         self.connection.commit()
 
     # Additive-only migrations. `CREATE TABLE IF NOT EXISTS` silently leaves an
@@ -497,6 +531,10 @@ class ExecutionLedger:
          "INTEGER NOT NULL DEFAULT 0"),
         ("execution_orders", "reject_reason", "TEXT"),
         ("execution_fills", "outcome", "TEXT"),
+        ("execution_fills", "trade_id", "TEXT"),
+        ("execution_fills", "trade_state", "TEXT"),
+        ("execution_fills", "reversed", "INTEGER NOT NULL DEFAULT 0"),
+        ("execution_fills", "reversed_at", "TEXT"),
         ("execution_positions", "cost", "TEXT"),
         ("execution_positions", "first_seen_at", "TEXT"),
     )
@@ -1069,6 +1107,15 @@ class ExecutionLedger:
         return (_decimal(row["net_qty"], "net_qty")
                 if row is not None else Decimal("0"))
 
+    def latest_rejection(self, market_slug: str) -> sqlite3.Row | None:
+        """Latest structured venue rejection for one market, if any."""
+
+        return self.connection.execute(
+            "SELECT exchange_order_id,reject_reason,event_at,received_at "
+            "FROM execution_orders WHERE market_slug=? AND status='REJECTED' "
+            "ORDER BY event_at DESC,received_at DESC LIMIT 1",
+            (market_slug,)).fetchone()
+
     def inventory_basis(self, market_slug: str) -> InventoryBasis | None:
         """Rebuild the current run's open basis from immutable fills.
 
@@ -1079,7 +1126,8 @@ class ExecutionLedger:
 
         rows = self.connection.execute(
             "SELECT qty,price,intent,event_at FROM execution_fills "
-            "WHERE market_slug=? ORDER BY event_at,received_at,execution_id",
+            "WHERE market_slug=? AND reversed=0 "
+            "ORDER BY event_at,received_at,execution_id",
             (market_slug,)).fetchall()
         net = Decimal("0")
         average: Decimal | None = None
@@ -1213,8 +1261,8 @@ class ExecutionLedger:
             if row["market_slug"] != order.market_slug or row["side"] != side:
                 raise LedgerConflict("order identity changed")
         known_fills = self.connection.execute(
-            "SELECT qty FROM execution_fills WHERE client_order_id=? OR "
-            "(? IS NOT NULL AND exchange_order_id=?)",
+            "SELECT qty FROM execution_fills WHERE reversed=0 AND "
+            "(client_order_id=? OR (? IS NOT NULL AND exchange_order_id=?))",
             (order.client_order_id, order.exchange_order_id,
              order.exchange_order_id)).fetchall()
         execution_total = sum(
@@ -1323,6 +1371,132 @@ class ExecutionLedger:
             return -qty
         raise ValueError("execution intent is required for economic direction")
 
+    @staticmethod
+    def _trade_state(value: str) -> str:
+        state = str(value or "").strip().upper()
+        if state and not state.startswith("TRADE_STATE_"):
+            state = "TRADE_STATE_" + state
+        return state
+
+    def _reverse_busted_fills(
+        self,
+        *,
+        trade_id: str,
+        market_slug: str,
+        update_at: str,
+        received_at: str,
+    ) -> int:
+        """Reverse every newly linked fill for one proven busted trade."""
+
+        reversed_count = 0
+        fills = self.connection.execute(
+            "SELECT execution_id,market_slug,qty,intent FROM execution_fills "
+            "WHERE trade_id=? AND reversed=0", (trade_id,)).fetchall()
+        for fill in fills:
+            if fill["market_slug"] != market_slug:
+                raise LedgerConflict(
+                    "trade and execution market identities disagree")
+            position = self.connection.execute(
+                "SELECT net_qty,event_at,authoritative_through FROM "
+                "execution_positions WHERE market_slug=?",
+                (fill["market_slug"],)).fetchone()
+            included_by_position = (
+                position is not None
+                and position["authoritative_through"] is not None
+                and update_at <= position["authoritative_through"])
+            if not included_by_position:
+                prior_qty = (
+                    _decimal(position["net_qty"], "net_qty")
+                    if position is not None else Decimal("0"))
+                reversal = self._signed_qty(
+                    str(fill["intent"]),
+                    _decimal(fill["qty"], "fill qty"))
+                net = prior_qty - reversal
+                position_at = max(
+                    update_at,
+                    position["event_at"] if position else update_at)
+                self.connection.execute(
+                    "INSERT INTO execution_positions"
+                    "(market_slug,net_qty,event_at,received_at,source,"
+                    "authoritative_through) VALUES (?,?,?,?,?,?) "
+                    "ON CONFLICT(market_slug) DO UPDATE SET "
+                    "net_qty=excluded.net_qty,event_at=excluded.event_at,"
+                    "received_at=excluded.received_at,source=excluded.source",
+                    (fill["market_slug"], _number(net, "net_qty"),
+                     position_at, received_at, "trade_bust",
+                     position["authoritative_through"]
+                     if position else None))
+            self.connection.execute(
+                "UPDATE execution_fills SET reversed=1,reversed_at=?,"
+                "trade_state='TRADE_STATE_BUSTED' "
+                "WHERE execution_id=? AND reversed=0",
+                (update_at, fill["execution_id"]))
+            reversed_count += 1
+        return reversed_count
+
+    def apply_trade_state(
+        self, observation: TradeStateObservation, *, received_at: datetime,
+    ) -> bool:
+        """Persist a trade lifecycle transition and reverse a bust once.
+
+        Current venue positions outrank reconstructed fill arithmetic. If a
+        complete position observation is at or after the bust timestamp, it
+        already contains the reversal and only the fill/P&L marker changes.
+        """
+
+        received = _time(received_at, "received_at")
+        update_at = _time(observation.update_at, "trade update_at")
+        state = self._trade_state(observation.state)
+        if not state:
+            raise ValueError("trade state is required")
+        payload = asdict(observation)
+        event_id = f"{observation.trade_id}:{update_at}:{state}"
+        with self.connection:
+            accepted = self._accept_event(
+                "trade_state", event_id, received, payload)
+            prior_state = self.connection.execute(
+                "SELECT market_slug,state,update_at FROM execution_trade_states "
+                "WHERE trade_id=?", (observation.trade_id,)).fetchone()
+            if (prior_state is not None
+                    and prior_state["market_slug"] != observation.market_slug):
+                raise LedgerConflict("trade state changed its market identity")
+            if prior_state is not None and update_at < prior_state["update_at"]:
+                self._finish_event(
+                    "trade_state", event_id, False, "stale_trade_state")
+                return False
+            if (prior_state is not None
+                    and prior_state["state"] == "TRADE_STATE_BUSTED"
+                    and state != "TRADE_STATE_BUSTED"):
+                raise LedgerConflict(
+                    "a busted trade cannot silently become active again")
+            self.connection.execute(
+                "INSERT INTO execution_trade_states"
+                "(trade_id,market_slug,state,update_at,received_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(trade_id) DO UPDATE SET "
+                "market_slug=excluded.market_slug,state=excluded.state,"
+                "update_at=excluded.update_at,received_at=excluded.received_at",
+                (observation.trade_id, observation.market_slug, state,
+                 update_at, received))
+            self.connection.execute(
+                "UPDATE execution_fills SET trade_state=? WHERE trade_id=?",
+                (state, observation.trade_id))
+            reversed_count = (
+                self._reverse_busted_fills(
+                    trade_id=observation.trade_id,
+                    market_slug=observation.market_slug,
+                    update_at=update_at,
+                    received_at=received)
+                if state == "TRADE_STATE_BUSTED" else 0)
+            if accepted:
+                self._finish_event(
+                    "trade_state", event_id, True,
+                    f"reversed_fills={reversed_count}"
+                    if reversed_count else None)
+        # A repeated lifecycle observation can still do useful work when an
+        # older execution was only just linked to this trade. The per-fill
+        # `reversed` marker makes that repair exactly-once.
+        return accepted or reversed_count > 0
+
     def apply_execution(
         self, execution: Execution, *, received_at: datetime,
     ) -> bool:
@@ -1331,20 +1505,85 @@ class ExecutionLedger:
         qty = _decimal(execution.qty, "qty")
         payload = asdict(execution)
         with self.connection:
+            existing = self.connection.execute(
+                "SELECT trade_id,market_slug,side,price,qty,fee,intent,event_at "
+                "FROM execution_fills WHERE execution_id=?",
+                (execution.execution_id,)).fetchone()
+            if existing is not None:
+                identity = (
+                    existing["market_slug"] == execution.market_slug
+                    and str(existing["side"]).upper() == execution.side.upper()
+                    and _decimal(existing["price"], "stored fill price")
+                    == _decimal(execution.price, "fill price")
+                    and _decimal(existing["qty"], "stored fill qty") == qty
+                    and _decimal(existing["fee"], "stored fill fee")
+                    == _decimal(execution.fee, "fill fee")
+                    and str(existing["intent"]) == str(execution.intent)
+                    and existing["event_at"] == event_at)
+                if not identity:
+                    raise LedgerConflict(
+                        "execution replay changed immutable fill content")
+                if (execution.trade_id and existing["trade_id"]
+                        and execution.trade_id != existing["trade_id"]):
+                    raise LedgerConflict(
+                        "execution replay changed its trade identity")
+                if execution.trade_id and not existing["trade_id"]:
+                    known = self.connection.execute(
+                        "SELECT market_slug,state,update_at "
+                        "FROM execution_trade_states "
+                        "WHERE trade_id=?", (execution.trade_id,)).fetchone()
+                    if (known is not None
+                            and known["market_slug"] != execution.market_slug):
+                        raise LedgerConflict(
+                            "trade and execution market identities disagree")
+                    linked_state = (
+                        known["state"] if known is not None
+                        else self._trade_state(execution.trade_state or "") or None)
+                    self.connection.execute(
+                        "UPDATE execution_fills SET trade_id=?,"
+                        "trade_state=COALESCE(?,trade_state) "
+                        "WHERE execution_id=?",
+                        (execution.trade_id, linked_state,
+                         execution.execution_id))
+                    if linked_state == "TRADE_STATE_BUSTED":
+                        self._reverse_busted_fills(
+                            trade_id=execution.trade_id,
+                            market_slug=execution.market_slug,
+                            update_at=(known["update_at"]
+                                       if known is not None else event_at),
+                            received_at=received)
+                return False
             if not self._accept_event(
                     "execution", execution.execution_id, received, payload):
                 return False
+            known_trade = (self.connection.execute(
+                "SELECT market_slug,state,update_at FROM execution_trade_states "
+                "WHERE trade_id=?", (execution.trade_id,)).fetchone()
+                if execution.trade_id else None)
+            if (known_trade is not None
+                    and known_trade["market_slug"] != execution.market_slug):
+                raise LedgerConflict(
+                    "trade and execution market identities disagree")
+            trade_state = (
+                known_trade["state"] if known_trade is not None
+                else self._trade_state(execution.trade_state or "") or None)
+            reversed_fill = trade_state == "TRADE_STATE_BUSTED"
+            reversed_at = (
+                known_trade["update_at"]
+                if reversed_fill and known_trade is not None else None)
             self.connection.execute(
                 "INSERT INTO execution_fills(execution_id,client_order_id,"
                 "exchange_order_id,market_slug,side,price,qty,fee,liquidity,"
-                "intent,event_at,received_at,outcome) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "intent,event_at,received_at,outcome,trade_id,trade_state,"
+                "reversed,reversed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (execution.execution_id, execution.client_order_id,
                  execution.exchange_order_id, execution.market_slug,
                  execution.side.upper(), _number(execution.price, "price"),
                  _number(qty, "qty"), _number(execution.fee, "fee"),
                  execution.liquidity, execution.intent, event_at, received,
-                 execution.outcome))
+                 execution.outcome, execution.trade_id, trade_state,
+                 int(reversed_fill), reversed_at))
             position = self.connection.execute(
                 "SELECT net_qty,event_at,source,authoritative_through "
                 "FROM execution_positions WHERE market_slug=?",
@@ -1361,7 +1600,7 @@ class ExecutionLedger:
             net = (prior if included_by_position
                    else prior + self._signed_qty(str(execution.intent), qty))
             position_at = max(event_at, position["event_at"] if position else event_at)
-            if not included_by_position:
+            if not included_by_position and not reversed_fill:
                 self.connection.execute(
                     "INSERT INTO execution_positions(market_slug,net_qty,event_at,"
                     "received_at,source,authoritative_through) VALUES (?,?,?,?,?,?) "
@@ -1373,7 +1612,7 @@ class ExecutionLedger:
                     (execution.market_slug, _number(net, "net_qty"), position_at,
                      received, "execution",
                      position["authoritative_through"] if position else None))
-            if execution.client_order_id:
+            if execution.client_order_id and not reversed_fill:
                 order = self.connection.execute(
                     "SELECT filled_qty,original_qty,status FROM execution_orders "
                     "WHERE client_order_id=?", (execution.client_order_id,)).fetchone()
@@ -1381,7 +1620,8 @@ class ExecutionLedger:
                     observed_total = sum(
                         (_decimal(item["qty"], "fill qty") for item in
                          self.connection.execute(
-                             "SELECT qty FROM execution_fills WHERE client_order_id=?",
+                             "SELECT qty FROM execution_fills "
+                             "WHERE client_order_id=? AND reversed=0",
                              (execution.client_order_id,)).fetchall()),
                         Decimal("0"))
                     # Order updates carry a cumulative filled quantity while
@@ -1518,7 +1758,7 @@ class ExecutionLedger:
         # today's budget forever, so once the ledger had ever lost $40 the bot
         # could never start again. Observed 2026-08-15: the stop fired on
         # startup from several days of accumulated test losses.
-        clauses: list[str] = []
+        clauses: list[str] = ["reversed=0"]
         params: list[Any] = []
         if market_slug is not None:
             clauses.append("market_slug=?")
@@ -1526,7 +1766,7 @@ class ExecutionLedger:
         if since is not None:
             clauses.append("event_at>=?")
             params.append(_time(since, "since").isoformat())
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where = " WHERE " + " AND ".join(clauses)
         cash = Decimal("0")
         long_qty = Decimal("0")
         short_qty = Decimal("0")

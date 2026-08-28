@@ -74,8 +74,9 @@ active outage in `STATUS.md`, unfinished adaptation in `NEXT.md`, and a proven
 code repair in `BUGFIXES.md`.
 
 The changelog provides an RSS feed at
-`https://docs.polymarket.us/changelog/rss.xml`. This project does not currently
-poll or subscribe to it automatically.
+`https://docs.polymarket.us/changelog/rss.xml`. The project now has an isolated
+public-RSS monitor and bounded shell wrapper. It is not part of the trading
+runner and does not become automatic until its server schedule is installed.
 
 ## Audited official pages
 
@@ -83,13 +84,13 @@ Last reviewed: **2026-08-27**.
 
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
-| Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. AI operators compare Retail-tagged announcements and effective windows with the symptom before attributing it to local code. | This is a manual review, not an automated monitor. Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. |
-| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 read retries are bounded; mutations never auto-retry. | The trader guide's institutional firm/endpoint limits do not replace the Retail 20 requests/second per-key ceiling. The limiter is process-local, so concurrent external reports on the same key still aggregate at the venue. `Retry-After` is not consumed. |
+| Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. The isolated RSS monitor establishes a baseline without history spam, alerts only unseen items and retains unseen state after notification failure. | Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. The monitor is not automatic until its separate server schedule is installed. |
+| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 reads use bounded numeric or HTTP-date `Retry-After` when present and exponential fallback otherwise; mutations never auto-retry. | The trader guide's institutional firm/endpoint limits do not replace the Retail 20 requests/second per-key ceiling. The limiter is process-local, so concurrent external reports on the same key still aggregate at the venue. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
-| Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. | Some SDK exceptions lose structured status, leaving narrow text classification. REST trace IDs are not persisted. Generic advice to retry POST must never override mutation ambiguity safety. |
-| Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus Retail `/v1/portfolio/activities` recover recent executions; exactly one account execution leg is selected with `isAggressor`; execution IDs deduplicate; rewards and non-trading cash are separated from trading P&L. | The ledger does not separately persist `tradeId` or trade state and cannot reverse `TRADE_STATE_BUSTED`. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
-| Order management | [Trader guide](https://docs.polymarket.us/trader-guide/order-management), [Retail orders](https://docs.polymarket.us/api-reference/orders/overview) | Reward quotes are asynchronous post-only GTC limits; forced reductions are bounded IOC limits; local validation covers identity, open state, price bounds, tick and minimum quantity; HTTP 200/order ID is acknowledgement only; stream/REST state proves acceptance, fills and cancellation; cancel-confirm-replace prevents overlapping ownership. | `buyingPower` is fetched but not used as an entry gate. Rejection reasons are stored but do not yet drive reason-specific backoff or alerting. Preview is deliberately not called for every quote because it would consume the shared hot-path budget. Batch mutation is not used and its echoed IDs would not prove per-order success. |
-| Connection issues | [Trader guide](https://docs.polymarket.us/trader-guide/connection-issues), [Retail WebSocket reference](https://docs.polymarket.us/api-reference/websocket/overview) | Close/error signals trigger bounded exponential reconnect; new risk stops during recovery; reconnect requires REST reconciliation and fresh private snapshots; sustained venue failure enters a maintenance pause and requires three successful authenticated account reads before normal recovery. The SDK reuses an `httpx.AsyncClient`. | REST reconciliation can currently keep the state gate fresh while an application heartbeat is silent. The three-connection private pool does not expose per-shard heartbeat age, and the market adapter does not expose heartbeat age. The SDK default REST timeout is 30 seconds while the guide recommends 15. |
+| Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. Safe status, structured error code and trace/request ID survive adapter boundaries. | Generic advice to retry POST must never override mutation ambiguity safety. Trace IDs are retained on raised errors and logs, not stored as a new durable ledger relation. |
+| Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus retained Retail `/v1/portfolio/activities` backfill recent executions; exactly one account leg is selected with `isAggressor`; execution and trade IDs deduplicate independently; trade state is durable; a linked `TRADE_STATE_BUSTED` fill is reversed exactly once and excluded from P&L/basis/counts. | Venue history can be reset and is never negative evidence. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
+| Order management | [Trader guide](https://docs.polymarket.us/trader-guide/order-management), [Retail orders](https://docs.polymarket.us/api-reference/orders/overview) | Reward quotes are asynchronous post-only GTC limits; forced reductions are bounded IOC limits; local validation covers identity, open state, price bounds, tick and minimum quantity; HTTP 200/order ID is acknowledgement only; stream/REST state proves acceptance, fills and cancellation; cancel-confirm-replace prevents overlapping ownership. New-risk post-only quotes are gated by cached `buyingPower`, successful submissions reserve it for the rest of the sweep, and structured rejection delays are market-local. | Buying power never substitutes for equity/P&L and never blocks reducing quotes, cancels or IOC exits. Expected post-only races wait only one second; balance/risk and unknown validation rejects wait longer locally. Preview is deliberately not called per quote, and batch mutation remains unused. |
+| Connection issues | [Trader guide](https://docs.polymarket.us/trader-guide/connection-issues), [Retail WebSocket reference](https://docs.polymarket.us/api-reference/websocket/overview) | Close/error signals trigger bounded exponential reconnect; new risk stops during recovery; reconnect requires REST reconciliation and fresh private snapshots; sustained venue failure enters a maintenance pause and requires three successful authenticated account reads before normal recovery. Every private shard and the market socket has an independent 180-second last-message deadline. Owned SDK clients use a 15-second REST timeout. | REST reconciliation can bridge a brief stream gap but cannot certify socket liveness. If both stream families are stale they are rebuilt together; one stale family uses its scoped bounded recovery. |
 
 ## Safety interpretations that must not be lost
 
@@ -156,21 +157,21 @@ executed and later reversed by the exchange; it remains in history and must be
 recorded as a reversal for positions, P&L and reconciliation. Silently dropping
 it or retaining the original fill unchanged is incorrect.
 
-## Unfinished work and authorization boundary
+## Rollout and authorization boundary
 
-[NEXT.md](../NEXT.md) is authoritative for unresolved implementation work. At
-this review the documentation identified three grouped follow-ups:
+[NEXT.md](../NEXT.md) is authoritative for unresolved work. The prioritized
+2026-08-27 review is implemented locally: history-reset semantics, independent
+stream liveness, busted-trade reversal, entry-only buying-power/rejection
+protection, structured HTTP diagnostics and `Retry-After`, the 15-second REST
+timeout, and an isolated changelog RSS monitor.
 
-1. Persist trade ID/state and implement auditable busted-trade reversal.
-2. Add buying-power and rejection-reason-aware protection without turning
-   expected post-only collisions into a global stop.
-3. Separate per-connection WebSocket heartbeat liveness from REST state
-   freshness and review a 15-second REST timeout.
-
-These are engineering findings, not authorized strategy or deployment changes.
-Do not implement, deploy or restart solely because they appear here. The human
-operator retains the decision on behavior and deployment timing, and all normal
-tests, mutation checks, review and live safety gates still apply.
+Local implementation is not deployment. The operator still decides commit,
+deployment, RSS scheduling and restart timing. The additive ledger migration
+runs when the new runner first opens the ledger; read-only reports tolerate the
+old schema during the deployment window and begin filtering `reversed` after
+migration. Live acceptance must use normal authenticated flat/order-free
+startup gates. No document entry alone authorizes a restart or a trading-policy
+change.
 
 ## Required update procedure
 

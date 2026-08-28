@@ -48,6 +48,7 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.bot_era import is_bot_era  # noqa: E402
 from liquidity_bot.reward_calendar import reward_day  # noqa: E402
+from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
 # Fills before this are unusable: the isAggressor fix reached production on
 # 2026-08-17T13:20Z and roughly 60% of earlier fills were never recorded,
@@ -61,9 +62,11 @@ def trading_by_day(db: str, since: str) -> tuple[dict, dict, int]:
     markets = defaultdict(
         lambda: {"lq": Decimal(0), "sq": Decimal(0), "paid": Decimal(0),
                  "day": None})
+    active_fills = active_fills_predicate(connection)
     for row in connection.execute(
             "SELECT market_slug, intent, qty, price, received_at "
-            "FROM execution_fills WHERE intent IS NOT NULL AND received_at>=? "
+            f"FROM execution_fills WHERE {active_fills} "
+            "AND intent IS NOT NULL AND received_at>=? "
             "ORDER BY received_at", (since,)):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         cell = markets[row["market_slug"]]

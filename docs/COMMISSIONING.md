@@ -55,10 +55,15 @@ strategy is profitable and not permission to scale.
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account
-  state use WebSockets.
+  state use WebSockets. Owned SDK clients use a 15-second REST timeout, and
+  every private shard plus the market socket has an independent 180-second
+  silence deadline.
 
 The runner measures marked account equity as the API's USD `currentBalance`
-plus `assetNotional`. It never substitutes `buyingPower` for equity.
+plus `assetNotional`. It never substitutes `buyingPower` for equity. Buying
+power gates only a flat market's new post-only entry and is reserved locally
+after successful submissions so the 20-slot sweep cannot reuse stale capacity;
+it never delays a reducer, cancel or IOC exit.
 
 ## Startup gates
 
@@ -114,6 +119,18 @@ exact-position, planning, and unexitable-inventory failures end maker quoting
 and enter cancel/flatten shutdown; they are not downgraded to warnings. A
 first- or second-consecutive ET loss-stop day pauses new risk in-process while
 exits remain active; the third consecutive day is terminal.
+
+Structured entry rejections are also scoped rather than terminal: expected
+post-only races wait one second in that market, balance/risk failures wait 15
+seconds and unknown validation failures wait 60 seconds. These delays apply
+only while the market is flat and cannot delay inventory reduction.
+
+Recent portfolio activity is positive backfill evidence, not a complete
+history contract. Trade identity and lifecycle are tracked separately from an
+execution leg. If the venue later marks a linked trade
+`TRADE_STATE_BUSTED`, the ledger reverses that fill exactly once and excludes
+it from position basis, P&L and reporting; a newer authoritative venue position
+prevents double reversal.
 
 Incremental slot top-up takes complete account snapshots and strictly proves
 every owner it will release before it changes the active tuple or closes
@@ -181,6 +198,15 @@ flat sessions. The supervisor and diagnostics read the same persisted value.
 The launcher reads the existing sibling `../maker-lab/credentials.py` as
 literal data. The credential file, environment files, databases, locks, and
 logs are ignored by Git. Never copy secrets into this repository.
+
+The optional changelog monitor is a separate public-RSS process with no key,
+ledger or trading hook. Its wrapper provides a nonblocking lock and 30-second
+timeout. Installing its hourly server schedule is a deployment choice, not a
+runner startup step:
+
+```bash
+bash scripts/post_polymarket_changelog.sh
+```
 
 ## Exit meanings
 

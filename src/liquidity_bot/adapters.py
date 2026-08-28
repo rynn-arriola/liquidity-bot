@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .errors import AdapterError
@@ -31,7 +32,14 @@ __all__ = [
     "AsyncReadOnlyGateway",
     "parse_book_response",
     "parse_trade_response",
+    "REST_REQUEST_TIMEOUT_SECONDS",
 ]
+
+
+# Official connection guidance calls for client-side timeout detection after
+# 15 seconds. The SDK otherwise defaults to 30 seconds, long enough for one
+# hung request to consume most of the private-state freshness window.
+REST_REQUEST_TIMEOUT_SECONDS = 15.0
 
 
 def _amount(value: Any, *, field: str) -> float:
@@ -309,6 +317,7 @@ class AsyncReadOnlyGateway:
         incentive_max_pages: int = 200,
         retry_attempts: int = 3,
         retry_base_seconds: float = 1.0,
+        max_retry_after_seconds: float = 60.0,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     ):
         if not 1 <= incentive_batch_size <= 100:
@@ -319,7 +328,8 @@ class AsyncReadOnlyGateway:
             raise ValueError("max_pages must be positive")
         if incentive_max_pages <= 0:
             raise ValueError("incentive_max_pages must be positive")
-        if retry_attempts <= 0 or retry_base_seconds < 0:
+        if (retry_attempts <= 0 or retry_base_seconds < 0
+                or max_retry_after_seconds < 0):
             raise ValueError("retry settings are invalid")
         self.client = client
         self.limiter = limiter or AsyncIntervalLimiter()
@@ -329,6 +339,7 @@ class AsyncReadOnlyGateway:
         self.incentive_max_pages = incentive_max_pages
         self.retry_attempts = retry_attempts
         self.retry_base_seconds = retry_base_seconds
+        self.max_retry_after_seconds = max_retry_after_seconds
         self._sleep = sleep
 
     @staticmethod
@@ -340,6 +351,75 @@ class AsyncReadOnlyGateway:
             return int(raw) if raw is not None else None
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _response_headers(exc: Exception) -> Mapping[str, Any]:
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+        return headers if isinstance(headers, Mapping) else {}
+
+    @classmethod
+    def _retry_after_seconds(cls, exc: Exception) -> float | None:
+        raw = next((value for name, value in cls._response_headers(exc).items()
+                    if str(name).lower() == "retry-after"), None)
+        if raw in (None, ""):
+            return None
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            try:
+                until = parsedate_to_datetime(str(raw))
+                if until.tzinfo is None or until.utcoffset() is None:
+                    return None
+                seconds = (until - datetime.now(timezone.utc)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                return None
+        return max(0.0, seconds) if math.isfinite(seconds) else None
+
+    @classmethod
+    def _error_code(cls, exc: Exception) -> str | None:
+        body = getattr(exc, "body", None)
+        if not isinstance(body, Mapping):
+            return None
+        for key in ("code", "errorCode", "error_code"):
+            value = body.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return None
+
+    @classmethod
+    def _trace_id(cls, exc: Exception) -> str | None:
+        headers = cls._response_headers(exc)
+        for wanted in ("x-trace-id", "trace-id", "x-request-id"):
+            for name, value in headers.items():
+                if str(name).lower() == wanted and value not in (None, ""):
+                    return str(value)
+        body = getattr(exc, "body", None)
+        if isinstance(body, Mapping):
+            for key in ("traceId", "trace_id", "requestId", "request_id"):
+                if body.get(key) not in (None, ""):
+                    return str(body[key])
+        return None
+
+    @classmethod
+    def _adapter_error(cls, operation: str, exc: Exception) -> AdapterError:
+        status = cls._status_code(exc)
+        code = cls._error_code(exc)
+        trace = cls._trace_id(exc)
+        retry_after = cls._retry_after_seconds(exc)
+        detail = [f"status={status}"] if status is not None else []
+        if code:
+            detail.append(f"code={code}")
+        if trace:
+            detail.append(f"trace={trace}")
+        suffix = f" ({', '.join(detail)})" if detail else ""
+        return AdapterError(
+            f"{operation} failed: {type(exc).__name__}: {exc}{suffix}",
+            operation=operation,
+            status_code=status,
+            error_code=code,
+            trace_id=trace,
+            retry_after_seconds=retry_after,
+        )
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
@@ -354,9 +434,12 @@ class AsyncReadOnlyGateway:
                 # "Global Rate Limit Exceeded" even though it is not a rate
                 # limit; slowing down in response makes that failure worse.
                 if self._status_code(exc) != 429 or attempt + 1 >= self.retry_attempts:
-                    raise AdapterError(
-                        f"{operation} failed: {type(exc).__name__}: {exc}") from exc
-                await self._sleep(self.retry_base_seconds * (2 ** attempt))
+                    raise self._adapter_error(operation, exc) from exc
+                retry_after = self._retry_after_seconds(exc)
+                delay = (self.retry_base_seconds * (2 ** attempt)
+                         if retry_after is None else min(
+                             retry_after, self.max_retry_after_seconds))
+                await self._sleep(delay)
         raise AssertionError("unreachable retry loop")
 
     async def fetch_incentives(

@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
+from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 from liquidity_bot.reward_calendar import (  # noqa: E402
     reward_day, reward_day_bounds)
 
@@ -373,9 +374,10 @@ def _today_trading(now) -> float:
             lambda: {"lq": Decimal(0), "lc": Decimal(0),
                      "sq": Decimal(0), "sc": Decimal(0)})
         start, end = reward_day_bounds(reward_day(now))
+        active_fills = active_fills_predicate(conn)
         for slug, intent, price, qty in conn.execute(
                 "SELECT market_slug,intent,price,qty FROM execution_fills "
-                "WHERE event_at>=? AND event_at<?",
+                f"WHERE {active_fills} AND event_at>=? AND event_at<?",
                 (start.isoformat(), end.isoformat())):
             q, p_ = Decimal(str(qty)), Decimal(str(price))
             book = books[slug]
@@ -527,9 +529,13 @@ async def main() -> int:
                                   # action could ever clear.
                                   "WHERE state NOT IN ('RECONCILED','FAILED')"
                                   ).fetchone()[0]
-        fills_all = conn.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0]
+        active_fills = active_fills_predicate(conn)
+        fills_all = conn.execute(
+            "SELECT COUNT(*) FROM execution_fills "
+            f"WHERE {active_fills}").fetchone()[0]
         fills_today = conn.execute(
-            "SELECT COUNT(*) FROM execution_fills WHERE event_at LIKE ?",
+            "SELECT COUNT(*) FROM execution_fills "
+            f"WHERE {active_fills} AND event_at LIKE ?",
             (now.strftime("%Y-%m-%d") + "%",)).fetchone()[0]
         conn.close()
     except Exception as exc:
@@ -705,9 +711,11 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
         books: dict[str, dict[str, Decimal]] = collections.defaultdict(
             lambda: {"lq": Decimal(0), "lc": Decimal(0),
                      "sq": Decimal(0), "sc": Decimal(0)})
+        active_fills = active_fills_predicate(conn)
         for slug, intent, price, qty in conn.execute(
                 "SELECT market_slug,intent,price,qty FROM execution_fills "
-                "WHERE event_at LIKE ?", (now.strftime("%Y-%m-%d") + "%",)):
+                f"WHERE {active_fills} AND event_at LIKE ?",
+                (now.strftime("%Y-%m-%d") + "%",)):
             q, p_ = Decimal(str(qty)), Decimal(str(price))
             book = books[slug]
             if intent == "ORDER_INTENT_BUY_LONG":

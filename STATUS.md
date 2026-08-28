@@ -5,7 +5,7 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 14:11 ET / 2026-08-28 18:11 UTC
+- **Verified:** 2026-08-28 14:35 ET / 2026-08-28 18:35 UTC
 - **Liquidity bot:** LIVE; supervisor PID 34772 / runner PID 34778, size 10
 - **Live exposure:** authenticated dashboard proved zero positions and 30
   resting orders, zero `UNKNOWN_ABSENT` and three just-submitted unresolved
@@ -17,9 +17,9 @@ snapshots are under [docs/history/](docs/history/README.md).
   fix `1c82778` is deployed for hourly/new report processes
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
-- **Dynamic size capability:** whole values 5-30 and one shared validator pass
-  748 local tests plus reversal; deployment is pending and live size stays 10
-- **Verification:** all 745 local and server tests, documentation audit,
+- **Dynamic size capability:** `5165fc4` is deployed; whole values 5-30 share
+  one validator, while persisted/running size remains 10 without a restart
+- **Verification:** all 748 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery

@@ -366,7 +366,7 @@ class ShadowRunner:
             return
         payload = build_liquidity_summary(self.discord_snapshot(
             observed_at=observed_at, reconnects=reconnects))
-        await self.notifier.send_payload_async(payload)
+        await self.notifier.send_payload_async(payload, channel="summary")
 
     def summary(self, reconnects: int) -> dict[str, Any]:
         def scalar(sql: str) -> float:

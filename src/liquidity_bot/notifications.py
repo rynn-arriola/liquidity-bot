@@ -40,13 +40,12 @@ def _discord_post(url: str, body: bytes) -> bool:
 
 
 class DiscordNotifier:
-    """Send status or critical messages without ever exposing webhook URLs."""
+    """Send summaries or operational messages without exposing webhook URLs."""
 
     def __init__(self, secrets: RuntimeSecrets,
                  transport: Transport = _discord_post):
-        self._status_url = secrets.discord_webhook_url
-        self._error_url = (secrets.discord_errors_webhook_url
-                           or secrets.discord_webhook_url)
+        self._summary_url = secrets.discord_webhook_url
+        self._error_url = secrets.discord_errors_webhook_url
         self._rewards_url = secrets.discord_rewards_webhook_url
         self._transport = transport
 
@@ -75,17 +74,20 @@ class DiscordNotifier:
         # Destination and severity are separate choices. They used to be one
         # knob -- critical went to the errors webhook, everything else to the
         # status one -- so downgrading routine recoveries from critical also
-        # moved them into the status channel, which is meant for reporting.
+        # moved them into the summary channel, which is meant for reporting.
         # Operational noise belongs in the errors channel whether or not it
         # needs a human right now.
-        if channel not in (None, "status", "errors", "rewards"):
+        if channel not in (None, "summary", "errors", "rewards"):
             raise ValueError(
-                "channel must be 'status', 'errors', or 'rewards'")
+                "channel must be 'summary', 'errors', or 'rewards'")
         if channel == "rewards":
             url = self._rewards_url
+        elif channel == "summary":
+            url = self._summary_url
         else:
-            to_errors = (critical if channel is None else channel == "errors")
-            url = self._error_url if to_errors else self._status_url
+            # Safe default: everything that is not explicitly a report is an
+            # operational event. Severity affects presentation, not routing.
+            url = self._error_url
         if not url:
             return NotificationResult(False, "webhook_not_configured")
         if not isinstance(payload, Mapping) or not payload:

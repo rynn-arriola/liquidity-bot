@@ -109,9 +109,11 @@ class IncentiveRefreshTests(unittest.IsolatedAsyncioTestCase):
         class Notifier:
             def __init__(self):
                 self.payloads = []
+                self.channels = []
 
-            async def send_payload_async(self, payload):
+            async def send_payload_async(self, payload, *, channel=None):
                 self.payloads.append(payload)
+                self.channels.append(channel)
 
         path = Path(tempfile.mkdtemp(prefix="liquidity-summary-")) / "shadow.db"
         config = RunConfig(
@@ -128,6 +130,7 @@ class IncentiveRefreshTests(unittest.IsolatedAsyncioTestCase):
         finally:
             runner.close()
         self.assertEqual(len(notifier.payloads), 1)
+        self.assertEqual(notifier.channels, ["summary"])
         embed = notifier.payloads[0]["embeds"][0]
         self.assertIn("SHADOW", embed["title"])
         self.assertIn("DO_NOT_START_TRIAL", embed["title"])

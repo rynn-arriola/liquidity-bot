@@ -111,7 +111,7 @@ class DiscordTests(unittest.TestCase):
             discord_errors_webhook_url="https://discord.com/api/webhooks/2/error",
             discord_rewards_webhook_url="https://discord.com/api/webhooks/3/rewards")
 
-    def test_status_and_critical_use_separate_hooks_without_network(self):
+    def test_operational_messages_default_to_errors_without_network(self):
         calls = []
 
         def transport(url, body):
@@ -121,7 +121,7 @@ class DiscordTests(unittest.TestCase):
         notifier = DiscordNotifier(self.secrets(), transport=transport)
         self.assertTrue(notifier.send("healthy").sent)
         self.assertTrue(notifier.send("money risk", critical=True).sent)
-        self.assertIn("/1/status", calls[0][0])
+        self.assertIn("/2/error", calls[0][0])
         self.assertIn("/2/error", calls[1][0])
         self.assertEqual(calls[1][1]["content"], "money risk")
 
@@ -140,12 +140,27 @@ class DiscordTests(unittest.TestCase):
 
         notifier = DiscordNotifier(self.secrets(), transport=transport)
         notifier.send("retrying", critical=False, channel="errors")
-        notifier.send("session summary", critical=False)
+        notifier.send("session summary", critical=True, channel="summary")
         notifier.send("seven-day table", critical=False, channel="rewards")
 
         self.assertIn("/2/error", calls[0])
         self.assertIn("/1/status", calls[1])
         self.assertIn("/3/rewards", calls[2])
+
+    def test_errors_never_fall_back_into_the_summary_webhook(self):
+        calls = []
+        secrets = RuntimeSecrets(
+            discord_webhook_url="https://discord.com/api/webhooks/1/summary")
+        notifier = DiscordNotifier(
+            secrets, transport=lambda url, body: calls.append(url) or True)
+
+        operational = notifier.send("stream recovered")
+        summary = notifier.send("five-minute report", channel="summary")
+
+        self.assertFalse(operational.sent)
+        self.assertEqual(operational.reason, "webhook_not_configured")
+        self.assertTrue(summary.sent)
+        self.assertEqual(calls, [secrets.discord_webhook_url])
 
     def test_an_unknown_channel_is_refused(self):
         notifier = DiscordNotifier(self.secrets(), transport=lambda u, b: True)
@@ -617,7 +632,8 @@ class DiscordTests(unittest.TestCase):
         calls = []
         result = DiscordNotifier(
             self.secrets(), transport=lambda url, body: calls.append(
-                (url, json.loads(body))) or True).send_payload(payload)
+                (url, json.loads(body))) or True).send_payload(
+                    payload, channel="summary")
         self.assertTrue(result.sent)
         self.assertEqual(calls[0][1], payload)
 

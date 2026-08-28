@@ -794,7 +794,8 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                        session_loss=session_loss, session_cap=session_cap,
                        viable=viable, tight=tight, rewarded=rewarded,
                        reward_paid=reward_paid, reward_pending=reward_pending,
-                       uptime=_uptime()))
+                       uptime=_uptime()),
+                channel="summary")
             print(paint("d", "  posted to Discord"))
         except Exception as exc:
             print(paint("y", "  Discord post failed: {}: {}".format(

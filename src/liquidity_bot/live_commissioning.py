@@ -4223,7 +4223,8 @@ class CommissioningRunner:
                if self._selection_scan_seconds_last is not None else ""),
             flush=True,
         )
-        await self.notifier.send_payload_async(payload, critical=critical)
+        await self.notifier.send_payload_async(
+            payload, critical=critical, channel="summary")
         await self._alarm_if_quoting_nothing(
             now, resting=resting_markets, reasons=idle_reasons)
 
@@ -5296,7 +5297,9 @@ class CommissioningRunner:
                         f"{len(ambiguous_markets)} market(s) remain scoped "
                         "until terminal order proof."
                         if ambiguous_markets else "Quoting may resume."
-                    ))
+                    ),
+                    channel="errors",
+                )
                 self._runtime_error_counts.pop("bound_streams", None)
                 return None
             except RuntimeInvariantViolation as invariant:

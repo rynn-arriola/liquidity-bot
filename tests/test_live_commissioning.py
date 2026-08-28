@@ -6053,6 +6053,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._send_summary(runner._now())
 
         payload, _critical = notifier.payloads[-1]
+        self.assertEqual(notifier.channels[-1], "summary")
         rendered = "\n".join(
             field["value"] for field in payload["embeds"][0]["fields"])
         # Reporting slot zero only showed no open position here, which is the
@@ -8528,6 +8529,8 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.market_stream.started)
         self.assertFalse(runner.market_stream.closed)
         self.assertEqual(len(failures), 1)
+        self.assertIn("rebound both streams", runner.notifier.messages[-1][0])
+        self.assertEqual(runner.notifier.channels[-1], "errors")
         await runner.private_stream.close()
         await runner.market_stream.close()
 

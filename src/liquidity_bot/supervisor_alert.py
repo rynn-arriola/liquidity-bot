@@ -15,7 +15,7 @@ def main() -> int:
     args = parser.parse_args()
     secrets = load_runtime_secrets()
     result = DiscordNotifier(secrets).send(
-        args.message, critical=args.critical)
+        args.message, critical=args.critical, channel="errors")
     print(result.reason)
     return 0 if result.sent else 1
 

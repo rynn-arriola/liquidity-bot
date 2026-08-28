@@ -58,12 +58,12 @@ traceback, unresolved-mutation timeout, runtime recovery, stream-silence event,
 buying-power block or rejection backoff. Natural failure/reversal paths still
 need observation; do not induce a closure, disconnect, rejection or bust.
 
-The separate strict spread-scalp collector started at 04:07:22Z without a
-trading-bot restart. Its 10-minute acceptance covered 100 markets, 24,050 book
-updates and 792 public trades across both `PURE_VOLUME` and `REWARD_SLOTS`,
-with 99.3% stream coverage and zero gaps, reconnects, stream errors or REST
-429s. The bot remained active. One private-socket silence recovered normally;
-the same condition repeatedly predated this collector, including at 04:05Z.
+The strict spread-scalp collector started at 04:07:22Z without a trading-bot
+restart. Ten-minute acceptance covered 100 markets, 24,050 book updates and
+792 trades across both cohorts, with 99.3% stream coverage and zero gaps,
+reconnects, stream errors or REST 429s. Bot PID 5445 stayed active. A private-
+socket silence matched repeated pre-collector recoveries; later transient
+UNKNOWN_ABSENT/cancel intents also cleared, with no mutation timeout or stop.
 
 ## Current operating instruction
 

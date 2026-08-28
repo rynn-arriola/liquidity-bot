@@ -90,8 +90,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   The deployed 10-minute acceptance then covered 100 markets, 24,050 books and
   792 trades, with strict episodes in `PURE_VOLUME` and `REWARD_SLOTS`, 99.3%
   stream coverage and zero gaps/reconnects/errors/REST 429s. The live runner
-  was not restarted and stayed active. One private-stream silence during the
-  window matched repeated pre-collector recoveries and cleared normally.
+  stayed active. Private-stream silence matched pre-collector recoveries;
+  transient absent/cancel states also cleared without mutation timeout or stop.
 ## How to add a finding
 
 Add a concise, dated fact here while it is current. Move detailed incident

@@ -38,6 +38,12 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   entry/status/decision/engineering set fell from 1,030 lines / 8,990 words to
   442 lines / 3,170 words while the former long files were preserved in dated
   archives. `scripts/audit_docs.py` enforces budgets, routes and local links.
+- **Polymarket's trader guides are not all Retail wire contracts.** The bot
+  uses `api.polymarket.us` and the pinned Retail SDK; Institutional examples
+  using participant accounts, JWT/Auth0, FIX, gRPC, Drop Copy or
+  `api.prod.polymarketexchange.com` are conceptual unless the matching Retail
+  endpoint documents them. The audited source map and implementation gaps are
+  in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md).
 
 ## How to add a finding
 

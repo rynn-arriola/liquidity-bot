@@ -56,3 +56,19 @@ better than the old matched-pair-only row, but per-market realized attribution
 is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
+
+## 5. Official API follow-up is documented but not authorized
+
+The 2026-08-27 comparison of official Retail and Institutional documentation is
+in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md). It
+identified three grouped engineering reviews:
+
+- preserve `tradeId` and trade state and reverse `TRADE_STATE_BUSTED` entries;
+- use buying power and rejection reasons to prevent persistent invalid retry
+  without blocking ordinary post-only collisions;
+- monitor heartbeat liveness per private-stream shard and on the market stream,
+  separate it from REST freshness, and review the 30s SDK timeout against the
+  documented 15s recommendation.
+
+No implementation, deployment or restart is authorized by this entry. Review
+each flow and obtain the operator's decision before changing behavior.

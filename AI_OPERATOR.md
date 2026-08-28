@@ -25,6 +25,9 @@ Before diagnosing, changing, deploying, stopping or starting anything:
    venue behavior, also re-open the current
    [Polymarket changelog](https://docs.polymarket.us/changelog) and its linked
    live status page before attributing the symptom to local code.
+   For a rollback or stable-version request, read
+   [docs/STABLE_RELEASE.md](docs/STABLE_RELEASE.md) before touching git,
+   deployment files, databases or the running process.
 5. Verify live facts when the question is operational. Markdown is the latest
    handoff, not the venue. Process state comes from the server, deployed code
    from `DEPLOYED_COMMIT` plus file hashes, configuration from the running
@@ -149,6 +152,7 @@ are evidence the operator asked to see.
 | [docs/COMMISSIONING.md](docs/COMMISSIONING.md) | Live execution envelope and operating lifecycle |
 | [docs/SAFETY_INVARIANTS.md](docs/SAFETY_INVARIANTS.md) | Rules no fix may weaken |
 | [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) | Canonical go-to reference for Polymarket rules, official sources, Retail/Institutional scope and audited implementation differences |
+| [docs/STABLE_RELEASE.md](docs/STABLE_RELEASE.md) | Immutable stable tags, rollback scope and required recovery procedure |
 | `docs/PHASE*_ACCEPTANCE.md` | Historical acceptance evidence, never current status |
 
 Other files under `docs/` are technical references. They must not compete with

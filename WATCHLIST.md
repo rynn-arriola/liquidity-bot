@@ -58,7 +58,7 @@ reward surrendered during the same hours.
 
 ## 4. Size-20 counterfactual
 
-Live size 20 is not authorized. Continue the measurement-only comparison using
+Live size 20 is not selected. Continue the measurement-only comparison using
 complete ET reward days, resting side-hours, projected share multiplier,
 maker-fill rate and stressed-exit sensitivity.
 

@@ -15,6 +15,8 @@ snapshots are under [docs/history/](docs/history/README.md).
 - **Maker-lab:** stopped
 - **Running source:** the unchanged bot has `a8d91d0` behavior loaded; report
   fix `1c82778` is deployed for hourly/new report processes
+- **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
+  tagging it did not stop, restart or mutate the live process
 - **Verification:** all 745 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow

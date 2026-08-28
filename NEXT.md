@@ -65,3 +65,15 @@ timeout values.
 end with `flat=false`. Decide whether the script should fail when the final
 record lacks flat proof. Until then, every stop requires final-record plus an
 authenticated venue snapshot.
+
+## 6. Dynamic quote-size capability after stable `v1.0.0`
+
+The operator requested one centralized whole-number range from 5 through 30 so
+future quantity changes do not require edits across Python and shell launchers.
+The live and persisted size remain 10; maximum 30 is dormant capability, not a
+rollout. Preserve 20 slots and the six-hour horizon. Order quantity, reward
+selection, early-exit allowance, per-market exposure and execution-fee allowance
+must derive from the selected size. Keep the $340 capital cap and $40/$80 account
+protections fixed unless the operator separately authorizes more capital/risk.
+Remove duplicated launcher allowlists, test every integer and both boundaries,
+and do not restart merely to deploy the capability.

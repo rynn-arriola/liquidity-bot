@@ -20,7 +20,7 @@ show the operator the discrepancy.
 | Choice | Decision in force |
 |---|---|
 | Production runtime | Production server; no local runner |
-| Quote size | 10 contracts; size 20 is measurement-only and not authorized |
+| Quote size | 10 contracts live. Build a dormant whole-number 5-30 capability later; no non-10 size is activated without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
@@ -76,7 +76,8 @@ sensor independently pauses new risk as soon as closed trading reaches $80.
 
 - No automatic same-price cancel/repost to move a nearly-front order backward
   in the queue.
-- No size-20 live rollout yet.
+- A maximum-30 validator is future capability, not permission to change the
+  live size. Size 20 remains measurement-only until separately selected.
 - No removal of the 2-cent spread gate.
 - No live spread-scalping orders or automatic early-exit rule; collected scalp
   evidence must be reviewed before any separate strategy proposal.

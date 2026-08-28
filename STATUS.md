@@ -5,11 +5,11 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 18:02 ET / 2026-08-28 22:02 UTC
+- **Verified:** 2026-08-28 18:05 ET / 2026-08-28 22:05 UTC
 - **Liquidity bot:** LIVE; supervisor PID 51980 / runner PID 51989, size 10
-- **Live exposure:** authenticated venue snapshot found 0 positions and 34 resting orders across 18 markets
+- **Live exposure:** authenticated venue snapshot found 1 position and 32 resting orders across 18 markets
 - **20-slot health:** startup bound 20 markets; 18 currently quote and one
-  recently touched owner is economically idle, with 0 absent/unresolved rows
+  recently touched owner is economically idle, with 0 absent and 1 unresolved row
 - **Maker-lab:** stopped
 - **Deployed source:** runner and server marker are commit `2ece3c3`
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
@@ -62,6 +62,8 @@ passed all 766 server tests before the authorized size-10 restart. At 22:00Z the
 new runner had 20 bound, 18 quoting, 34 resting orders, zero positions,
 absent/unresolved rows or risk stops. At 22:01Z one silent private shard
 recovered under the same PID with `cancels=0` and all 33 working orders retained.
+The next normal fill opened one managed position; its transient absent cancel
+cleared by 22:05Z and the dashboard returned to `WORKING` with no risk stop.
 
 ## Current operating instruction
 

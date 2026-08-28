@@ -64,10 +64,10 @@ archived NEXT/FINDINGS files.
 
 ## 5. Spread-scalp collection needs a prospective cohort
 
-The isolated strict two-sided collector is implemented and locally smoke-
-tested. Continue it without changing live orders. Do not judge profitability
-from startup snapshots: require complete observation coverage, enough full-
-quantity both-side and one-side episodes across multiple days, and compare
-several predeclared early-exit horizons plus settlement. Keep `PURE_VOLUME`
-and `REWARD_SLOTS` separate; overlapping markets may appear in both analyses
-but must not be summed as independent profit.
+The isolated strict two-sided collector is deployed and collecting on the
+server without changing live orders. Its 10-minute acceptance passed, but do
+not judge profitability from that startup sample: require complete coverage,
+enough full-quantity both-side and one-side episodes across multiple days,
+and compare predeclared early-exit horizons plus settlement. Keep
+`PURE_VOLUME` and `REWARD_SLOTS` separate; overlapping markets may appear in
+both analyses but must not be summed as independent profit.

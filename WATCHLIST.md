@@ -18,7 +18,7 @@ does not use the Polymarket API budget.
 | Loss by market, side, ET hour and kickoff | Read-only analysis of the execution ledger and quote observations | None when analyzed | None |
 | Size-20 counterfactual | Read-only reuse of size-10 score, reward, fill and exit observations | None when analyzed | None; live size remains 10 |
 | Daily selection/period probe | Cron at 14:00 UTC runs one bounded snapshot | About 50 read-only calls once/day | None |
-| Strict spread-scalp study | Separate `scalp_run` process, database and combined book/trade socket | Normally 1-2 reads per 15 minutes, locally capped at 1 req/s; at most 100 market subscriptions | None; code has no order path |
+| Strict spread-scalp study | Active separate `scalp_run` process, database and combined book/trade socket | Normally 1-2 reads per 15 minutes, locally capped at 1 req/s; at most 100 market subscriptions | None; code has no order path |
 
 The hourly seven-day reward post is operational reporting, not a strategy
 experiment. The hourly changelog poll is venue diagnostics. Nightly SQLite

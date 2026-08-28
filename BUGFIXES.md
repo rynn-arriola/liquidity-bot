@@ -28,21 +28,27 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server.
 
+## Reviewed locally; deployment pending
+
+- Two silent private shards caused global cancellation and a transient zero-
+  order slate although the runner and 20 owners survived; filtered snapshots
+  could also clear another shard's state. Stale shards now overlap-replace only
+  after exact-scope order EOF and balance delivery, followed by buffered events,
+  whole-account REST order/position proof and all-shard liveness. Late
+  heartbeats use the same no-cancel proof; any failure retains global quarantine.
+  Scoped snapshots clear only their markets. Focused 20-slot, partial/failure,
+  race and cross-shard regressions passed; reversals reproduced both defects.
+  Full-suite and deployment state are in [STATUS.md](STATUS.md).
+
 ## Latest deployment additions
 
-- The summary webhook accepted routine notices because default routing followed
-  severity, and missing error config fell back to summary. Operations now use
-  error/status with no fallback; live, shadow and dashboard summaries opt in,
-  and supervisor alerts select errors. Commit `1d48584` is deployed and active.
+- Summary routing leaked routine notices through severity/fallback. Operations
+  now use error/status only; summaries explicitly opt in. `1d48584` is active.
 - Pregame owners blocked on both sides by named current-book economics could
-  retain a nominal slot indefinitely because incremental top-up recognized only
-  lifecycle loss. The local repair tracks a 10-minute continuous flat/clear
-  dwell and releases oldest-first only when the same normal scan supplies an
-  actual viable replacement. Any authorized side, position, working or absent
-  order, unresolved intent, unknown evaluation or non-economic blocker resets
-  or prevents release. Focused ownership/supply regressions passed, deliberate
-  removal of the predicate failed its regression and restoration passed. It is
-  deployed and active; natural replacement acceptance remains pending.
+  retain a slot. A deployed 10-minute flat/clear dwell releases oldest-first
+  only against actual supply; authorization, exposure, ambiguity or other
+  blockers prevent/reset release. Regressions and reversal passed; natural
+  replacement acceptance is pending.
 - Fixed-GTC excluded 17 post-reconnect pairs because one cumulative old gap was
   treated as episode-local. Coverage now uses overlapping stream intervals;
   legacy evidence stays conservative. The report is active; decode/drop closes
@@ -88,13 +94,6 @@ stream-silence event. Fault-specific live acceptance remains natural-only.
 
 ## Required entry format
 
-Every production defect must record:
-
-1. operator-visible symptom;
-2. measured mechanism and disproved alternatives;
-3. safety constraints and affected flows;
-4. focused regression plus deliberate reversal proof;
-5. complete local/server verification and deployment/live-acceptance state;
-6. operational cost or exposure uncertainty.
-
-Do not turn this index into a second current-status file.
+Record symptom, measured mechanism/disproved alternatives, safety/affected
+flows, regression plus reversal proof, verification/deployment/acceptance state,
+and operational cost or uncertainty. Do not duplicate current status here.

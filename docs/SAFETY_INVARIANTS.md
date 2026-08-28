@@ -298,7 +298,14 @@ These are implementation requirements, not suggestions.
     quarantine cancels, then apply buffered private events before classifying
     owners as ambiguous. Shutdown likewise drains buffered terminal events
     before REST reconciliation. This preserves positive cancel/fill proof
-    without treating a missing REST row as terminal.
+    without treating a missing REST row as terminal. Heartbeat-silence recovery
+    may preserve resting orders only under the frozen decision loop: overlap-
+    start only stale shards, consume exact-scope order EOF plus balance proof,
+    swap them, apply buffered events, complete whole-account REST order and
+    position reconciliation, and prove every shard live. A heartbeat that
+    arrives during handoff uses the same REST/liveness proof. Any failed step
+    falls back to global quarantine. A filtered shard snapshot is complete only
+    for its market scope and cannot clear state owned by another shard.
 65. A CANCEL-confirmed owner may be prioritized ahead of the full market slate
     only after a terminal order state resolves its intent. Priority changes
     scheduling, never authorization: ownership, unresolved-intent, private/REST
@@ -454,7 +461,9 @@ These are implementation requirements, not suggestions.
 79. REST account freshness cannot certify WebSocket liveness. Every private
     shard and the market connection owns an independent last-message clock;
     180 seconds of silence enters the existing bounded scoped recovery. If both
-    stream families are stale they are rebuilt together. REST requests use a
+    stream families are stale they are rebuilt together. A single-family
+    private recovery may preserve orders only under invariant 64's overlap and
+    whole-account proof; otherwise it quarantines. REST requests use a
     15-second timeout. Only confirmed 429 reads may honor bounded
     `Retry-After`; ambiguous mutations remain durable and never auto-retry.
 80. Changelog monitoring is operationally isolated. It may read only the

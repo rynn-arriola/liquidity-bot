@@ -38,6 +38,22 @@ class FakeStream:
         self.closed = True
 
 
+class SnapshotStream(FakeStream):
+    """A shard that immediately supplies the two required initial proofs."""
+
+    async def start(self, slugs):
+        await super().start(slugs)
+        scope = None if slugs is None else tuple(slugs)
+        self.queue.put_nowait(PrivateEvent(
+            PrivateEventKind.ORDER_SNAPSHOT,
+            {"orders": [], "eof": True}, request_id="orders",
+            market_scope=scope, received_at=datetime.now(timezone.utc)))
+        self.queue.put_nowait(PrivateEvent(
+            PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT,
+            {"balances": []}, request_id="balance",
+            received_at=datetime.now(timezone.utc)))
+
+
 def event(slug: str) -> PrivateEvent:
     return PrivateEvent(
         kind=PrivateEventKind.ORDER_UPDATE, request_id="r",
@@ -126,6 +142,64 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
             PrivateEventKind.HEARTBEAT, {}, request_id="heartbeat"))
         await pool.next_event(timeout=1)
         pool.assert_live(now=datetime.now(timezone.utc))
+
+    async def test_silent_shard_is_overlap_replaced_without_closing_healthy(self):
+        pool = PrivateStreamPool(object(), factory=SnapshotStream)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        old = tuple(pool._streams)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+
+        scopes = await pool.repair_stale_shards(now=now)
+
+        self.assertEqual(scopes, (tuple(f"market-{i}" for i in range(8, 16)),))
+        self.assertIs(pool._streams[0], old[0])
+        self.assertIsNot(pool._streams[1], old[1])
+        self.assertFalse(old[0].closed)
+        self.assertTrue(old[1].closed)
+        pool.assert_live(now=datetime.now(timezone.utc))
+
+    async def test_failed_overlap_repair_leaves_every_old_shard_intact(self):
+        starts = 0
+
+        class FailsReplacement(SnapshotStream):
+            async def start(self, slugs):
+                nonlocal starts
+                starts += 1
+                if starts > 2:
+                    raise AdapterError("replacement refused")
+                await super().start(slugs)
+
+        pool = PrivateStreamPool(object(), factory=FailsReplacement)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+        old = tuple(pool._streams)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+
+        with self.assertRaisesRegex(AdapterError, "overlap repair failed"):
+            await pool.repair_stale_shards(now=now)
+
+        self.assertEqual(tuple(pool._streams), old)
+        self.assertFalse(any(stream.closed for stream in old))
+
+    async def test_initial_state_is_ready_only_after_every_snapshot_is_delivered(self):
+        pool = PrivateStreamPool(object(), factory=SnapshotStream)
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        await asyncio.sleep(0)
+
+        # Socket receipt alone is insufficient: the runner must consume and
+        # apply both initial proofs from every shard before it may mutate.
+        self.assertFalse(pool.initial_state_ready)
+        for _ in range(3):
+            await pool.next_event(timeout=1)
+            self.assertFalse(pool.initial_state_ready)
+        await pool.next_event(timeout=1)
+        self.assertTrue(pool.initial_state_ready)
 
     async def test_close_closes_every_connection(self):
         pool = self.pool()

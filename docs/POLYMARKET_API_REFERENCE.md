@@ -132,7 +132,13 @@ The private WebSocket is the real-time execution channel. Complete REST orders,
 positions, activities and balance reads are the restart/reconnect backstop.
 REST freshness may prove current account state, but it should not silently
 certify that every WebSocket connection is alive. The 20-slot private stream is
-sharded across three connections, so liveness must ultimately be per shard.
+sharded across three connections, so liveness is per shard. Official
+application heartbeats retain the 180-second silence alarm. A silent shard may
+be overlap-replaced without cancelling resting orders only after its scoped
+order EOF and balance snapshot are consumed and a frozen whole-account REST
+order/position reconciliation succeeds. Filtered snapshots are complete only
+within their subscribed markets; any failed handoff proof uses global
+quarantine.
 
 ### Public health is diagnostic, not an account recovery proof
 

@@ -16,7 +16,7 @@ from typing import Any, Iterable
 from .adapters import parse_book_response, parse_trade_response
 from .errors import AdapterError
 from .models import BookSnapshot, TradePrint
-from .private_stream import PrivateEvent, decode_private_message
+from .private_stream import PrivateEvent, PrivateEventKind, decode_private_message
 
 
 # Measured 2026-08-14 by adding subscriptions one at a time: the 11th is
@@ -289,6 +289,8 @@ class PrivateReadOnlyStream:
         self._socket = client.ws.private()
         self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
         self._started = False
+        self._order_snapshot_complete = False
+        self._balance_snapshot_seen = False
         self._market_scope_by_request_id: dict[str, tuple[str, ...] | None] = {}
         # The installed SDK emits every decoded JSON object on `message`
         # before its convenience event. Register once to avoid duplicates.
@@ -367,6 +369,8 @@ class PrivateReadOnlyStream:
         # Install request metadata before subscribing because an initial
         # snapshot can arrive as soon as the subscribe call is awaited.
         self._market_scope_by_request_id = scopes
+        self._order_snapshot_complete = False
+        self._balance_snapshot_seen = False
         try:
             await self._socket.connect()
             for kind, request_id, market_filter in planned:
@@ -386,11 +390,26 @@ class PrivateReadOnlyStream:
             raise AdapterError(f"private WebSocket startup failed: {exc}") from exc
         self._started = True
 
+    @property
+    def initial_state_ready(self) -> bool:
+        """Whether this connection delivered its complete initial proof."""
+
+        return self._order_snapshot_complete and self._balance_snapshot_seen
+
+    def _mark_delivered(self, event: PrivateEvent) -> None:
+        if (event.kind == PrivateEventKind.ORDER_SNAPSHOT
+                and isinstance(event.payload, dict)
+                and event.payload.get("eof") is True):
+            self._order_snapshot_complete = True
+        elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
+            self._balance_snapshot_seen = True
+
     async def next_event(self, *, timeout: float | None = None) -> PrivateEvent:
         item = (await self._queue.get() if timeout is None
                 else await asyncio.wait_for(self._queue.get(), timeout))
         if isinstance(item, Exception):
             raise item
+        self._mark_delivered(item)
         return item
 
     def drain_events(self, *, limit: int | None = None) -> tuple[PrivateEvent, ...]:
@@ -405,6 +424,7 @@ class PrivateReadOnlyStream:
                 break
             if isinstance(item, Exception):
                 raise item
+            self._mark_delivered(item)
             events.append(item)
         return tuple(events)
 
@@ -414,6 +434,8 @@ class PrivateReadOnlyStream:
         finally:
             self._started = False
             self._market_scope_by_request_id.clear()
+            self._order_snapshot_complete = False
+            self._balance_snapshot_seen = False
 
 
 class ShadowMarketStream:
@@ -574,7 +596,10 @@ class PrivateStreamPool:
         self._readers: list[asyncio.Task[None]] = []
         self._shard_last_message_at: list[datetime | None] = []
         self._shard_slugs: list[tuple[str, ...] | None] = []
-        self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
+        self._shard_order_snapshot_delivered: list[bool] = []
+        self._shard_balance_snapshot_delivered: list[bool] = []
+        self._queue: asyncio.Queue[
+            tuple[int, PrivateEvent | Exception]] = asyncio.Queue()
         self._started = False
 
     @property
@@ -588,11 +613,11 @@ class PrivateStreamPool:
                 event = await stream.next_event()
                 self._shard_last_message_at[shard_index] = datetime.now(
                     timezone.utc)
-                self._queue.put_nowait(event)
+                self._queue.put_nowait((shard_index, event))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._queue.put_nowait(exc)
+                self._queue.put_nowait((shard_index, exc))
                 return
 
     async def start(self, slugs: Iterable[str] | None = None) -> None:
@@ -623,6 +648,8 @@ class PrivateStreamPool:
         self._shard_last_message_at = [started_at for _ in self._streams]
         self._shard_slugs = [
             tuple(shard) if shard is not None else None for shard in shards]
+        self._shard_order_snapshot_delivered = [False for _ in self._streams]
+        self._shard_balance_snapshot_delivered = [False for _ in self._streams]
         for index, stream in enumerate(self._streams):
             self._readers.append(asyncio.create_task(self._pump(index, stream)))
         self._started = True
@@ -665,11 +692,132 @@ class PrivateStreamPool:
         raise AdapterError(
             "private WebSocket shard silence: " + ", ".join(details))
 
+    @property
+    def initial_state_ready(self) -> bool:
+        """Require the runner to receive initial proof from every shard."""
+
+        return (
+            bool(self._streams)
+            and len(self._shard_order_snapshot_delivered) == len(self._streams)
+            and len(self._shard_balance_snapshot_delivered) == len(self._streams)
+            and all(self._shard_order_snapshot_delivered)
+            and all(self._shard_balance_snapshot_delivered)
+        )
+
+    def _mark_delivered(self, shard_index: int, event: PrivateEvent) -> None:
+        if (event.kind == PrivateEventKind.ORDER_SNAPSHOT
+                and isinstance(event.payload, dict)
+                and event.payload.get("eof") is True):
+            self._shard_order_snapshot_delivered[shard_index] = True
+        elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
+            self._shard_balance_snapshot_delivered[shard_index] = True
+
+    async def repair_stale_shards(
+        self, *, now: datetime,
+        max_silence_seconds: float = STREAM_SILENCE_TIMEOUT_SECONDS,
+        snapshot_timeout_seconds: float = 15.0,
+    ) -> tuple[tuple[str, ...] | None, ...]:
+        """Overlap-replace silent shards without touching venue orders.
+
+        Each replacement must deliver a complete order snapshot and an account
+        balance snapshot before it can displace the old connection. The caller
+        still freezes decisions and performs whole-account REST reconciliation
+        before resuming. If any replacement cannot prove its initial state, no
+        shard is swapped and the runner falls back to global quarantine.
+        """
+
+        stale = self.stale_shards(
+            now=now, max_silence_seconds=max_silence_seconds)
+        if not stale:
+            return ()
+
+        async def stage(index: int):
+            scope = self._shard_slugs[index]
+            replacement = self._factory(self._client)
+            events: list[PrivateEvent] = []
+            try:
+                await replacement.start(scope)
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + snapshot_timeout_seconds
+                order_complete = False
+                balance_seen = False
+                while not (order_complete and balance_seen):
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "replacement private shard initial state timed out")
+                    event = await replacement.next_event(timeout=remaining)
+                    events.append(event)
+                    if (event.kind == PrivateEventKind.ORDER_SNAPSHOT
+                            and isinstance(event.payload, dict)
+                            and event.payload.get("eof") is True):
+                        if event.market_scope != scope:
+                            raise AdapterError(
+                                "replacement private shard order snapshot "
+                                "scope does not match its subscription")
+                        order_complete = True
+                    elif event.kind == PrivateEventKind.ACCOUNT_BALANCE_SNAPSHOT:
+                        balance_seen = True
+                    elif event.kind == PrivateEventKind.ERROR:
+                        raise AdapterError(
+                            f"replacement private shard error: {event.payload}")
+                return replacement, tuple(events)
+            except Exception:
+                try:
+                    await replacement.close()
+                except Exception:
+                    pass
+                raise
+
+        staged = await asyncio.gather(
+            *(stage(index) for index in stale), return_exceptions=True)
+        failures = [item for item in staged if isinstance(item, BaseException)]
+        if failures:
+            for item in staged:
+                if isinstance(item, tuple):
+                    try:
+                        await item[0].close()
+                    except Exception:
+                        pass
+            raise AdapterError(
+                "private shard overlap repair failed: "
+                f"{type(failures[0]).__name__}: {failures[0]}") from failures[0]
+
+        old_streams = [self._streams[index] for index in stale]
+        old_readers = [self._readers[index] for index in stale]
+        for reader in old_readers:
+            reader.cancel()
+        await asyncio.gather(*old_readers, return_exceptions=True)
+
+        repaired_scopes: list[tuple[str, ...] | None] = []
+        for index, item in zip(stale, staged, strict=True):
+            assert isinstance(item, tuple)
+            replacement, events = item
+            self._streams[index] = replacement
+            repaired_scopes.append(self._shard_slugs[index])
+            self._shard_order_snapshot_delivered[index] = False
+            self._shard_balance_snapshot_delivered[index] = False
+            for event in events:
+                self._shard_last_message_at[index] = (
+                    event.received_at or datetime.now(timezone.utc))
+                self._queue.put_nowait((index, event))
+            self._readers[index] = asyncio.create_task(
+                self._pump(index, replacement))
+
+        for stream in old_streams:
+            try:
+                await stream.close()
+            except Exception:
+                pass
+        return tuple(repaired_scopes)
+
     async def next_event(self, *, timeout: float | None = None) -> PrivateEvent:
-        item = (await self._queue.get() if timeout is None
-                else await asyncio.wait_for(self._queue.get(), timeout))
+        shard_index, item = (
+            await self._queue.get() if timeout is None
+            else await asyncio.wait_for(self._queue.get(), timeout))
         if isinstance(item, Exception):
             raise item
+        self._mark_delivered(shard_index, item)
         return item
 
     def drain_events(self, *, limit: int | None = None) -> tuple[PrivateEvent, ...]:
@@ -679,11 +827,12 @@ class PrivateStreamPool:
         count = self._queue.qsize() if limit is None else max(0, limit)
         for _ in range(count):
             try:
-                item = self._queue.get_nowait()
+                shard_index, item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
             if isinstance(item, Exception):
                 raise item
+            self._mark_delivered(shard_index, item)
             events.append(item)
         return tuple(events)
 
@@ -704,4 +853,6 @@ class PrivateStreamPool:
         self._streams.clear()
         self._shard_last_message_at.clear()
         self._shard_slugs.clear()
+        self._shard_order_snapshot_delivered.clear()
+        self._shard_balance_snapshot_delivered.clear()
         self._started = False

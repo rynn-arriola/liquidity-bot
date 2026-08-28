@@ -111,9 +111,13 @@ cancel/flat/rebind downtime can be measured before any concurrency change.
 
 During runtime, an explicitly recoverable private, market, or order adapter
 error enters a dormant recovery state instead of ending the process. The runner
-records the error and stack, establishes replacement private visibility,
-cancels known quotes, applies buffered terminal events, reconciles the whole
-account, backs off exponentially, and only then permits new risk. Unknown
+records the error and stack. A heartbeat-silent private shard is overlap-
+replaced while decisions are frozen; its exact-scope order EOF and balance
+snapshot must be consumed, buffered events applied, and complete REST orders
+and positions reconciled before quotes are preserved. Any failed proof, and
+other private recovery, establishes replacement visibility, cancels known
+quotes, applies buffered terminal events, reconciles the whole account, backs
+off exponentially, and only then permits new risk. Unknown
 strategy conditions default to terminal. Ownership, cross-market identity,
 exact-position, planning, and unexitable-inventory failures end maker quoting
 and enter cancel/flatten shutdown; they are not downgraded to warnings. A

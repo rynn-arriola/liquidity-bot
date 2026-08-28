@@ -273,9 +273,12 @@ class PrivateLedgerProjector:
                 resolve_client_id=self.resolve_client_id)
                 for row in payload["orders"])
             if payload["eof"]:
+                scope = (None if event.market_scope is None else
+                         frozenset(event.market_scope))
                 self.ledger.apply_order_snapshot(
                     request_id, page, as_of=received_at,
-                    observed_at=received_at, complete=True)
+                    observed_at=received_at, complete=True,
+                    complete_market_scope=scope)
                 del self._order_pages[request_id]
             return
 
@@ -311,9 +314,13 @@ class PrivateLedgerProjector:
             page.extend(normalize_position(slug, row, observed_at=received_at)
                         for slug, row in payload["positions"].items())
             if payload["eof"]:
+                scope = (None if event.market_scope is None else
+                         frozenset(event.market_scope))
                 self.ledger.apply_position_snapshot(
                     request_id, page, as_of=received_at,
-                    observed_at=received_at, complete_account=True)
+                    observed_at=received_at,
+                    complete_account=scope is None,
+                    complete_market_scope=scope)
                 del self._position_pages[request_id]
             return
 

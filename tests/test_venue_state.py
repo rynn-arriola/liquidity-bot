@@ -151,6 +151,23 @@ class ProjectorTests(unittest.TestCase):
         self.assertEqual(self.ledger.query(
             "SELECT COUNT(*) n FROM execution_orders")[0]["n"], 1)
 
+    def test_scoped_order_snapshot_cannot_mark_another_shard_absent(self):
+        other = normalize_order(raw_order(
+            id="order-two", marketSlug="market-two",
+            state="ORDER_STATE_NEW", cumQuantity="0"), observed_at=NOW)
+        self.ledger.apply_order_event(
+            "ws", "other-open", other, received_at=NOW)
+
+        event = PrivateEvent(
+            PrivateEventKind.ORDER_SNAPSHOT,
+            {"orders": [], "eof": True}, "orders-market-one",
+            "SUBSCRIPTION_TYPE_ORDER", ("market-one",))
+        self.projector.apply(event, received_at=NOW)
+
+        row = self.ledger.query(
+            "SELECT status FROM execution_orders WHERE market_slug='market-two'")[0]
+        self.assertEqual(row["status"], "OPEN")
+
     def test_fill_update_books_one_fill_and_short_position(self):
         event = PrivateEvent(
             PrivateEventKind.ORDER_UPDATE,
@@ -169,6 +186,24 @@ class ProjectorTests(unittest.TestCase):
             {"positions": {}}, "positions-request")
         with self.assertRaises(AdapterError):
             self.projector.apply(event, received_at=NOW)
+
+    def test_scoped_position_snapshot_cannot_zero_another_shard(self):
+        for slug in ("market-one", "market-two"):
+            self.projector.apply(PrivateEvent(
+                PrivateEventKind.POSITION_UPDATE,
+                {"marketSlug": slug,
+                 "afterPosition": {"netPositionDecimal": "2.0000"},
+                 "updateTime": NOW.isoformat()},
+                f"position-update-{slug}"), received_at=NOW)
+
+        event = PrivateEvent(
+            PrivateEventKind.POSITION_SNAPSHOT,
+            {"positions": {}, "eof": True}, "positions-market-one",
+            "SUBSCRIPTION_TYPE_POSITION", ("market-one",))
+        self.projector.apply(event, received_at=NOW)
+
+        self.assertEqual(self.ledger.position("market-one"), Decimal("0"))
+        self.assertEqual(self.ledger.position("market-two"), Decimal("2.0000"))
 
     def test_documented_before_after_position_update_uses_exact_after_value(self):
         event = PrivateEvent(

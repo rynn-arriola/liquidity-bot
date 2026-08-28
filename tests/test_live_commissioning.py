@@ -4666,6 +4666,127 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_silent_shards_preserve_orders_and_all_twenty_slots(self):
+        """A proven overlap handoff must not erase reward exposure."""
+
+        runner, client, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slugs = ("market-one",) + tuple(
+            f"market-{index:02d}" for index in range(1, 20))
+        runner._bind_markets(slugs)
+        old_stream = runner.private_stream
+        old_stream.repair_stale_shards = AsyncMock(return_value=(
+            tuple(slugs[:8]), tuple(slugs[8:16])))
+        old_stream.assert_live = lambda **_kwargs: None
+        runner.ledger.apply_order_event(
+            "ws", "open-before-shard-repair",
+            OrderState(
+                client_order_id="liquidity-shard-repair",
+                exchange_order_id="exchange-shard-repair",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        client.orders.rows["exchange-shard-repair"] = {
+            "id": "exchange-shard-repair",
+            "clientOrderId": "liquidity-shard-repair",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "10",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+
+        stop = await runner._recover_private_stream(AdapterError(
+            "private WebSocket shard silence: 1(8 markets), 2(8 markets)"))
+
+        self.assertIsNone(stop)
+        self.assertIs(runner.private_stream, old_stream)
+        self.assertFalse(old_stream.closed)
+        self.assertEqual(runner.active_slugs, slugs)
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertEqual(
+            len(runner.ledger.working_orders("market-one")), 1)
+        self.assertTrue(runner.gate.session_ready(
+            runner.ledger, now=runner._now()))
+        self.assertTrue(any(
+            "preserved resting orders" in message
+            for message, _ in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_late_heartbeat_avoids_global_quarantine(self):
+        """A shard that recovers during handoff must not trigger cancels."""
+
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        old_stream = runner.private_stream
+        old_stream.repair_stale_shards = AsyncMock(return_value=())
+        old_stream.assert_live = lambda **_kwargs: None
+
+        stop = await runner._recover_private_stream(AdapterError(
+            "private WebSocket shard silence: 1(1 markets)"))
+
+        self.assertIsNone(stop)
+        self.assertIs(runner.private_stream, old_stream)
+        self.assertFalse(old_stream.closed)
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertTrue(runner.gate.session_ready(
+            runner.ledger, now=runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_shard_handoff_falls_back_to_global_quarantine(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        slug = runner.market_slug
+        old_stream = runner.private_stream
+        old_stream.repair_stale_shards = AsyncMock(
+            side_effect=AdapterError("replacement snapshot timed out"))
+        runner.ledger.apply_order_event(
+            "ws", "open-before-failed-handoff",
+            OrderState(
+                client_order_id="liquidity-fallback",
+                exchange_order_id="exchange-fallback",
+                market_slug=slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=runner._now()),
+            received_at=runner._now())
+        client.orders.rows["exchange-fallback"] = {
+            "id": "exchange-fallback",
+            "clientOrderId": "liquidity-fallback",
+            "marketSlug": slug,
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "10",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": runner._now().isoformat(),
+        }
+
+        stop = await runner._recover_private_stream(AdapterError(
+            "private WebSocket shard silence: 1(1 markets)"))
+
+        self.assertIsNone(stop)
+        self.assertTrue(old_stream.closed)
+        self.assertEqual(
+            [call[0] for call in client.orders.cancel_calls],
+            ["exchange-fallback"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_open_position_marked_breach_waits_for_realized_close(self):
         """A losing open mark must not force a shutdown that realizes it."""
 

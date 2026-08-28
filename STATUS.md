@@ -5,17 +5,17 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 08:25 ET / 2026-08-28 12:25 UTC
+- **Verified:** 2026-08-28 10:22 ET / 2026-08-28 14:22 UTC
 - **Liquidity bot:** LIVE; supervisor PID 21783 / runner PID 21791, size 10
-- **Live exposure:** authenticated dashboard showed zero positions and 35
-  resting orders; the following ledger check had zero unresolved and zero
-  `UNKNOWN_ABSENT`
-- **20-slot health:** 20/20 owners quoting, zero bound-idle and zero empty
+- **Live exposure:** authenticated dashboard showed one position, 34 resting
+  orders, zero unresolved and zero `UNKNOWN_ABSENT`; no risk stop is active
+- **20-slot health:** 19/20 owners quoting, one bound-not-quoting owner and zero
+  empty; the runner is working and placed an order 19 seconds before the check
 - **Maker-lab:** stopped
-- **GitHub:** `main` at docs commit `5ad5fd8`; server marker `de1478b` with no
-  source/test deploy lag, exact changed-file hashes and current docs copied
-- **Verification:** all 726 local and reduced-priority server tests passed;
-  documentation audit and deliberate reversal check passed
+- **GitHub:** `main` includes the reviewed private-shard repair; server marker
+  `de1478b`. The repair is not deployed, so running source remains unchanged
+- **Verification:** all 734 local tests, documentation audit and both deliberate
+  reversal checks passed; the prior deployed server suite passed 726 tests
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 22836
@@ -62,9 +62,11 @@ closure loads on its next natural supervisor restart.
 
 ## Current operating instruction
 
-Keep the bot and collector running. Do not interrupt the 20 clean GTC trials
-only to reload measurement code. Do not change strategy, size, slots or stops
-from measurement output; collect three complete days plus one held-out day.
+Keep the bot and collector running. Do not restart to load the private-shard
+repair; deploy only after operator authorization and load it on the next
+authorized restart. Do not interrupt the 20 clean GTC trials only to reload
+measurement code. Do not change strategy, size, slots or stops from measurement
+output; collect three complete days plus one held-out day.
 
 ## Current repositories and records
 

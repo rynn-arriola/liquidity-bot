@@ -11,6 +11,12 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 
 ## Current high-value findings
 
+- **Private-shard silence erased the reward slate.** At 13:50Z on 2026-08-28,
+  two shards correctly crossed the 180-second alarm, but recovery needlessly
+  cancelled all orders before the same runner rebuilt to 34. Filtered snapshots
+  also acted account-complete across shards. Detect with `private WebSocket
+  shard silence`, `[private-shard-recovery]`, PID, owners, cancels, unresolved
+  state and post-recovery orders—not raw order count alone.
 - **Twenty-slot health is not raw order count.** Use queue `markets=20`, active
   owners, eligibility, resting-time coverage, unresolved ownership and
   positions. A slot can be healthy while temporarily holding no order.
@@ -33,15 +39,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Current-day account-boundary trading is more complete than matched pairs,**
   but per-market P&L remains incomplete when settlements/manual closes are not
   attributable.
-- **Queue rank is only bounded.** The venue does not publish exact position;
-  automatic cancel/repost remains unauthorized.
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
   authority.
-- **The mandatory AI startup route is now bounded.** On 2026-08-27 the tracked
-  entry/status/decision/engineering set fell from 1,030 lines / 8,990 words to
-  442 lines / 3,170 words while the former long files were preserved in dated
-  archives. `scripts/audit_docs.py` enforces budgets, routes and local links.
 - **Polymarket's trader guides are not all Retail wire contracts.** The bot
   uses `api.polymarket.us` and the pinned Retail SDK; Institutional examples
   using participant accounts, JWT/Auth0, FIX, gRPC, Drop Copy or
@@ -95,6 +95,3 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   the bounded retained cohort; it excludes coverage loss and uses no future row.
 - **A cumulative gap counter is not episode-level coverage evidence.** One old gap censored 17 later clean GTC pairs. Strict replay uses overlapping stream
   intervals; future decode/drop gaps close only their affected interval.
-## How to add a finding
-
-Add concise current facts here; move detailed evidence into a dated archive.

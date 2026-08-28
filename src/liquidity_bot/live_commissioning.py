@@ -1580,7 +1580,10 @@ class CommissioningRunner:
             # fails closes both streams, so the markets that were perfectly
             # fine stopped quoting too. Whether any given market may quote is
             # asked per market, every pass, in `_frame`.
-            if self.gate.session_ready(self.ledger, now=now):
+            pool_ready = getattr(
+                self.private_stream, "initial_state_ready", True)
+            if (self.gate.session_ready(self.ledger, now=now)
+                    and bool(pool_ready)):
                 return
         raise CommissioningUnavailable(
             "private stream did not become reconciled and fresh")
@@ -5049,6 +5052,69 @@ class CommissioningRunner:
 
     async def _recover_private_stream(self, initial: Exception) -> str | None:
         """Stay alive but dormant until private state is proven again."""
+
+        # A heartbeat-silent shard can be replaced under an overlapping
+        # listener without sacrificing every resting order. The decision
+        # coroutine owns the loop here, so no new mutation can occur. The
+        # replacement first proves its own initial snapshots; buffered events
+        # are then applied and a complete REST order/position snapshot bridges
+        # the old connection's gap. Any failed proof falls through to the
+        # older global cancel/quarantine recovery below.
+        repair_stale = getattr(self.private_stream, "repair_stale_shards", None)
+        if (callable(repair_stale)
+                and "private WebSocket shard silence:" in str(initial)):
+            await self._report_runtime_error("private_stream", initial, 1)
+            try:
+                self.gate.on_reconciliation_conflict()
+                scopes = await repair_stale(
+                    now=self._now(),
+                    max_silence_seconds=STREAM_SILENCE_TIMEOUT_SECONDS)
+                # A heartbeat may arrive after assert_live raises but before
+                # this frozen recovery coroutine re-checks the pool. An empty
+                # repair set means the shard recovered; it does not justify
+                # canceling the whole slate. The account-wide REST proof and
+                # final liveness gate below are still mandatory.
+                await self._drain_private_events()
+                await self._rest_reconcile(
+                    self._now(), tag="private-shard-handoff",
+                    strict_order_markets=frozenset())
+                await self._drain_private_events()
+                self.private_stream.assert_live(
+                    now=self._now(),
+                    max_silence_seconds=STREAM_SILENCE_TIMEOUT_SECONDS)
+                if not self.gate.session_ready(
+                        self.ledger, now=self._now()):
+                    raise CommissioningUnavailable(
+                        "private shard handoff did not restore fresh account state")
+                repaired_markets = sum(
+                    len(scope) for scope in scopes if scope is not None)
+                print(
+                    f"[private-shard-recovery] at={self._now().isoformat()} "
+                    f"resumed=yes shards={len(scopes)} "
+                    f"markets={repaired_markets} cancels=0 "
+                    f"working={len(self.ledger.working_orders(owned_only=True))}",
+                    flush=True,
+                )
+                await self.notifier.send_async(
+                    "✅ Liquidity Bot recovered the silent private WebSocket "
+                    f"shard(s), re-proved the account, and preserved "
+                    f"resting orders across {repaired_markets} market(s).",
+                    channel="errors",
+                )
+                self._runtime_error_counts.pop("private_stream", None)
+                return None
+            except RuntimeInvariantViolation as invariant:
+                await self._report_runtime_error(
+                    "private_stream_terminal", invariant)
+                return f"critical:{invariant.code}"
+            except Exception as repair_exc:
+                print(
+                    "[private-shard-recovery] overlap repair failed; "
+                    "falling back to global quarantine: "
+                    f"{type(repair_exc).__name__}: {repair_exc}",
+                    flush=True,
+                )
+                initial = repair_exc
 
         exc = initial
         attempt = 0

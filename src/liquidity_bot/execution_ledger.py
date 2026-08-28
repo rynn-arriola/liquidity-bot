@@ -1328,11 +1328,18 @@ class ExecutionLedger:
         as_of: datetime,
         observed_at: datetime,
         complete: bool,
+        complete_market_scope: frozenset[str] | None = None,
     ) -> bool:
         rows = tuple(orders)
         received = _time(observed_at, "observed_at")
         snapshot_at = _time(as_of, "as_of")
+        scope = (None if complete_market_scope is None
+                 else frozenset(str(slug) for slug in complete_market_scope))
+        if scope is not None and any(row.market_slug not in scope for row in rows):
+            raise LedgerConflict("order snapshot contains a market outside its scope")
         payload = {"as_of": snapshot_at, "complete": complete,
+                   "complete_market_scope": (
+                       None if scope is None else sorted(scope)),
                    "orders": [asdict(row) for row in rows]}
         with self.connection:
             if not self._accept_event("order_snapshot", snapshot_id, received, payload):
@@ -1344,9 +1351,12 @@ class ExecutionLedger:
                 applied_any = self._upsert_order(order, received) or applied_any
             if complete:
                 active = self.connection.execute(
-                    "SELECT client_order_id,event_at FROM execution_orders WHERE status "
+                    "SELECT client_order_id,market_slug,event_at "
+                    "FROM execution_orders WHERE status "
                     "IN ('OPEN','NEW','PARTIAL','PENDING','SUBMITTED')").fetchall()
                 for item in active:
+                    if scope is not None and item["market_slug"] not in scope:
+                        continue
                     if item["client_order_id"] in seen or snapshot_at < item["event_at"]:
                         continue
                     # Deliberately does not advance event_at. Absence is not
@@ -1679,11 +1689,23 @@ class ExecutionLedger:
         as_of: datetime,
         observed_at: datetime,
         complete_account: bool,
+        complete_market_scope: frozenset[str] | None = None,
     ) -> bool:
         rows = tuple(positions)
         snapshot_at = _time(as_of, "as_of")
         received = _time(observed_at, "observed_at")
+        scope = (None if complete_market_scope is None
+                 else frozenset(str(slug) for slug in complete_market_scope))
+        if complete_account and scope is not None:
+            raise ValueError(
+                "position snapshot cannot be both account-complete and scoped")
+        if scope is not None and any(
+                position.market_slug not in scope for position in rows):
+            raise LedgerConflict(
+                "position snapshot contains a market outside its scope")
         payload = {"as_of": snapshot_at, "complete_account": complete_account,
+                   "complete_market_scope": (
+                       None if scope is None else sorted(scope)),
                    "positions": [asdict(row) for row in rows]}
         with self.connection:
             if not self._accept_event("position_snapshot", snapshot_id,
@@ -1696,6 +1718,9 @@ class ExecutionLedger:
                 for item in self.connection.execute(
                         "SELECT market_slug FROM execution_positions").fetchall():
                     venue.setdefault(item["market_slug"], Decimal("0"))
+            elif scope is not None:
+                for slug in scope:
+                    venue.setdefault(slug, Decimal("0"))
             for slug, venue_qty in venue.items():
                 prior = self.connection.execute(
                     "SELECT net_qty,event_at FROM execution_positions WHERE market_slug=?",

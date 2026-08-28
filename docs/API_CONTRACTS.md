@@ -118,6 +118,13 @@ Official references:
   Terminal order events produced before the listener exists are not replayable
   by contract, and GET-by-ID can temporarily answer NotFound. Recovery and
   shutdown drain already-buffered private events before relying on REST.
+- A shard-filtered order or position snapshot is complete only for the exact
+  subscribed market scope; it may never mark another shard's order absent or
+  position zero. On heartbeat silence, replacements overlap only stale shards
+  and must deliver exact-scope order EOF plus balance proof before swap. The
+  frozen runner then applies buffered events and completes whole-account REST
+  order/position reconciliation before resuming without cancels. Any failed
+  proof falls back to the global listener-first quarantine path.
 - Each private connection has its own last-message clock. Heartbeats and
   account events refresh only the shard that delivered them; 180 seconds of
   silence on any shard fails the whole private pool into bounded recovery.

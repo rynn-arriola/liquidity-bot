@@ -5,16 +5,14 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 15:52 ET / 2026-08-28 19:52 UTC
-- **Liquidity bot:** STOPPED by operator decision; no supervisor or runner
-- **Live exposure:** the stopped-only orphan resolver took a fresh authenticated
-  account snapshot and proved zero venue orders and zero positions before
-  resolving one 18:35Z no-ID PLACE intent; the ledger now has zero unresolved
-- **20-slot health:** not applicable while stopped; no slot/size/horizon change
-  was made by this recovery work
+- **Verified:** 2026-08-28 15:56 ET / 2026-08-28 19:56 UTC
+- **Liquidity bot:** LIVE; supervisor PID 46008 / runner PID 46019, size 10
+- **Live exposure:** dashboard: 0 positions, 19 resting, 0 absent/unresolved
+- **20-slot health:** 19/20 quoting; one empty slot reports no qualifying
+  supply. No slot, size, horizon or strategy setting changed in this repair
 - **Maker-lab:** stopped
-- **Deployed source:** server marker is `c28aba2`; no bot process currently has
-  it loaded
+- **Deployed source:** server marker is `63061cf`; runner has the `c28aba2`
+  no-ID startup repair loaded
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
 - **Dynamic size capability:** `5165fc4` is deployed; whole values 5-30 share
@@ -61,18 +59,21 @@ bound. The underlying mutation was a Polymarket/Cloudflare 504 at 18:35:11Z.
 
 The reviewed stopped-only recovery was run dry and then applied. Its fresh
 snapshot returned zero live orders and zero position markets, so exactly that
-intent moved `UNCERTAIN -> FAILED`; zero unresolved remain. The bot was not
-restarted. Deployed `c28aba2` now makes future startups refuse once with the
-correct recovery instruction instead of loading the stale market and entering
-a misleading transport-failure loop.
+intent moved `UNCERTAIN -> FAILED`; zero unresolved remain. Deployed `c28aba2`
+now makes future startups refuse once with the correct recovery instruction
+instead of loading the stale market and entering a misleading transport-failure
+loop. The authorized 19:54Z start passed live acceptance: the runner remained
+up, placed 19 resting orders across 19/20 slots, stayed flat and reported no
+unresolved/absent mutation or risk stop. Old `book is empty on both sides`
+lines at 19:23Z belong to the failed pre-fix run, not the current process.
 
 ## Current operating instruction
 
-Keep the liquidity bot stopped until the operator explicitly authorizes a new
-start. The no-ID startup/recovery repair is deployed but deliberately not live.
-Avoid repeated authenticated probes; the latest stopped-only resolver supplied
-current flat/order-free proof. Do not change strategy, size, slots or stops from
-this availability repair.
+Keep the current runner live unless the operator directs otherwise or a safety
+condition requires a stop. Do not restart merely because the historical 19:23Z
+empty-book failures remain in the append-only log. Avoid repeated authenticated
+probes; the 19:56Z dashboard is the accepted post-start snapshot. Do not change
+strategy, size, slots or stops from this availability repair.
 
 ## Current records
 

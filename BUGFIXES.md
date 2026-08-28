@@ -19,13 +19,13 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 ## Latest deployed no-ID startup repair
 
-- After whole-account reconciliation, startup refuses a no-ID PLACE once with
-  the stopped-only recovery command, before book binding. It never clears or
-  retries ambiguity. The resolver now blocks on any live order in that market,
-  not the unsent local client ID. Stop progress prints every 30 seconds without
-  shortening the 300-second grace. Fresh proof found zero venue orders/positions
-  and resolved the one 18:35Z intent. `c28aba2` passed all 755 local/server
-  tests, three reversals and parity; the bot remains stopped.
+- Startup now refuses a no-ID PLACE once after account reconciliation and before
+  book binding; it never clears/retries ambiguity. The stopped-only resolver
+  blocks on any live order in that market, not the unsent local client ID. Stop
+  progress prints every 30 seconds; flat/order-free proof resolved the 18:35Z
+  intent. `c28aba2` passed 755 local/server tests, three reversals and parity.
+  At 19:54Z: 19/20 quoting, 19 resting, 0 positions/absent/unresolved, no risk stop; old 19:23Z failures did not recur.
+
 ## Latest deployed private-stream repair
 
 - Silent shards caused global cancellation and cross-shard snapshot clearing.

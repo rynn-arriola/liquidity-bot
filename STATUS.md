@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 19:21 ET / 23:21 UTC
+- **Verified:** 2026-08-28 19:42 ET / 23:42 UTC
 - **Liquidity bot:** STOPPED; supervisor and runner are absent
 - **Stop proof:** 23:00Z authenticated dashboard found zero positions/orders;
   the 23:01Z graceful-stop record ended `flat=true`
@@ -14,10 +14,10 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   startup repair and cooperative-loop backoff are implemented; focused tests and three deliberate
   reversals plus all 776 local/server tests pass; all 13 deployed hashes matched
 - **Maker-lab:** stopped
-- **Recovery copy on desktop:** the 23:21Z online SQLite snapshot passed
-  integrity verification (`31,038` orders, `2,642` fills, 139.1 MB); the
-  restricted credential backup and 352-file recovery archive also validated
-  against deployed marker `31f815c`
+- **Recovery copy on desktop:** the 23:21Z execution ledger passed integrity
+  (`31,038` orders, `2,642` fills, 139.1 MB); the 23:38Z scalp database passed
+  integrity with all nine tables (1.35 GB); restricted credentials, the 352-file
+  `31f815c` recovery archive and a full-log/crontab archive also validated
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
 - **Measurement:** spread-scalp collector is isolated; adverse-fill and queue
   studies remain observational; scheduled reports/backups remain independent

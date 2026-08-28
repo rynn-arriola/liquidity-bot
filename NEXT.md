@@ -17,17 +17,18 @@ zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
 Do not restart on this host. The operator selected the laptop as the next
 primary live runtime and the desktop as a manual cold standby. At 23:21Z the
-desktop received a direct online snapshot of the production ledger plus a
-restricted credential file and recovery archive; all three validated. The
-laptop still needs its own direct verified pull rather than a cloud-synced copy.
+desktop received direct online snapshots of the production and spread-scalp
+databases plus restricted credentials, the deployed recovery archive and a
+full-log/crontab diagnostic archive; all validated. The laptop still needs its
+own direct verified pull rather than a cloud-synced copy.
 
 Before laptop activation:
 
 1. run parity on the laptop and establish its supported Linux/WSL production
    environment, dependencies, power/network settings and no-VPN home egress;
 2. install the ignored local backup helper and a machine-specific SSH key, then
-   pull and verify the latest stopped production ledger, recovery archive and
-   credentials directly from the server;
+   pull and verify both SQLite databases, credentials, deployed recovery archive
+   and diagnostic archive directly from the server;
 3. prove the server and desktop have no runner, verify current account state,
    and make the laptop the sole writable ledger/API owner;
 4. move authenticated reports and backups off DigitalOcean before live use so

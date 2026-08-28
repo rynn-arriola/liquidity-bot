@@ -9,7 +9,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ```
 ## Current high-value findings
 
-- **Desktop recovery is verified.** The 23:21Z snapshot passed integrity (31,038 orders/2,642 fills); restricted credentials and the 352-file `31f815c` archive validated. It is a recovery copy, not permission for a second bot.
+- **Desktop recovery is verified.** The execution ledger (31,038 orders/2,642 fills), 1.35 GB nine-table scalp database, restricted credentials, deployed archive and full-log/crontab archive validated. These are recovery copies, not permission for a second bot.
 - **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one `UNCERTAIN` create; its finished market caused three fast empty-book deaths, not a slot defect. Stopped repair blocks same-market orders because Retail never receives the local client ID.
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed 180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
 - **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;

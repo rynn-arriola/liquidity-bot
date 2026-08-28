@@ -28,8 +28,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   returned HTTP 403/code 7 location denials, but the old mutation path wrote
   rejected creates as no-ID `UNCERTAIN`. All 20 owners retired while selection
   still had 27 viable markets. Private silence recovered with `cancels=0`; the
-  post-flat trigger never ran. The all-no-ID repair loop then reached 67% CPU
-  and starved SIGTERM; every outer pass now yields and full no-ID slates idle.
+  post-flat trigger never ran. The no-ID loop reached 67% CPU and starved SIGTERM.
+  The repaired restart closed all 20 legacy rows, preserved 20 owners and zero unresolved through three denied probes, then stopped flat in 30 seconds; access remains denied.
   [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 - **A signed rejection and a lost response require opposite intent states.**
   Response-backed 403 means that exact request failed; timeout, connection loss,

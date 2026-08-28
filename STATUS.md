@@ -4,15 +4,12 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 18:54 ET / 22:54 UTC
+- **Verified:** 2026-08-28 19:01 ET / 23:01 UTC
 - **Liquidity bot:** STOPPED; supervisor and runner are absent
-- **Stop proof:** latest authenticated recovery found zero working orders;
-  authoritative ledger snapshot found zero nonzero positions. Twenty legacy
-  no-ID PLACE intents remain `UNCERTAIN` and match exact 403/code-7 proof.
-- **Stop method:** graceful SIGTERM exhausted 300 seconds because the old
-  no-ID repair loop starved its callback; after flat/order-free proof, the
-  reviewed force path terminated PID 51989. Nothing was restarted.
-- **Last loaded source:** `2ece3c3`; it did not contain today's repair
+- **Stop proof:** 23:00Z authenticated dashboard found zero positions/orders;
+  the 23:01Z graceful-stop record ended `flat=true`
+- **Stop method:** normal SIGTERM completed in about 30 seconds; no force used
+- **Last loaded source:** `31f815c`; it ran from 22:56Z to 23:01Z
 - **Deployed repair:** `31f815c`; classifier, entry circuit, risk-action bypass, legacy
   startup repair and cooperative-loop backoff are implemented; focused tests and three deliberate
   reversals plus all 776 local/server tests pass; all 13 deployed hashes matched
@@ -38,7 +35,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Active incident and deployed dormant repair
+## Active incident and accepted containment
 
 From 22:07 UTC, Retail order mutations returned structured HTTP 403/code 7
 location/VPN denials. The old gateway mislabeled these positive rejections as
@@ -55,6 +52,12 @@ only legacy rows containing the exact persisted 403/code-7 rejection proof;
 timeouts, 5xx, absence and near-matches remain unresolved. [Full evidence and
 verification](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 
+The authorized 22:56Z start repaired exactly 20 legacy intents, bound all 20
+owners and made three probes about 72 seconds apart. Every probe received the
+same VPN/proxy 403. Later slots backed off locally: zero owners retired, zero
+intents remained unresolved and the account stayed flat/order-free. This
+accepts containment, not access recovery; no quote could rest.
+
 The forced stop exposed a second defect: all-no-ID repair can complete without
 an `await`, making ready stream tasks spin the loop and starve Unix signal
 callbacks. Every outer pass now yields, and a fully no-ID-blocked active slate
@@ -63,9 +66,9 @@ adds a 250ms idle backoff without adding API calls or changing strategy.
 ## Current operating instruction
 
 Keep the bot stopped; do not restart without separate operator authorization.
-On the next authorized
-start, verify the exact 20 legacy rows repair before the orphan gate, then prove
-20-slot recovery and mutation-access circuit behavior from natural evidence.
+Polymarket still rejects this server's mutations as VPN/proxy traffic. A later
+authorized start should expect no legacy repair and may probe access naturally;
+only `[mutation-access-restored]` plus a resting order proves recovery.
 
 ## Current records
 

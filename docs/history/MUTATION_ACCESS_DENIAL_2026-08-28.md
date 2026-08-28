@@ -78,6 +78,14 @@ This is the detailed evidence record for the 20-slot collapse that began near
 
 Commit `31f815c` is pushed and deployed. All 13 file hashes matched, all 776
 local/server tests passed and the server documentation audit found no issue.
-The bot remains stopped and still has `2ece3c3` as its last loaded source.
-Activation and natural acceptance require a separately authorized restart
-after venue/account state is reviewed.
+An authorized start at 22:56Z loaded `31f815c` and repaired exactly 20 legacy
+intents before the orphan gate. It bound 20 owners. Entry probes at 22:57:26,
+22:58:39 and 22:59:51Z each received the same HTTP 403/code-7 VPN/proxy denial;
+all later entry decisions backed off locally. At 23:00Z the dashboard showed
+20 bound, zero retired, zero unresolved, zero positions and zero orders. This
+accepts the containment path but not access recovery.
+
+The operator then withdrew restart authorization. Normal SIGTERM completed in
+about 30 seconds and the 23:01Z terminal record proved `flat=true`. Supervisor,
+runner and maker-lab are stopped. Do not restart without new authorization;
+only a successful later mutation proves the server's access recovered.

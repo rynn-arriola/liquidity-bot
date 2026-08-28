@@ -16,7 +16,7 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   slot-minutes. Sixty-seven focused, 766 local/server and a reversal passed;
   `2ece3c3` is active. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
-## Latest deployed defect repair; not loaded by a runner yet
+## Latest deployed defect repair; containment live-accepted
 
 - **A Retail 403/code-7 rejection retired all 20 slots.** The gateway called
   every POST failure uncertain. Response-backed 403 now makes only that intent
@@ -26,7 +26,8 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   rows repair at startup; timeouts/5xx/absence remain ambiguous. A cooperative outer-loop
   yield plus full no-ID idle backoff prevents CPU spin and SIGTERM starvation.
   Focused tests, three reversals and all 776 local/server tests pass. Commit
-  `31f815c` is deployed; the bot remains stopped, so it is not active yet.
+  `31f815c` repaired 20 legacy rows, retained all 20 owners through three denied
+  probes, left zero unresolved/retired and stopped flat. Access remains denied.
   [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 
 ## Latest deployed no-ID startup repair

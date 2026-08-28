@@ -5,17 +5,14 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 07:30 ET / 2026-08-28 11:30 UTC
-- **Liquidity bot:** RUNNING under supervisor PID 5439 / size-10 runner PID 5445
-- **Startup gate:** after the operator manually flattened and canceled all
-  venue exposure, a stopped-state read proved zero positions/orders/unresolved
-- **Live exposure:** the latest complete authenticated dashboard at 11:02Z
-  showed zero positions, 13 resting and zero unresolved. At 11:07Z the ledger
-  showed 23 open and zero position/unresolved/absent; it is not a venue snapshot
+- **Verified:** 2026-08-28 07:40 ET / 2026-08-28 11:40 UTC
+- **Liquidity bot:** STOPPED; no commissioning supervisor or runner remains
+- **Live exposure:** the 11:40Z authenticated stopped-state dashboard proved
+  zero positions, zero resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
 - **Maker-lab:** stopped
 - **GitHub:** `main` includes reviewed economic-idle repair `dc71ae8`
 - **Server marker:** `8e348eb`; source/tests match the marker
-- **Latest trading source:** `1ff0e42`, deployed and active in unchanged PID 5445
+- **Latest deployed trading source:** `1ff0e42`, on disk but not running
 - **Parity:** desktop/GitHub match `dc71ae8`; server matches marker `8e348eb`.
   Undeployed source and unrelated local measurement work leave expected drift
 - **Deployed verification:** all 706 local and reduced-priority server tests passed
@@ -45,7 +42,7 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Current live acceptance
+## Last run outcome
 
 The operator-authorized 03:06Z restart loaded source marker `1ff0e42` from a
 positively flat/order-free account. By 03:10Z it held exactly 20/20 quoting
@@ -62,15 +59,17 @@ reconnects, stream errors or REST 429s. Bot PID 5445 stayed active. A private-
 socket silence matched repeated pre-collector recoveries; later transient
 UNKNOWN_ABSENT/cancel intents also cleared, with no mutation timeout or stop.
 
+At the operator's 11:39Z stop, shutdown discovered a 2.47-contract position
+created after the earlier flat check and crossed it once at 0.43. The runner
+then exited, and the independent 11:40Z authenticated dashboard proved flat,
+order-free and ambiguity-free. Commit `dc71ae8` was not deployed, the production
+marker remains `8e348eb`, and the separate scalp measurement stayed running.
+
 ## Current operating instruction
 
-Let the current run continue on its unchanged deployed build. At 11:30Z the
-same supervisor/runner PIDs were active and action logs were still placing
-quotes. Judge slot health from queue scope, distinct owners, ownership state
-and resting coverage, not raw order count. The reviewed economic-idle repair
-passed all 719 local tests and deliberate reversal, but deploy/restart remains
-a separate operator decision and must use the normal authenticated exposure
-gate.
+Keep the liquidity bot stopped. Do not deploy or restart until the operator
+explicitly authorizes both. The reviewed economic-idle repair remains pushed
+and undeployed; any future restart must re-run the authenticated exposure gate.
 
 ## Current repositories and records
 

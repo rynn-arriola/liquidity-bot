@@ -100,6 +100,8 @@ coverage gap cannot count as success. Collection does not authorize a live
 scalping order, change reward selection, consume a slot, or change any exit.
 Active reconnect/decode/drop counters are persisted when they change so a
 read-only report cannot mistake an unfinished run's known gap for clean data.
+Strict exclusion is market- and time-scoped to overlapping stream intervals;
+a cumulative run counter cannot poison pairs begun after a clean reconnect.
 
 For the leave-it question, compare three non-overlapping strategy definitions:
 

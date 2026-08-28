@@ -93,6 +93,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Rolling scalp episodes are not leave-it orders.** Untouched pairs renew at
   five minutes and can rotate out of scope. Exact GTC evidence therefore needs
   the bounded retained cohort; it excludes coverage loss and uses no future row.
+- **A cumulative gap counter is not episode-level coverage evidence.** One old gap censored 17 later clean GTC pairs. Strict replay uses overlapping stream
+  intervals; future decode/drop gaps close only their affected interval.
 ## How to add a finding
 
 Add concise current facts here; move detailed evidence into a dated archive.

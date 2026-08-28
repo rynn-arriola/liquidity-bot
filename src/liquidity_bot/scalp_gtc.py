@@ -242,13 +242,21 @@ def _features(connection: sqlite3.Connection, row: sqlite3.Row,
 
 def _has_gap(connection: sqlite3.Connection, run_id: str, slug: str,
              started_at: datetime, ended_at: datetime) -> bool:
-    run = connection.execute(
-        "SELECT coverage_gaps FROM scalp_runs WHERE run_id=?", (run_id,)).fetchone()
-    if run is not None and int(run[0]) > 0:
-        return True
     sessions = list(connection.execute(
         "SELECT started_at,ended_at,scope_json,status FROM scalp_stream_sessions "
         "WHERE run_id=? ORDER BY started_at,id", (run_id,)))
+    # The run counter is cumulative and has no timestamp or market scope.  Once
+    # a long-lived run has any gap, using it as an episode-level predicate
+    # would incorrectly censor every later pair, even after a clean reconnect.
+    # Modern collectors close a stream interval as ERROR/INTERRUPTED on a
+    # decode, drop, disconnect or process loss, so interval overlap is the
+    # authoritative evidence.  Retain the cumulative counter only as a
+    # conservative fallback for legacy runs that have no interval records.
+    if not sessions:
+        run = connection.execute(
+            "SELECT coverage_gaps FROM scalp_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        return run is not None and int(run[0]) > 0
     for row in sessions:
         scope = set(json.loads(row["scope_json"]))
         gap_start = _at(row["started_at"])

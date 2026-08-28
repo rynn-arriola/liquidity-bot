@@ -414,12 +414,22 @@ class ScalpRunner:
                     self.engine.on_book(event, observed_at=observed_at)
                 elif isinstance(event, TradePrint):
                     self.engine.on_trade(event, observed_at=observed_at)
-                if stream.decode_failures > decode_seen:
-                    self.coverage_gaps += stream.decode_failures - decode_seen
-                    decode_seen = stream.decode_failures
-                if stream.dropped_events > dropped_seen:
-                    self.coverage_gaps += stream.dropped_events - dropped_seen
-                    dropped_seen = stream.dropped_events
+                decode_delta = max(0, stream.decode_failures - decode_seen)
+                dropped_delta = max(0, stream.dropped_events - dropped_seen)
+                if decode_delta or dropped_delta:
+                    self.coverage_gaps += decode_delta + dropped_delta
+                    if stream_session is not None:
+                        self.store.finish_stream(
+                            stream_session, observed_at, "ERROR",
+                            f"decode_failures={decode_delta} "
+                            f"dropped_events={dropped_delta}")
+                    await stream.close()
+                    stream = None
+                    stream_session = None
+                    self.reconnects += 1
+                    self._persist_run_health()
+                    self.store.flush()
+                    continue
                 self._persist_run_health()
                 self.store.flush()
                 message_age = (

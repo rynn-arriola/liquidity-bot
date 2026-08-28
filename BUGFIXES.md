@@ -26,16 +26,14 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   reporting uses bounded account truth when its prerequisites are proved and
   visibly marks fallbacks.
 
-The latest trading-source repair is `1ff0e42`; current deployment and runtime
-state must always be read from [STATUS.md](STATUS.md) and the server.
+Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server.
 
-## Reviewed locally; deployment pending
+## Latest deployment additions
 
 - The summary webhook accepted routine notices because default routing followed
   severity, and missing error config fell back to summary. Operations now use
   error/status with no fallback; live, shadow and dashboard summaries opt in,
-  and supervisor alerts select errors. Exact reversal failed; restoration and
-  all 724 local tests passed. Commit `1d48584` is pushed; production is unchanged.
+  and supervisor alerts select errors. Commit `1d48584` is deployed and active.
 - Pregame owners blocked on both sides by named current-book economics could
   retain a nominal slot indefinitely because incremental top-up recognized only
   lifecycle loss. The local repair tracks a 10-minute continuous flat/clear
@@ -43,8 +41,12 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
   actual viable replacement. Any authorized side, position, working or absent
   order, unresolved intent, unknown evaluation or non-economic blocker resets
   or prevents release. Focused ownership/supply regressions passed, deliberate
-  removal of the predicate failed its regression, restoration passed, and all
-  719 local tests passed. Production is unchanged pending deploy/restart.
+  removal of the predicate failed its regression and restoration passed. It is
+  deployed and active; natural replacement acceptance remains pending.
+- Fixed-GTC excluded 17 post-reconnect pairs because one cumulative old gap was
+  treated as episode-local. Coverage now uses overlapping stream intervals;
+  legacy evidence stays conservative and decode/drop closes the affected
+  interval before reconnecting. This is measurement-only.
 
 ## Deployed and active; natural fault-path acceptance pending
 
@@ -78,10 +80,8 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
   old schema treats every historical fill as active, while migrated schema
   excludes busted fills. This migration is now active.
 
-Focused regressions, edge cases and deliberate reversal mutations passed for
-each defect. Commit `1ff0e42` is pushed; all 690 local and server tests passed
-and source/test parity matches the deployed marker. The reviewed 03:06Z restart
-loaded the code and completed the additive migration. Its initial acceptance
+Focused regressions and reversal mutations passed for each defect. The reviewed
+03:06Z restart completed the additive migration. Its initial acceptance
 reached 20/20 quoting, 37 resting orders, zero positions and zero unresolved
 rows with no restart-window traceback, mutation timeout, runtime recovery or
 stream-silence event. Fault-specific live acceptance remains natural-only.

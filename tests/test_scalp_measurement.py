@@ -464,6 +464,40 @@ class FixedGtcReplayTests(unittest.TestCase):
         self.assertEqual(row["coverage_clean_orders"], 0)
         self.assertEqual(row["coverage_gaps_excluded"], 1)
 
+    def test_old_gap_does_not_censor_pair_started_after_clean_reconnect(self):
+        old = self.store.start_stream(
+            "run", T0 - timedelta(minutes=5), ("market-one",))
+        self.store.finish_stream(
+            old, T0 - timedelta(seconds=2), "INTERRUPTED", "old process ended")
+        clean = self.store.start_stream(
+            "run", T0 - timedelta(seconds=1), ("market-one",))
+        self.select()
+        self.raw_book(T0)
+        ended = T0 + timedelta(minutes=1)
+        self.store.finish_stream(clean, ended, "STOPPED")
+        self.store.finish_run("run", ended, reconnects=1, coverage_gaps=1)
+        self.store.flush()
+
+        report = build_gtc_scalp_report(
+            self.path, config=GtcReplayConfig(quantity=2))
+        row = report["fixed_gtc_to_settlement"][0]
+        self.assertEqual(row["orders_started"], 1)
+        self.assertEqual(row["coverage_clean_orders"], 1)
+        self.assertEqual(row["coverage_gaps_excluded"], 0)
+
+    def test_legacy_run_gap_without_stream_intervals_stays_conservative(self):
+        self.select()
+        self.raw_book(T0)
+        ended = T0 + timedelta(minutes=1)
+        self.store.finish_run("run", ended, reconnects=1, coverage_gaps=1)
+        self.store.flush()
+
+        report = build_gtc_scalp_report(
+            self.path, config=GtcReplayConfig(quantity=2))
+        row = report["fixed_gtc_to_settlement"][0]
+        self.assertEqual(row["coverage_clean_orders"], 0)
+        self.assertEqual(row["coverage_gaps_excluded"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

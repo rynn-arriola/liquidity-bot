@@ -5,26 +5,26 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 07:40 ET / 2026-08-28 11:40 UTC
-- **Liquidity bot:** STOPPED; no commissioning supervisor or runner remains
-- **Live exposure:** the 11:40Z authenticated stopped-state dashboard proved zero positions, zero resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
+- **Verified:** 2026-08-28 08:10 ET / 2026-08-28 12:10 UTC
+- **Liquidity bot:** LIVE; supervisor PID 21783 / runner PID 21791, size 10
+- **Live exposure:** 12:06Z authenticated dashboard showed zero positions,
+  37 resting orders, zero unresolved and zero `UNKNOWN_ABSENT`
+- **20-slot health:** queue telemetry proved `markets=20`; 19 owners were
+  quoting and one was bound but economically blocked, so raw order count is not
+  evidence of a missing scheduler slot
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes webhook-routing repair `1d48584`
-- **Server marker:** `8e348eb`; source/tests match the marker
-- **Latest deployed trading source:** `1ff0e42`, on disk but not running
-- **Parity:** desktop/GitHub source match `1d48584`; server matches marker `8e348eb`.
-  Undeployed source and unrelated local measurement work leave expected drift
-- **Deployed verification:** all 706 local and reduced-priority server tests passed
-- **Official API remediation:** seven prioritized reliability fixes and the
-  rolling-report compatibility repair are pushed, deployed and active; the
-  additive `execution_trade_states`/fill-reversal migration completed
-- **Changelog monitor:** public RSS baseline succeeded and the isolated hourly
-  schedule is active at minute 23; it has no trading API or ledger access
-- **Spread-scalp measurement:** isolated supervisor PID 8376 / collector PID
-  8382 is active against `data/scalp.db`; it has no order path
-- **Pending strategy repair:** pushed commit `dc71ae8` safely replaces
-  continuously economically idle slots; it is not deployed or active
-- **Pending notification repair:** pushed `1d48584` routes operations to error/status with no summary fallback; it is not deployed
+- **GitHub/server:** `main` and marker `53fa838`; all deployed hashes matched
+- **Verification:** all 724 tests passed on the server before restart; the
+  documentation audit passed
+- **Webhook routing:** operations use error/status only; routine live, shadow
+  and dashboard summaries explicitly opt into summary delivery
+- **Spread-scalp measurement:** supervisor PID 22830 / collector PID 22836
+  started 12:04:58Z; separate database/socket, one-read-per-second cap and no
+  order path
+- **Fixed GTC:** 17 `PURE_VOLUME_GTC` trials appeared after the required
+  five-minute book warm-up with 17/17 pre-placement feature coverage
+- **Other collection:** adverse-fill and queue studies run inside the bot;
+  daily probe, hourly rewards/changelog and nightly backup schedules are active
 
 ## Active operating envelope
 
@@ -42,35 +42,28 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Last run outcome
+## Latest restart outcome
 
-The operator-authorized 03:06Z restart loaded source marker `1ff0e42` from a
-positively flat/order-free account. By 03:10Z it held exactly 20/20 quoting
-owners and 37 resting orders, with zero positions and zero unresolved rows.
-The restart-window log recorded a 20-market queue, 44 placements and no
-traceback, unresolved-mutation timeout, runtime recovery, stream-silence event,
-buying-power block or rejection backoff. Natural failure/reversal paths still
-need observation; do not induce a closure, disconnect, rejection or bust.
+The operator-authorized restart first proved the account flat, order-free and
+ambiguity-free. Commit `53fa838` passed 724 server tests and the docs audit,
+then started at 11:58:57Z. Startup released three expired owners, committed
+back to 20 active markets and resumed post-only placement. One market-local
+unknown-state recovery at 12:02:55Z reconciled and resumed naturally; by 12:06Z
+the dashboard was working with 19 quoted owners, one economic blocker, zero
+positions and zero unresolved rows. No current-run REST 429 was observed.
 
-The strict spread-scalp collector started at 04:07:22Z without a trading-bot
-restart. Ten-minute acceptance covered 100 markets, 24,050 book updates and
-792 trades across both cohorts, with 99.3% stream coverage and zero gaps,
-reconnects, stream errors or REST 429s. Bot PID 5445 stayed active. A private-
-socket silence matched repeated pre-collector recoveries; later transient
-UNKNOWN_ABSENT/cancel intents also cleared, with no mutation timeout or stop.
-
-At the operator's 11:39Z stop, shutdown discovered a 2.47-contract position
-created after the earlier flat check and crossed it once at 0.43. The runner
-then exited, and the independent 11:40Z authenticated dashboard proved flat,
-order-free and ambiguity-free. Commit `dc71ae8` was not deployed, the production
-marker remains `8e348eb`, and the separate scalp measurement stayed running.
+The old scalp collector needed isolated SIGTERM after its graceful flush did
+not finish; it has no trading path and `PRAGMA quick_check` returned `ok` before
+the new collector started. The first GTC report exposed an offline-reporting
+defect: one cumulative historical run gap censored every later clean pair.
+The scoped repair is under verification and does not alter trading behavior.
 
 ## Current operating instruction
 
-Keep the liquidity bot stopped. Do not deploy or restart until the operator
-explicitly authorizes both. The reviewed economic-idle repair remains pushed
-and undeployed; webhook repair `1d48584` is pushed and undeployed. Any restart
-must re-run the authenticated exposure gate.
+Keep the bot and measurement collector running. Do not change strategy, size,
+slots or stops from measurement output. Finish and deploy the GTC gap-scoping
+repair without restarting the bot; restart only the isolated collector if its
+forward stream-gap marking changes.
 
 ## Current repositories and records
 

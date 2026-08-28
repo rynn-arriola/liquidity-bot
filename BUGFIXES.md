@@ -26,10 +26,10 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   reporting uses bounded account truth when its prerequisites are proved and
   visibly marks fallbacks.
 
-The latest trading-source repair is `dc26c96`; current deployment and runtime
+The latest trading-source repair is `1ff0e42`; current deployment and runtime
 state must always be read from [STATUS.md](STATUS.md) and the server.
 
-## Deployed on disk; runner restart pending
+## Deployed and active; natural fault-path acceptance pending
 
 - Venue execution history can be reset, so an empty activity page was wrongly
   described as restart-surviving history. The adapter now exposes only positive
@@ -59,13 +59,15 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
   read-only reports would have failed on the new `reversed` column before the
   next runner startup migrated it. Reports now detect the column read-only:
   old schema treats every historical fill as active, while migrated schema
-  excludes busted fills. Trading and migration behavior are unchanged.
+  excludes busted fills. This migration is now active.
 
 Focused regressions, edge cases and deliberate reversal mutations passed for
-each defect. Commit `1ff0e42` is pushed; all 690 local and server tests passed,
-source/test parity matches the deployed marker, and the unchanged process IDs
-prove no restart occurred. Schema migration and natural live acceptance remain
-pending, so trading behavior is unchanged.
+each defect. Commit `1ff0e42` is pushed; all 690 local and server tests passed
+and source/test parity matches the deployed marker. The reviewed 03:06Z restart
+loaded the code and completed the additive migration. Its initial acceptance
+reached 20/20 quoting, 37 resting orders, zero positions and zero unresolved
+rows with no restart-window traceback, mutation timeout, runtime recovery or
+stream-silence event. Fault-specific live acceptance remains natural-only.
 
 ## Required entry format
 

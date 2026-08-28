@@ -16,11 +16,12 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   positions. A slot can be healthy while temporarily holding no order.
 - **Closed owners parked capacity.** The deployed repair releases only after
   fresh exact closed/not-open metadata plus complete flat/order-free ownership
-  proof. It awaits natural live acceptance after the current stop.
+  proof. The 2026-08-28 reviewed restart reached 20/20 quoting; natural closed-
+  owner replacement remains uninduced and pending observation.
 - **Maintenance recovery works when the venue recovers.** It requires three
   consecutive complete authenticated checks, normal reconciliation and fresh
-  streams. The later forced stop did not obtain venue proof, so exposure is
-  currently unknown.
+  streams. Current exposure was positively re-established before the 03:06Z
+  restart; do not carry the prior forced-stop uncertainty into this run.
 - **Open marked loss is provisional.** New entries block immediately, but an
   open-position mark does not become a terminal hard stop until the documented
   close/newer-balance evidence arrives.
@@ -74,6 +75,13 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Changelog monitoring belongs outside trading.** The public RSS feed can be
   polled by a lock/timeout-bounded process with independent state and Discord
   notification. It needs no API key, ledger access, REST budget or runner hook.
+- **Initial official-API remediation acceptance passed on 2026-08-28.** A
+  positively flat/order-free restart completed the additive trade-state
+  migration and reached exactly 20 quoting owners, 37 resting orders, zero
+  positions and zero unresolved mutations. The new-run log had zero traceback,
+  mutation timeout, runtime recovery or stream-silence event; destructive
+  fault injection remains prohibited, so bust/rejection/silence branches await
+  natural evidence.
 
 ## How to add a finding
 

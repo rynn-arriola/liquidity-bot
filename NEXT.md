@@ -4,18 +4,13 @@ This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 Do not add deployment narratives here after their remaining action is closed.
 
-## 0. Reviewed rollout and live acceptance
+## 0. Remaining natural acceptance
 
-The production process remains on its earlier loaded source. Commit `1ff0e42`
-is pushed and deployed on disk, local/server suites passed 690 tests and parity
-passed without changing the supervisor or runner PIDs. The remediation becomes
-active only after the additive ledger migration runs on an operator-authorized
-restart following complete authenticated flat/order-free proof.
-Read-only reports remain compatible with the pre-migration schema during this
-deployment window and begin excluding busted fills after migration.
-
-After that safe start, accept both the existing slot repair and the new
-reliability behavior from natural operation:
+Commit `1ff0e42` is pushed, deployed and active. Local/server suites passed all
+690 tests, parity passed, the additive trade-state migration completed, and the
+reviewed flat/order-free restart reached 20/20 quoting with zero unresolved
+rows and no new error signature. Continue accepting these paths only when they
+occur naturally:
 
 - queue scope reaches exactly 20 when viable supply permits;
 - positively closed, flat/order-free owners release without touching retained
@@ -66,17 +61,3 @@ better than the old matched-pair-only row, but per-market realized attribution
 is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
-
-## 5. Official API remediation awaits restart acceptance
-
-The ordered review in
-[docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) is
-implemented and deployed on disk: venue-history reset semantics, independent stream
-liveness, busted-trade reversal, entry-only buying-power/rejection protection,
-structured HTTP diagnostics with `Retry-After`, a 15-second REST timeout and an
-isolated changelog RSS monitor. Focused regressions, deliberate mutation checks
-and all 690 local/server tests passed.
-
-The public RSS monitor baseline succeeded and its isolated minute-23 hourly
-schedule is active. The running trading process was not restarted; authenticated
-restart proof and natural live acceptance remain separate operator decisions.

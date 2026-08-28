@@ -6,10 +6,11 @@ Do not add deployment narratives here after their remaining action is closed.
 
 ## 0. Reviewed rollout and live acceptance
 
-The production bot remains on its earlier deployed source. The local official-
-API remediation is not active until final tests pass, it is committed and
-deployed, the additive ledger migration runs, and the operator separately
-authorizes a restart after complete authenticated flat/order-free proof.
+The production process remains on its earlier loaded source. Commit `1ff0e42`
+is pushed and deployed on disk, local/server suites passed 690 tests and parity
+passed without changing the supervisor or runner PIDs. The remediation becomes
+active only after the additive ledger migration runs on an operator-authorized
+restart following complete authenticated flat/order-free proof.
 Read-only reports remain compatible with the pre-migration schema during this
 deployment window and begin excluding busted fills after migration.
 
@@ -66,15 +67,16 @@ is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
 
-## 5. Official API remediation awaits rollout
+## 5. Official API remediation awaits restart acceptance
 
 The ordered review in
 [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) is
-implemented locally: venue-history reset semantics, independent stream
+implemented and deployed on disk: venue-history reset semantics, independent stream
 liveness, busted-trade reversal, entry-only buying-power/rejection protection,
 structured HTTP diagnostics with `Retry-After`, a 15-second REST timeout and an
-isolated changelog RSS monitor. Focused regressions and deliberate mutation
-checks passed; the complete final regression remains the rollout gate.
+isolated changelog RSS monitor. Focused regressions, deliberate mutation checks
+and all 690 local/server tests passed.
 
-The RSS monitor is code only until an isolated server schedule is explicitly
-installed. Deployment and restart remain separate operator decisions.
+The public RSS monitor baseline succeeded and its isolated minute-23 hourly
+schedule is active. The running trading process was not restarted; authenticated
+restart proof and natural live acceptance remain separate operator decisions.

@@ -5,28 +5,30 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-27 21:01 ET / 2026-08-28 01:01 UTC
+- **Verified:** 2026-08-27 23:00 ET / 2026-08-28 03:00 UTC
 - **Liquidity bot:** RUNNING under its supervisor, automatic selection at size
-  10
+  10; supervisor PID 2245 and runner PID 2251 were unchanged through deployment
 - **Startup gate:** complete authenticated reads proved zero venue orders and
   positions; the reviewed orphan-create recovery then resolved the one
   remaining no-exchange-ID PLACE and a second complete gate proved zero
   unknown-absent and unresolved rows
-- **Latest live checkpoint:** 20 active market owners, 28 venue orders across
-  17 markets, zero nonzero positions and zero `UNKNOWN_ABSENT`; two fresh
-  acknowledged mutations were ordinary in-progress cancel/place work
+- **Deployment exposure boundary:** no authenticated venue exposure query was
+  made for this no-restart deployment; current orders and positions are not
+  inferred from the ledger or process state
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes the compact AI handoff through `f2a5e02`; run
-  parity for the exact current documentation-only HEAD
-- **Server marker:** `14e438a`
-- **Latest trading-source change:** `dc26c96`
-- **Parity:** desktop/GitHub/server passed; a laptop result is authoritative
-  only from the laptop's own output
-- **Documentation acceptance:** local and stopped-server audits plus all 667
-  tests passed; server AI files are installed and no bot restart occurred
+- **GitHub:** `main` includes reviewed source commit `1ff0e42`
+- **Server marker:** `1ff0e42`; source/tests match the marker
+- **Latest trading-source change:** `1ff0e42`, deployed on disk but not loaded
+  by the unchanged running process
+- **Parity:** desktop/GitHub/server passed for source/tests; a laptop result is
+  authoritative only from the laptop's own output
+- **Verification:** all 690 local and reduced-priority server tests passed;
+  documentation, diff, secret, shell-syntax and rolling-schema checks passed
 - **Official API remediation:** seven prioritized reliability fixes and the
-  safe rolling-report compatibility repair passed final local review; rollout
-  is authorized but not yet deployed or active in production
+  rolling-report compatibility repair are pushed and deployed on disk; runner
+  behavior and ledger migration remain inactive until an authorized restart
+- **Changelog monitor:** public RSS baseline succeeded and the isolated hourly
+  schedule is active at minute 23; it has no trading API or ledger access
 
 ## Active operating envelope
 
@@ -60,9 +62,10 @@ owners, ownership state and resting coverage, not raw order count. Any future
 stop/restart remains a separate operator decision and must use the normal
 authenticated exposure gate.
 
-The local official-API remediation must not be treated as live until it is
-committed, deployed, migrated and accepted after an explicitly authorized safe
-restart. Until then the server continues to run the earlier deployed source.
+The official-API remediation must not be treated as live merely because its
+files and marker are deployed. The unchanged process still has its earlier
+modules loaded. Migration and live behavior begin only after an explicitly
+authorized safe restart and then require natural acceptance.
 
 ## Current repositories and records
 

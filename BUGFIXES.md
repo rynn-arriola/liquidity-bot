@@ -29,7 +29,7 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 The latest trading-source repair is `dc26c96`; current deployment and runtime
 state must always be read from [STATUS.md](STATUS.md) and the server.
 
-## Reviewed locally; not yet deployed
+## Deployed on disk; runner restart pending
 
 - Venue execution history can be reset, so an empty activity page was wrongly
   described as restart-surviving history. The adapter now exposes only positive
@@ -54,7 +54,7 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
   construct clients with the same explicit 15-second timeout.
 - Changelog checks were manual only. A public-RSS-only monitor now establishes
   a no-spam baseline, durably retries failed notifications and runs under an
-  isolated lock/timeout wrapper. Automatic scheduling remains pending rollout.
+  isolated lock/timeout wrapper. Its minute-23 hourly schedule is active.
 - The pre-deploy server still has the old fill schema, so immediately deployed
   read-only reports would have failed on the new `reversed` column before the
   next runner startup migrated it. Reports now detect the column read-only:
@@ -62,8 +62,10 @@ state must always be read from [STATUS.md](STATUS.md) and the server.
   excludes busted fills. Trading and migration behavior are unchanged.
 
 Focused regressions, edge cases and deliberate reversal mutations passed for
-each defect. Complete-suite rerun, commit, deployment, schema migration and
-natural live acceptance remain pending; production behavior is unchanged.
+each defect. Commit `1ff0e42` is pushed; all 690 local and server tests passed,
+source/test parity matches the deployed marker, and the unchanged process IDs
+prove no restart occurred. Schema migration and natural live acceptance remain
+pending, so trading behavior is unchanged.
 
 ## Required entry format
 

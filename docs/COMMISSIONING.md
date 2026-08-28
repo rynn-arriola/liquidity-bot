@@ -199,10 +199,10 @@ The launcher reads the existing sibling `../maker-lab/credentials.py` as
 literal data. The credential file, environment files, databases, locks, and
 logs are ignored by Git. Never copy secrets into this repository.
 
-The optional changelog monitor is a separate public-RSS process with no key,
+The changelog monitor is a separate public-RSS process with no Polymarket key,
 ledger or trading hook. Its wrapper provides a nonblocking lock and 30-second
-timeout. Installing its hourly server schedule is a deployment choice, not a
-runner startup step:
+timeout. Production schedules it hourly at minute 23; this is independent of
+runner startup and restart:
 
 ```bash
 bash scripts/post_polymarket_changelog.sh

@@ -12,8 +12,8 @@ snapshots are under [docs/history/](docs/history/README.md).
 - **20-slot health:** 18/20 owners quoting and two bound-not-quoting owners;
   zero slots empty and the same runner continued placing
 - **Maker-lab:** stopped
-- **Running source:** `2831026`; staged 429 correction needs a later restart
-- **Verification:** all 740 local and server tests, documentation audit,
+- **Running source:** `2831026`; server/GitHub stage `a8d91d0` needs a restart
+- **Verification:** all 744 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
@@ -72,7 +72,7 @@ decisions remain frozen and orders/private visibility are preserved.
 Keep the bot and collector running. Do not induce a 180-second private-stream
 failure to test recovery. Avoid repeated authenticated dashboard probes during
 live recovery because their separate process does not share the runner limiter.
-The staged 429 correction is not active until an authorized restart. Do not
+Staged commit `a8d91d0` is deployed but inactive until an authorized restart. Do not
 change strategy, size, slots or stops from measurement output.
 
 ## Current records

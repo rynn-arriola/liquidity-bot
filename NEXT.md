@@ -22,9 +22,9 @@ when they occur naturally; do not induce a live failure:
 
 Commit `2831026` is active and startup acceptance passed with Polymarket's real
 empty-subscription pattern. The first natural overlap then proved a confirmed
-429 on the final balance read still caused global quarantine. The correction is
-to be deployed without restarting and activated only on the next authorized
-restart. Do not induce a fault. Natural acceptance must show
+429 on the final balance read still caused global quarantine. Correction
+`a8d91d0` is deployed without restarting and activates only on the next
+authorized restart. Do not induce a fault. Natural acceptance must show
 `[private-shard-handoff-rate-limit] ... cancels=0`, followed by
 `[private-shard-recovery] ... cancels=0`, unchanged PID/owners and no persistent
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the

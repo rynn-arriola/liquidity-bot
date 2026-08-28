@@ -5,17 +5,20 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-27 19:08 ET / 23:08 UTC
+- **Verified:** 2026-08-27 20:34 ET / 2026-08-28 00:34 UTC
 - **Liquidity bot:** STOPPED; no supervisor or runner process
 - **Stop quality:** FORCED during an authenticated venue outage
 - **Venue exposure:** UNKNOWN; possible unmanaged orders must be ruled out by a
   new complete authenticated account snapshot before any restart
 - **Maker-lab:** stopped
-- **GitHub:** `main` at `d59339a` at the last parity check
-- **Server marker:** `e97e231`
+- **GitHub:** `main` includes the compact AI handoff at `14e438a`; run parity
+  for the exact current documentation-only HEAD
+- **Server marker:** `14e438a`
 - **Latest trading-source change:** `dc26c96`
 - **Parity:** desktop/GitHub/server passed; a laptop result is authoritative
   only from the laptop's own output
+- **Documentation acceptance:** local and stopped-server audits plus all 667
+  tests passed; server AI files are installed and no bot restart occurred
 
 ## Active operating envelope
 

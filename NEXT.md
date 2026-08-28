@@ -56,14 +56,3 @@ better than the old matched-pair-only row, but per-market realized attribution
 is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
-
-## 5. Documentation compaction acceptance
-
-After this documentation-only change is reviewed:
-
-- the documentation audit and full test suite must pass locally and on the
-  stopped server;
-- root mandatory context must stay within its enforced budgets;
-- all archive links must resolve;
-- a fresh AI session on another workstation must route through
-  `AI_OPERATOR.md` without loading archives by default.

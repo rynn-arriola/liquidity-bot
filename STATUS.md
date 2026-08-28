@@ -5,25 +5,19 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 00:19 ET / 2026-08-28 04:19 UTC
-- **Liquidity bot:** RUNNING under its supervisor, automatic selection at size
-  10; the reviewed restart launched supervisor PID 5439 and runner PID 5445
+- **Verified:** 2026-08-28 07:30 ET / 2026-08-28 11:30 UTC
+- **Liquidity bot:** RUNNING under supervisor PID 5439 / size-10 runner PID 5445
 - **Startup gate:** after the operator manually flattened and canceled all
-  venue exposure, an authenticated stopped-state read proved zero positions,
-  zero resting orders and zero unresolved rows before start
-- **Live exposure:** the 04:18Z authenticated dashboard showed one position,
-  29 resting orders and no risk stop; a follow-up ledger read proved zero
-  unresolved rows
+  venue exposure, a stopped-state read proved zero positions/orders/unresolved
+- **Live exposure:** the latest complete authenticated dashboard at 11:02Z
+  showed zero positions, 13 resting and zero unresolved. At 11:07Z the ledger
+  showed 23 open and zero position/unresolved/absent; it is not a venue snapshot
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes reviewed source commit `8e348eb`; the current
-  documentation handoff is tracked separately from the server source marker
+- **GitHub:** `main` includes reviewed source commit `8e348eb`
 - **Server marker:** `8e348eb`; source/tests match the marker
-- **Latest trading-source change:** `1ff0e42`, deployed and active in the
-  unchanged PID 5445 process; deploying the measurement did not restart it
-- **Parity:** desktop/GitHub/server passed for source/tests; a laptop result is
-  authoritative only from the laptop's own output
-- **Verification:** all 706 local and reduced-priority server tests passed;
-  documentation, diff, secret, shell-syntax and rolling-schema checks passed
+- **Latest trading source:** `1ff0e42`, deployed and active in unchanged PID 5445
+- **Parity:** desktop/GitHub/server passed; laptop requires its own result
+- **Deployed verification:** all 706 local and reduced-priority server tests passed
 - **Official API remediation:** seven prioritized reliability fixes and the
   rolling-report compatibility repair are pushed, deployed and active; the
   additive `execution_trade_states`/fill-reversal migration completed
@@ -31,6 +25,8 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
   schedule is active at minute 23; it has no trading API or ledger access
 - **Spread-scalp measurement:** isolated supervisor PID 8376 / collector PID
   8382 is active against `data/scalp.db`; it has no order path
+- **Pending strategy repair:** local work safely replaces continuously
+  economically idle slots; it is not deployed and has not changed the runner
 
 ## Active operating envelope
 
@@ -67,10 +63,13 @@ UNKNOWN_ABSENT/cancel intents also cleared, with no mutation timeout or stop.
 
 ## Current operating instruction
 
-Let the current run continue. Judge slot health from queue scope, distinct
-owners, ownership state and resting coverage, not raw order count. Any future
-stop/restart remains a separate operator decision and must use the normal
-authenticated exposure gate.
+Let the current run continue on its unchanged deployed build. At 11:30Z the
+same supervisor/runner PIDs were active and action logs were still placing
+quotes. Judge slot health from queue scope, distinct owners, ownership state
+and resting coverage, not raw order count. The reviewed economic-idle repair
+passed all 719 local tests and deliberate reversal, but deploy/restart remains
+a separate operator decision and must use the normal authenticated exposure
+gate.
 
 ## Current repositories and records
 

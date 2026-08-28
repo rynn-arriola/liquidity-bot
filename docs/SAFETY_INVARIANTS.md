@@ -476,3 +476,13 @@ These are implementation requirements, not suggestions.
     None may select, delay, cancel, replace, resize or otherwise affect the
     20-slot runner. A measurement restart restores durable unfinished first-
     leg episodes; it never turns them into venue positions.
+82. Current-book economic refusal may reclaim a pregame slot only after both
+    sides remain continuously blocked for 600 seconds by a named, reviewed
+    replaceable reason while the owner is flat, working-order-free,
+    `UNKNOWN_ABSENT`-free and unresolved-intent-free. An authorized side,
+    unknown/data/lifecycle/retirement blocker or execution ownership resets or
+    prevents the dwell. Replacement runs only on the normal 900-second scan,
+    releases oldest-first, and must have one distinct viable replacement per
+    optional owner before release. It may not cancel retained orders, lower the
+    active count when replacement supply is short, bypass complete pre-commit
+    account reconciliation or exceed 20 slots.

@@ -278,6 +278,20 @@ class CommissioningRunner:
     # latency on a slot that is already barred.
     DEAD_MARKET_REFRESH_SECONDS = 300.0
 
+    # These are current-book economic refusals which selection can improve by
+    # choosing another market.  Missing/stale data, lifecycle ambiguity,
+    # retirement and execution-state blockers are deliberately absent: those
+    # have their own fail-closed recovery paths and cannot prove a continuous
+    # economic comparison.
+    REPLACEABLE_ECONOMIC_BLOCKERS = frozenset({
+        "target_not_met",
+        "outside_reward_cutoff",
+        "book_sides_overlap",
+        "price_too_extreme",
+        "stressed_exit_incomplete",
+        "projected_reward_does_not_cover_probability_weighted_exit_cost",
+    })
+
     def __init__(
         self,
         client: Any,
@@ -2026,8 +2040,44 @@ class CommissioningRunner:
         """
 
         state = self.state_for(slug or self.market_slug)
-        self._evaluate_rewards_inner(now, slug)
+        try:
+            self._evaluate_rewards_inner(now, slug)
+        except Exception:
+            # A failed evaluation interrupts continuous economic proof.  It
+            # must not leave an old refusal clock aging through unknown state.
+            state.economically_ineligible_since = None
+            state.economic_ineligibility_reasons = ()
+            raise
+        self._record_economic_ineligibility(state, self._now())
         self._record_eligibility(state, self._now())
+
+    def _record_economic_ineligibility(
+        self, state: MarketState, now: datetime,
+    ) -> None:
+        """Maintain a continuous dwell only for a flat, proven economic no.
+
+        The timer is intentionally stricter than quote eligibility.  Both
+        sides must have completed evaluation with a replaceable economic
+        blocker, and the owner must already be position/order/ambiguity free.
+        Any authorized side or execution state resets the dwell immediately.
+        """
+
+        reasons = tuple(sorted(set(state.economic_blocker_by_side.values())))
+        replaceable = (
+            set(state.economic_blocker_by_side) == {"bid", "offer"}
+            and bool(reasons)
+            and set(reasons).issubset(self.REPLACEABLE_ECONOMIC_BLOCKERS)
+            and not any(
+                value > 0 for value in state.expected_net_by_side.values())
+            and self._owner_is_flat_and_clear(state.slug)
+        )
+        if not replaceable:
+            state.economically_ineligible_since = None
+            state.economic_ineligibility_reasons = ()
+            return
+        if state.economically_ineligible_since is None:
+            state.economically_ineligible_since = now
+        state.economic_ineligibility_reasons = reasons
 
     def _record_eligibility(self, state: MarketState, now: datetime) -> None:
         """Log a side whose reason-to-quote changed, with how long it held.
@@ -2148,6 +2198,13 @@ class CommissioningRunner:
                 state.market.tick_size)
             if price is None:
                 state.economic_blocker_by_side[side] = "book_sides_overlap"
+                continue
+            if min(price, 1.0 - price) < (
+                    float(self.config.minimum_entry_price) - 1e-9):
+                # The reconciler already refuses the same candidate.  Record
+                # it here as economics as well so a flat market that drifts to
+                # an untradeable extreme cannot silently own a slot forever.
+                state.economic_blocker_by_side[side] = "price_too_extreme"
                 continue
             already_resting = side in working_sides
             result = evaluate_order_score(
@@ -4578,6 +4635,30 @@ class CommissioningRunner:
 
         return self._reward_authorization_lost_and_flat(slug, now)
 
+    def _economically_idle_and_flat(self, slug: str, now: datetime) -> bool:
+        """True after a continuous economic refusal and complete flat proof."""
+
+        state = self._markets.get(slug)
+        if state is None or state.economically_ineligible_since is None:
+            return False
+        if not state.economic_ineligibility_reasons:
+            return False
+        current_reasons = tuple(sorted(set(
+            state.economic_blocker_by_side.values())))
+        if (set(state.economic_blocker_by_side) != {"bid", "offer"}
+                or current_reasons != state.economic_ineligibility_reasons
+                or any(value > 0
+                       for value in state.expected_net_by_side.values())):
+            return False
+        if not set(state.economic_ineligibility_reasons).issubset(
+                self.REPLACEABLE_ECONOMIC_BLOCKERS):
+            return False
+        held = (now - state.economically_ineligible_since).total_seconds()
+        return (
+            held >= self.config.economic_idle_replacement_seconds
+            and self._owner_is_flat_and_clear(slug)
+        )
+
     def _position_near_its_flatten_deadline(self, now: datetime) -> bool:
         """True when held inventory is close enough to kickoff that a scan hurts.
 
@@ -4624,6 +4705,8 @@ class CommissioningRunner:
                    for slug in self.active_slugs)
             or any(self._reward_authorization_lost_and_flat(slug, now)
                    for slug in self.active_slugs)
+            or any(self._economically_idle_and_flat(slug, now)
+                   for slug in self.active_slugs)
         )
 
     def _initial_market_selection_due(self, now: datetime) -> datetime:
@@ -4662,16 +4745,18 @@ class CommissioningRunner:
         19 -> 11 -> 8 -> 7 -> 6 across the previous session for this reason as
         much as for the retirement ban.
 
-        This path is deliberately narrower. It releases ONLY markets that are
+        This path is deliberately narrower. It releases markets that are
         past kickoff and flat, are positively reported closed/not-open and
         flat, or whose exact reward program is positively confirmed ended and
-        which are flat with no order ownership left. It keeps every other
-        market and its resting orders exactly where they are, fills any
-        capacity startup validation left free, and never quarantines. Streams
-        are restarted because they cannot subscribe incrementally, but a
-        stream restart does not touch resting orders -- those live on the venue
-        and keep earning through it. That is the whole difference from full
-        rotation, which cancels them.
+        which are flat with no order ownership left.  It may also replace a
+        flat, clear pregame owner after ten continuous minutes of a named
+        current-book economic refusal, but only when the same scan supplies an
+        actual viable replacement. It keeps every other market and its resting
+        orders exactly where they are, fills any capacity startup validation
+        left free, and never quarantines. Streams are restarted because they
+        cannot subscribe incrementally, but a stream restart does not touch
+        resting orders -- those live on the venue and keep earning through it.
+        That is the whole difference from full rotation, which cancels them.
         """
 
         if not self.config.auto_select_reward_markets:
@@ -4695,11 +4780,23 @@ class CommissioningRunner:
             if (slug not in expired and slug not in closed
                 and slug not in reward_ended
                 and self._reward_authorization_lost_and_flat(slug, now))]
-        released = expired + closed + reward_ended + reward_inactive
-        keep = tuple(slug for slug in self.active_slugs
-                     if slug not in released)
-        free = max(0, self.config.max_markets - len(keep))
-        if not released and free == 0:
+        mandatory_released = expired + closed + reward_ended + reward_inactive
+        economic_idle_candidates = sorted(
+            (slug for slug in self.active_slugs
+             if slug not in mandatory_released
+             and self._economically_idle_and_flat(slug, now)),
+            key=lambda slug: (
+                self.state_for(slug).economically_ineligible_since
+                or datetime.max.replace(tzinfo=timezone.utc),
+                slug,
+            ),
+        )
+        base_keep = tuple(slug for slug in self.active_slugs
+                          if slug not in mandatory_released)
+        capacity_without_optional_release = max(
+            0, self.config.max_markets - len(base_keep))
+        if (not mandatory_released and not economic_idle_candidates
+                and capacity_without_optional_release == 0):
             return False
         scan_started = time.monotonic()
         try:
@@ -4708,11 +4805,24 @@ class CommissioningRunner:
             self._selection_scan_seconds_last = time.monotonic() - scan_started
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
-        exclude = self._barred_slugs() | set(keep) | set(released)
-        replacements = tuple(
+        # Exclude every current owner, including optional idle candidates.  An
+        # idle owner may be retained if supply is short, but it must not count
+        # as its own replacement and manufacture a no-op stream rebind.
+        exclude = (self._barred_slugs() | set(base_keep)
+                   | set(mandatory_released)
+                   | set(economic_idle_candidates))
+        replacement_candidates = tuple(
             item.market.slug
             for item in selection.top_viable(self.config.max_markets,
-                                             exclude=exclude))[:free]
+                                             exclude=exclude))
+        optional_capacity = max(
+            0, len(replacement_candidates) - capacity_without_optional_release)
+        economic_idle = economic_idle_candidates[:optional_capacity]
+        released = mandatory_released + economic_idle
+        keep = tuple(slug for slug in self.active_slugs
+                     if slug not in released)
+        free = max(0, self.config.max_markets - len(keep))
+        replacements = replacement_candidates[:free]
         print(
             f"[top-up-plan] at={self._now().isoformat()} "
             f"released={len(released)} kept={len(keep)} "
@@ -4720,6 +4830,8 @@ class CommissioningRunner:
             f"expired={len(expired)} closed={len(closed)} "
             f"reward_ended={len(reward_ended)} "
             f"reward_inactive={len(reward_inactive)} "
+            f"economic_idle={len(economic_idle)} "
+            f"economic_idle_candidates={len(economic_idle_candidates)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )
@@ -4731,7 +4843,8 @@ class CommissioningRunner:
             print(
                 f"[top-up] at={self._now().isoformat()} skipped=nothing_retained "
                 f"expired={len(expired)} closed={len(closed)} "
-                f"reward_ended={len(reward_ended)}",
+                f"reward_ended={len(reward_ended)} "
+                f"economic_idle={len(economic_idle)}",
                 flush=True,
             )
             return False
@@ -4768,6 +4881,8 @@ class CommissioningRunner:
             if not (self._expired_and_flat(slug, self._now())
                     or self._closed_and_flat(slug)
                     or self._reward_authorization_lost_and_flat(
+                        slug, self._now())
+                    or self._economically_idle_and_flat(
                         slug, self._now()))]
         if no_longer_releasable:
             raise AdapterError(
@@ -4796,6 +4911,7 @@ class CommissioningRunner:
             f"expired={len(expired)} closed={len(closed)} "
             f"reward_ended={len(reward_ended)} "
             f"reward_inactive={len(reward_inactive)} "
+            f"economic_idle={len(economic_idle)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )

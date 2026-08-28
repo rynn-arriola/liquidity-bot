@@ -295,6 +295,11 @@ class CommissioningConfig:
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
+    # A bound pregame owner can temporarily fail current reward economics even
+    # though its program remains active.  Do not churn on a moving book: only a
+    # continuous ten-minute refusal may offer the flat, order-free slot to the
+    # normal fifteen-minute replacement scan.
+    economic_idle_replacement_seconds: int = 600
     # Was 25. Only ~33 markets survive the day_of and catalog-spread filters,
     # so 25 left a real blind spot for no reason: the census covered all 33 in
     # 40 seconds. 100 covers the whole candidate pool with room to grow, at
@@ -464,6 +469,10 @@ class CommissioningConfig:
         if self.minimum_entry_price != Decimal("0.10"):
             problems.append(
                 "commissioning entry quotes must remain between 0.10 and 0.90")
+        if self.economic_idle_replacement_seconds != 600:
+            problems.append(
+                "commissioning must retain an economically idle market for "
+                "ten continuous minutes before replacement")
         return tuple(problems)
 
     def assert_authorized(self, *, now: datetime) -> None:

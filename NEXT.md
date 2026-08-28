@@ -4,6 +4,18 @@ This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 Do not add deployment narratives here after their remaining action is closed.
 
+## Pending deploy decision: persistent economic-idle slot replacement
+
+The reviewed local change is ready but not deployed. It offers a pregame slot
+to the normal 15-minute top-up scan only after both sides have remained blocked
+by named current-book economics for 10 continuous minutes while the owner is
+flat, order-free, `UNKNOWN_ABSENT`-free and unresolved-intent-free. It releases
+oldest-first and only one-for-one against actual viable replacement supply, so
+short supply cannot reduce the active count. Deployment and restart remain a
+separate operator decision. After activation, accept the first natural
+`economic_idle=N` committed top-up and verify retained orders, active count,
+positions and unresolved state without inducing the event.
+
 ## 0. Remaining natural acceptance
 
 Commit `1ff0e42` is pushed, deployed and active. Local/server suites passed all

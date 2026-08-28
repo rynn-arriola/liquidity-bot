@@ -3891,6 +3891,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_extreme_prices_are_recorded_as_replaceable_economics(self):
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        runner.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.05, 100), BookLevel(.04, 100)),
+            (BookLevel(.07, 100), BookLevel(.08, 100)),
+            "MARKET_STATE_OPEN",
+            NOW,
+        )
+        runner.book_observed_at = NOW
+
+        runner._evaluate_rewards(NOW)
+
+        self.assertEqual(
+            set(runner._economic_blocker_by_side.values()),
+            {"price_too_extreme"},
+        )
+        self.assertIn(
+            "price_too_extreme", runner.REPLACEABLE_ECONOMIC_BLOCKERS)
+        self.assertIsNotNone(
+            runner.state_for(runner.market_slug).economically_ineligible_since)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_loss_stop_in_the_utc_midnight_gap_uses_the_et_date(self):
         """The pause streak and baseline must never disagree on their day."""
 
@@ -7625,6 +7650,20 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         state.reward_period_end_confirmed_at = now
         return state
 
+    def mark_economically_idle(
+        self, runner, slug, *, seconds=601, reason="target_not_met",
+    ):
+        """Record the continuous runtime proof used by optional replacement."""
+
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.market = self.metadata(slug, now)
+        state.economic_blocker_by_side = {"bid": reason, "offer": reason}
+        state.expected_net_by_side = {}
+        state.economically_ineligible_since = now - timedelta(seconds=seconds)
+        state.economic_ineligibility_reasons = (reason,)
+        return state
+
     def metadata(self, slug, now):
         return MarketMetadata(
             slug=slug,
@@ -7769,6 +7808,144 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.active_slugs,
                          ("market-one", "market-three"))
         self.assertEqual(len(runner.active_slugs), 2)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_persistent_economic_refusal_replaces_only_that_flat_slot(self):
+        runner = await self.armed(replacements=(
+            "market-three", "market-four"))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", runner._now())
+        self.mark_economically_idle(runner, "market-two")
+
+        self.assertTrue(runner._active_set_needs_top_up(runner._now()))
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "market-three"))
+        self.assertEqual(len(runner.active_slugs), 2)
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_economic_refusal_must_hold_for_the_full_dwell(self):
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.market = self.metadata(slug, now)
+        state.economic_blocker_by_side = {
+            "bid": "target_not_met", "offer": "outside_reward_cutoff"}
+
+        runner._record_economic_ineligibility(state, now)
+
+        self.assertFalse(runner._economically_idle_and_flat(
+            slug, now + timedelta(seconds=599)))
+        self.assertTrue(runner._economically_idle_and_flat(
+            slug, now + timedelta(seconds=600)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_authorized_side_resets_the_economic_refusal_dwell(self):
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        state = self.mark_economically_idle(runner, slug)
+        state.expected_net_by_side = {"bid": 0.01}
+        state.economic_blocker_by_side = {"offer": "target_not_met"}
+
+        runner._record_economic_ineligibility(state, runner._now())
+
+        self.assertIsNone(state.economically_ineligible_since)
+        self.assertEqual(state.economic_ineligibility_reasons, ())
+        self.assertFalse(runner._economically_idle_and_flat(
+            slug, runner._now() + timedelta(hours=1)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_economic_idle_owner_is_kept_without_a_replacement(self):
+        runner = await self.armed(replacements=())
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", runner._now())
+        self.mark_economically_idle(runner, "market-two")
+        before_private = runner.private_stream
+        before_market = runner.market_stream
+
+        self.assertFalse(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(runner.active_slugs, ("market-one", "market-two"))
+        self.assertIs(runner.private_stream, before_private)
+        self.assertIs(runner.market_stream, before_market)
+        self.assertFalse(before_private.closed)
+        self.assertFalse(before_market.closed)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_position_blocks_economic_idle_slot_release(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed(replacements=("market-three",))
+        slug = runner.market_slug
+        self.mark_economically_idle(runner, slug)
+        runner.ledger.apply_position_event(
+            "ws", "economic-idle-position",
+            PositionState(slug, Decimal("1"), runner._now()),
+            received_at=runner._now())
+
+        self.assertFalse(runner._economically_idle_and_flat(
+            slug, runner._now() + timedelta(hours=1)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_preflight_position_keeps_economic_idle_scope_unchanged(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", runner._now())
+        self.mark_economically_idle(runner, "market-two")
+        before_private = runner.private_stream
+        before_market = runner.market_stream
+
+        async def reconcile_discovers_position(*_args, **_kwargs):
+            runner.ledger.apply_position_event(
+                "rest", "economic-idle-preflight-position",
+                PositionState("market-two", Decimal("1"), runner._now()),
+                received_at=runner._now())
+
+        runner._rest_reconcile = reconcile_discovers_position
+
+        with self.assertRaisesRegex(
+                AdapterError, "top-up release proof changed"):
+            await runner._top_up_active_markets(runner._now())
+
+        self.assertEqual(runner.active_slugs, ("market-one", "market-two"))
+        self.assertIs(runner.private_stream, before_private)
+        self.assertIs(runner.market_stream, before_market)
+        self.assertFalse(before_private.closed)
+        self.assertFalse(before_market.closed)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_one_replacement_releases_only_the_oldest_idle_owner(self):
+        runner = await self.armed(replacements=("market-four",))
+        runner.config = replace(runner.config, max_markets=3)
+        runner._bind_markets(("market-one", "market-two", "market-three"))
+        runner.state_for("market-three").market = self.metadata(
+            "market-three", runner._now())
+        self.mark_economically_idle(runner, "market-one", seconds=900)
+        self.mark_economically_idle(runner, "market-two", seconds=700)
+
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+
+        self.assertEqual(
+            runner.active_slugs, ("market-two", "market-three", "market-four"))
+        self.assertEqual(len(runner.active_slugs), 3)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

@@ -18,6 +18,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   fresh exact closed/not-open metadata plus complete flat/order-free ownership
   proof. The 2026-08-28 reviewed restart reached 20/20 quoting; natural closed-
   owner replacement remains uninduced and pending observation.
+- **Bound capacity can remain economically idle.** Lifecycle repairs do not
+  cover a pregame owner continuously blocked on current-book economics. The
+  local repair adds a 10-minute dwell and one-for-one supply; deploy is pending.
 - **Maintenance recovery works when the venue recovers.** It requires three
   consecutive complete authenticated checks, normal reconciliation and fresh
   streams. Current exposure was positively re-established before the 03:06Z
@@ -94,7 +97,4 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   transient absent/cancel states also cleared without mutation timeout or stop.
 ## How to add a finding
 
-Add a concise, dated fact here while it is current. Move detailed incident
-evidence into a dated archive during periodic compaction. Record what was
-measured, the scope, the source, what interpretation was disproved and what
-decision remains.
+Add concise current facts here; move detailed evidence into a dated archive.

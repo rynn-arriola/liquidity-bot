@@ -92,6 +92,11 @@ class MarketState:
     reward_authorization_lost_at: datetime | None = None
     reward_authorization_loss_reason: str | None = None
     reward_authorization_loss_confirmed_at: datetime | None = None
+    # A current-book economic refusal is not a lifecycle end.  Keep its dwell
+    # separate so normal eligible observations and any execution ownership
+    # immediately reset the clock instead of rotating on a transient tick.
+    economically_ineligible_since: datetime | None = None
+    economic_ineligibility_reasons: tuple[str, ...] = ()
 
     def clear_economics(self) -> None:
         """Drop every derived per-side value before a fresh evaluation.
@@ -131,6 +136,8 @@ class MarketState:
         self.reward_authorization_lost_at = None
         self.reward_authorization_loss_reason = None
         self.reward_authorization_loss_confirmed_at = None
+        self.economically_ineligible_since = None
+        self.economic_ineligibility_reasons = ()
         self.clear_economics()
 
     def observe_book_touch(

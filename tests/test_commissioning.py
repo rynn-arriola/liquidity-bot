@@ -141,6 +141,7 @@ class CommissioningTests(unittest.TestCase):
         # unchanged by the five-contract rollback.
         self.assertEqual(config.quote_size, Decimal("5"))
         self.assertEqual(config.market_selection_refresh_seconds, 900)
+        self.assertEqual(config.economic_idle_replacement_seconds, 600)
         # Only ~33 markets survive the day_of and catalog-spread filters, so
         # 25 left a blind spot for no reason. 100 covers the whole pool.
         self.assertEqual(config.max_selection_book_candidates, 100)

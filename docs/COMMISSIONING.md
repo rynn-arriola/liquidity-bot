@@ -145,6 +145,16 @@ private state; missing/conflicting/unowned/out-of-scope state stays terminal.
 Logs distinguish `[top-up-plan]` from an actual `[top-up] ... committed=yes`
 transition and include the positively closed release count.
 
+A still-open pregame owner may also be replaced after both sides continuously
+fail named current-book economics for 10 minutes. This is optional replacement,
+not lifecycle disposal: the normal 15-minute scan must provide a different
+viable market for every such owner released. Any authorized side, non-economic
+or unknown evaluation, position, working/`UNKNOWN_ABSENT` order or unresolved
+intent resets or blocks the release. Oldest idle owners go first, retained venue
+orders are never cancelled, and short replacement supply cannot reduce the
+active market count. Logs expose both `economic_idle_candidates` and the number
+actually released as `economic_idle`.
+
 Shutdown carries its own three-attempt flatten budget, independent of whatever
 the quoting loop already spent, so reaching the runtime ceiling can never stop
 the terminal path from trying. While it cannot prove flat it repeats a critical

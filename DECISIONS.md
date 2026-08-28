@@ -25,6 +25,7 @@ show the operator the discrepancy.
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
+| Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
 | Market loss stop | $40 |
 | Account loss threshold | $80 realized-session sensor and $80 marked-equity sensor; an open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |

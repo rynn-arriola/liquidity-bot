@@ -29,6 +29,18 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 The latest trading-source repair is `1ff0e42`; current deployment and runtime
 state must always be read from [STATUS.md](STATUS.md) and the server.
 
+## Reviewed locally; deployment pending
+
+- Pregame owners blocked on both sides by named current-book economics could
+  retain a nominal slot indefinitely because incremental top-up recognized only
+  lifecycle loss. The local repair tracks a 10-minute continuous flat/clear
+  dwell and releases oldest-first only when the same normal scan supplies an
+  actual viable replacement. Any authorized side, position, working or absent
+  order, unresolved intent, unknown evaluation or non-economic blocker resets
+  or prevents release. Focused ownership/supply regressions passed, deliberate
+  removal of the predicate failed its regression, restoration passed, and all
+  719 local tests passed. Production is unchanged pending deploy/restart.
+
 ## Deployed and active; natural fault-path acceptance pending
 
 - Venue execution history can be reset, so an empty activity page was wrongly

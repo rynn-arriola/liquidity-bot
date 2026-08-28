@@ -74,12 +74,17 @@ is still incomplete. Do not use a single ledger P&L number to authorize a
 strategy change. The long-form mechanism and proposed sequencing are in the
 archived NEXT/FINDINGS files.
 
-## 5. Spread-scalp collection needs a prospective cohort
+## 5. Fixed-GTC spread-scalp cohort awaits deployment and evidence
 
-The isolated strict two-sided collector is deployed and collecting on the
-server without changing live orders. Its 10-minute acceptance passed, but do
-not judge profitability from that startup sample: require complete coverage,
-enough full-quantity both-side and one-side episodes across multiple days,
-and compare predeclared early-exit horizons plus settlement. Keep
-`PURE_VOLUME` and `REWARD_SLOTS` separate; overlapping markets may appear in
-both analyses but must not be summed as independent profit.
+The existing rolling collector remains deployed and collecting without changing
+live orders. The local reviewed addition creates a bounded `PURE_VOLUME_GTC`
+cohort and a read-only `scripts/scalp_gtc_report.py`; it is not active until a
+separate push/deploy and collector restart are authorized. The liquidity bot
+does not need a restart.
+
+After activation, confirm within ten minutes that the trading PID is unchanged,
+combined public scope is at most 100, REST remains capped at 1 request/second,
+the GTC cohort appears only after its five-minute warmup, and no stream/API error
+increases. Then collect three complete days plus a held-out day. Compare the
+existing renewal/one-hour path, fixed-GTC/one-hour path and fixed-GTC/settlement
+path without adding overlapping cohorts as independent profit.

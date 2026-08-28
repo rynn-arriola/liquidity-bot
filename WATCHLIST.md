@@ -18,7 +18,7 @@ does not use the Polymarket API budget.
 | Loss by market, side, ET hour and kickoff | Read-only analysis of the execution ledger and quote observations | None when analyzed | None |
 | Size-20 counterfactual | Read-only reuse of size-10 score, reward, fill and exit observations | None when analyzed | None; live size remains 10 |
 | Daily selection/period probe | Cron at 14:00 UTC runs one bounded snapshot | About 50 read-only calls once/day | None |
-| Strict spread-scalp study | Active separate `scalp_run` process, database and combined book/trade socket | Normally 1-2 reads per 15 minutes, locally capped at 1 req/s; at most 100 market subscriptions | None; code has no order path |
+| Strict spread-scalp study | Active separate `scalp_run` process, database and combined book/trade socket | Catalog normally uses 1-2 reads per 15 minutes; retained terminal checks can add up to 10 reads per 15 minutes, all locally capped at 1 req/s; at most 100 subscriptions | None; code has no order path |
 
 The hourly seven-day reward post is operational reporting, not a strategy
 experiment. The hourly changelog poll is venue diagnostics. Nightly SQLite
@@ -81,6 +81,10 @@ Measure two separately labeled cohorts without changing the 20-slot strategy:
   full-book `sharesTraded`; discovery rotates without a league filter.
 - `REWARD_SLOTS`: the exact current commissioning queue read from the live
   ledger in SQLite read-only mode.
+- `PURE_VOLUME_GTC`: up to 20 pure-volume markets observed for five minutes
+  before one hypothetical placement, then retained in the same bounded socket
+  through settlement so the replay can end at both original fills or settlement
+  without a rotation gap. It has no league filter.
 
 One episode posts hypothetical fixed touch orders on both sides at the back of
 the displayed queue. Success requires the entire requested quantity to fill on
@@ -94,3 +98,19 @@ one-side exposure rate, pair net, forced-exit completion/loss by horizon,
 settlement result, and outcomes by initial spread/volume/depth/stability. A
 coverage gap cannot count as success. Collection does not authorize a live
 scalping order, change reward selection, consume a slot, or change any exit.
+Active reconnect/decode/drop counters are persisted when they change so a
+read-only report cannot mistake an unfinished run's known gap for clean data.
+
+For the leave-it question, compare three non-overlapping strategy definitions:
+
+1. Existing five-minute no-fill renewal with an exit one hour after first fill.
+2. One fixed original pair with that same one-hour inventory exit.
+3. One fixed original pair held until both fills or settlement.
+
+The pre-placement two-sided score is the smaller of recent bid- and offer-
+consuming volume divided by that side's displayed queue plus requested size.
+Also report initial spread, contemporaneous `sharesTraded`, two-way balance,
+mid-price range/reversals, capital-hours, peak committed capital, fees/rebates,
+one-sided settlement loss and worst loss. Optimize expected net, not the both-
+fill rate alone. Require three complete days and a prospective held-out day
+before proposing any live rule.

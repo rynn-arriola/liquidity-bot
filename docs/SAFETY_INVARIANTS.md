@@ -476,6 +476,17 @@ These are implementation requirements, not suggestions.
     None may select, delay, cancel, replace, resize or otherwise affect the
     20-slot runner. A measurement restart restores durable unfinished first-
     leg episodes; it never turns them into venue positions.
+    An exact fixed-GTC trial is a separately labeled pure-volume cohort capped
+    at 20 markets inside the same 100-market public scope. It receives five
+    minutes of observation before hypothetical placement and remains subscribed
+    through positive settlement so offline both-fill or settlement termination
+    cannot inherit a rotation gap. It never creates, cancels or reprices a venue
+    order. Pre-placement features
+    may use only books at or before placement and trades strictly before it.
+    A later scope loss, stream error or interrupted interval excludes that path
+    from strict results. Retained terminal checks remain read-only, share the
+    existing 1 request/second limiter and are bounded to five markets per
+    15-minute refresh.
 82. Current-book economic refusal may reclaim a pregame slot only after both
     sides remain continuously blocked for 600 seconds by a named, reviewed
     replaceable reason while the owner is flat, working-order-free,

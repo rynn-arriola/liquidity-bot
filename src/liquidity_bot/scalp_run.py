@@ -106,6 +106,8 @@ class ScalpRunConfig:
     refresh_minutes: float
     rest_requests_per_second: float
     policy: ScalpPolicy
+    gtc_pure_markets: int = 20
+    gtc_warmup_seconds: float = 300.0
 
 
 class ScalpRunner:
@@ -128,13 +130,34 @@ class ScalpRunner:
         self.candidates: list[MarketMetadata] = []
         self.latest_books: dict[str, BookSnapshot] = {}
         self.latest_book_at: dict[str, datetime] = {}
+        self.first_book_at: dict[str, datetime] = {}
         self.reward_slugs: tuple[str, ...] = ()
         self.pure_slugs: set[str] = set()
+        self.gtc_pure_slugs: set[str] = {
+            str(row["market_slug"]) for row in self.store.query(
+                "SELECT DISTINCT market_slug FROM scalp_selections s "
+                "WHERE run_id=? AND cohort='PURE_VOLUME_GTC' AND NOT EXISTS ("
+                "SELECT 1 FROM scalp_settlements x WHERE x.run_id=s.run_id "
+                "AND x.market_slug=s.market_slug)", (self.run_id,))
+        }
         self.discovery_offset = 0
         self.settlement_offset = 0
         self.scope: tuple[str, ...] = ()
-        self.reconnects = 0
-        self.coverage_gaps = 0
+        health = self.store.query(
+            "SELECT reconnects,coverage_gaps FROM scalp_runs WHERE run_id=?",
+            (self.run_id,))
+        self.reconnects = int(health[0]["reconnects"]) if health else 0
+        self.coverage_gaps = int(health[0]["coverage_gaps"]) if health else 0
+        self._persisted_health = (self.reconnects, self.coverage_gaps)
+
+    def _persist_run_health(self) -> None:
+        health = (self.reconnects, self.coverage_gaps)
+        if health == self._persisted_health:
+            return
+        self.store.update_run_health(
+            self.run_id, reconnects=self.reconnects,
+            coverage_gaps=self.coverage_gaps)
+        self._persisted_health = health
 
     def _apply_cohorts(self, at: datetime) -> None:
         self.engine.set_cohorts({
@@ -148,9 +171,22 @@ class ScalpRunner:
             if slug in self.latest_book_at
             and (at - self.latest_book_at[slug]).total_seconds() <= 180
         }
-        pure = rank_observed_volume(
+        required = (set(self.reward_slugs) | self.engine.required_slugs
+                    | self.gtc_pure_slugs)
+        ranked = rank_observed_volume(
             [market for market in self.candidates if market.slug in self.scope],
             fresh_books, limit=self.config.pure_markets)
+        # A retained GTC trial often remains in the current top-volume cohort,
+        # so capacity is based on the union rather than subtracting it twice.
+        # Only non-required tail markets consume additional socket capacity.
+        additional_capacity = max(0, 100 - len(required))
+        pure = []
+        for market in ranked:
+            if market.slug in required:
+                pure.append(market)
+            elif additional_capacity:
+                pure.append(market)
+                additional_capacity -= 1
         self.pure_slugs = {market.slug for market in pure}
         values = {
             market.slug: _book_volume(fresh_books[market.slug])[0]
@@ -165,6 +201,44 @@ class ScalpRunner:
             rank_metric=(next(iter(metrics)) if len(metrics) == 1
                          else "mixed_book_volume" if metrics else None),
             rank_values=values)
+        if len(self.gtc_pure_slugs) < self.config.gtc_pure_markets:
+            eligible = [
+                market for market in pure
+                if market.slug not in self.gtc_pure_slugs
+                and market.slug in self.first_book_at
+                and (at - self.first_book_at[market.slug]).total_seconds()
+                >= self.config.gtc_warmup_seconds
+            ]
+            available = self.config.gtc_pure_markets - len(self.gtc_pure_slugs)
+            self.gtc_pure_slugs.update(
+                market.slug for market in eligible[:available])
+        gtc = [market for market in pure if market.slug in self.gtc_pure_slugs]
+        # Retained trials can rotate out of the current pure ranking.  Keep
+        # their original metadata and their stream scope until settlement.
+        gtc_by_slug = {market.slug: market for market in gtc}
+        for slug in self.gtc_pure_slugs:
+            if slug in self.catalog:
+                gtc_by_slug.setdefault(slug, self.catalog[slug])
+        gtc_ranked = sorted(
+            gtc_by_slug.values(),
+            key=lambda market: (market.slug not in self.pure_slugs,
+                                next((index for index, current in enumerate(pure)
+                                      if current.slug == market.slug), 10_000),
+                                market.slug))
+        gtc_observed = {
+            slug: _book_volume(fresh_books[slug])
+            for slug in gtc_by_slug if slug in fresh_books
+            and _book_volume(fresh_books[slug]) is not None
+        }
+        gtc_values = {slug: measured[0]
+                      for slug, measured in gtc_observed.items()}
+        gtc_metrics = {measured[1] for measured in gtc_observed.values()}
+        self.store.record_selection(
+            self.run_id, "PURE_VOLUME_GTC", gtc_ranked, at,
+            source="five_minute_observed_volume_then_fixed_to_terminal",
+            rank_metric=(next(iter(gtc_metrics)) if len(gtc_metrics) == 1
+                         else "mixed_book_volume" if gtc_metrics else None),
+            rank_values=gtc_values)
         self._apply_cohorts(at)
 
     async def _selection(self, at: datetime) -> tuple[str, ...]:
@@ -195,7 +269,8 @@ class ScalpRunner:
         # 100-market ceiling) so volume ranking has contemporaneous controls.
         # On each refresh, retain current high-volume markets and rotate the
         # unused discovery capacity through the rest of the eligible universe.
-        fixed = set(self.reward_slugs) | self.pure_slugs | self.engine.required_slugs
+        fixed = (set(self.reward_slugs) | self.pure_slugs
+                 | self.engine.required_slugs | self.gtc_pure_slugs)
         capacity = max(0, 100 - len(fixed))
         discovery_target = min(
             capacity, max(self.config.pure_markets * 2, self.config.pure_markets + 20))
@@ -225,8 +300,9 @@ class ScalpRunner:
 
     async def _capture_settlements(self, at: datetime) -> None:
         retained = sorted(
-            slug for slug in self.engine.required_slugs
-            if slug not in self.catalog and self.engine.has_exposure(slug))
+            slug for slug in (self.engine.required_slugs | self.gtc_pure_slugs)
+            if slug not in self.catalog
+            and (slug in self.gtc_pure_slugs or self.engine.has_exposure(slug)))
         if not retained:
             return
         start = self.settlement_offset % len(retained)
@@ -244,6 +320,7 @@ class ScalpRunner:
             self.store.upsert_market(self.run_id, market, at)
             self.store.record_settlement(self.run_id, slug, at, settlement)
             self.engine.settle_market(slug, at=at)
+            self.gtc_pure_slugs.discard(slug)
 
     async def run(self) -> dict[str, Any]:
         started = datetime.now(timezone.utc)
@@ -256,7 +333,9 @@ class ScalpRunner:
                 "horizon_minutes": self.config.horizon_minutes,
                 "refresh_minutes": self.config.refresh_minutes,
                 "rest_requests_per_second": self.config.rest_requests_per_second,
-                "cohorts": ["PURE_VOLUME", "REWARD_SLOTS"],
+                "gtc_pure_markets": self.config.gtc_pure_markets,
+                "gtc_warmup_seconds": self.config.gtc_warmup_seconds,
+                "cohorts": ["PURE_VOLUME", "REWARD_SLOTS", "PURE_VOLUME_GTC"],
             })
         loop = asyncio.get_running_loop()
         deadline = (loop.time() + self.config.minutes * 60
@@ -289,6 +368,7 @@ class ScalpRunner:
                     next_rank = loop.time() + rank_seconds
                 if not self.scope:
                     self.coverage_gaps += 1
+                    self._persist_run_health()
                     self.store.flush()
                     await asyncio.sleep(min(5.0, max(0.0, deadline - loop.time())))
                     continue
@@ -299,6 +379,8 @@ class ScalpRunner:
                     except Exception as exc:
                         self.reconnects += 1
                         self.coverage_gaps += 1
+                        self._persist_run_health()
+                        self.store.flush()
                         stream = None
                         await asyncio.sleep(min(2 ** min(self.reconnects, 5), 30))
                         continue
@@ -321,11 +403,14 @@ class ScalpRunner:
                     await stream.close()
                     stream = None
                     stream_session = None
+                    self._persist_run_health()
+                    self.store.flush()
                     continue
                 observed_at = datetime.now(timezone.utc)
                 if isinstance(event, BookSnapshot):
                     self.latest_books[event.slug] = event
                     self.latest_book_at[event.slug] = observed_at
+                    self.first_book_at.setdefault(event.slug, observed_at)
                     self.engine.on_book(event, observed_at=observed_at)
                 elif isinstance(event, TradePrint):
                     self.engine.on_trade(event, observed_at=observed_at)
@@ -335,6 +420,7 @@ class ScalpRunner:
                 if stream.dropped_events > dropped_seen:
                     self.coverage_gaps += stream.dropped_events - dropped_seen
                     dropped_seen = stream.dropped_events
+                self._persist_run_health()
                 self.store.flush()
                 message_age = (
                     (observed_at - stream.last_message_at).total_seconds()
@@ -348,6 +434,8 @@ class ScalpRunner:
                     await stream.close()
                     stream = None
                     stream_session = None
+                    self._persist_run_health()
+                    self.store.flush()
             completed_run = True
         finally:
             ended = datetime.now(timezone.utc)
@@ -384,6 +472,7 @@ class ScalpRunner:
             "run_id": self.run_id,
             "database": str(self.config.database.resolve()),
             "scope_markets": len(self.scope),
+            "gtc_pure_trials": len(self.gtc_pure_slugs),
             "cohorts": [dict(row) for row in rows],
             "reconnects": self.reconnects,
             "coverage_gaps": self.coverage_gaps,
@@ -427,10 +516,14 @@ def main() -> int:
     parser.add_argument("--size", type=float, default=10.0)
     parser.add_argument("--no-fill-timeout", type=float, default=300.0)
     parser.add_argument("--minimum-spread", type=float, default=0.005)
+    parser.add_argument("--gtc-pure-markets", type=int, default=20)
+    parser.add_argument("--gtc-warmup-seconds", type=float, default=300.0)
     args = parser.parse_args()
     if (args.minutes < 0 or not 1 <= args.pure_markets <= 80
             or args.horizon_minutes <= 0 or args.refresh_minutes <= 0
-            or not 0 < args.rest_rps <= 2):
+            or not 0 < args.rest_rps <= 2
+            or not 1 <= args.gtc_pure_markets <= 40
+            or args.gtc_warmup_seconds < 60):
         parser.error("invalid duration, market count, horizon, refresh, or REST rate")
     config = ScalpRunConfig(
         database=args.database, live_database=args.live_database,
@@ -438,6 +531,8 @@ def main() -> int:
         horizon_minutes=args.horizon_minutes,
         refresh_minutes=args.refresh_minutes,
         rest_requests_per_second=args.rest_rps,
+        gtc_pure_markets=args.gtc_pure_markets,
+        gtc_warmup_seconds=args.gtc_warmup_seconds,
         policy=ScalpPolicy(
             quantity=args.size, no_fill_timeout_seconds=args.no_fill_timeout,
             minimum_spread=args.minimum_spread),

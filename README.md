@@ -279,6 +279,8 @@ maker sides.
 ./scripts/status_scalp_measurement.sh
 PYTHONPATH=src .venv/bin/python -B scripts/scalp_measurement_report.py \
   --database data/scalp.db --horizons 30,60,300,900,3600
+PYTHONPATH=src .venv/bin/python -B scripts/scalp_gtc_report.py \
+  --database data/scalp.db --size 10
 ./scripts/stop_scalp_measurement.sh
 ```
 
@@ -289,6 +291,17 @@ time, and holding unmatched inventory to settlement can be compared from the
 same raw path. Coverage gaps and partial fills are never counted as successful
 pairs. The server launcher caps its separate REST reads at 1 request/second and
 uses at most one 100-market public socket.
+
+The collector also reserves up to 20 `PURE_VOLUME_GTC` trials. A market must
+first have five minutes of public observation; the hypothetical pair is then
+placed once at the observed touch. Its market data remains subscribed through
+settlement so the report can end the fixed original pair at both fills or at
+settlement without a rotation gap. The GTC report compares that leave-it path
+with a one-hour post-first-fill exit and the
+existing five-minute no-fill renewal model. It groups results by initial
+spread, contemporaneous shares traded, pre-placement reversals and conservative
+two-sided queue-clearance score. This remains an offline counterfactual, not an
+order instruction.
 
 ## Liquidity commissioning
 

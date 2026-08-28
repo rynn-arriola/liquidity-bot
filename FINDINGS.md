@@ -86,15 +86,13 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   fault injection remains prohibited, so bust/rejection/silence branches await
   natural evidence.
 - **Retail list volume fields were absent on the observed 2026-08-28 wire.**
-  `markets.list` and `events.list` omitted documented `volume`/`volumeNum`, so
-  the first server-ranked implementation silently selected zero pure markets.
-  The correction discovers bounded upcoming events and ranks homogeneous full-
-  book `sharesTraded`. A two-minute smoke captured both cohorts with no orders.
-  The deployed 10-minute acceptance then covered 100 markets, 24,050 books and
-  792 trades, with strict episodes in `PURE_VOLUME` and `REWARD_SLOTS`, 99.3%
-  stream coverage and zero gaps/reconnects/errors/REST 429s. The live runner
-  stayed active. Private-stream silence matched pre-collector recoveries;
-  transient absent/cancel states also cleared without mutation timeout or stop.
+  The first implementation silently selected no pure markets. Bounded discovery
+  now ranks homogeneous full-book `sharesTraded`; its 10-minute acceptance
+  covered 100 markets, 24,050 books and 792 trades at 99.3% stream coverage with
+  no gaps/reconnects/errors/REST 429s and no effect on the live runner.
+- **Rolling scalp episodes are not leave-it orders.** Untouched pairs renew at
+  five minutes and can rotate out of scope. Exact GTC evidence therefore needs
+  the bounded retained cohort; it excludes coverage loss and uses no future row.
 ## How to add a finding
 
 Add concise current facts here; move detailed evidence into a dated archive.

@@ -217,6 +217,14 @@ class ScalpStore:
             (_iso(at), reconnects, coverage_gaps, run_id))
         self.flush()
 
+    def update_run_health(self, run_id: str, *, reconnects: int,
+                          coverage_gaps: int) -> None:
+        """Persist active-run coverage counters before a read-only report."""
+
+        self.connection.execute(
+            "UPDATE scalp_runs SET reconnects=?,coverage_gaps=? WHERE run_id=?",
+            (reconnects, coverage_gaps, run_id))
+
     def upsert_market(self, run_id: str, market: MarketMetadata, at: datetime) -> None:
         self.connection.execute(
             "INSERT INTO scalp_markets(run_id,market_slug,first_seen_at,last_seen_at,"

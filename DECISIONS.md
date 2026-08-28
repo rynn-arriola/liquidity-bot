@@ -31,7 +31,7 @@ show the operator the discrepancy.
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Measurement only; never cancel/repost automatically |
 | Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
-| Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, no orders or strategy gate |
+| Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, plus a bounded pure-volume fixed-GTC-to-settlement cohort; no orders or strategy gate |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
 
 The two $80 sensors protect against different evidence and responses; they are

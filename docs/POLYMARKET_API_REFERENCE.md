@@ -56,12 +56,34 @@ decoder or workaround; it does not authorize undocumented trading behavior.
 Official documentation can change. Re-open the relevant official page during
 each new API decision rather than relying only on this dated summary.
 
+## When Polymarket suddenly behaves differently
+
+Check the [official changelog](https://docs.polymarket.us/changelog) before
+assuming the project introduced a regression. Filter for **Retail API** and
+review the effective date, version and tags—especially **Breaking Change**,
+**Maintenance**, **Upcoming**, **Incentives** and **Bug Fix**. Then check the
+[live exchange status](https://status.polymarketexchange.com/) because the two
+sources answer different questions: the changelog records announced changes
+and maintenance; the status page reports current service health.
+
+Compare the first observed symptom with the announced ET effective window,
+the deployed commit and SDK version, and the exact Retail endpoint involved.
+An announcement is evidence, not permission to weaken reconciliation or change
+trading behavior. Record the matched version and date in `FINDINGS.md`; put an
+active outage in `STATUS.md`, unfinished adaptation in `NEXT.md`, and a proven
+code repair in `BUGFIXES.md`.
+
+The changelog provides an RSS feed at
+`https://docs.polymarket.us/changelog/rss.xml`. This project does not currently
+poll or subscribe to it automatically.
+
 ## Audited official pages
 
 Last reviewed: **2026-08-27**.
 
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
+| Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. AI operators compare Retail-tagged announcements and effective windows with the symptom before attributing it to local code. | This is a manual review, not an automated monitor. Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. |
 | Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 read retries are bounded; mutations never auto-retry. | The trader guide's institutional firm/endpoint limits do not replace the Retail 20 requests/second per-key ceiling. The limiter is process-local, so concurrent external reports on the same key still aggregate at the venue. `Retry-After` is not consumed. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. | Some SDK exceptions lose structured status, leaving narrow text classification. REST trace IDs are not persisted. Generic advice to retry POST must never override mutation ambiguity safety. |
@@ -117,6 +139,16 @@ from an account-specific problem. It cannot prove authentication, ownership,
 open orders, exact positions or balance. The existing three complete
 authenticated account reads remain the stronger maintenance recovery gate.
 
+### Empty venue history is not proof of no execution
+
+Changelog `v0.0.79`, published 2026-08-26, announced that stored execution
+history would be cleared during the extended 2026-08-27 maintenance window.
+Queries for earlier executions can therefore return empty after maintenance.
+The bot's durable local ledger remains the history it already observed, while
+current complete orders, positions and balance reads remain the restart and
+reconciliation evidence. Never reinterpret a post-reset empty history response
+as cancellation, flatness or proof that an ambiguous mutation did not fill.
+
 ### Busted trades are reversals
 
 Retail activity history exposes trade states. A `TRADE_STATE_BUSTED` trade was
@@ -144,7 +176,8 @@ tests, mutation checks, review and live safety gates still apply.
 
 When a future task reviews another official Polymarket page:
 
-1. Identify whether it is Retail, Institutional or shared conceptual guidance.
+1. Check the changelog for a matching Retail announcement, then identify
+   whether the affected page is Retail, Institutional or shared guidance.
 2. Read the exact affected code path end to end, including failure, recovery,
    shutdown and 20-slot behavior.
 3. Record what is implemented, what is intentionally different and what is a

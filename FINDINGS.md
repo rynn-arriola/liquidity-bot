@@ -49,6 +49,12 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   fees are costs and negative maker rebates are credits. Partner fixed-point
   decoding is a different interface and would overstate some Retail fees if
   applied here. No fee-handling defect was found in this documentation review.
+- **Changelog `v0.0.79` explains the 2026-08-27 venue interruption and a new
+  history boundary.** Polymarket announced extended 02:00-08:00 ET maintenance
+  for Retail and Institutional APIs and deletion of stored execution history
+  during that window. A post-maintenance empty pre-window history result is not
+  positive proof of no fill, cancellation or flatness; retain normal durable-
+  ledger and current authenticated-state requirements.
 
 ## How to add a finding
 

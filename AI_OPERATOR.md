@@ -21,7 +21,10 @@ Before diagnosing, changing, deploying, stopping or starting anything:
    For any Polymarket rule, API, SDK, venue behavior, venue error or official-
    documentation question, use the project's canonical go-to reference first:
    read [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md)
-   before deciding whether a guide applies to the Retail bot.
+   before deciding whether a guide applies to the Retail bot. For unexplained
+   venue behavior, also re-open the current
+   [Polymarket changelog](https://docs.polymarket.us/changelog) and its linked
+   live status page before attributing the symptom to local code.
 5. Verify live facts when the question is operational. Markdown is the latest
    handoff, not the venue. Process state comes from the server, deployed code
    from `DEPLOYED_COMMIT` plus file hashes, configuration from the running

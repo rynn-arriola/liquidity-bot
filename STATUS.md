@@ -5,22 +5,22 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 14:35 ET / 2026-08-28 18:35 UTC
-- **Liquidity bot:** LIVE; supervisor PID 34772 / runner PID 34778, size 10
-- **Live exposure:** authenticated dashboard proved zero positions and 30
-  resting orders, zero `UNKNOWN_ABSENT` and three just-submitted unresolved
-  intents; no risk stop is active
-- **20-slot health:** rebuilding after whole-stream recovery: 16/20 quoting,
-  two bound-idle and two empty; same runner remains active
+- **Verified:** 2026-08-28 15:40 ET / 2026-08-28 19:40 UTC
+- **Liquidity bot:** STOPPED by operator decision; no supervisor or runner
+- **Live exposure:** the stopped-only orphan resolver took a fresh authenticated
+  account snapshot and proved zero venue orders and zero positions before
+  resolving one 18:35Z no-ID PLACE intent; the ledger now has zero unresolved
+- **20-slot health:** not applicable while stopped; no slot/size/horizon change
+  was made by this recovery work
 - **Maker-lab:** stopped
-- **Running source:** the unchanged bot has `a8d91d0` behavior loaded; report
-  fix `1c82778` is deployed for hourly/new report processes
+- **Deployed source:** server marker is `ca9216c`; no bot process currently has
+  it loaded
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
 - **Dynamic size capability:** `5165fc4` is deployed; whole values 5-30 share
   one validator, while persisted/running size remains 10 without a restart
-- **Verification:** all 748 local and server tests, documentation audit,
-  compilation and deliberate reversal checks passed
+- **Verification:** all 755 local tests, documentation audit, compilation and
+  three deliberate reversals pass; server verification is pending deployment
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
@@ -49,29 +49,30 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Latest start outcome
+## Latest stop/restart outcome
 
-The operator-authorized start followed a 15:34Z authenticated flat/order-free
-preflight. The new runner completed discovery without restart, loaded the staged
-429 handoff correction and reached 20/20 quoting with 37 resting orders by
-15:38Z. One just-acknowledged PLACE was visible during that snapshot and cleared
-normally; the 15:39Z ledger check showed zero unresolved and zero absent orders.
-No startup-window traceback, critical, 429, quarantine or recovery event was logged.
+The operator-authorized restart on 2026-08-28 stopped supervisor 34772, but
+runner 34778 could not complete its 300-second shutdown because one ambiguous
+PLACE had no exchange order ID. After authenticated flat/order-free proof, it
+was force-stopped. Three replacement runners then died in 11-12 seconds on
+`book is empty on both sides`: startup had bound the no-ID intent's finished
+market as live recovery risk. The supervisor gave up after its three-fast-death
+bound. The underlying mutation was a Polymarket/Cloudflare 504 at 18:35:11Z.
 
-Private-only silence then recovered repeatedly with `cancels=0`, proving the
-overlap handoff preserves orders. At 16:22Z both the market stream and one
-private shard were silent together; the designed whole-stream fallback globally
-quarantined the slate and rebuilt under unchanged PID 34778. By 16:25Z it had
-restored 30 orders. This was not a 429 or 20-slot capacity change.
+The reviewed stopped-only recovery was run dry and then applied. Its fresh
+snapshot returned zero live orders and zero position markets, so exactly that
+intent moved `UNCERTAIN -> FAILED`; zero unresolved remain. The bot was not
+restarted. A code repair is being verified so future startups refuse once with
+the correct recovery instruction instead of loading the stale market and
+entering a misleading transport-failure loop.
 
 ## Current operating instruction
 
-Keep the liquidity bot and isolated spread-scalp collector running. Commit
-`a8d91d0` is active, but do not induce a 180-second private-stream failure to
-test it. Avoid repeated authenticated
-dashboard probes during live recovery because their separate process does not
-share the runner limiter. Do not change strategy, size, slots or stops from
-measurement output.
+Keep the liquidity bot stopped until the operator explicitly authorizes a new
+start. Finish, review, push and deploy the no-ID startup/recovery repair without
+restarting. Avoid repeated authenticated probes; the latest stopped-only
+resolver already supplied current flat/order-free proof. Do not change strategy,
+size, slots or stops from this availability repair.
 
 ## Current records
 

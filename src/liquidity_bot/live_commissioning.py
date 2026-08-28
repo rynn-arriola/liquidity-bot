@@ -726,6 +726,16 @@ class CommissioningRunner:
                 f"above the authorized {self.config.max_markets}")
         return tuple(sorted(slugs))
 
+    def _unresolved_places_without_exchange_id(self) -> tuple[Any, ...]:
+        """Return creates that have no safe order-specific recovery path."""
+
+        return tuple(
+            row for row in self.ledger.unresolved_intents()
+            if str(row["operation"]).upper() == "PLACE"
+            and str(row["state"]).upper() == "UNCERTAIN"
+            and not str(row["exchange_order_id"] or "").strip()
+        )
+
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
 
@@ -1777,6 +1787,30 @@ class CommissioningRunner:
             # the account against the venue and refuses if it cannot, so a
             # transient read here must not be the thing that stops the session.
             await self._report_runtime_error("startup_reconcile", exc)
+        if reconciled_at_startup:
+            orphan_places = self._unresolved_places_without_exchange_id()
+            if orphan_places:
+                # A create that returned no exchange id cannot be retrieved by
+                # id, and the local client id was never sent to the venue. Do
+                # not bind its (possibly finished) market as if it held a
+                # position: an empty book then becomes a retryable transport
+                # failure and the supervisor performs three pointless fast
+                # restarts. It is also unsafe to clear the intent from one
+                # absence snapshot. Stop once and direct the operator to the
+                # reviewed, stopped-only path, which takes its own fresh
+                # account proof before writing anything.
+                markets = sorted({
+                    str(row["market_slug"] or "").strip()
+                    for row in orphan_places
+                    if str(row["market_slug"] or "").strip()
+                })
+                raise CommissioningRefused(
+                    "startup found "
+                    f"{len(orphan_places)} unresolved PLACE intent(s) without "
+                    "an exchange order id; keep the runner stopped and run "
+                    "scripts/resolve_orphan_places.py (dry run, then --apply "
+                    "only after its venue proof)"
+                    + (f"; markets={','.join(markets)}" if markets else ""))
         if self.config.auto_select_reward_markets:
             recovery_slugs = self._identified_recovery_markets()
             if recovery_slugs:

@@ -2341,6 +2341,47 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_startup_refuses_no_id_place_once_before_loading_its_book(self):
+        """A no-id create needs stopped-only proof, not a recovery-book loop."""
+
+        runner, _, _ = self.build_runner(auto=True, clock=TickingClock())
+        stale = "aec-finished-orphan-2026-08-28"
+        runner.ledger.prepare_intent(
+            "orphan-place", "PLACE", stale, "local-only-client",
+            {"marketSlug": stale}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "UNCERTAIN", updated_at=NOW,
+            error="POST /v1/orders returned 504 without an id")
+        refresh = AsyncMock()
+        runner._refresh_bound_books = refresh
+
+        with self.assertRaisesRegex(
+                CommissioningRefused, "resolve_orphan_places.py"):
+            await runner.preflight()
+
+        refresh.assert_not_awaited()
+        self.assertEqual(runner.active_slugs, ())
+        self.assertEqual(
+            [row["intent_id"] for row in runner.ledger.unresolved_intents()],
+            ["orphan-place"],
+            "startup must diagnose the ambiguity, never clear it")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_prepared_place_is_not_mislabeled_as_manual_orphan(self):
+        """The resolver accepts UNCERTAIN only; startup advice must match."""
+
+        runner, _, _ = self.build_runner(auto=True, clock=TickingClock())
+        runner.ledger.prepare_intent(
+            "prepared-place", "PLACE", "market-one", "prepared-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+
+        self.assertEqual(runner._unresolved_places_without_exchange_id(), ())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_daily_score_splits_at_et_midnight_and_survives_restart(self):
         runner, client, notifier = self.build_runner()
         # 03:59:50Z is 23:59:50 ET during daylight time. A two-point score

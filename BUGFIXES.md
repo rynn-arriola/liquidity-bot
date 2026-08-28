@@ -10,20 +10,21 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 ## Latest deployed defects
 
-- Dashboard account-read failure could render false zero/flat state. Fixed by
-  publishing venue-backed fields only after a complete account snapshot.
-- Closed/not-open flat owners could park nominal 20-slot capacity. Fixed with
-  fresh exact metadata and complete ownership proof before transactional
-  replacement.
-- Alternating permanent book-error strings advanced retirement rounds. Fixed
-  by stable permanent failure families.
-- Maintenance repeated the same full traceback every minute. Concise attempts
-  remain complete; full traces are bounded.
-- An open-position paper mark could force loss-realizing hard-stop shutdown.
-  Fixed with provisional breach state and newer post-close balance evidence.
-- Historical rows discarded proven account boundaries after post-cutoff cash.
-  The scan now skips only later events; live snapshots stay strict. `1c82778`
-  passed 745 local/server tests and report acceptance without restarting the bot.
+- Dashboard account failure rendered false zero/flat; venue fields now require
+  a complete snapshot. Closed flat owners parked slots; fresh metadata plus
+  ownership proof now gates transactional replacement. Stable failure families
+  stop alternating book errors from advancing rounds. Maintenance traces are
+  bounded. Open paper loss is provisional until post-close evidence. Historical
+  scans skip only post-cutoff cash; `1c82778` passed 745 local/server tests.
+
+## Locally verified; deployment pending — no-ID startup loop
+
+- After whole-account reconciliation, startup refuses a no-ID PLACE once with
+  the stopped-only recovery command, before book binding. It never clears or
+  retries ambiguity. The resolver now blocks on any live order in that market,
+  not the unsent local client ID. Stop progress prints every 30 seconds without
+  shortening the 300-second grace. Fresh proof found zero venue orders/positions
+  and resolved the one 18:35Z intent; the bot remains stopped.
 ## Latest deployed private-stream repair
 
 - Silent shards caused global cancellation and cross-shard snapshot clearing.
@@ -94,6 +95,5 @@ stream-silence event. Fault-specific live acceptance remains natural-only.
 
 ## Required entry format
 
-Record symptom, measured mechanism/disproved alternatives, safety/affected
-flows, regression plus reversal proof, verification/deployment/acceptance state,
-and operational cost or uncertainty. Do not duplicate current status here.
+Record symptom, mechanism/disproved alternatives, affected safety flows,
+regression/reversal proof, verification/deployment state and cost/uncertainty.

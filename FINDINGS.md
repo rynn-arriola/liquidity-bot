@@ -8,9 +8,12 @@ Before theorizing, search both files:
 ```powershell
 rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_*.md
 ```
-
 ## Current high-value findings
 
+- **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one
+  `UNCERTAIN` create; its finished market caused three fast empty-book deaths,
+  not a slot defect. Stopped repair blocks same-market orders because Retail
+  never receives the local client ID.
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed
   180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
 - **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;
@@ -46,11 +49,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
   authority.
-- **Polymarket's trader guides are not all Retail wire contracts.** The bot
-  uses `api.polymarket.us` and the pinned Retail SDK; Institutional examples
-  using participant accounts, JWT/Auth0, FIX, gRPC, Drop Copy or
-  `api.prod.polymarketexchange.com` are conceptual unless the matching Retail
-  endpoint documents them. The audited source map and implementation gaps are
+- **Trader guides are not all Retail wire contracts.** Institutional examples
+  are conceptual unless the Retail API/SDK documents them; use the audited map
   in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md).
 - **The 2026-07-01 fee schedule matches the bot's signed-fee accounting.**
   Retail execution commission is already a USD `MoneyAmount`: positive taker

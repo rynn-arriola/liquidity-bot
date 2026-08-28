@@ -37,6 +37,9 @@ GRACE=${COMMISSIONING_STOP_GRACE_SECONDS:-300}
 while [ -n "$(runner_pids)" ] && [ "$WAITED" -lt "$GRACE" ]; do
     sleep 2
     WAITED=$((WAITED + 2))
+    if [ $((WAITED % 30)) -eq 0 ]; then
+        echo "runner is still canceling/flattening/reconciling (${WAITED}s/${GRACE}s)"
+    fi
 done
 
 LEFT=$(runner_pids)

@@ -25,7 +25,7 @@ Safety. It refuses unless ALL of these hold, per intent:
 
   * the intent is PLACE and UNCERTAIN with a NULL exchange order id
   * no `execution_orders` row exists for its client order id
-  * the venue reports NO open order carrying that client order id
+  * the venue reports NO open order in that market
   * the venue reports NO non-zero position in that market
   * no runner process is alive
 
@@ -63,6 +63,38 @@ def runner_is_alive() -> str:
         capture_output=True, text=True).stdout.strip()
 
 
+def candidate_blockers(
+    conn: sqlite3.Connection,
+    row,
+    *,
+    live_clients: set[str],
+    live_markets: set[str],
+    held: set[str],
+) -> list[str]:
+    """Return every reason this candidate is unsafe to resolve."""
+
+    client = str(row["client_order_id"])
+    market = str(row["market_slug"])
+    order = conn.execute(
+        "SELECT status FROM execution_orders WHERE client_order_id=?",
+        (client,)).fetchone()
+    blockers: list[str] = []
+    if order is not None:
+        blockers.append(f"an order row exists (status {order['status']})")
+    if client in live_clients:
+        blockers.append("the venue reports it as a live order")
+    # The local client id was never sent with a retail order, so a create that
+    # actually landed would normally be adopted as ``venue:<id>``. Matching
+    # only on the local id therefore cannot prove absence. Any live order in
+    # the candidate market blocks repair, even when its exchange id is unknown
+    # to this intent.
+    if market in live_markets:
+        blockers.append("the venue reports a live order in this market")
+    if market in held:
+        blockers.append("the venue holds a position in this market")
+    return blockers
+
+
 async def venue_state(attempts: int = 10, pause: float = 6.0):
     """Read the venue, retrying, and NEVER inferring emptiness from failure.
 
@@ -97,8 +129,10 @@ async def venue_state(attempts: int = 10, pause: float = 6.0):
             continue
         live_clients = {
             str(o.client_order_id) for o in orders if o.status in ACTIVE}
+        live_markets = {
+            str(o.market_slug) for o in orders if o.status in ACTIVE}
         held = {p.market_slug for p in positions if p.net_qty != 0}
-        return live_clients, held
+        return live_clients, live_markets, held
     raise AdapterError(
         f"venue unreadable after {attempts} attempts; refusing to resolve "
         f"anything on a guess (last: {last})")
@@ -126,7 +160,7 @@ def main() -> int:
         print("nothing to do: no orphan PLACE intents")
         return 0
 
-    live_clients, held = asyncio.run(venue_state())
+    live_clients, live_markets, held = asyncio.run(venue_state())
     print(f"venue: {len(live_clients)} live order(s), "
           f"{len(held)} market(s) with a position\n")
 
@@ -137,22 +171,18 @@ def main() -> int:
         print(f"    client_order_id = {client}")
         print(f"    created_at      = {row['created_at']}")
 
-        order = conn.execute(
-            "SELECT status FROM execution_orders WHERE client_order_id=?",
-            (client,)).fetchone()
-        blockers = []
-        if order is not None:
-            blockers.append(f"an order row exists (status {order['status']})")
-        if client in live_clients:
-            blockers.append("the venue reports it as a live order")
-        if row["market_slug"] in held:
-            blockers.append("the venue holds a position in that market")
+        blockers = candidate_blockers(
+            conn, row,
+            live_clients=live_clients,
+            live_markets=live_markets,
+            held=held,
+        )
         if blockers:
             print("    SKIP: " + "; ".join(blockers))
             continue
 
-        print("    venue has no such order and no position -- the create did "
-              "not happen")
+        print("    venue has no live order in this market and no position -- "
+              "the create did not happen")
         if not args.apply:
             print("    would set state FAILED (dry run)")
             continue

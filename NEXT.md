@@ -50,7 +50,11 @@ any strategy proposal, and never add overlapping cohorts as separate profit.
 An ambiguous create without an exchange ID has no safe order-specific lookup;
 absence cannot prove cancellation. The stopped-only
 `scripts/resolve_orphan_places.py` utility is the reviewed manual recovery path.
-Do not automate or loosen it without an explicit safety review.
+The 2026-08-28 repair makes startup refuse once with that instruction before it
+loads a stale recovery book, and strengthens the utility to reject any live
+venue order in the candidate market. All 755 local tests and three reversals
+pass; deploy and verify server parity without restarting. Do not automate
+or loosen the human proof path without an explicit safety review.
 
 ## 4. One unresolved mutation can have account-wide availability cost
 
@@ -64,4 +68,5 @@ timeout values.
 `stop_commissioning.sh` primarily proves process termination; the runner can
 end with `flat=false`. Decide whether the script should fail when the final
 record lacks flat proof. Until then, every stop requires final-record plus an
-authenticated venue snapshot.
+authenticated venue snapshot. The script now reports every 30 seconds during
+its unchanged 300-second grace, but progress output is not flat proof.

@@ -110,6 +110,29 @@ entries account-wide and permits one later desired entry as a recovery probe.
 Cancels and reducers remain available unless their own request is rejected;
 the same intent is never blindly retried.
 
+### Hosting and location access
+
+The Retail API documents API-key authentication and signed HTTP requests; it
+does not document an "authenticated network identity", a residential-IP
+add-on, or Polygon RPC signing for Retail order entry. A Retail rate limit is
+HTTP 429, while the observed HTTP 403/code 7 is a permission/location denial.
+Do not treat a US datacenter label or third-party "residential VPS" marketing
+as venue authorization, and never disguise egress to evade an access control.
+Kamatera explicitly states that its servers use datacenter IPs and that it does
+not sell residential ISP addresses. Before choosing another runtime, send the
+exact timestamps, safe trace/request IDs and public egress IP to
+`support@polymarket.us`; never send the API secret. Ask which self-hosted or
+cloud topology Polymarket US permits for this verified Retail account.
+
+The Retail documentation does not expose a cancel-on-disconnect/dead-man
+control. Retail GTC orders remain until filled or canceled; GTD can bound an
+individual order's life but would change quote renewal, queue position and
+reward economics. The documented Cancel on Disconnect feature belongs to
+institutional FIX and cancels only DAY orders; GTC and GTD continue resting.
+Therefore UPS power protection and reconnect logic do not eliminate the risk
+of an ISP outage while Retail quotes rest. Any redundant ISP/failover egress
+must also be confirmed with Polymarket before use.
+
 ### HTTP success is not order success
 
 A returned exchange order ID acknowledges receipt. It does not prove that the

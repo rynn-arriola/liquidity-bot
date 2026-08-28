@@ -3,7 +3,7 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Keep stopped while server mutation access remains denied
+## 0. Current server is not authorized for trading
 
 The bot is stopped after authenticated recovery proved zero working orders and
 the authoritative ledger snapshot proved zero nonzero positions. Commit
@@ -14,8 +14,10 @@ The authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
 zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
-Investigate or wait for server egress/location access separately; only a later
-successful mutation and `[mutation-access-restored]` proves recovery.
+Do not restart on this host. Obtain Polymarket US guidance on permitted hosting
+and resolve the server egress/location classification without a residential
+proxy or disguised IP. A replacement runtime requires an explicit decision,
+credential-safe migration, flat/order-free proof and normal parity/start gates.
 
 ## 1. Remaining natural acceptance
 

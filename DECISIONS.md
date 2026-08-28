@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | Production server; no local runner |
+| Production runtime | Trading is disabled on the current server after repeated Polymarket VPN/proxy 403s; no local live runner. Any replacement runtime and restart require explicit operator approval plus compliant access confirmation |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
@@ -86,6 +86,9 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - No league-based reward-market filter.
 - No inference that an absent venue order is canceled.
 - No new droplet based solely on the transient August 26 location denial.
+- No residential proxy, disguised IP or other attempt to evade Polymarket's
+  location/access controls; obtain support confirmation before changing hosts.
+- The operator's laptop is a last-resort runtime, not the preferred 24/7 host.
 
 When the operator changes one of these choices, update this file and
 [STATUS.md](STATUS.md) in the same task and record the evidence or implementation

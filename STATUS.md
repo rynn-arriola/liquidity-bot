@@ -23,7 +23,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 | Setting | Current decision |
 |---|---|
-| Production runtime | Server only; no local runner |
+| Production runtime | Trading disabled on current server; no local runner |
 | Quote size | 10 contracts |
 | Concurrent capacity | 20 market slots |
 | Entry horizon | Six hours |
@@ -65,10 +65,10 @@ adds a 250ms idle backoff without adding API calls or changing strategy.
 
 ## Current operating instruction
 
-Keep the bot stopped; do not restart without separate operator authorization.
-Polymarket still rejects this server's mutations as VPN/proxy traffic. A later
-authorized start should expect no legacy repair and may probe access naturally;
-only `[mutation-access-restored]` plus a resting order proves recovery.
+Keep trading disabled on this server; no manual restart. Polymarket still
+rejects its mutations as VPN/proxy traffic. Do not use a residential proxy to
+evade that control. Contact Polymarket US support for permitted-host guidance;
+any replacement runtime needs explicit operator approval and a safe migration.
 
 ## Current records
 

@@ -107,6 +107,15 @@ class FakeGateway:
         self.metadata_calls.append(slug)
         raise AssertionError("selector must not fetch metadata by slug")
 
+    async def fetch_markets_by_slugs(self, slugs):
+        slugs = tuple(slugs)
+        self.metadata_calls.append(slugs)
+        return {
+            slug: self.markets[slug]
+            for slug in slugs
+            if slug in self.markets
+        }
+
     async def fetch_book(self, slug):
         self.book_calls.append(slug)
         return self.books[slug]
@@ -339,6 +348,32 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cached_candidates_are_freshly_revalidated_without_catalog_scan(self):
+        fresh = market("fresh")
+        closed = MarketMetadata(
+            **{**market("closed").__dict__, "closed": True})
+        tight = market("tight", catalog_bid=.495, catalog_offer=.505)
+        gateway = FakeGateway(
+            {item.slug: item for item in (fresh, closed, tight)},
+            {slug: incentive(slug, pool=1000)
+             for slug in ("fresh", "closed", "tight")},
+            {slug: book(slug) for slug in ("fresh", "closed", "tight")},
+        )
+        selector = RewardMarketSelector(gateway)
+
+        result = await selector.revalidate_viable(
+            ("fresh", "closed", "tight"), now=NOW)
+
+        self.assertEqual(
+            tuple(item.market.slug for item in result), ("fresh",))
+        self.assertEqual(gateway.catalog_calls, 0)
+        self.assertEqual(
+            gateway.metadata_calls, [("fresh", "closed", "tight")])
+        self.assertEqual(
+            gateway.incentive_symbol_calls,
+            [("fresh", "closed", "tight")])
+        self.assertEqual(gateway.book_calls, ["fresh"])
+
     async def test_all_reward_programs_are_considered_not_only_high_pool(self):
         markets = {slug: market(slug) for slug in ("high", "low")}
         incentives = {

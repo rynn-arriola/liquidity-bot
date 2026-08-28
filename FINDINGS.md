@@ -1,7 +1,6 @@
 # Findings index
 
-Measured facts are indexed here; detailed history through 2026-08-27 is in
-[docs/history/FINDINGS_THROUGH_2026-08-27.md](docs/history/FINDINGS_THROUGH_2026-08-27.md).
+Measured facts are indexed here; [history through 2026-08-27](docs/history/FINDINGS_THROUGH_2026-08-27.md) is archived.
 
 Before theorizing, search both files:
 
@@ -25,8 +24,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Private-only and whole-stream silence have different order cost.** Six natural
   private-shard repairs preserved 32-35 orders with `cancels=0`; simultaneous
   251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
-- **Twenty-slot health is not raw order count.** Use queue `markets=20`, active owners,
-  eligibility, resting coverage and unresolved/position state; a healthy slot can temporarily hold no order.
+- **Twenty-slot health is not raw order count.** At 21:09Z, 24 orders/14 markets
+  coexisted with 29-34 viable; after flat proof, serial service delayed restoring
+  20 active owners. This was scheduling, not low supply. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 - **Risk now has one quantity authority.** The approved profile derives portfolio/market/account limits as `30×/4×/8×` size; 20 slots and six hours stay fixed.
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.

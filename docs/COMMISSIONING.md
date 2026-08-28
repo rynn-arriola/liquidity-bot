@@ -152,6 +152,18 @@ private state; missing/conflicting/unowned/out-of-scope state stays terminal.
 Logs distinguish `[top-up-plan]` from an actual `[top-up] ... committed=yes`
 transition and include the positively closed release count.
 
+When the final position inside the pre-kickoff safety margin becomes positively
+flat and mandatory capacity is reclaimable, the runner requests top-up before
+the next ordinary 20-market service sweep. It does not scan while urgent
+inventory remains. A full selection observed no more than 120 seconds earlier
+may shorten discovery only after fresh bulk metadata/incentive reads and a
+fresh full-book viability check for every proposed replacement; any stale,
+failed or insufficient refresh runs the normal bounded selector. This fast path
+cannot accelerate optional economic-idle eviction, which remains on the normal
+900-second scan. `[top-up-request]`, `[top-up-cache]`,
+`post_flat_wait_seconds` and `post_flat_underfilled_slot_minutes` expose the
+result without changing authorization.
+
 A still-open pregame owner may also be replaced after both sides continuously
 fail named current-book economics for 10 minutes. This is optional replacement,
 not lifecycle disposal: the normal 15-minute scan must provide a different

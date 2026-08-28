@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Iterable
 
 from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError
@@ -526,6 +527,68 @@ class RewardMarketSelector:
         if result.selected is not None:
             self._last_selected_slug = result.selected.market.slug
         return result
+
+    async def revalidate_viable(
+        self, slugs: Iterable[str], *, now: datetime,
+    ) -> tuple[RewardMarketOpportunity, ...]:
+        """Freshly re-prove a small cached replacement set.
+
+        Incremental top-up may already have a recent full-universe selection
+        when an urgent position becomes flat. Re-running the entire bounded
+        catalog scan delays the refill, but trusting its old rows would let a
+        closed market, ended incentive or changed book enter the active set.
+
+        This path is deliberately small and read-only: one bulk market read,
+        one batched incentive read and one fresh full-book read per candidate.
+        Every normal selector gate is applied again and only currently viable
+        opportunities are returned. Callers fall back to ``select`` when this
+        bounded refresh is unavailable or does not supply enough replacements.
+        """
+
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("selection clock must be timezone-aware")
+        clean = tuple(dict.fromkeys(
+            str(slug).strip() for slug in slugs if str(slug).strip()))
+        if not clean:
+            return ()
+        if len(clean) > self.policy.max_book_candidates:
+            raise ValueError(
+                "cached revalidation exceeds the selector book budget")
+
+        markets = await self.gateway.fetch_markets_by_slugs(clean)
+        incentives = await self.gateway.fetch_incentives(clean)
+        window_end = now + timedelta(
+            seconds=self.policy.selection_horizon_seconds)
+        opportunities: list[RewardMarketOpportunity] = []
+        for slug in clean:
+            market = markets.get(slug)
+            incentive = incentives.get(slug)
+            if market is None or incentive is None:
+                continue
+            if not self._catalog_market_is_executable(
+                    market, now=now, window_end=window_end):
+                continue
+            if not self._catalog_spread_can_enter(market):
+                continue
+            try:
+                period = self._applicable_period(market, incentive, now)
+                if period is None:
+                    continue
+                opportunity = evaluate_market_opportunity(
+                    market,
+                    incentive,
+                    await self.gateway.fetch_book(slug),
+                    period=period,
+                    now=now,
+                    policy=self.policy,
+                    fill_hazard_model=self.fill_hazard_model,
+                )
+            except (AdapterError, AmbiguousIncentiveError, ValueError):
+                continue
+            if opportunity.viable_sides:
+                opportunities.append(opportunity)
+        opportunities.sort(key=_opportunity_key)
+        return tuple(opportunities)
 
     def _catalog_market_is_executable(
         self,

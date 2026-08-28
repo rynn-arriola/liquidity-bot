@@ -198,6 +198,13 @@ RETIREMENT_BURST_WINDOW_SECONDS = 900
 # a market returns while its game is still ahead of it.
 RETIREMENT_COOLDOWN_SECONDS = 1800
 
+# A recent full-universe selection can seed an urgent post-flat refill, but it
+# is never trusted directly. Within this small window the runner bulk-refreshes
+# metadata/incentives and re-reads every candidate book; older evidence falls
+# back to the normal complete scan. The value is operational latency, not a
+# strategy horizon or reward authorization lifetime.
+POST_FLAT_SELECTION_CACHE_SECONDS = 120.0
+
 RETIRING_STRATEGY_CRITICALS = frozenset({
     "hard_exit_attempt_limit_exceeded",
     "hard_exit_retry_window_exceeded",
@@ -357,6 +364,14 @@ class CommissioningRunner:
         # it on one immediate incremental top-up attempt; a failed attempt then
         # uses the ordinary bounded backoff instead of retrying every pass.
         self._reward_end_top_up_requested = False
+        # A near-deadline position can correctly defer discovery while several
+        # finished owners hold slots. Once the final such position becomes
+        # flat, waiting behind another serial twenty-market service pass adds
+        # avoidable reward downtime. This one-shot request preempts only that
+        # ordinary pass; the near-deadline guard and all top-up ownership proof
+        # remain unchanged.
+        self._post_flat_top_up_requested_at: datetime | None = None
+        self._post_flat_underfilled_slots = 0
         # "Up, healthy, and resting nothing" -- see `_alarm_if_quoting_nothing`.
         self._quiet_since: datetime | None = None
         self._quiet_alarm_sent = False
@@ -1506,9 +1521,13 @@ class CommissioningRunner:
         self.ledger.apply_order_snapshot(
             f"commissioning-rest-orders:{stamp}", orders,
             as_of=now, observed_at=now, complete=True)
+        had_near_deadline_position = (
+            self._position_near_its_flatten_deadline(self._now()))
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        self._request_post_flat_top_up_if_needed(
+            had_near_deadline_position, self._now())
         self._record_resolved_cancel_owners(unresolved_cancels)
         if blocking_reconcile_failures:
             raise AdapterError(
@@ -1555,8 +1574,12 @@ class CommissioningRunner:
     async def _observe_private(self, event: Any, now: datetime) -> None:
         unresolved_cancels = self._unresolved_cancel_owners()
         received_at = getattr(event, "received_at", None) or now
+        had_near_deadline_position = (
+            self._position_near_its_flatten_deadline(now))
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
+        self._request_post_flat_top_up_if_needed(
+            had_near_deadline_position, self._now())
         self._record_resolved_cancel_owners(unresolved_cancels)
         self._queue_measurement_sync(observed_at=received_at)
 
@@ -3969,6 +3992,8 @@ class CommissioningRunner:
         """
 
         serviced_slugs = self.managed_slugs() if slugs is None else slugs
+        if slugs is None and self._post_flat_top_up_can_preempt(self._now()):
+            return ""
         for slug in serviced_slugs:
             if slug not in self._markets:
                 continue
@@ -3983,6 +4008,9 @@ class CommissioningRunner:
                     slug, f"service_failed_{type(exc).__name__}")
                 if stop:
                     return stop
+            if (slugs is None
+                    and self._post_flat_top_up_can_preempt(self._now())):
+                return ""
         return ""
 
     async def _service_market_state(self, slug: str, now: datetime) -> None:
@@ -4746,6 +4774,75 @@ class CommissioningRunner:
                 return True
         return False
 
+    def _mandatory_top_up_gap(self, now: datetime) -> int:
+        """Slots free or held by owners with mandatory release evidence.
+
+        Economic-idle replacement deliberately stays on its operator-approved
+        900-second cadence. It must not become urgent merely because an
+        unrelated position closed. Lifecycle, reward-end and genuinely empty
+        capacity are different: every one is already unable to produce useful
+        pregame reward work and can request the post-flat fast path.
+        """
+
+        mandatory = {
+            slug for slug in self.active_slugs
+            if (self._expired_and_flat(slug, now)
+                or self._closed_and_flat(slug)
+                or self._reward_authorization_lost_and_flat(slug, now))
+        }
+        retained = len(self.active_slugs) - len(mandatory)
+        return max(0, self.config.max_markets - retained)
+
+    def _request_post_flat_top_up_if_needed(
+        self, had_near_deadline_position: bool, now: datetime,
+    ) -> None:
+        """Request one immediate refill when the final urgent position clears."""
+
+        if (not had_near_deadline_position
+                or self._position_near_its_flatten_deadline(now)):
+            return
+        underfilled = self._mandatory_top_up_gap(now)
+        if underfilled <= 0:
+            return
+        if self._post_flat_top_up_requested_at is None:
+            self._post_flat_top_up_requested_at = now
+            self._post_flat_underfilled_slots = underfilled
+            print(
+                f"[top-up-request] at={now.isoformat()} reason=post_flat "
+                f"underfilled_slots={underfilled}",
+                flush=True,
+            )
+        else:
+            self._post_flat_underfilled_slots = max(
+                self._post_flat_underfilled_slots, underfilled)
+
+    def _post_flat_top_up_can_preempt(self, now: datetime) -> bool:
+        """Whether ordinary market service may yield to the one-shot refill."""
+
+        if self._post_flat_top_up_requested_at is None:
+            return False
+        if self._position_near_its_flatten_deadline(now):
+            return False
+        if self._mandatory_top_up_gap(now) <= 0:
+            # The evidence that created the request changed before scheduling.
+            # Do not let a stale optimization label or preempt a later scan.
+            self._post_flat_top_up_requested_at = None
+            self._post_flat_underfilled_slots = 0
+            return False
+        return True
+
+    def _clear_incremental_top_up_requests(
+        self, consumed_post_flat_at: datetime | None,
+    ) -> None:
+        self._reward_end_top_up_requested = False
+        # The socket handoff performs another complete position snapshot. If
+        # that discovers a different final urgent position becoming flat, it
+        # creates a new request during this top-up. Clear only the request this
+        # attempt actually consumed; never erase the newer evidence.
+        if self._post_flat_top_up_requested_at == consumed_post_flat_at:
+            self._post_flat_top_up_requested_at = None
+            self._post_flat_underfilled_slots = 0
+
     def _active_set_needs_top_up(self, now: datetime) -> bool:
         """True when safe, incremental discovery has useful work to do.
 
@@ -4785,14 +4882,125 @@ class CommissioningRunner:
 
         return (
             self.config.auto_select_reward_markets
-            and (now >= next_selection or self._reward_end_top_up_requested)
+            and (now >= next_selection
+                 or self._reward_end_top_up_requested
+                 or self._post_flat_top_up_requested_at is not None)
             and (self._reward_end_top_up_requested
+                 or self._post_flat_top_up_requested_at is not None
                  or not self._safe_to_scan())
             and not self._position_near_its_flatten_deadline(now)
             and self._active_set_needs_top_up(now)
         )
 
-    async def _top_up_active_markets(self, now: datetime) -> bool:
+    async def _replacement_candidates_for_top_up(
+        self,
+        now: datetime,
+        *,
+        exclude: set[str],
+        wanted: int,
+        allow_cached_selection: bool,
+    ) -> tuple[tuple[str, ...], str, float | None]:
+        """Return freshly authorized replacement slugs and their evidence path."""
+
+        if self.reward_selector is None:
+            return (), "unavailable", None
+        observed = self._market_selection_observed_at
+        cached = self._market_selection
+        if allow_cached_selection and cached is not None and observed is not None:
+            cache_age = (now - observed).total_seconds()
+            if 0 <= cache_age <= POST_FLAT_SELECTION_CACHE_SECONDS:
+                # Overfetch a small bounded set so one changed book does not
+                # force a full catalog scan. The revalidator still spends no
+                # more than the selector's existing twenty-book live budget.
+                candidate_limit = min(
+                    self.config.max_markets, max(wanted, wanted * 2))
+                candidates = tuple(
+                    item.market.slug for item in cached.top_viable(
+                        candidate_limit, exclude=exclude))
+                revalidate = getattr(
+                    self.reward_selector, "revalidate_viable", None)
+                if candidates and callable(revalidate):
+                    validation_started = time.monotonic()
+                    try:
+                        refreshed = await revalidate(
+                            candidates, now=self._now())
+                    except Exception as exc:
+                        print(
+                            f"[top-up-cache] at={self._now().isoformat()} "
+                            f"outcome=fallback error={type(exc).__name__}",
+                            flush=True,
+                        )
+                    else:
+                        candidate_set = set(candidates)
+                        viable = tuple(
+                            item.market.slug for item in refreshed
+                            if (item.viable_sides
+                                and item.market.slug in candidate_set
+                                and item.market.slug not in exclude))
+                        elapsed = time.monotonic() - validation_started
+                        if len(viable) >= wanted:
+                            print(
+                                f"[top-up-cache] at={self._now().isoformat()} "
+                                f"outcome=validated age_seconds={cache_age:.1f} "
+                                f"checked={len(candidates)} viable={len(viable)} "
+                                f"validation_seconds={elapsed:.1f}",
+                                flush=True,
+                            )
+                            return viable, "cached_revalidated", cache_age
+                        print(
+                            f"[top-up-cache] at={self._now().isoformat()} "
+                            f"outcome=fallback age_seconds={cache_age:.1f} "
+                            f"checked={len(candidates)} viable={len(viable)} "
+                            f"wanted={wanted} validation_seconds={elapsed:.1f}",
+                            flush=True,
+                        )
+
+        scan_started = time.monotonic()
+        try:
+            selection = await self.reward_selector.select(now=self._now())
+        finally:
+            self._selection_scan_seconds_last = time.monotonic() - scan_started
+        self._market_selection = selection
+        self._market_selection_observed_at = self._now()
+        return (
+            tuple(item.market.slug for item in selection.top_viable(
+                self.config.max_markets, exclude=exclude)),
+            "fresh_scan",
+            None,
+        )
+
+    def _top_up_timing_fields(
+        self, now: datetime, selection_source: str,
+        cache_age: float | None,
+    ) -> str:
+        triggers: list[str] = []
+        if self._post_flat_top_up_requested_at is not None:
+            triggers.append("post_flat")
+        if self._reward_end_top_up_requested:
+            triggers.append("reward_end")
+        trigger = "+".join(triggers) if triggers else "scheduled"
+        fields = f"trigger={trigger} selection_source={selection_source}"
+        if cache_age is not None:
+            fields += f" cache_age_seconds={cache_age:.1f}"
+        if self._post_flat_top_up_requested_at is not None:
+            wait = max(0.0, (
+                now - self._post_flat_top_up_requested_at).total_seconds())
+            slot_minutes = (
+                wait * self._post_flat_underfilled_slots / 60.0)
+            fields += (
+                f" post_flat_wait_seconds={wait:.1f}"
+                f" post_flat_underfilled_slots="
+                f"{self._post_flat_underfilled_slots}"
+                f" post_flat_underfilled_slot_minutes={slot_minutes:.2f}")
+        return fields
+
+    async def _top_up_active_markets(
+        self,
+        now: datetime,
+        *,
+        allow_cached_selection: bool = False,
+        allow_economic_idle: bool = True,
+    ) -> bool:
         """Fill free slots without disturbing markets that are still resting.
 
         Full rotation requires a whole-account flat state (`_rotation_blockers`,
@@ -4843,6 +5051,7 @@ class CommissioningRunner:
         economic_idle_candidates = sorted(
             (slug for slug in self.active_slugs
              if slug not in mandatory_released
+             and allow_economic_idle
              and self._economically_idle_and_flat(slug, now)),
             key=lambda slug: (
                 self.state_for(slug).economically_ineligible_since
@@ -4857,23 +5066,23 @@ class CommissioningRunner:
         if (not mandatory_released and not economic_idle_candidates
                 and capacity_without_optional_release == 0):
             return False
-        scan_started = time.monotonic()
-        try:
-            selection = await self.reward_selector.select(now=self._now())
-        finally:
-            self._selection_scan_seconds_last = time.monotonic() - scan_started
-        self._market_selection = selection
-        self._market_selection_observed_at = self._now()
         # Exclude every current owner, including optional idle candidates.  An
         # idle owner may be retained if supply is short, but it must not count
         # as its own replacement and manufacture a no-op stream rebind.
         exclude = (self._barred_slugs() | set(base_keep)
                    | set(mandatory_released)
                    | set(economic_idle_candidates))
-        replacement_candidates = tuple(
-            item.market.slug
-            for item in selection.top_viable(self.config.max_markets,
-                                             exclude=exclude))
+        wanted = max(
+            1,
+            capacity_without_optional_release + len(economic_idle_candidates),
+        )
+        replacement_candidates, selection_source, cache_age = (
+            await self._replacement_candidates_for_top_up(
+                now,
+                exclude=exclude,
+                wanted=wanted,
+                allow_cached_selection=allow_cached_selection,
+            ))
         optional_capacity = max(
             0, len(replacement_candidates) - capacity_without_optional_release)
         economic_idle = economic_idle_candidates[:optional_capacity]
@@ -4882,8 +5091,11 @@ class CommissioningRunner:
                      if slug not in released)
         free = max(0, self.config.max_markets - len(keep))
         replacements = replacement_candidates[:free]
+        plan_at = self._now()
+        timing_fields = self._top_up_timing_fields(
+            plan_at, selection_source, cache_age)
         print(
-            f"[top-up-plan] at={self._now().isoformat()} "
+            f"[top-up-plan] at={plan_at.isoformat()} {timing_fields} "
             f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} free_slots={free} "
             f"expired={len(expired)} closed={len(closed)} "
@@ -4963,8 +5175,12 @@ class CommissioningRunner:
         # recreate the same account-wide failure after the safe preflight.
         await self._open_streams_for_active_market(
             strict_order_markets=frozenset())
+        committed_at = self._now()
+        timing_fields = self._top_up_timing_fields(
+            committed_at, selection_source, cache_age)
         print(
-            f"[top-up] at={self._now().isoformat()} committed=yes "
+            f"[top-up] at={committed_at.isoformat()} committed=yes "
+            f"{timing_fields} "
             f"released={len(released)} kept={len(keep)} "
             f"added={len(replacements)} active={len(self.active_slugs)} "
             f"expired={len(expired)} closed={len(closed)} "
@@ -6667,18 +6883,32 @@ class CommissioningRunner:
                 # fill capacity that startup validation left free. That path
                 # keeps every resting order where it is.
                 if self._incremental_top_up_due(now, next_selection):
+                    consumed_post_flat_at = (
+                        self._post_flat_top_up_requested_at)
+                    post_flat_requested = consumed_post_flat_at is not None
+                    normal_scan_due = now >= next_selection
                     stream_tasks = (market_task, private_task)
                     for task in stream_tasks:
                         task.cancel()
                     await asyncio.gather(
                         *stream_tasks, return_exceptions=True)
                     try:
-                        await self._top_up_active_markets(now)
-                        self._reward_end_top_up_requested = False
+                        await self._top_up_active_markets(
+                            now,
+                            allow_cached_selection=post_flat_requested,
+                            # Optional economic-idle eviction remains on the
+                            # operator-approved 900-second cadence. An urgent
+                            # lifecycle refill may fill mandatory holes early,
+                            # but it cannot pull a merely uneconomic owner early.
+                            allow_economic_idle=normal_scan_due,
+                        )
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
                         next_selection = self._now() + timedelta(
                             seconds=self.config.market_selection_refresh_seconds)
                     except Exception as exc:
-                        self._reward_end_top_up_requested = False
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
                         await self._report_runtime_error(
                             "market_top_up", exc)
                         # Back off exactly as the rotation path does. Without

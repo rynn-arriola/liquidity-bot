@@ -514,3 +514,18 @@ These are implementation requirements, not suggestions.
     optional owner before release. It may not cancel retained orders, lower the
     active count when replacement supply is short, bypass complete pre-commit
     account reconciliation or exceed 20 slots.
+83. Post-flat refill priority may shorten only avoidable scheduler delay. It
+    requires a transition from positively held near-deadline inventory to no
+    remaining near-deadline position, observed through the normal private
+    projector or a complete REST position snapshot, plus mandatory empty,
+    expired, closed or reward-ended capacity. It may yield the ordinary full-
+    slate service sweep but never priority cancel recovery, reducer/exit work,
+    the near-deadline guard, release revalidation, complete account proof or
+    stream freshness. A full-universe selection no older than 120 seconds may
+    seed candidates only after fresh bulk metadata and incentive reads plus a
+    fresh full book and every normal selector gate for each candidate; stale,
+    failed or insufficient validation falls back to the bounded complete scan.
+    The urgent path may not accelerate invariant 82's economic-idle eviction.
+    A failed attempt clears only the request it consumed and uses the ordinary
+    bounded retry cadence; a newer post-flat transition must survive. Timing
+    telemetry is evidence only and cannot authorize a slot or order.

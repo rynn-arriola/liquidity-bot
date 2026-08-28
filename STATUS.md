@@ -5,10 +5,12 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 16:33 ET / 2026-08-28 20:33 UTC
+- **Verified:** 2026-08-28 17:29 ET / 2026-08-28 21:29 UTC
 - **Liquidity bot:** LIVE; supervisor PID 47601 / runner PID 47608, size 10
-- **Live exposure:** 1 position, 32 resting, 0 absent, 1 current submitting intent
-- **20-slot health:** 18/20 quoting; two bound owners are temporarily not quoting
+- **Live exposure:** authenticated venue snapshot found 2 positions and 24 resting orders across 14 markets
+- **20-slot health:** the last committed top-up restored `active=20`; the
+  21:27Z selector still found 34 viable markets, so the lower raw order count
+  is not a supply shortage
 - **Maker-lab:** stopped
 - **Deployed source:** runner has `b7fe3fd` trading code; dashboard/reporting fix
   was deployed afterward without restarting or changing the runner PID
@@ -16,8 +18,9 @@ snapshots are under [docs/history/](docs/history/README.md).
   tagging it did not stop, restart or mutate the live process
 - **Risk scaling:** active size-10 configuration is $300 portfolio, $40 market,
   $80 session and $80 hard
-- **Verification:** 757 local tests, 756 server tests, focused server dashboard
-  tests, compilation, docs audit and four multiplier reversals pass
+- **Verification:** the deployed build retains its prior 756 server-test
+  acceptance; the pending post-flat refill optimization passes 766 local tests
+  plus a deliberate reversal
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
@@ -46,6 +49,14 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
+## Pending post-flat refill optimization
+
+The 21:08:53Z flat proof waited until 21:11:17Z for refill despite 29-34 viable
+markets. The reviewed repair gives mandatory post-flat holes one safe, freshly
+revalidated fast path while preserving exit priority and the optional-idle
+cadence; 766 tests and a reversal pass. It is not deployed or loaded, and no
+stop/restart occurred. [Full evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+
 ## Latest stop/restart outcome
 
 At 20:22Z authenticated proof showed zero positions/orders and no unresolved or
@@ -60,9 +71,9 @@ same scaled limits as the runner; it was deployed without another restart.
 ## Current operating instruction
 
 Keep the current runner live unless the operator directs otherwise or a safety
-condition requires a stop. The one 20:33Z submitting intent was current order
-flow, not persistent ambiguity; investigate only if it ages instead of
-reconciling. Do not restart for the dashboard-only repair already on disk.
+condition requires a stop. Do not deploy or restart the pending post-flat
+optimization without a new exposure check and explicit operator timing; the
+21:29Z account is not flat.
 
 ## Current records
 

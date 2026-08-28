@@ -10,15 +10,19 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 ## Latest deployed defects
 
-- Dashboard account failure rendered false zero/flat; venue fields now require
-  a complete snapshot. Closed flat owners parked slots; fresh metadata plus
-  ownership proof now gates transactional replacement. Stable failure families
-  stop alternating book errors from advancing rounds. Maintenance traces are
-  bounded. Open paper loss is provisional until post-close evidence. Historical
-  scans skip only post-cutoff cash; `1c82778` passed 745 local/server tests.
-- Scaled limits became properties, but the dashboard read class attributes;
-  its exception fallback silently displayed stale `$40/$40/$45`. It now reads
-  the configured instance, and size-20 regression expects `$80/$160/$160`.
+- Dashboard false-zero account state, parked closed owners, alternating book
+  failures, maintenance trace growth, provisional open P&L and historical cash
+  cutoffs were repaired in `1c82778`; 745 local/server tests passed.
+- Dashboard scaling now reads the configured instance instead of stale class
+  fallbacks; size 20 displays `$80/$160/$160`.
+
+## Reviewed locally; deployment pending
+
+- **Post-flat refill waited behind serial full-slate service.** The repair
+  prioritizes proven mandatory gaps, revalidates cache no older than 120 seconds,
+  preserves exit/ownership and 900-second idle rules, and measures delay and
+  slot-minutes. Sixty-seven focused, 766 full and a reversal passed; production has
+  not loaded it. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
 ## Latest deployed no-ID startup repair
 
@@ -86,13 +90,11 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   old schema treats every historical fill as active, while migrated schema
   excludes busted fills. This migration is now active.
 
-Focused regressions and reversal mutations passed for each defect. The reviewed
-03:06Z restart completed the additive migration. Its initial acceptance
-reached 20/20 quoting, 37 resting orders, zero positions and zero unresolved
-rows with no restart-window traceback, mutation timeout, runtime recovery or
-stream-silence event. Fault-specific live acceptance remains natural-only.
+Focused regressions and reversals passed. The reviewed 03:06Z restart completed
+the migration and reached 20/20 quoting, 37 resting orders, zero positions and
+unresolved rows, with no traceback, mutation timeout, recovery or stream-silence
+event. Fault-specific live acceptance remains natural-only.
 
 ## Required entry format
 
-Record symptom, mechanism/disproved alternatives, affected safety flows,
-regression/reversal proof, verification/deployment state and cost/uncertainty.
+Record symptom, mechanism/disproved alternatives, affected safety flows, regression/reversal proof, verification/deployment state and cost/uncertainty.

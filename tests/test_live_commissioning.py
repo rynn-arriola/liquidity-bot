@@ -8284,6 +8284,279 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_final_urgent_position_flat_requests_immediate_top_up(self):
+        """The request is driven by positive position state, not a timer."""
+
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        now = runner._now()
+        runner.state_for(held).market = replace(
+            self.metadata(held, now),
+            game_start=now + timedelta(seconds=120),
+        )
+        runner.state_for(dead).market = replace(
+            self.metadata(dead, now),
+            game_start=now - timedelta(minutes=45),
+        )
+        runner.ledger.apply_position_event(
+            "ws", "urgent-position-open",
+            PositionState(held, Decimal("5"), now),
+            received_at=now,
+        )
+        self.assertTrue(runner._position_near_its_flatten_deadline(now))
+
+        closed_at = runner._now()
+        await runner._observe_private(PrivateEvent(
+            PrivateEventKind.POSITION_UPDATE,
+            {
+                "marketSlug": held,
+                "beforePosition": {"netPositionDecimal": "5"},
+                "afterPosition": {"netPositionDecimal": "0"},
+                "updateTime": closed_at.isoformat(),
+            },
+            "post-flat-position",
+        ), closed_at)
+
+        self.assertIsNotNone(runner._post_flat_top_up_requested_at)
+        self.assertEqual(runner._post_flat_underfilled_slots, 1)
+        self.assertTrue(runner._incremental_top_up_due(
+            runner._now(), runner._now() + timedelta(hours=1)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_complete_rest_flat_proof_also_requests_immediate_top_up(self):
+        """A missed private close still receives the same safe scheduling hint."""
+
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        now = runner._now()
+        runner.state_for(held).market = replace(
+            self.metadata(held, now),
+            game_start=now + timedelta(seconds=120),
+        )
+        runner.state_for(dead).market = replace(
+            self.metadata(dead, now),
+            game_start=now - timedelta(minutes=45),
+        )
+        runner.ledger.apply_position_event(
+            "ws", "urgent-before-rest-flat",
+            PositionState(held, Decimal("5"), now),
+            received_at=now,
+        )
+        runner.account.fetch_positions = AsyncMock(return_value=())
+
+        await runner._rest_reconcile(runner._now(), tag="post-flat-test")
+
+        self.assertEqual(runner.ledger.position(held), 0)
+        self.assertIsNotNone(runner._post_flat_top_up_requested_at)
+        self.assertEqual(runner._post_flat_underfilled_slots, 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_post_flat_request_preempts_only_the_ordinary_service_sweep(self):
+        runner = await self.armed()
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        now = runner._now()
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", now)
+        runner.state_for("market-two").market = replace(
+            self.metadata("market-two", now),
+            game_start=now - timedelta(minutes=45),
+        )
+        runner._post_flat_top_up_requested_at = now
+        runner._post_flat_underfilled_slots = 1
+
+        with patch.object(
+                runner, "_service_market_state", new=AsyncMock()) as service:
+            self.assertEqual(await runner._service_bound_markets(), "")
+            service.assert_not_awaited()
+            self.assertEqual(await runner._service_bound_markets(
+                ("market-one",)), "")
+            service.assert_awaited_once()
+
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_top_up_completion_does_not_erase_a_newer_post_flat_request(self):
+        runner = await self.armed()
+        consumed = runner._now()
+        newer = consumed + timedelta(seconds=1)
+        runner._post_flat_top_up_requested_at = newer
+        runner._post_flat_underfilled_slots = 2
+
+        runner._clear_incremental_top_up_requests(consumed)
+
+        self.assertEqual(runner._post_flat_top_up_requested_at, newer)
+        self.assertEqual(runner._post_flat_underfilled_slots, 2)
+        runner._clear_incremental_top_up_requests(newer)
+        self.assertIsNone(runner._post_flat_top_up_requested_at)
+        self.assertEqual(runner._post_flat_underfilled_slots, 0)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_one_remaining_urgent_position_keeps_refill_deferred(self):
+        runner = await self.armed()
+        runner.config = replace(runner.config, max_markets=3)
+        first, second, dead = "market-one", "market-two", "market-three"
+        runner._bind_markets((first, second, dead))
+        now = runner._now()
+        for slug in (first, second):
+            runner.state_for(slug).market = replace(
+                self.metadata(slug, now),
+                game_start=now + timedelta(seconds=120),
+            )
+            runner.ledger.apply_position_event(
+                "ws", f"urgent-open-{slug}",
+                PositionState(slug, Decimal("5"), now),
+                received_at=now,
+            )
+        runner.state_for(dead).market = replace(
+            self.metadata(dead, now),
+            game_start=now - timedelta(minutes=45),
+        )
+
+        closed_at = runner._now()
+        await runner._observe_private(PrivateEvent(
+            PrivateEventKind.POSITION_UPDATE,
+            {
+                "marketSlug": first,
+                "beforePosition": {"netPositionDecimal": "5"},
+                "afterPosition": {"netPositionDecimal": "0"},
+                "updateTime": closed_at.isoformat(),
+            },
+            "one-of-two-flat",
+        ), closed_at)
+
+        self.assertIsNone(runner._post_flat_top_up_requested_at)
+        self.assertTrue(runner._position_near_its_flatten_deadline(
+            runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_post_flat_fast_path_does_not_pull_economic_idle_early(self):
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        self.mark_economically_idle(runner, "market-two")
+        before = runner.active_slugs
+
+        changed = await runner._top_up_active_markets(
+            runner._now(),
+            allow_cached_selection=True,
+            allow_economic_idle=False,
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(runner.active_slugs, before)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_recent_cache_is_revalidated_before_post_flat_binding(self):
+        runner = await self.armed()
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        now = runner._now()
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", now)
+        runner.state_for("market-two").market = replace(
+            self.metadata("market-two", now),
+            game_start=now - timedelta(minutes=45),
+        )
+        cached = multi_selection("market-three", "market-four")
+
+        class CachedSelector:
+            def __init__(self):
+                self.select_calls = 0
+                self.revalidate_calls = []
+
+            async def select(self, *, now):
+                self.select_calls += 1
+                return cached
+
+            async def revalidate_viable(self, slugs, *, now):
+                self.revalidate_calls.append(tuple(slugs))
+                allowed = set(slugs)
+                return tuple(
+                    item for item in cached.opportunities
+                    if item.market.slug in allowed)
+
+        selector = CachedSelector()
+        runner.reward_selector = selector
+        runner._market_selection = cached
+        runner._market_selection_observed_at = now - timedelta(seconds=60)
+        runner._post_flat_top_up_requested_at = now - timedelta(seconds=10)
+        runner._post_flat_underfilled_slots = 1
+        captured = io.StringIO()
+
+        with patch("sys.stdout", captured):
+            changed = await runner._top_up_active_markets(
+                now,
+                allow_cached_selection=True,
+                allow_economic_idle=False,
+            )
+
+        self.assertTrue(changed)
+        self.assertEqual(selector.select_calls, 0)
+        self.assertEqual(
+            selector.revalidate_calls,
+            [("market-three", "market-four")],
+        )
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "market-three"))
+        text = captured.getvalue()
+        self.assertIn("selection_source=cached_revalidated", text)
+        self.assertIn("post_flat_wait_seconds=", text)
+        self.assertIn("post_flat_underfilled_slot_minutes=", text)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stale_cache_falls_back_to_complete_selector(self):
+        runner = await self.armed()
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        now = runner._now()
+        runner.state_for("market-one").market = self.metadata(
+            "market-one", now)
+        runner.state_for("market-two").market = replace(
+            self.metadata("market-two", now),
+            game_start=now - timedelta(minutes=45),
+        )
+        cached = multi_selection("cached-market")
+        fresh = multi_selection("fresh-market")
+
+        class StaleSelector:
+            def __init__(self):
+                self.select_calls = 0
+                self.revalidate_calls = 0
+
+            async def select(self, *, now):
+                self.select_calls += 1
+                return fresh
+
+            async def revalidate_viable(self, slugs, *, now):
+                self.revalidate_calls += 1
+                return cached.opportunities
+
+        selector = StaleSelector()
+        runner.reward_selector = selector
+        runner._market_selection = cached
+        runner._market_selection_observed_at = now - timedelta(seconds=121)
+
+        self.assertTrue(await runner._top_up_active_markets(
+            now, allow_cached_selection=True))
+
+        self.assertEqual(selector.revalidate_calls, 0)
+        self.assertEqual(selector.select_calls, 1)
+        self.assertEqual(
+            runner.active_slugs, ("market-one", "fresh-market"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_normal_safe_scan_is_left_for_full_rotation(self):
         """The lifecycle fix must not divert the existing rotation path."""
 

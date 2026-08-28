@@ -48,6 +48,12 @@ being released, while retained ambiguity remains behind its owner's gate. The
 EV model is measured and logged but remains
 advisory while `enforce_reward_cost_gate` is false.
 
+If the final near-deadline position becomes positively flat while mandatory
+holes exist, a one-shot scheduler edge reaches incremental top-up before the
+ordinary full-slate service pass. It may use a two-minute selection cache only
+through fresh candidate metadata, incentive and book validation; exit priority,
+ownership proof and the optional-idle cadence are unchanged.
+
 ### Observation-only branch
 
 For a building post-only action, the runner may construct an immutable

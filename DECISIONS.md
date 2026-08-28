@@ -26,6 +26,7 @@ show the operator the discrepancy.
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
+| Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary 20-market service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
 | Portfolio exposure | `30 × quote size`: 20 slot-notionals plus a proportional 10-notional cushion; $300 at size 10 |
 | Market loss stop | `4 × quote size`; $40 at size 10 |
 | Account loss threshold | `8 × quote size`; $80 at size 10 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |

@@ -1,15 +1,15 @@
 # Current operator status
 
-Only current operational facts belong here; verify live before acting. Historical
-snapshots are under [docs/history/](docs/history/README.md).
+Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 
 ## Verified state
 
-- **Verified:** 2026-08-28 18:05 ET / 2026-08-28 22:05 UTC
+- **Verified:** 2026-08-28 18:14 ET / 2026-08-28 22:14 UTC
 - **Liquidity bot:** LIVE; supervisor PID 51980 / runner PID 51989, size 10
-- **Live exposure:** authenticated venue snapshot found 1 position and 32 resting orders across 18 markets
-- **20-slot health:** startup bound 20 markets; 18 currently quote and one
-  recently touched owner is economically idle, with 0 absent and 1 unresolved row
+- **Live exposure:** last authenticated 22:05Z snapshot found 1 position/32 orders;
+  later logs retired a market with 3.13 contracts, so re-read before mutation
+- **20-slot health:** scheduled 22:11Z top-up restored `active=20`, then outcome-
+  uncertain placements retired five markets and left more recovery in flight
 - **Maker-lab:** stopped
 - **Deployed source:** runner and server marker are commit `2ece3c3`
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
@@ -52,7 +52,8 @@ The 21:08:53Z flat proof waited until 21:11:17Z for refill despite 29-34 viable
 markets. Commit `2ece3c3` now gives mandatory post-flat holes one safe, freshly
 revalidated fast path while preserving exit priority and optional-idle cadence.
 Natural post-flat acceptance remains pending; do not induce a position to test
-it. [Full evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+it. No `[top-up-request]` occurred through 22:14Z; the 22:11Z refill was a normal
+scheduled scan, not acceptance. [Full evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
 ## Latest stop/restart outcome
 
@@ -64,12 +65,15 @@ absent/unresolved rows or risk stops. At 22:01Z one silent private shard
 recovered under the same PID with `cancels=0` and all 33 working orders retained.
 The next normal fill opened one managed position; its transient absent cancel
 cleared by 22:05Z and the dashboard returned to `WORKING` with no risk stop.
+From 22:07-22:14Z eight PLACE outcomes became uncertain during/after all-shard
+private silence. Scoped recovery preserved 28 orders with `cancels=0`, but five
+markets retired unresolved; one carried 3.13 contracts. This is separate from
+the post-flat refill repair and remains live recovery work.
 
 ## Current operating instruction
 
-Keep the current runner live unless the operator directs otherwise or a safety
-condition requires a stop. Observe the new post-flat path only when it occurs
-naturally; do not manufacture a position, exit or slot gap for acceptance.
+Do not restart or force-stop while position/mutation outcomes remain unresolved.
+Let recovery work, then require venue proof; observe post-flat only naturally.
 
 ## Current records
 

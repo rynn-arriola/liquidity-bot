@@ -33,7 +33,8 @@ either a validated `[top-up-cache]` or bounded fresh-scan fallback and
 `[top-up] ... committed=yes`. Confirm unchanged ownership safety, no economic-
 idle early eviction, restored `active=20`, and materially lower
 `post_flat_wait_seconds`/`post_flat_underfilled_slot_minutes`. Do not induce an
-exit or position merely to test it.
+exit or position merely to test it. Through 22:14Z there was no
+`[top-up-request]`; the 22:11Z `trigger=scheduled` refill is not acceptance.
 
 ## 2. Accept rate-limited private-shard recovery
 

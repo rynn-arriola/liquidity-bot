@@ -21,9 +21,9 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   remain complete; full traces are bounded.
 - An open-position paper mark could force loss-realizing hard-stop shutdown.
   Fixed with provisional breach state and newer post-close balance evidence.
-- Historical/current reward-table trading rows omitted account losses. Current
-  reporting uses bounded account truth when its prerequisites are proved and
-  visibly marks fallbacks.
+- Historical rows discarded all proven account boundaries when a cash event
+  completed after their fixed cutoff. The historical scan now skips only those
+  later events; live snapshots stay strict. Verified locally; deploy pending.
 
 ## Latest deployed private-stream repair
 

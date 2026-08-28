@@ -66,12 +66,9 @@ end with `flat=false`. Decide whether the script should fail when the final
 record lacks flat proof. Until then, every stop requires final-record plus an
 authenticated venue snapshot.
 
-## 6. Historical reward rows discard proven account boundaries
+## 6. Deploy and accept corrected historical reward rows
 
-The historical cash scan rejects a normal activity completed after its fixed
-`through` boundary, then the caller clears the entire account-history map.
-August 26 therefore shows `~-$48.65` instead of audited `-$64.4870`. Separate
-fixed historical-window filtering from the strict current snapshot, preserve
-the current fail-closed rule, expose the fallback reason, and test post-window
-activity plus the corrected August 26 net. Per-market attribution remains
-incomplete; never use it alone for a strategy decision.
+The fix is locally verified with 745 tests and a deliberate reversal. Deploy
+without restarting the bot, run one bounded non-posting report, and confirm
+August 26 is `-$64.49` with finalized net `+$145.12`. The next hourly process
+loads the script automatically. Per-market attribution remains incomplete.

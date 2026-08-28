@@ -177,8 +177,10 @@ adds current venue position basis; if the boundary or snapshot is not proved,
 it displays `Unavailable`. A completed historical row uses adjacent native ET
 equity boundaries only when both are flat, less non-trading cash. A row without
 that proof retains the balanced-leg ledger method, is prefixed `~`, and can
-omit settled exits. The current ET row and its net use the account figure. The
-script performs no market
+omit settled exits. A fixed historical scan ignores cash completed after its
+closed `through` boundary but still reaches explicit EOF; today's bracketed
+snapshot remains strict because a later completion can move live cash. The
+current ET row and its net use the account figure. The script performs no market
 discovery, book, order or mutation call. Do not tight-loop it or schedule it
 more frequently than hourly. Pending and unposted reward are never counted as
 net, and the current ET day is marked partial.

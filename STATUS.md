@@ -26,8 +26,8 @@ snapshots are under [docs/history/](docs/history/README.md).
   clean paths, with zero false historical-gap exclusions
 - **Other collection:** adverse-fill and queue studies run inside the bot;
   daily probe, hourly rewards/changelog and nightly backup schedules are active
-- **Reporting caveat:** historical webhook rows currently fall back to matched
-  pairs; August 26 shows `~-$48.65` instead of audited account loss `-$64.49`
+- **Reporting fix:** August 26's `~-$48.65` fallback is corrected locally to
+  audited `-$64.49`; 745 tests pass and deployment is pending
 
 ## Active operating envelope
 

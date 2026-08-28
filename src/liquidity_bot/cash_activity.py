@@ -162,12 +162,18 @@ async def fetch_nontrading_cash_changes(
     boundary: datetime,
     through: datetime,
     max_pages: int = 4,
+    fixed_historical_window: bool = False,
 ) -> tuple[NontradingCashChange, ...]:
     """Completed deposits, withdrawals, rewards and transfers in a window.
 
     The venue sorts activity by creation time while cash moves at completion
     time. Therefore an explicit EOF is required; crossing the time boundary in
     one page is not proof that an older-created row did not complete later.
+
+    ``fixed_historical_window`` is only for an immutable past interval. A row
+    completed after that interval is irrelevant but does not end the scan. A
+    live balance snapshot keeps the default strict behavior because a later
+    completion means the bracketed account value may have moved.
     """
 
     if boundary.tzinfo is None or boundary.utcoffset() is None:
@@ -213,6 +219,8 @@ async def fetch_nontrading_cash_changes(
                     continue
                 row_at = _first_timestamp(row, parent, activity)
                 if row_at > through:
+                    if fixed_historical_window:
+                        continue
                     raise CashActivityUnavailable(
                         "completed cash activity changed after the account snapshot")
                 # The opening balance already contains every cash movement

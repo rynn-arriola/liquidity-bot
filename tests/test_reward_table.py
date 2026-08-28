@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.reward_table import (
-    AccountMetricUnavailable, AccountRealizedToday, _nontrading_cash_today,
+    AccountMetricUnavailable, AccountRealizedToday,
+    _historical_nontrading_cash_changes, _nontrading_cash_today,
     _opening_cash_for_day, account_realized_today, build_discord_payload,
     historical_account_trading_by_day, render_table,
     resting_side_hours_by_day)
@@ -468,6 +469,57 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
                 gateway,
                 boundary=datetime(2026, 8, 25, 4, tzinfo=timezone.utc),
                 through=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+
+    async def test_historical_cash_ignores_later_completion_and_reaches_eof(self):
+        def transfer(amount, updated):
+            return {
+                "type": "ACTIVITY_TYPE_TRANSFER",
+                "accountBalanceChange": {
+                    "status": "COMPLETED",
+                    "amount": {"value": str(amount), "currency": "USD"},
+                    "description": "liquidity reward payout",
+                    "updateTime": updated,
+                },
+            }
+
+        gateway = _Gateway([], {}, [
+            {"activities": [
+                transfer("9", "2026-08-28T12:00:00Z"),
+                transfer("4", "2026-08-25T12:00:00Z"),
+            ], "eof": False, "nextCursor": "older"},
+            {"activities": [], "eof": True},
+        ])
+
+        result = await _historical_nontrading_cash_changes(
+            gateway,
+            boundary=datetime(2026, 8, 22, 4, tzinfo=timezone.utc),
+            through=datetime(2026, 8, 28, 4, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(
+            result,
+            (NontradingCashChange(
+                datetime(2026, 8, 25, 12, tzinfo=timezone.utc),
+                Decimal("4")),),
+        )
+        self.assertEqual(
+            gateway.client.portfolio.activity_params[1]["cursor"], "older")
+
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+            [
+                ("2026-08-26", "772.7878", "0", "772.7878",
+                 "2026-08-26T04:00:14.133861+00:00", "fresh_et_day"),
+                ("2026-08-27", "708.3008", "0", "708.3008",
+                 "2026-08-27T04:04:10.544588+00:00", "fresh_et_day"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+        history = historical_account_trading_by_day(
+            str(self.database), [date(2026, 8, 26)], result)
+        self.assertEqual(history["2026-08-26"], Decimal("-64.4870"))
 
     async def test_cash_scan_uses_completion_time_not_feed_order(self):
         def transfer(amount, created, updated):

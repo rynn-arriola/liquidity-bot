@@ -392,7 +392,9 @@ These are implementation requirements, not suggestions.
     this value. A completed historical day uses adjacent native ET equity
     boundaries only when both prove flat and all non-trading cash is removed;
     otherwise it is visibly prefixed `~` and remains the balanced-pair
-    estimate. Any moving balance, absent basis, unproven
+    estimate. An immutable historical scan may ignore completions after its
+    fixed `through` boundary but must still reach EOF; the current bracketed
+    snapshot may not. Any moving balance, absent basis, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day
     rollover must render `Unavailable`, never a partial number. A nonblocking
     file lock prevents overlap and a 90-second timeout bounds runtime. Its

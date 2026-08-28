@@ -235,6 +235,20 @@ async def _nontrading_cash_today(
         raise AccountMetricUnavailable(str(exc)) from exc
 
 
+async def _historical_nontrading_cash_changes(
+    gateway: AsyncReadOnlyGateway, *, boundary: datetime, through: datetime,
+) -> tuple[NontradingCashChange, ...]:
+    """Read one immutable historical window without weakening live snapshots."""
+
+    return await fetch_nontrading_cash_changes(
+        gateway,
+        boundary=boundary,
+        through=through,
+        max_pages=ACCOUNT_ACTIVITY_MAX_PAGES,
+        fixed_historical_window=True,
+    )
+
+
 async def account_realized_today(
     db: str, gateway: AsyncReadOnlyGateway, *, now: datetime,
 ) -> AccountRealizedToday:
@@ -567,11 +581,10 @@ async def main() -> int:
             days[0], time.min, tzinfo=NEW_YORK).astimezone(timezone.utc)
         today_boundary = datetime.combine(
             today, time.min, tzinfo=NEW_YORK).astimezone(timezone.utc)
-        changes = await fetch_nontrading_cash_changes(
+        changes = await _historical_nontrading_cash_changes(
             gateway,
             boundary=history_boundary,
             through=today_boundary,
-            max_pages=ACCOUNT_ACTIVITY_MAX_PAGES,
         )
         history = historical_account_trading_by_day(
             args.db, days, changes)

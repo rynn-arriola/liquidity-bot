@@ -38,9 +38,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   close/newer-balance evidence arrives.
 - **Resting side-hours are the reward-facing time metric.** Reward-score seconds
   and process-session hours answer different questions.
-- **Historical reward reporting currently discards proven account truth.** The
-  audited August 26 result is `-$64.487`, but a post-window cash activity makes
-  the scan drop all boundaries and show `~-$48.65`, understating loss by $15.84.
+- **Later cash activity erased proven historical account truth.** The historical
+  scan now ignores only post-window completions while still reaching EOF; live
+  snapshots remain strict. August 26 correctly resolves to `-$64.4870`.
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
   authority.

@@ -13,6 +13,15 @@ check"**; the command safely fast-forwards a clean behind-only checkout and
 must be run independently on both
 workstations.
 
+AI-facing root files are deliberately compact. Detailed completed evidence is
+preserved under [`docs/history/`](docs/history/README.md) and loaded only when
+the task-specific indexes route an agent there. Verify the routing, context
+budgets and every local Markdown link with:
+
+```powershell
+python -B scripts/audit_docs.py
+```
+
 A clean, standalone Polymarket US liquidity-reward market maker.
 
 This project uses `D:\polybot\maker-lab` as a pinned code/evidence reference,

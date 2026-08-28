@@ -13,10 +13,11 @@ Before diagnosing, changing, deploying, stopping or starting anything:
 2. Read [DECISIONS.md](DECISIONS.md) for choices currently in force.
 3. Read the shared safety and evidence rules in
    [AI_ENGINEERING.md](AI_ENGINEERING.md).
-4. Read the task-specific source: [FINDINGS.md](FINDINGS.md) before forming a
-   theory, [BUGFIXES.md](BUGFIXES.md) for prior production defects,
+4. Read the compact task-specific index: [FINDINGS.md](FINDINGS.md) before
+   forming a theory, [BUGFIXES.md](BUGFIXES.md) for prior production defects,
    [NEXT.md](NEXT.md) for unfinished work, or [WATCHLIST.md](WATCHLIST.md) for
-   measurement-only ideas.
+   measurement-only ideas. Use the index's `rg` route into `docs/history/`
+   when older evidence is relevant; never load every archive by default.
 5. Verify live facts when the question is operational. Markdown is the latest
    handoff, not the venue. Process state comes from the server, deployed code
    from `DEPLOYED_COMMIT` plus file hashes, configuration from the running
@@ -146,6 +147,11 @@ Other files under `docs/` are technical references. They must not compete with
 `STATUS.md` for the meaning of “current.” A historical heading containing the
 words “current” or “active” is true only for its dated section.
 
+The root AI files have enforced context budgets checked by
+`python -B scripts/audit_docs.py`. Completed narratives move to dated files in
+`docs/history/`; root `NEXT.md`, `WATCHLIST.md`, `FINDINGS.md` and
+`BUGFIXES.md` stay compact indexes or active state.
+
 ## End-of-task handoff definition
 
 When anything changes operational state, deployed behavior, configuration,
@@ -157,6 +163,7 @@ active decisions or the understanding of an incident:
 - add a production code defect to `BUGFIXES.md` when fixed;
 - update `NEXT.md` for remaining work;
 - commit and push tracked documentation so another machine sees it;
+- run `python -B scripts/audit_docs.py` before the final commit;
 - state explicitly whether code changed, whether the bot restarted, and the
   verified order/position state.
 

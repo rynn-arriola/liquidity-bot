@@ -5,14 +5,19 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-27 20:34 ET / 2026-08-28 00:34 UTC
-- **Liquidity bot:** STOPPED; no supervisor or runner process
-- **Stop quality:** FORCED during an authenticated venue outage
-- **Venue exposure:** UNKNOWN; possible unmanaged orders must be ruled out by a
-  new complete authenticated account snapshot before any restart
+- **Verified:** 2026-08-27 21:01 ET / 2026-08-28 01:01 UTC
+- **Liquidity bot:** RUNNING under its supervisor, automatic selection at size
+  10
+- **Startup gate:** complete authenticated reads proved zero venue orders and
+  positions; the reviewed orphan-create recovery then resolved the one
+  remaining no-exchange-ID PLACE and a second complete gate proved zero
+  unknown-absent and unresolved rows
+- **Latest live checkpoint:** 20 active market owners, 28 venue orders across
+  17 markets, zero nonzero positions and zero `UNKNOWN_ABSENT`; two fresh
+  acknowledged mutations were ordinary in-progress cancel/place work
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes the compact AI handoff at `14e438a`; run parity
-  for the exact current documentation-only HEAD
+- **GitHub:** `main` includes the compact AI handoff through `f2a5e02`; run
+  parity for the exact current documentation-only HEAD
 - **Server marker:** `14e438a`
 - **Latest trading-source change:** `dc26c96`
 - **Parity:** desktop/GitHub/server passed; a laptop result is authoritative
@@ -36,22 +41,21 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Deployed but not live-accepted after the stop
+## Current live acceptance
 
 Commit `dc26c96` preserves unknown dashboard state during venue failure,
 reduces duplicate maintenance tracebacks, groups equivalent permanent book
 faults, and replaces only positively closed, flat/order-free slot owners after
-fresh exact proof. Local and stopped-server suites passed before deployment.
-Because the bot has not restarted, the closed-slot behavior still needs natural
-live acceptance on the next authorized run.
+fresh exact proof. The 2026-08-28 start safely bound 19 owners and transactionally
+topped up the free slot to exactly 20. Natural closed-owner replacement still
+needs observation; do not induce a closure or disconnect to test it.
 
-## Next safe action
+## Current operating instruction
 
-Do not restart from this snapshot alone. First obtain one complete authenticated
-venue view of open orders and positions and reconcile unresolved ownership.
-Restart remains a separate operator decision. After a safe start, verify queue
-scope `markets=20`, distinct active owners, zero unmanaged ownership and normal
-top-up behavior; raw order count alone is not acceptance.
+Let the current run continue. Judge slot health from queue scope, distinct
+owners, ownership state and resting coverage, not raw order count. Any future
+stop/restart remains a separate operator decision and must use the normal
+authenticated exposure gate.
 
 ## Current repositories and records
 

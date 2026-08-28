@@ -1,12 +1,19 @@
-# Polymarket US documentation contract
+# Polymarket rules and information — canonical reference
 
-This is the agent-neutral map from official Polymarket documentation to this
-project. It exists because the documentation site contains both the Retail API
-used by this bot and an Institutional API with different hosts, authentication,
-field names, transports and limits. Similar concepts do not make those
-interfaces interchangeable.
+This is the project's go-to, agent-neutral reference for Polymarket rules,
+official documentation, API behavior and venue-specific operating guidance.
+Start here for every Polymarket question before searching scattered project
+notes or applying advice from an external guide. It maps the official
+documentation to this project and records which guidance applies to the Retail
+API used by this bot.
 
-This file is a technical reference, not a current operational handoff. Read
+The documentation site also contains an Institutional API with different
+hosts, authentication, field names, transports and limits. Similar concepts do
+not make those interfaces interchangeable.
+
+This file owns stable Polymarket knowledge and the source map; it does not own
+live bot state, operator decisions, unfinished implementation or detailed wire
+schemas. Read
 [STATUS.md](../STATUS.md) for live state, [DECISIONS.md](../DECISIONS.md) for
 operator policy, [NEXT.md](../NEXT.md) for unfinished work and
 [API_CONTRACTS.md](API_CONTRACTS.md) for the detailed wire contracts already
@@ -130,4 +137,3 @@ When a future task reviews another official Polymarket page:
    documentation and tests in the same task.
 6. Update the reviewed date and source table here without copying secrets,
    server addresses, credentials or private account data.
-

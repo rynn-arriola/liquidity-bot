@@ -18,7 +18,8 @@ Before diagnosing, changing, deploying, stopping or starting anything:
    [NEXT.md](NEXT.md) for unfinished work, or [WATCHLIST.md](WATCHLIST.md) for
    measurement-only ideas. Use the index's `rg` route into `docs/history/`
    when older evidence is relevant; never load every archive by default.
-   For a Polymarket API, SDK, venue-error or official-documentation task, also
+   For any Polymarket rule, API, SDK, venue behavior, venue error or official-
+   documentation question, use the project's canonical go-to reference first:
    read [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md)
    before deciding whether a guide applies to the Retail bot.
 5. Verify live facts when the question is operational. Markdown is the latest
@@ -144,7 +145,7 @@ are evidence the operator asked to see.
 | [README.md](README.md) | Product overview and supported commands |
 | [docs/COMMISSIONING.md](docs/COMMISSIONING.md) | Live execution envelope and operating lifecycle |
 | [docs/SAFETY_INVARIANTS.md](docs/SAFETY_INVARIANTS.md) | Rules no fix may weaken |
-| [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) | Official Retail/Institutional documentation map and audited implementation differences |
+| [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) | Canonical go-to reference for Polymarket rules, official sources, Retail/Institutional scope and audited implementation differences |
 | `docs/PHASE*_ACCEPTANCE.md` | Historical acceptance evidence, never current status |
 
 Other files under `docs/` are technical references. They must not compete with

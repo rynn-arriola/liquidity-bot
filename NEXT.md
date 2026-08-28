@@ -5,7 +5,7 @@ This file contains unfinished work. Completed implementation history is in
 
 ## 0. Remaining natural acceptance
 
-The live runner has `a8d91d0` behavior loaded. Continue accepting these paths
+The live runner has `2ece3c3` behavior loaded. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
@@ -23,11 +23,11 @@ Private-only silence now has natural acceptance with unchanged PID and
 global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
 only if recurrence shows a local liveness defect rather than venue/network loss.
 
-## 1. Deploy and accept the post-flat mandatory refill
+## 1. Accept the deployed post-flat mandatory refill
 
-The local repair is verified but not active. At the operator's chosen safe
-window, push/deploy it and restart only after authenticated flat/order-free
-proof. Natural acceptance requires a real final near-deadline position closing
+Commit `2ece3c3` is active after authenticated flat/order-free proof, a graceful
+stop, parity, 766 server tests and a clean size-10 restart. Natural acceptance
+requires a real final near-deadline position closing
 while mandatory capacity is reclaimable, then `[top-up-request]` followed by
 either a validated `[top-up-cache]` or bounded fresh-scan fallback and
 `[top-up] ... committed=yes`. Confirm unchanged ownership safety, no economic-

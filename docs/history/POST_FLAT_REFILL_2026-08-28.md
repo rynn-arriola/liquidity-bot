@@ -69,7 +69,10 @@ a newer request. Deliberately removing the post-flat authorization made
 `test_final_urgent_position_flat_requests_immediate_top_up` fail; restoring it
 passed. The complete local suite passed 766 tests.
 
-At 21:29Z the live runner remained PID 47608 with the prior deployed behavior,
-24 orders across 14 markets and two positions. No stop, deploy or restart was
-performed for this repair. Deployment and natural acceptance require a later
-operator-selected flat/order-free window; never induce a position to test it.
+At 21:51Z authenticated venue proof showed zero positions and orders. The old
+runner stopped gracefully and its 29 stale `UNKNOWN_ABSENT` rows reconciled to
+zero. Commit `2ece3c3` matched production hashes and passed all 766 server tests
+before the authorized size-10 restart. At 22:00Z runner PID 51989 had 20 bound,
+18 quoting, 34 resting orders, zero positions/absent/unresolved rows and no
+new-run recovery, quarantine or risk stop. Natural post-flat acceptance still
+requires a real qualifying close; never induce a position merely to test it.

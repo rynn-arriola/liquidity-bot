@@ -16,13 +16,13 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 - Dashboard scaling now reads the configured instance instead of stale class
   fallbacks; size 20 displays `$80/$160/$160`.
 
-## Reviewed locally; deployment pending
+## Latest deployed post-flat refill repair
 
 - **Post-flat refill waited behind serial full-slate service.** The repair
   prioritizes proven mandatory gaps, revalidates cache no older than 120 seconds,
   preserves exit/ownership and 900-second idle rules, and measures delay and
-  slot-minutes. Sixty-seven focused, 766 full and a reversal passed; production has
-  not loaded it. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+  slot-minutes. Sixty-seven focused, 766 local/server and a reversal passed;
+  `2ece3c3` is active. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
 ## Latest deployed no-ID startup repair
 

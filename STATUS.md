@@ -5,22 +5,19 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 17:29 ET / 2026-08-28 21:29 UTC
-- **Liquidity bot:** LIVE; supervisor PID 47601 / runner PID 47608, size 10
-- **Live exposure:** authenticated venue snapshot found 2 positions and 24 resting orders across 14 markets
-- **20-slot health:** the last committed top-up restored `active=20`; the
-  21:27Z selector still found 34 viable markets, so the lower raw order count
-  is not a supply shortage
+- **Verified:** 2026-08-28 18:00 ET / 2026-08-28 22:00 UTC
+- **Liquidity bot:** LIVE; supervisor PID 51980 / runner PID 51989, size 10
+- **Live exposure:** authenticated venue snapshot found 0 positions and 34 resting orders across 18 markets
+- **20-slot health:** startup bound 20 markets; 18 currently quote and one
+  recently touched owner is economically idle, with 0 absent/unresolved rows
 - **Maker-lab:** stopped
-- **Deployed source:** runner has `b7fe3fd` trading code; dashboard/reporting fix
-  was deployed afterward without restarting or changing the runner PID
+- **Deployed source:** runner and server marker are commit `2ece3c3`
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
 - **Risk scaling:** active size-10 configuration is $300 portfolio, $40 market,
   $80 session and $80 hard
-- **Verification:** the deployed build retains its prior 756 server-test
-  acceptance; the pending post-flat refill optimization passes 766 local tests
-  plus a deliberate reversal
+- **Verification:** 67 focused and all 766 local/server tests passed, plus the
+  deliberate post-flat authorization reversal
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
@@ -49,31 +46,27 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 
-## Pending post-flat refill optimization
+## Deployed post-flat refill optimization
 
 The 21:08:53Z flat proof waited until 21:11:17Z for refill despite 29-34 viable
-markets. The reviewed repair gives mandatory post-flat holes one safe, freshly
-revalidated fast path while preserving exit priority and the optional-idle
-cadence; 766 tests and a reversal pass. It is not deployed or loaded, and no
-stop/restart occurred. [Full evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+markets. Commit `2ece3c3` now gives mandatory post-flat holes one safe, freshly
+revalidated fast path while preserving exit priority and optional-idle cadence.
+Natural post-flat acceptance remains pending; do not induce a position to test
+it. [Full evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
 ## Latest stop/restart outcome
 
-At 20:22Z authenticated proof showed zero positions/orders and no unresolved or
-absent state. The old process stopped gracefully, `b7fe3fd` deployed, and all
-756 server tests passed before the authorized size-10 restart. The new runner
-loaded `$300/$40/$80/$80`; after seven minutes it had 18/20 quoting, 32 resting,
-one managed position, no absent order and no risk stop. Startup exposed a
-dashboard-only defect: property-based limits fell into stale `$40/$40/$45`
-fallbacks. The dashboard now reads the configured instance and displays the
-same scaled limits as the runner; it was deployed without another restart.
+At 21:51Z authenticated proof showed zero positions/orders. The old process
+stopped gracefully and cleared 29 stale `UNKNOWN_ABSENT` rows. Commit `2ece3c3`
+passed all 766 server tests before the authorized size-10 restart. At 22:00Z the
+new runner had 20 bound, 18 quoting, 34 resting orders, zero positions,
+absent/unresolved rows or risk stops, and no new-run recovery or quarantine.
 
 ## Current operating instruction
 
 Keep the current runner live unless the operator directs otherwise or a safety
-condition requires a stop. Do not deploy or restart the pending post-flat
-optimization without a new exposure check and explicit operator timing; the
-21:29Z account is not flat.
+condition requires a stop. Observe the new post-flat path only when it occurs
+naturally; do not manufacture a position, exit or slot gap for acceptance.
 
 ## Current records
 

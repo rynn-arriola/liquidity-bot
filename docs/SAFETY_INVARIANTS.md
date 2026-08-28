@@ -529,3 +529,16 @@ These are implementation requirements, not suggestions.
     A failed attempt clears only the request it consumed and uses the ordinary
     bounded retry cadence; a newer post-flat transition must survive. Timing
     telemetry is evidence only and cannot authorize a slot or order.
+84. A response-backed mutation rejection is not a transport ambiguity. An
+    authenticated HTTP 403 may move that exact durable intent to `FAILED`; it
+    does not prove any existing order terminal or any position flat. A
+    permission/location denial is account-wide for new entry, so the normal
+    action loop must stop later entry slots before their API call and admit at
+    most one periodic entry probe. Cancels and reducers bypass that circuit;
+    if their own request is denied, only risk-reducing mutations receive a
+    short bounded cooldown. Only success in the matching scope clears its
+    circuit. Timeout, connection loss, 5xx, malformed success, missing order
+    ID and absence remain ambiguous. Legacy repair may close an old uncertain
+    intent only when its durable error contains the exact reviewed response
+    proof; near-matches remain unresolved. Shutdown keeps its independent
+    risk-reduction and positive-flatness contract.

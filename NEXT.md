@@ -3,7 +3,22 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Remaining natural acceptance
+## 0. Deploy but do not restart the 403/no-ID repair
+
+The bot is stopped after authenticated recovery proved zero working orders and
+the authoritative ledger snapshot proved zero nonzero positions. Finish the
+full suite, docs audit and diff review; then commit, push and deploy reviewed
+source/tests/docs. Do not restart without a new operator instruction.
+
+On the next authorized start, require `[startup-intent-repair] ... intents=20`
+before the ordinary orphan gate. Natural acceptance then requires one denied
+entry mutation to become `FAILED`, one critical alert, later entry slots logging
+`[mutation-access-backoff]` without additional API calls or retirements, and a
+successful entry logging `[mutation-access-restored]`. Cancels and reducers
+must bypass the entry circuit. Do not induce a 403.
+Confirm SIGTERM is prompt if a natural all-no-ID state ever recurs.
+
+## 1. Remaining natural acceptance
 
 The live runner has `2ece3c3` behavior loaded. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
@@ -23,7 +38,7 @@ Private-only silence now has natural acceptance with unchanged PID and
 global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
 only if recurrence shows a local liveness defect rather than venue/network loss.
 
-## 1. Accept the deployed post-flat mandatory refill
+## 2. Accept the deployed post-flat mandatory refill
 
 Commit `2ece3c3` is active after authenticated flat/order-free proof, a graceful
 stop, parity, 766 server tests and a clean size-10 restart. Natural acceptance
@@ -36,7 +51,7 @@ idle early eviction, restored `active=20`, and materially lower
 exit or position merely to test it. Through 22:14Z there was no
 `[top-up-request]`; the 22:11Z `trigger=scheduled` refill is not acceptance.
 
-## 2. Accept rate-limited private-shard recovery
+## 3. Accept rate-limited private-shard recovery
 
 Commit `a8d91d0` is active. Its clean startup reached 20/20 quoting, 37 resting
 orders, zero positions, zero absent and zero persistent unresolved state without
@@ -46,7 +61,7 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 3. Collect fixed-GTC evidence
+## 4. Collect fixed-GTC evidence
 
 Commit `de1478b` repaired the cumulative-gap defect and is deployed. The live
 report proves 20 GTC starts, 20/20 feature rows, 20 clean paths and zero false
@@ -58,14 +73,14 @@ to load forward decode/drop interval closure. It loads on the next natural
 supervisor restart. Collect three complete days plus one held-out day before
 any strategy proposal, and never add overlapping cohorts as separate profit.
 
-## 4. One unresolved mutation can have account-wide availability cost
+## 5. One unresolved mutation can have account-wide availability cost
 
 Review whether unrelated proven-safe markets can continue while one owner is
 ambiguous without weakening the account-wide unowned-order invariant. Raising
 a timeout is not a fix; the venue has hidden accepted state longer than prior
 timeout values.
 
-## 5. Graceful stop success is not proof of flatness
+## 6. Graceful stop success is not proof of flatness
 
 `stop_commissioning.sh` primarily proves process termination; the runner can
 end with `flat=false`. Decide whether the script should fail when the final

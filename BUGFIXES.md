@@ -8,14 +8,6 @@ Search it before designing a repair:
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
 
-## Latest deployed defects
-
-- Dashboard false-zero account state, parked closed owners, alternating book
-  failures, maintenance trace growth, provisional open P&L and historical cash
-  cutoffs were repaired in `1c82778`; 745 local/server tests passed.
-- Dashboard scaling now reads the configured instance instead of stale class
-  fallbacks; size 20 displays `$80/$160/$160`.
-
 ## Latest deployed post-flat refill repair
 
 - **Post-flat refill waited behind serial full-slate service.** The repair
@@ -24,18 +16,29 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   slot-minutes. Sixty-seven focused, 766 local/server and a reversal passed;
   `2ece3c3` is active. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
+## Locally fixed; not loaded by the live runner
+
+- **A Retail 403/code-7 rejection retired all 20 slots.** The gateway called
+  every POST failure uncertain. Response-backed 403 now makes only that intent
+  `FAILED`; a 60-second new-entry circuit prevents cross-slot churn and alerts
+  once, while cancels/reducers stay available unless their own request is
+  denied, which opens only a 10-second safety-action cooldown. Exact legacy
+  rows repair at startup; timeouts/5xx/absence remain ambiguous. A cooperative outer-loop
+  yield plus full no-ID idle backoff prevents CPU spin and SIGTERM starvation.
+  Focused tests, three reversals and the full local suite pass. The bot is stopped
+  and this repair is not deployed. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
+
 ## Latest deployed no-ID startup repair
 
-- Startup refuses a no-ID PLACE before book binding and never clears/retries it; repair blocks any same-market live order. Flat proof resolved the 18:35Z intent; `c28aba2` passed 755 tests, three reversals and parity. Its 19:54Z start reached 19/20 quoting, 19 resting, 0 positions/absent/unresolved and no risk stop.
+- Startup refuses ambiguous no-ID PLACE before book binding and never clears or
+  retries it; `c28aba2` passed 755 tests and three reversals.
 
 ## Latest deployed private-stream repair
 
-- Silent shards caused global cancellation and cross-shard snapshot clearing.
-  Stale shards now overlap-replace after per-connection balance, scope-checked
-  buffered events, fresh REST account proof and all-shard liveness. Empty order
-  streams need no invented EOF; scoped snapshots clear only their markets.
-  Failed proof retains global quarantine; reversals reproduced both defects.
-  Commit `2831026` passed 740 local/server tests and live startup acceptance.
+- Silent shards formerly caused global cancellation and cross-shard clearing.
+  Overlap replacement now requires per-connection balance, scoped events,
+  fresh REST account proof and all-shard liveness; failed proof quarantines.
+  `2831026` passed 740 local/server tests and live startup acceptance.
 
 - **Active; natural fault-path acceptance pending:** a handoff reconciled 34 orders, then final
   balance Cloudflare `1015`/429 drove quarantine. Frozen handoff now gives only
@@ -89,11 +92,6 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   next runner startup migrated it. Reports now detect the column read-only:
   old schema treats every historical fill as active, while migrated schema
   excludes busted fills. This migration is now active.
-
-Focused regressions and reversals passed. The reviewed 03:06Z restart completed
-the migration and reached 20/20 quoting, 37 resting orders, zero positions and
-unresolved rows, with no traceback, mutation timeout, recovery or stream-silence
-event. Fault-specific live acceptance remains natural-only.
 
 ## Required entry format
 

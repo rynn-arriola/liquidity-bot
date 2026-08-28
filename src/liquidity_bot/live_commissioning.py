@@ -47,6 +47,7 @@ from .live_orders import (
     AsyncTradingGateway,
     LiveOrderExecutor,
     OPEN_MARKET_STATUSES,
+    OrderMutationRejected,
     OrderOutcomeUncertain,
     OrderRequest,
     build_order_payload,
@@ -158,6 +159,13 @@ PRIVATE_HANDOFF_RATE_LIMIT_MAX_SECONDS = 60.0
 MAINTENANCE_FAILURE_THRESHOLD = 3
 MAINTENANCE_STABLE_READS = 3
 MAINTENANCE_POLL_SECONDS = 60.0
+
+# A ready stream task and a no-op repair coroutine can both complete without
+# suspending. Yield on every outer pass so Unix signal callbacks, the isolated
+# telemetry task and socket readers cannot be starved by an otherwise fully
+# synchronous iteration.
+RUN_LOOP_COOPERATIVE_YIELD_SECONDS = 0.01
+NO_ID_REPAIR_IDLE_SECONDS = 0.25
 
 RETIRED_EXIT_RETRY_SECONDS = 60
 
@@ -281,6 +289,16 @@ class CommissioningRunner:
     BALANCE_REJECTION_COOLDOWN_SECONDS = 15.0
     VALIDATION_REJECTION_COOLDOWN_SECONDS = 60.0
     BUYING_POWER_RECHECK_SECONDS = 5.0
+
+    # A response-backed permission denial blocks new exposure account-wide
+    # until a later entry proves otherwise. One entry probe per minute avoids
+    # turning a twenty-market sweep into twenty deterministic failures.
+    # Cancels and reducers bypass that entry circuit: preserving the ability
+    # to reduce risk is more important than assuming an entry rejection also
+    # rejected safety mutations. If a safety mutation itself receives the
+    # same response-backed rejection, retry it on the normal cancel cadence.
+    ENTRY_MUTATION_ACCESS_RECHECK_SECONDS = 60.0
+    RISK_MUTATION_ACCESS_RECHECK_SECONDS = 10.0
 
     # Background terminal repair is grouped by owner, not by order. Five
     # owners lets a twenty-slot recovery complete one fair circuit in four
@@ -535,6 +553,9 @@ class CommissioningRunner:
         self._bot_era_rewards: dict[str, Decimal] = {}
         self._orders_before = 0
         self._runtime_error_counts: dict[str, int] = {}
+        self._entry_mutation_blocked_until: datetime | None = None
+        self._risk_mutation_blocked_until: datetime | None = None
+        self._mutation_access_denial_announced = False
         self._selection_scan_seconds_last: float | None = None
         self._rotation_transition_seconds_last: float | None = None
         # (market, side) -> (label, since). Drives `[eligibility]`. Pruned in
@@ -1800,6 +1821,15 @@ class CommissioningRunner:
         # recovery binding, `ControlledTrialStartup`, the flat proof -- is more
         # accurate for it, and on a clean start it finds nothing and costs one
         # round trip.
+        repaired_denials = self.executor.resolve_recorded_permission_denials(
+            now=now)
+        if repaired_denials:
+            print(
+                f"[startup-intent-repair] at={now.isoformat()} "
+                "reason=definitive_permission_rejection "
+                f"intents={len(repaired_denials)}",
+                flush=True,
+            )
         reconciled_at_startup = False
         try:
             await self._rest_reconcile(now, tag="startup")
@@ -3220,6 +3250,19 @@ class CommissioningRunner:
         self._unresolved_reconcile_cursor += size
         return frozenset(selected)
 
+    def _all_active_markets_blocked_by_no_id_intents(self) -> bool:
+        """True when no active owner can produce id-based repair or mutate."""
+
+        active = set(self.active_slugs)
+        if not active:
+            return False
+        blocked = {
+            str(row["market_slug"] or "").strip()
+            for row in self.ledger.unresolved_intents()
+            if not str(row["exchange_order_id"] or "").strip()
+        }
+        return active.issubset(blocked)
+
     async def _repair_unresolved_orders(
         self, now: datetime, *, markets: frozenset[str],
     ) -> None:
@@ -3534,6 +3577,69 @@ class CommissioningRunner:
             else Decimal("-1"))
         return required, available
 
+    @staticmethod
+    def _is_mutation_action(action: PlanAction) -> bool:
+        return action.kind in {
+            ActionKind.CANCEL,
+            ActionKind.PLACE_POST_ONLY,
+            ActionKind.PLACE_IOC,
+        }
+
+    @staticmethod
+    def _is_risk_reducing_mutation(
+        action: PlanAction, position: Decimal,
+    ) -> bool:
+        """Return whether the mutation removes orders or existing exposure."""
+
+        return (
+            action.kind in {ActionKind.CANCEL, ActionKind.PLACE_IOC}
+            or (action.kind == ActionKind.PLACE_POST_ONLY and position != 0)
+        )
+
+    def _mutation_access_delay(
+        self, actions: list[PlanAction], now: datetime, position: Decimal,
+    ) -> float:
+        """Return the applicable entry or risk-mutation cooldown."""
+
+        if not actions or not self._is_mutation_action(actions[0]):
+            return 0.0
+        blocked_until = (
+            self._risk_mutation_blocked_until
+            if self._is_risk_reducing_mutation(actions[0], position)
+            else self._entry_mutation_blocked_until
+        )
+        if blocked_until is None:
+            return 0.0
+        return max(
+            0.0,
+            (blocked_until - now).total_seconds())
+
+    def _clear_mutation_access_denial(
+        self, action: PlanAction, position: Decimal,
+    ) -> None:
+        """A successful later mutation is positive proof access recovered."""
+
+        if not self._is_mutation_action(action):
+            return
+        risk_reducing = self._is_risk_reducing_mutation(action, position)
+        blocked_until = (
+            self._risk_mutation_blocked_until
+            if risk_reducing else self._entry_mutation_blocked_until)
+        if blocked_until is None:
+            return
+        print(
+            f"[mutation-access-restored] at={self._now().isoformat()} "
+            f"kind={action.kind.name} "
+            f"scope={'risk' if risk_reducing else 'entry'}",
+            flush=True,
+        )
+        if risk_reducing:
+            self._risk_mutation_blocked_until = None
+        else:
+            self._entry_mutation_blocked_until = None
+            self._mutation_access_denial_announced = False
+            self._runtime_error_counts.pop("mutation_access_denied", None)
+
     def _log_shutdown(self, market_slug: str, decision: str, **fields: Any) -> None:
         """Log one shutdown decision, the way `[action]` logs a live one.
 
@@ -3725,6 +3831,16 @@ class CommissioningRunner:
                          state.expected_net_by_side.items()} }",
                 flush=True,
             )
+            mutation_delay = self._mutation_access_delay(
+                actions, now, position=position)
+            if mutation_delay > 0:
+                print(
+                    f"[mutation-access-backoff] at={now.isoformat()} "
+                    f"market={slug} kind={chosen.kind.name} "
+                    f"seconds={mutation_delay:.1f}",
+                    flush=True,
+                )
+                return None, mutation_delay
             if (chosen.kind == ActionKind.PLACE_POST_ONLY and position == 0):
                 rejection_delay = self._recent_rejection_delay(slug, now)
                 if rejection_delay > 0:
@@ -3758,6 +3874,9 @@ class CommissioningRunner:
                 actions, market=state.market,
                 position=position, now=now,
                 quote_observation=quote_observation)
+            if actions and result is not None:
+                self._clear_mutation_access_denial(
+                    actions[0], position=position)
             # The venue balance refresh is periodic. Reserve successful new
             # quote notional locally so later slots in this same sweep cannot
             # all spend the same stale buying-power observation. A rejection or
@@ -3773,7 +3892,14 @@ class CommissioningRunner:
                 )
             self._queue_measurement_sync(observed_at=self._now())
         except Exception as exc:
-            stop = await self._handle_action_failure(exc, slug)
+            stop = await self._handle_action_failure(
+                exc,
+                slug,
+                risk_reducing=(
+                    bool(actions)
+                    and self._is_risk_reducing_mutation(
+                        actions[0], position)),
+            )
             if stop:
                 return stop, 0.0
             return None, self._recovery_delay(f"action_driver:{slug}")
@@ -6273,10 +6399,38 @@ class CommissioningRunner:
         return self._terminal_exception_reason("strategy_plan", exc)
 
     async def _handle_action_failure(
-        self, exc: Exception, slug: str,
+        self, exc: Exception, slug: str, *, risk_reducing: bool = False,
     ) -> str | None:
         """Retry ambiguous remote outcomes; terminate local invariant failures."""
 
+        if isinstance(exc, OrderMutationRejected):
+            await self._report_runtime_error(
+                "mutation_access_denied", exc, include_traceback=False)
+            self._entry_mutation_blocked_until = (
+                self._now()
+                + timedelta(
+                    seconds=self.ENTRY_MUTATION_ACCESS_RECHECK_SECONDS))
+            if risk_reducing:
+                self._risk_mutation_blocked_until = (
+                    self._now()
+                    + timedelta(
+                        seconds=self.RISK_MUTATION_ACCESS_RECHECK_SECONDS))
+            if not self._mutation_access_denial_announced:
+                self._mutation_access_denial_announced = True
+                await self.notifier.send_async(
+                    "⛔ Liquidity Bot mutation access was rejected by "
+                    "Polymarket. New entries pause for one minute, then one "
+                    "entry will probe recovery. Cancels and exits remain "
+                    "available unless their own request is rejected. "
+                    "Existing venue state remains tracked; no cancellation "
+                    "or flatness was inferred.",
+                    critical=True,
+                    channel="errors",
+                )
+            # The request is positively FAILED, not ambiguous. Quarantining
+            # would cancel healthy resting quotes and convert one account-wide
+            # venue denial into twenty market retirements.
+            return None
         await self._report_runtime_error(f"action_driver:{slug}", exc)
         if isinstance(exc, RuntimeInvariantViolation):
             # About the process, not this market. Terminal.
@@ -6732,6 +6886,12 @@ class CommissioningRunner:
             queue_measurement_task = asyncio.create_task(
                 self._queue_measurement_loop())
             while True:
+                # Awaiting an already-ready task does not necessarily hand
+                # control back to the event loop. During the 2026-08-28
+                # twenty-owner no-ID incident every repair gather was empty;
+                # the loop reached 67% CPU and did not run its SIGTERM callback
+                # inside the full 300-second graceful-stop window.
+                await self.sleep(RUN_LOOP_COOPERATIVE_YIELD_SECONDS)
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
@@ -7036,6 +7196,14 @@ class CommissioningRunner:
                     # account-wide fail-closed behavior for that case.
                     if any(not str(row["market_slug"] or "").strip()
                            for row in self.ledger.unresolved_intents()):
+                        continue
+                    if self._all_active_markets_blocked_by_no_id_intents():
+                        # No exchange id means the focused repair has no REST
+                        # call to await, and place() correctly bars every one
+                        # of these owners. Avoid a CPU spin while retaining
+                        # normal stream/account service and the two-second
+                        # repair cadence on the next pass.
+                        await self.sleep(NO_ID_REPAIR_IDLE_SECONDS)
                         continue
                 stop_reason = await self._decision_sweep() or ""
                 if stop_reason:

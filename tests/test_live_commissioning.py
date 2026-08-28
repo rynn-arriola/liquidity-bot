@@ -32,13 +32,16 @@ from liquidity_bot.live_commissioning import (
     MAINTENANCE_STABLE_READS,
     MAX_RECOVERY_ATTEMPTS,
     MAX_RETIREMENT_ROUNDS,
+    NO_ID_REPAIR_IDLE_SECONDS,
     RETIREMENT_COOLDOWN_SECONDS,
+    RUN_LOOP_COOPERATIVE_YIELD_SECONDS,
     CommissioningResult,
     CommissioningRunner,
     _run,
     main,
 )
-from liquidity_bot.live_orders import OrderOutcomeUncertain, OrderRequest
+from liquidity_bot.live_orders import (
+    OrderMutationRejected, OrderOutcomeUncertain, OrderRequest)
 from liquidity_bot.market_selector import (
     RewardMarketOpportunity,
     RewardMarketSelection,
@@ -500,6 +503,38 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # order still places, but the sample is visibly invalid rather than
         # silently pretending it had public-trade coverage.
         self.assertEqual(queue_rows[0]["coverage_gaps"], 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_403_during_decision_fails_once_then_blocks_the_next_slot(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one",
+            "reward_positive_candidate", side="bid", price=.49,
+            qty=Decimal("10"))
+        denial = AdapterError(
+            "location permission denied",
+            operation="POST /v1/orders",
+            status_code=403,
+            error_code="7",
+        )
+        client.orders.create = AsyncMock(side_effect=denial)
+
+        with patch.object(runner.reconciler, "plan", return_value=[action]):
+            first_stop, _ = await runner._decide_for_market("market-one", NOW)
+            second_stop, second_delay = await runner._decide_for_market(
+                "market-one", NOW)
+
+        self.assertIsNone(first_stop)
+        self.assertIsNone(second_stop)
+        self.assertGreater(second_delay, 0)
+        self.assertEqual(client.orders.create.await_count, 1)
+        self.assertEqual(runner.ledger.unresolved_intents(), [])
+        self.assertEqual(runner.ledger.query(
+            "SELECT state FROM execution_intents WHERE operation='PLACE'")[0][0],
+            "FAILED")
+        self.assertNotIn("market-one", runner._retired)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -2276,6 +2311,55 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(runner._next_unresolved_reconcile_scope(rows))
 
+    async def test_only_a_fully_no_id_blocked_active_set_enters_idle_backoff(self):
+        runner, _, _ = self.build_runner()
+        runner._bind_markets(("market-one", "market-two"))
+        for index, slug in enumerate(runner.active_slugs):
+            intent = f"no-id-{index}"
+            runner.ledger.prepare_intent(
+                intent, "PLACE", slug, f"client-{index}", {}, created_at=NOW)
+            runner.ledger.transition_intent(
+                intent, "SUBMITTING", updated_at=NOW)
+            runner.ledger.transition_intent(
+                intent, "UNCERTAIN", updated_at=NOW,
+                error="lost response without id")
+
+        self.assertTrue(runner._all_active_markets_blocked_by_no_id_intents())
+        runner._bind_markets(("market-one", "market-two", "market-three"))
+        self.assertFalse(runner._all_active_markets_blocked_by_no_id_intents())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_no_id_repair_loop_yields_and_observes_operator_stop(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.prepare_intent(
+            "no-id-spin", "PLACE", runner.market_slug, "no-id-client", {},
+            created_at=NOW)
+        runner.ledger.transition_intent(
+            "no-id-spin", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "no-id-spin", "UNCERTAIN", updated_at=NOW,
+            error="lost response without id")
+        runner.preflight_until_ready = AsyncMock(return_value="TRADE")
+        runner._shutdown = AsyncMock()
+        sleeps = []
+
+        async def observe_sleep(seconds):
+            sleeps.append(seconds)
+            if seconds == NO_ID_REPAIR_IDLE_SECONDS:
+                runner.request_stop("operator_sigterm")
+            await asyncio.sleep(0)
+
+        runner.sleep = observe_sleep
+
+        result = await asyncio.wait_for(runner.run(), timeout=2)
+
+        self.assertEqual(result.stop_reason, "operator_sigterm")
+        self.assertIn(RUN_LOOP_COOPERATIVE_YIELD_SECONDS, sleeps)
+        self.assertIn(NO_ID_REPAIR_IDLE_SECONDS, sleeps)
+        runner._shutdown.assert_awaited_once_with("operator_sigterm")
+
     async def test_unresolved_repair_does_not_serialize_terminal_owners_behind_one_404(self):
         """One consistency-lagged id cannot hide four terminal answers."""
 
@@ -2367,6 +2451,28 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             [row["intent_id"] for row in runner.ledger.unresolved_intents()],
             ["orphan-place"],
             "startup must diagnose the ambiguity, never clear it")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_repairs_exact_legacy_permission_denial_before_orphan_gate(self):
+        runner, _, _ = self.build_runner(clock=TickingClock())
+        runner.ledger.prepare_intent(
+            "old-location-denial", "PLACE", "market-one", "old-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "old-location-denial", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "old-location-denial", "UNCERTAIN", updated_at=NOW,
+            error="AdapterError: POST /v1/orders outcome uncertain: "
+                  "PermissionDeniedError: VPN (status=403, code=7)")
+
+        mode = await runner.preflight()
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner.ledger.unresolved_intents(), [])
+        self.assertEqual(runner.ledger.query(
+            "SELECT state FROM execution_intents WHERE intent_id=?",
+            ("old-location-denial",))[0][0], "FAILED")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -6792,6 +6898,86 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # Genuine transport failure still retires quotes before resuming.
         self.assertIsNone(stop)
+
+    async def test_permission_rejection_blocks_entry_but_not_risk_reduction(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        denied = OrderMutationRejected(
+            "POST /v1/orders rejected: location denied",
+            operation="POST /v1/orders",
+            status_code=403,
+            error_code="7",
+        )
+
+        stop = await runner._handle_action_failure(denied, runner.market_slug)
+        first_until = runner._entry_mutation_blocked_until
+        messages_after_first = len(notifier.messages)
+        await runner._handle_action_failure(denied, "market-two")
+
+        self.assertIsNone(stop)
+        self.assertIsNotNone(first_until)
+        self.assertGreater(
+            runner._mutation_access_delay([PlanAction(
+                ActionKind.PLACE_POST_ONLY, runner.market_slug, "test",
+                side="bid", price=.49, qty=Decimal("1"))], NOW,
+                position=Decimal("0")),
+            0,
+        )
+        self.assertEqual(
+            runner._mutation_access_delay([PlanAction(
+                ActionKind.CANCEL, runner.market_slug, "test",
+                order_id="exchange-one")], NOW, position=Decimal("0")),
+            0,
+        )
+        self.assertEqual(
+            runner._mutation_access_delay([PlanAction(
+                ActionKind.PLACE_POST_ONLY, runner.market_slug, "reduce",
+                side="ask", price=.50, qty=Decimal("1"))], NOW,
+                position=Decimal("1")),
+            0,
+        )
+        await runner._handle_action_failure(
+            denied, runner.market_slug, risk_reducing=True)
+        risk_delay = runner._mutation_access_delay([PlanAction(
+            ActionKind.CANCEL, runner.market_slug, "test",
+            order_id="exchange-one")], NOW, position=Decimal("0"))
+        self.assertGreater(risk_delay, 0)
+        self.assertLessEqual(
+            risk_delay, runner.RISK_MUTATION_ACCESS_RECHECK_SECONDS)
+        self.assertEqual(len(notifier.messages), messages_after_first)
+        self.assertNotIn(runner.market_slug, runner._retired)
+        self.assertNotIn("market-two", runner._retired)
+        self.assertTrue(any(
+            critical and "mutation access was rejected" in message
+            for message, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_successful_mutation_is_only_proof_that_clears_access_circuit(self):
+        runner, _, _ = self.build_runner()
+        runner._entry_mutation_blocked_until = NOW - timedelta(seconds=1)
+        runner._mutation_access_denial_announced = True
+        action = PlanAction(
+            ActionKind.PLACE_POST_ONLY, runner.market_slug, "probe",
+            side="bid", price=.49, qty=Decimal("1"))
+
+        runner._clear_mutation_access_denial(action, position=Decimal("0"))
+
+        self.assertIsNone(runner._entry_mutation_blocked_until)
+        self.assertFalse(runner._mutation_access_denial_announced)
+
+    async def test_successful_cancel_clears_only_risk_mutation_circuit(self):
+        runner, _, _ = self.build_runner()
+        runner._entry_mutation_blocked_until = NOW + timedelta(seconds=60)
+        runner._risk_mutation_blocked_until = NOW + timedelta(seconds=10)
+        action = PlanAction(
+            ActionKind.CANCEL, runner.market_slug, "cancel",
+            order_id="exchange-one")
+
+        runner._clear_mutation_access_denial(action, position=Decimal("0"))
+
+        self.assertIsNone(runner._risk_mutation_blocked_until)
+        self.assertIsNotNone(runner._entry_mutation_blocked_until)
 
     async def test_a_stale_book_does_not_cancel_a_resting_quote(self):
         """What the operator watched live: place, then cancel two seconds on.

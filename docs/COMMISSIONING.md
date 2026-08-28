@@ -238,6 +238,26 @@ runner startup and restart:
 bash scripts/post_polymarket_changelog.sh
 ```
 
+## Mutation permission and location denial
+
+A Retail HTTP 403 is a positive rejection of that request, not proof about any
+other venue state. The exact PLACE or CANCEL intent becomes `FAILED`; timeouts,
+connection loss, 5xx and malformed success remain `UNCERTAIN`. The ordinary
+20-slot action loop then opens one account-wide 60-second new-entry circuit so
+a location or permission failure cannot retire every market. Existing orders
+and positions stay tracked. Cancels and reducers bypass an entry denial; if a
+safety mutation itself is rejected, it receives a short 10-second retry
+cooldown. One later desired entry probes entry recovery, and successful
+mutations clear only their matching circuit. The first denial sends one
+critical operations alert.
+
+On startup, old rows are repaired only when their durable error contains the
+reviewed triple `PermissionDeniedError`, `status=403`, and `code=7`. This is
+stored positive response proof, not snapshot absence. Every near-match still
+requires normal reconciliation or the stopped-only orphan resolver. Shutdown
+retains its independent exit attempts and never treats either circuit as
+flatness.
+
 ## Exit meanings
 
 - `0`: clean operator/risk exit with flat state proven;

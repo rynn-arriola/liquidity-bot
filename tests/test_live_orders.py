@@ -15,6 +15,7 @@ from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
 from liquidity_bot.live_orders import (
     AsyncTradingGateway,
     LiveOrderExecutor,
+    OrderMutationRejected,
     OrderOutcomeUncertain,
     OrderRequest,
     OrderValidationError,
@@ -62,6 +63,13 @@ class CountingLimiter:
 
     async def wait(self):
         self.calls += 1
+
+
+class ResponseError(RuntimeError):
+    def __init__(self, message, *, status_code, body=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body or {}
 
 
 class Orders:
@@ -301,6 +309,77 @@ class LiveOrderExecutorTests(unittest.TestCase):
             "SELECT * FROM execution_quote_observations"), [])
         self.assertTrue(self.ledger.market_has_unresolved_intent("market-one"))
         self.assertFalse(self.ledger.risk_state_known())
+
+    def test_response_backed_403_fails_create_without_unresolved_intent(self):
+        self.client.orders.create_results = [ResponseError(
+            "location permission denied",
+            status_code=403,
+            body={"code": 7},
+        )]
+
+        with self.assertRaises(OrderMutationRejected) as raised:
+            self.run_async(self.executor.place(
+                self.request(), market(), now=NOW,
+                intent_id="intent-denied", client_order_id="client-denied"))
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.error_code, "7")
+        self.assertEqual(len(self.client.orders.create_calls), 1)
+        self.assertEqual(self.ledger.unresolved_intents(), [])
+        row = self.ledger.query(
+            "SELECT state,error FROM execution_intents WHERE intent_id=?",
+            ("intent-denied",))[0]
+        self.assertEqual(row["state"], "FAILED")
+        self.assertIn("OrderMutationRejected", row["error"])
+
+    def test_response_backed_403_fails_cancel_without_inferring_terminal_order(self):
+        self.client.orders.create_results = [AdapterError(
+            "location permission denied",
+            operation="POST /v1/order/exchange-one/cancel",
+            status_code=403,
+            error_code="7",
+        )]
+
+        with self.assertRaises(OrderMutationRejected):
+            self.run_async(self.executor.cancel(
+                client_order_id="client-one",
+                exchange_order_id="exchange-one",
+                market_slug="market-one",
+                now=NOW,
+                intent_id="cancel-denied"))
+
+        self.assertEqual(len(self.client.orders.cancel_calls), 1)
+        self.assertEqual(self.ledger.unresolved_intents(), [])
+        row = self.ledger.query(
+            "SELECT state,exchange_order_id FROM execution_intents "
+            "WHERE intent_id=?", ("cancel-denied",))[0]
+        self.assertEqual(row["state"], "FAILED")
+        self.assertEqual(row["exchange_order_id"], "exchange-one")
+
+    def test_exact_legacy_permission_denial_is_repaired_but_near_match_is_not(self):
+        for intent_id, error in (
+            ("legacy-denied",
+             "AdapterError: POST /v1/orders outcome uncertain: "
+             "PermissionDeniedError: VPN (status=403, code=7)"),
+            ("legacy-timeout",
+             "AdapterError: POST /v1/orders outcome uncertain: "
+             "TimeoutError (status=403, code=7)"),
+        ):
+            self.ledger.prepare_intent(
+                intent_id, "PLACE", "market-one", f"client-{intent_id}", {},
+                created_at=NOW)
+            self.ledger.transition_intent(
+                intent_id, "SUBMITTING", updated_at=NOW)
+            self.ledger.transition_intent(
+                intent_id, "UNCERTAIN", updated_at=NOW, error=error)
+
+        repaired = self.executor.resolve_recorded_permission_denials(now=NOW)
+
+        self.assertEqual(repaired, ("legacy-denied",))
+        states = {row["intent_id"]: row["state"] for row in self.ledger.query(
+            "SELECT intent_id,state FROM execution_intents")}
+        self.assertEqual(states["legacy-denied"], "FAILED")
+        self.assertEqual(states["legacy-timeout"], "UNCERTAIN")
 
     def test_missing_create_id_is_uncertain(self):
         self.client.orders.create_results = [{"executions": []}]

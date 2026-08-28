@@ -30,6 +30,15 @@ class OrderOutcomeUncertain(RuntimeError):
     """The remote result is ambiguous and the market remains quarantined."""
 
 
+class OrderMutationRejected(AdapterError):
+    """The venue positively rejected a mutation without accepting it.
+
+    This is deliberately separate from ``OrderOutcomeUncertain``. A signed
+    HTTP rejection is terminal proof about this request; a timeout, dropped
+    connection, malformed success response, or 5xx remains ambiguous.
+    """
+
+
 # The market metadata endpoint currently emits MARKET_STATUS_OPEN while the
 # full-book endpoint emits MARKET_STATE_OPEN. Accept only these two observed
 # documented-open families; every other value remains fail-closed.
@@ -173,7 +182,24 @@ class AsyncTradingGateway:
         try:
             return await call()
         except Exception as exc:
-            detail = self.gateway._adapter_error(operation, exc)
+            # Preserve structured metadata if the SDK boundary has already
+            # normalized the exception. Re-normalizing an AdapterError would
+            # discard its code because it no longer carries the raw body.
+            detail = (exc if isinstance(exc, AdapterError)
+                      else self.gateway._adapter_error(operation, exc))
+            # A structured 403 response is positive proof that the venue
+            # refused this mutation. Keeping it UNCERTAIN invents an order
+            # that the response says was not accepted, and an account-wide
+            # permission/location denial then poisons every market slot.
+            if detail.status_code == 403:
+                raise OrderMutationRejected(
+                    f"{operation} rejected: {detail}",
+                    operation=operation,
+                    status_code=detail.status_code,
+                    error_code=detail.error_code,
+                    trace_id=detail.trace_id,
+                    retry_after_seconds=detail.retry_after_seconds,
+                ) from exc
             raise AdapterError(
                 f"{operation} outcome uncertain: {detail}",
                 operation=operation,
@@ -240,6 +266,32 @@ class LiveOrderExecutor:
     def _id(prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex}"
 
+    def resolve_recorded_permission_denials(self, *, now: datetime) -> tuple[str, ...]:
+        """Close legacy uncertain intents that contain exact rejection proof.
+
+        Runners before the response-backed rejection classifier persisted a
+        structured location denial as free-form error text and marked the
+        intent uncertain. The three required tokens below are the durable
+        response metadata recorded by that old path. A timeout, 5xx, generic
+        403, missing id, or merely absent order cannot pass this repair.
+        """
+
+        repaired: list[str] = []
+        for row in self.ledger.unresolved_intents():
+            if str(row["state"]).upper() != "UNCERTAIN":
+                continue
+            error = str(row["error"] or "")
+            if not all(token in error for token in (
+                    "PermissionDeniedError", "status=403", "code=7")):
+                continue
+            intent_id = str(row["intent_id"])
+            self.ledger.transition_intent(
+                intent_id, "FAILED", updated_at=now,
+                exchange_order_id=row["exchange_order_id"],
+                error=f"definitive_permission_rejection: {error}")
+            repaired.append(intent_id)
+        return tuple(repaired)
+
     async def place(self, request: OrderRequest, market: MarketMetadata, *,
                     now: datetime, intent_id: str | None = None,
                     client_order_id: str | None = None) -> SubmittedOrder:
@@ -270,6 +322,11 @@ class LiveOrderExecutor:
             exchange_id = str(response.get("id") or "").strip()
             if not exchange_id:
                 raise AdapterError("create-order response has no exchange order id")
+        except OrderMutationRejected as exc:
+            self.ledger.transition_intent(
+                intent_id, "FAILED", updated_at=now,
+                error=f"{type(exc).__name__}: {exc}")
+            raise
         except Exception as exc:
             self.ledger.transition_intent(
                 intent_id, "UNCERTAIN", updated_at=now,
@@ -311,6 +368,12 @@ class LiveOrderExecutor:
             intent_id, "SUBMITTING", updated_at=now)
         try:
             await self.gateway.cancel(exchange_order_id, market_slug)
+        except OrderMutationRejected as exc:
+            self.ledger.transition_intent(
+                intent_id, "FAILED", updated_at=now,
+                exchange_order_id=exchange_order_id,
+                error=f"{type(exc).__name__}: {exc}")
+            raise
         except Exception as exc:
             self.ledger.transition_intent(
                 intent_id, "UNCERTAIN", updated_at=now,

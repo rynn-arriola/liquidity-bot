@@ -11,6 +11,7 @@ history, not current instructions or runtime truth.
 | [Watchlist through 2026-08-27](WATCHLIST_THROUGH_2026-08-27.md) | Prior measurements, decisions and closed hypotheses |
 | [Findings through 2026-08-27](FINDINGS_THROUGH_2026-08-27.md) | Full measured evidence log |
 | [Bug fixes through 2026-08-27](BUGFIXES_THROUGH_2026-08-27.md) | Full production defect history |
+| [Mutation access denial — 2026-08-28](MUTATION_ACCESS_DENIAL_2026-08-28.md) | Evidence, repair and activation state for the 20-slot 403 cascade |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

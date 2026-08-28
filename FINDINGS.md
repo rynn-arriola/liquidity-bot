@@ -24,9 +24,17 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Private-only and whole-stream silence have different order cost.** Six natural
   private-shard repairs preserved 32-35 orders with `cancels=0`; simultaneous
   251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
-- **Twenty-slot health is not raw order count.** At 21:09Z, 24 orders/14 markets
-  coexisted with 29-34 viable; after flat proof, serial service delayed restoring
-  20 active owners. This was scheduling, not low supply. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+- **The 2026-08-28 one-order state was a 403 cascade, not low supply.** Retail
+  returned HTTP 403/code 7 location denials, but the old mutation path wrote
+  rejected creates as no-ID `UNCERTAIN`. All 20 owners retired while selection
+  still had 27 viable markets. Private silence recovered with `cancels=0`; the
+  post-flat trigger never ran. The all-no-ID repair loop then reached 67% CPU
+  and starved SIGTERM; every outer pass now yields and full no-ID slates idle.
+  [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
+- **A signed rejection and a lost response require opposite intent states.**
+  Response-backed 403 means that exact request failed; timeout, connection loss,
+  5xx, malformed success and absence remain ambiguous. Only later mutation
+  success proves account mutation access recovered.
 - **Risk now has one quantity authority.** The approved profile derives portfolio/market/account limits as `30×/4×/8×` size; 20 slots and six hours stay fixed.
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.
@@ -82,13 +90,6 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Changelog monitoring belongs outside trading.** The public RSS feed can be
   polled by a lock/timeout-bounded process with independent state and Discord
   notification. It needs no API key, ledger access, REST budget or runner hook.
-- **Initial official-API remediation acceptance passed on 2026-08-28.** A
-  positively flat/order-free restart completed the additive trade-state
-  migration and reached exactly 20 quoting owners, 37 resting orders, zero
-  positions and zero unresolved mutations. The new-run log had zero traceback,
-  mutation timeout, runtime recovery or stream-silence event; destructive
-  fault injection remains prohibited, so bust/rejection/silence branches await
-  natural evidence.
 - **Retail list volume fields were absent on the observed 2026-08-28 wire.**
   The first implementation silently selected no pure markets. Bounded discovery
   now ranks homogeneous full-book `sharesTraded`; its 10-minute acceptance
@@ -97,4 +98,3 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Rolling scalp episodes are not leave-it orders.** Untouched pairs renew at
   five minutes and can rotate out of scope. Exact GTC evidence therefore needs
   the bounded retained cohort; it excludes coverage loss and uses no future row.
-- **A cumulative gap counter is not episode-level coverage evidence.** One old gap censored 17 later clean GTC pairs; strict replay uses overlapping intervals.

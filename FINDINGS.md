@@ -40,7 +40,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   and process-session hours answer different questions.
 - **Later cash activity erased proven historical account truth.** The historical
   scan now ignores only post-window completions while still reaching EOF; live
-  snapshots remain strict. August 26 correctly resolves to `-$64.4870`.
+  snapshots remain strict. Deployed acceptance resolved August 26 to
+  `-$64.4870` trading and `+$145.12` finalized net.
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
   authority.

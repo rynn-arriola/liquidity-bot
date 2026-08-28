@@ -21,10 +21,9 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   remain complete; full traces are bounded.
 - An open-position paper mark could force loss-realizing hard-stop shutdown.
   Fixed with provisional breach state and newer post-close balance evidence.
-- Historical rows discarded all proven account boundaries when a cash event
-  completed after their fixed cutoff. The historical scan now skips only those
-  later events; live snapshots stay strict. Verified locally; deploy pending.
-
+- Historical rows discarded proven account boundaries after post-cutoff cash.
+  The scan now skips only later events; live snapshots stay strict. `1c82778`
+  passed 745 local/server tests and report acceptance without restarting the bot.
 ## Latest deployed private-stream repair
 
 - Silent shards caused global cancellation and cross-shard snapshot clearing.

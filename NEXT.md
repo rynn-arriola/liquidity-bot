@@ -65,10 +65,3 @@ timeout values.
 end with `flat=false`. Decide whether the script should fail when the final
 record lacks flat proof. Until then, every stop requires final-record plus an
 authenticated venue snapshot.
-
-## 6. Deploy and accept corrected historical reward rows
-
-The fix is locally verified with 745 tests and a deliberate reversal. Deploy
-without restarting the bot, run one bounded non-posting report, and confirm
-August 26 is `-$64.49` with finalized net `+$145.12`. The next hourly process
-loads the script automatically. Per-market attribution remains incomplete.

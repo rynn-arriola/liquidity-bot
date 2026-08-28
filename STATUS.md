@@ -5,7 +5,7 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 12:25 ET / 2026-08-28 16:25 UTC
+- **Verified:** 2026-08-28 14:11 ET / 2026-08-28 18:11 UTC
 - **Liquidity bot:** LIVE; supervisor PID 34772 / runner PID 34778, size 10
 - **Live exposure:** authenticated dashboard proved zero positions and 30
   resting orders, zero `UNKNOWN_ABSENT` and three just-submitted unresolved
@@ -13,21 +13,21 @@ snapshots are under [docs/history/](docs/history/README.md).
 - **20-slot health:** rebuilding after whole-stream recovery: 16/20 quoting,
   two bound-idle and two empty; same runner remains active
 - **Maker-lab:** stopped
-- **Running source:** `a8d91d0` behavior is loaded; deployed documentation marker
-  is `d1d4384`
-- **Verification:** all 744 local and server tests, documentation audit,
+- **Running source:** the unchanged bot has `a8d91d0` behavior loaded; report
+  fix `1c82778` is deployed for hourly/new report processes
+- **Verification:** all 745 local and server tests, documentation audit,
   compilation and deliberate reversal checks passed
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
-- **Spread-scalp measurement:** supervisor PID 22830 / collector PID 22836
+- **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
   started 12:04:58Z; separate database/socket, one-read-per-second cap and no
   order path
 - **Fixed GTC:** 20 trials appeared after warm-up; 20/20 feature rows and 20
   clean paths, with zero false historical-gap exclusions
 - **Other collection:** adverse-fill and queue studies run inside the bot;
   daily probe, hourly rewards/changelog and nightly backup schedules are active
-- **Reporting fix:** August 26's `~-$48.65` fallback is corrected locally to
-  audited `-$64.49`; 745 tests pass and deployment is pending
+- **Reporting fix:** deployed report accepted August 26 at audited `-$64.49`
+  trading and `+$145.12` finalized net; no bot restart occurred
 
 ## Active operating envelope
 

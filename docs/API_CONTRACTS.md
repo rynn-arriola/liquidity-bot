@@ -143,6 +143,22 @@ Official references:
   clock is `lastTransactTime`. Order normalization prefers `updateTime`, then
   `lastTransactTime`, and only then creation/insertion clocks.
 
+## Execution commission
+
+- Retail executions expose `commissionNotionalCollected` as a USD
+  `MoneyAmount`. Persist its decimal `value` unchanged: positive means a taker
+  charge and negative means a maker rebate. A missing field is zero.
+- The venue-reported signed amount is authoritative for ledger accounting and
+  realized P&L. The published formula is used only for projections and safety
+  ceilings; do not replace an observed fill commission with a recomputation.
+- Partner/institutional execution examples expose scaled integer notional and
+  require price and fractional-quantity scales. That decoding does not apply
+  to the Retail `MoneyAmount` used by this bot.
+- The exchange-wide schedule effective 2026-07-01 uses
+  `theta * contracts * price * (1 - price)`, with theta `0.06` for takers and
+  `-0.0125` for makers, rounded to cents with banker's rounding. Canceled,
+  expired and rejected orders have no fee.
+
 ## Earnings
 
 - `GET /v1/incentives/earnings` returns `{ "rewards": [...] }`.

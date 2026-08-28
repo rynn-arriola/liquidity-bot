@@ -63,6 +63,7 @@ Last reviewed: **2026-08-27**.
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
 | Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 read retries are bounded; mutations never auto-retry. | The trader guide's institutional firm/endpoint limits do not replace the Retail 20 requests/second per-key ceiling. The limiter is process-local, so concurrent external reports on the same key still aggregate at the venue. `Retry-After` is not consumed. |
+| Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. | Some SDK exceptions lose structured status, leaving narrow text classification. REST trace IDs are not persisted. Generic advice to retry POST must never override mutation ambiguity safety. |
 | Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus Retail `/v1/portfolio/activities` recover recent executions; exactly one account execution leg is selected with `isAggressor`; execution IDs deduplicate; rewards and non-trading cash are separated from trading P&L. | The ledger does not separately persist `tradeId` or trade state and cannot reverse `TRADE_STATE_BUSTED`. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
 | Order management | [Trader guide](https://docs.polymarket.us/trader-guide/order-management), [Retail orders](https://docs.polymarket.us/api-reference/orders/overview) | Reward quotes are asynchronous post-only GTC limits; forced reductions are bounded IOC limits; local validation covers identity, open state, price bounds, tick and minimum quantity; HTTP 200/order ID is acknowledgement only; stream/REST state proves acceptance, fills and cancellation; cancel-confirm-replace prevents overlapping ownership. | `buyingPower` is fetched but not used as an entry gate. Rejection reasons are stored but do not yet drive reason-specific backoff or alerting. Preview is deliberately not called for every quote because it would consume the shared hot-path budget. Batch mutation is not used and its echoed IDs would not prove per-order success. |
@@ -84,6 +85,22 @@ A returned exchange order ID acknowledges receipt. It does not prove that the
 order is resting. A place intent reconciles only from a venue order state; a
 cancel or modify reconciles only from a terminal state. Absence from a snapshot
 is never treated as cancellation.
+
+### Venue-reported commission is the accounting authority
+
+The schedule computes taker fees and maker rebates symmetrically around a
+price of 0.50. Fees exist only on executed fills; a canceled, expired or
+rejected order has no fee. Taker charges are deducted and maker rebates are
+credited when the fill occurs. For partial aggressive fills, the venue rounds
+each fill using banker's rounding and limits the total charge to the rounded
+cumulative exact fee; maker rebates are independently rounded per fill.
+
+Use the signed commission reported on the Retail execution for the ledger and
+P&L rather than recomputing it. The formula is appropriate for forecasts and
+risk ceilings. Retail `commissionNotionalCollected` is a USD `MoneyAmount`,
+whereas the partner/institutional execution schema can expose a scaled integer
+that requires both price and fractional-quantity scales. Mixing those encodings
+can misstate fees by 100 times.
 
 ### Streaming and REST prove different things
 

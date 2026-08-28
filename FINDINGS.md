@@ -44,6 +44,11 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   `api.prod.polymarketexchange.com` are conceptual unless the matching Retail
   endpoint documents them. The audited source map and implementation gaps are
   in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md).
+- **The 2026-07-01 fee schedule matches the bot's signed-fee accounting.**
+  Retail execution commission is already a USD `MoneyAmount`: positive taker
+  fees are costs and negative maker rebates are credits. Partner fixed-point
+  decoding is a different interface and would overstate some Retail fees if
+  applied here. No fee-handling defect was found in this documentation review.
 
 ## How to add a finding
 

@@ -13,10 +13,11 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
   showed zero positions, 13 resting and zero unresolved. At 11:07Z the ledger
   showed 23 open and zero position/unresolved/absent; it is not a venue snapshot
 - **Maker-lab:** stopped
-- **GitHub:** `main` includes reviewed source commit `8e348eb`
+- **GitHub:** `main` includes reviewed economic-idle repair `dc71ae8`
 - **Server marker:** `8e348eb`; source/tests match the marker
 - **Latest trading source:** `1ff0e42`, deployed and active in unchanged PID 5445
-- **Parity:** desktop/GitHub/server passed; laptop requires its own result
+- **Parity:** desktop/GitHub match `dc71ae8`; server matches marker `8e348eb`.
+  Undeployed source and unrelated local measurement work leave expected drift
 - **Deployed verification:** all 706 local and reduced-priority server tests passed
 - **Official API remediation:** seven prioritized reliability fixes and the
   rolling-report compatibility repair are pushed, deployed and active; the
@@ -25,8 +26,8 @@ Historical snapshots are under [docs/history/](docs/history/README.md).
   schedule is active at minute 23; it has no trading API or ledger access
 - **Spread-scalp measurement:** isolated supervisor PID 8376 / collector PID
   8382 is active against `data/scalp.db`; it has no order path
-- **Pending strategy repair:** local work safely replaces continuously
-  economically idle slots; it is not deployed and has not changed the runner
+- **Pending strategy repair:** pushed commit `dc71ae8` safely replaces
+  continuously economically idle slots; it is not deployed or active
 
 ## Active operating envelope
 

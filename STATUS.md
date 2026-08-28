@@ -5,7 +5,7 @@ snapshots are under [docs/history/](docs/history/README.md).
 
 ## Verified state
 
-- **Verified:** 2026-08-28 15:40 ET / 2026-08-28 19:40 UTC
+- **Verified:** 2026-08-28 15:52 ET / 2026-08-28 19:52 UTC
 - **Liquidity bot:** STOPPED by operator decision; no supervisor or runner
 - **Live exposure:** the stopped-only orphan resolver took a fresh authenticated
   account snapshot and proved zero venue orders and zero positions before
@@ -13,14 +13,14 @@ snapshots are under [docs/history/](docs/history/README.md).
 - **20-slot health:** not applicable while stopped; no slot/size/horizon change
   was made by this recovery work
 - **Maker-lab:** stopped
-- **Deployed source:** server marker is `ca9216c`; no bot process currently has
+- **Deployed source:** server marker is `c28aba2`; no bot process currently has
   it loaded
 - **Stable rollback anchor:** `v1.0.0` points to deployed commit `744b7c1`;
   tagging it did not stop, restart or mutate the live process
 - **Dynamic size capability:** `5165fc4` is deployed; whole values 5-30 share
   one validator, while persisted/running size remains 10 without a restart
-- **Verification:** all 755 local tests, documentation audit, compilation and
-  three deliberate reversals pass; server verification is pending deployment
+- **Verification:** all 755 local and server tests, Linux shell syntax,
+  compilation, documentation audit, three reversals and four-way parity pass
 - **Webhook routing:** operations use error/status only; routine live, shadow
   and dashboard summaries explicitly opt into summary delivery
 - **Spread-scalp measurement:** supervisor PID 22830 / collector PID 38363
@@ -62,17 +62,17 @@ bound. The underlying mutation was a Polymarket/Cloudflare 504 at 18:35:11Z.
 The reviewed stopped-only recovery was run dry and then applied. Its fresh
 snapshot returned zero live orders and zero position markets, so exactly that
 intent moved `UNCERTAIN -> FAILED`; zero unresolved remain. The bot was not
-restarted. A code repair is being verified so future startups refuse once with
-the correct recovery instruction instead of loading the stale market and
-entering a misleading transport-failure loop.
+restarted. Deployed `c28aba2` now makes future startups refuse once with the
+correct recovery instruction instead of loading the stale market and entering
+a misleading transport-failure loop.
 
 ## Current operating instruction
 
 Keep the liquidity bot stopped until the operator explicitly authorizes a new
-start. Finish, review, push and deploy the no-ID startup/recovery repair without
-restarting. Avoid repeated authenticated probes; the latest stopped-only
-resolver already supplied current flat/order-free proof. Do not change strategy,
-size, slots or stops from this availability repair.
+start. The no-ID startup/recovery repair is deployed but deliberately not live.
+Avoid repeated authenticated probes; the latest stopped-only resolver supplied
+current flat/order-free proof. Do not change strategy, size, slots or stops from
+this availability repair.
 
 ## Current records
 

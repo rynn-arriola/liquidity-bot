@@ -5,7 +5,7 @@ This file contains unfinished work. Completed implementation history is in
 
 ## 0. Remaining natural acceptance
 
-The live runner uses marker `53fa838`. Continue accepting these paths only
+The live runner uses marker `2831026`. Continue accepting these paths only
 when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
@@ -18,15 +18,15 @@ when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-## 1. Deploy private-shard overlap recovery without restarting
+## 1. Naturally accept private-shard overlap recovery
 
-The reviewed and pushed repair preserves orders and the exact 20-market scope
-when private shards cross the valid 180-second heartbeat deadline. Deploy only
-with operator authorization; deployment must not restart the current bot. Load
-it at the next authorized restart. Natural acceptance must
-show `[private-shard-recovery] ... cancels=0`, unchanged runner PID, all active
-owners retained and no unresolved/`UNKNOWN_ABSENT` state. The fallback path
-must still quarantine globally if any handoff proof fails.
+Commit `2831026` is active and startup acceptance passed with Polymarket's real
+empty-subscription pattern: `order_eof=0/3 account_balance=3/3`. Do not induce a
+private-stream failure. On a natural 180-second silence, acceptance must show
+`[private-shard-recovery] ... cancels=0`, unchanged runner PID, retained active
+owners and no unresolved/`UNKNOWN_ABSENT` state. The fallback must still
+quarantine globally if any replacement balance, scope, REST or liveness proof
+fails.
 
 ## 2. Collect fixed-GTC evidence
 

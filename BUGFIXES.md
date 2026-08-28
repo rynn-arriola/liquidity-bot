@@ -28,7 +28,7 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server.
 
-## Reviewed locally; deployment pending
+## Latest deployed private-stream repair
 
 - Two silent private shards caused global cancellation and a transient zero-
   order slate although the runner and 20 owners survived; filtered snapshots
@@ -39,7 +39,7 @@ Read current deployment/runtime state from [STATUS.md](STATUS.md) and the server
   heartbeats use the same no-cancel proof; any failure retains global quarantine.
   Scoped snapshots clear only their markets. Focused 20-slot, partial/failure,
   race, startup and cross-shard regressions passed; reversals reproduced defects.
-  Full-suite and deployment state are in [STATUS.md](STATUS.md).
+  Commit `2831026` passed 740 local/server tests and live startup acceptance.
 
 ## Latest deployment additions
 

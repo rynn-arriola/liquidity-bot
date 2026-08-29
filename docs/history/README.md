@@ -14,6 +14,7 @@ history, not current instructions or runtime truth.
 | [Mutation access denial — 2026-08-28](MUTATION_ACCESS_DENIAL_2026-08-28.md) | Evidence, repair and activation state for the 20-slot 403 cascade |
 | [Desktop cold-backup setup — 2026-08-28](DESKTOP_COLD_BACKUP_SETUP_2026-08-28.md) | Inactive WSL runtime, recovery validation and manual-handoff boundary |
 | [TV Gain dashboard addition — 2026-08-28](TV_GAIN_DASHBOARD_2026-08-28.md) | P&L cards, seven-day Gain table, accounting semantics and zero-API activation boundary |
+| [Score-clock slot retirement — 2026-08-28](SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md) | Why score telemetry produced `OBSERVED` slots, containment and 20-slot reversal proof |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

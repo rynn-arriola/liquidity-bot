@@ -48,12 +48,10 @@ tracked root `AGENTS.md` is only a thin Codex auto-discovery pointer,
 rules. A workstation may also have an ignored `AGENTS.local.md`; read it when
 present, but never commit it.
 
-## Desktop, laptop, GitHub, Drive and production parity
+## Desktop, laptop, GitHub and production parity
 
 GitHub is the tracked-file synchronization point between the desktop and
-laptop. The Google Drive folder `Liquidity Bot Private Recovery` is the
-AI-managed rendezvous for versioned, client-encrypted runtime recovery
-archives that must not enter git. Production is not a git checkout, so it is
+laptop. Production is not a git checkout, so it is
 not required to equal a newer documentation-only GitHub commit. It must instead
 satisfy both of these conditions:
 
@@ -85,29 +83,31 @@ scripts newer than the loaded runtime are allowed when runner source and tests
 still match the deployed marker.
 
 When the operator says **"run parity"**, **"run parity check"** or **"run
-four-way parity check"**, perform every applicable step below:
+three-way parity check"**, perform every applicable step below:
 
 1. Run the command with `--sync` on the current machine.
 2. If the SSH peer is reachable, check and safely update it in the same run. If
    it is offline, mark it pending; do not make its absence fail the available
    workstation or pretend the peer is current.
-3. Always use the connected Google Drive connector to add a new verified,
-   versioned recovery archive to `Liquidity Bot Private Recovery`, even when
-   both computers are online. Prefer the active laptop's newest safe snapshot.
-   If it is unavailable, upload only the newest already-verified accessible
-   recovery copy and label its source role and capture time truthfully.
-4. Read back the Drive file metadata and report its source, capture time, hash
-   and age. An upload success is not evidence that an offline machine or live
-   ledger is current.
 
-The phrase authorizes git fetch, clean behind-only fast-forwards on both
-reachable workstations and the versioned Drive archive write/readback. It does
-not authorize overwriting/committing dirty work, choosing a side of diverged
-history, uploading a raw live SQLite/WAL file, exposing an unencrypted secret,
-deploying trading code, handing off the writable ledger or starting/restarting
-the bot. Never upload SSH private keys. If the encryption packager or Drive
-connector is unavailable, mark the Drive dimension pending instead of sending
-unsafe material.
+The phrase authorizes git fetch and clean behind-only fast-forwards on both
+reachable workstations. Parity has exactly three authorities: PC, laptop and
+GitHub. It does not use Google Drive and must not wait for a recovery archive.
+It does not authorize overwriting/committing dirty work, choosing a side of
+diverged history, deploying trading code, handing off the writable ledger or
+starting/restarting the bot.
+
+The separate phrase **"run weekly task"** authorizes one manual Drive recovery
+run. Either Codex (primary AI operator) or Claude (backup AI operator) may use
+its connected Google Drive access. Prefer the active laptop's newest safe
+snapshot; if unavailable, label any older verified source and capture time
+truthfully. Build consistent SQLite snapshots through the online backup API,
+encrypt locally with `scripts/recovery_archive.py`, upload a new version to
+`Liquidity Bot Private Recovery`, then read it back and verify its metadata and
+hash. Never upload a raw SQLite/WAL file, unencrypted secret, recovery key or
+SSH private key. Keep the recovery key outside repositories and every cloud-
+synchronized folder. The weekly task is manual, not scheduled, and cannot
+stop, start, restart or hand off the bot.
 
 The unqualified instruction **"run the bot"** always means the laptop. The
 desktop may be selected only when the operator explicitly says **"run it on

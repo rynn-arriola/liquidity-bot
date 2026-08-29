@@ -78,24 +78,24 @@ realized sensor independently pauses new risk at the same scaled threshold.
   be bidirectionally synchronized through GitHub, OneDrive, Dropbox or another
   live file-sync service. Backups on the inactive machine are recovery copies,
   not a second writable authority.
-- The selected runtime is compared to `DEPLOYED_COMMIT` plus exact source/test
-  hashes, not blindly to the newest documentation-only GitHub commit.
+- Compare runtime to `DEPLOYED_COMMIT` plus source/test hashes, not a newer documentation-only commit.
 - “Run parity” means run `scripts/check_parity.py --sync` on the current
   workstation and, when reachable through its machine-local SSH coordinates,
   run the same safe check on the peer. A clean behind-only checkout may
   fast-forward to GitHub `main`; dirty, ahead or diverged work is preserved.
-- Every parity run adds a verified, versioned, client-encrypted archive to
-  Drive folder `Liquidity Bot Private Recovery`, even when a peer is offline.
-  Report source/role/time/hash/age; never describe a stale copy as current.
-- Parity permission authorizes those clean fast-forwards and the versioned
-  Drive archive write/readback. It does not authorize overwriting dirty or
-  diverged work, deploying trading code, activating a recovery ledger or
-  starting/restarting production. Those remain explicit review/operator
-  decisions.
-- Local databases, recovery archives, SSH keys and other ignored files are not
-  repository parity and must never be committed. Runtime recovery material may
-  travel only as the verified encrypted Drive archive above; SSH private keys
-  never enter that archive.
+- Parity has exactly three authorities—PC, laptop and GitHub—and never waits for Drive.
+- Parity permission authorizes only those clean fast-forwards. It does not
+  authorize overwriting dirty or diverged work, deploying trading code,
+  activating a recovery ledger or starting/restarting production.
+- “Run weekly task” manually creates and verifies one new client-encrypted
+  archive in Drive folder `Liquidity Bot Private Recovery`. It is not
+  scheduled. Report source/role/time/hash/age; never describe a stale copy as
+  current. Codex is the primary AI operator and Claude is the backup AI
+  operator; either may run the same workflow through its own Drive access.
+- Local databases, archives and keys are not repository parity and must never
+  be committed. Runtime recovery material may
+  travel only as the verified encrypted Drive archive above; recovery keys and
+  SSH private keys never enter that archive.
 
 ## Decisions explicitly not authorized
 

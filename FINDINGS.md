@@ -5,11 +5,7 @@ Before theorizing, search both files:
 rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_*.md
 ```
 ## Current high-value findings
-- **Score-clock reversals reduced laptop quoting capacity.** At 01:58Z
-  authenticated state proved 10/20 quoting markets, 17 orders, zero positions
-  and zero ambiguity after 34 clock failures retired several markets. The
-  requested 02:00Z stop ended with authenticated zero orders/positions; root
-  cause and repair remain open, so do not restart first.
+- **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting, 17 orders, zero positions and zero ambiguity. `OBSERVED` meant selected but without a local working order—the result of retirement, not a reduced slot setting. The local repair retains a timestamp high-water mark, adds zero for stale time and cannot reach retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Laptop commissioning was accepted.** After 785 WSL tests and a
   flat/order-free preflight, `04fddb1` reached 20/20 markets and 39 orders with
   zero positions/ambiguity or server-era 403. [Evidence](docs/history/LAPTOP_ACTIVATION_2026-08-28.md).

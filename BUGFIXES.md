@@ -8,6 +8,9 @@ Search it before designing a repair:
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
 
+## Reviewed locally; push/deployment pending
+- **A backward score clock turned half the slate into `OBSERVED`.** A non-decreasing score high-water mark now contains the telemetry fault with zero accrual and zero retirement. The 20-market regression, old-code reversal and all 801 tests pass; trading policy and venue traffic are unchanged. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+
 ## Latest deployed post-flat refill repair
 
 - **Post-flat refill waited behind serial full-slate service.** The repair
@@ -29,11 +32,6 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
   `31f815c` repaired 20 legacy rows, retained all 20 owners through three denied
   probes, left zero unresolved/retired and stopped flat. Access remains denied.
   [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
-
-## Latest deployed no-ID startup repair
-
-- Startup refuses ambiguous no-ID PLACE before book binding and never clears or
-  retries it; `c28aba2` passed 755 tests and three reversals.
 
 ## Latest deployed private-stream repair
 

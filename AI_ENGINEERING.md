@@ -92,15 +92,20 @@ market selection. At minimum, preserve these rules:
   pending because one workstation cannot prove its inaccessible files.
 - A clean behind-only `main` may fast-forward. Dirty, ahead or diverged work is
   preserved for review; timestamps never choose a winner.
-- Every operator-requested parity run must also create a versioned,
+- Parity has exactly three tracked-file authorities: PC, laptop and GitHub.
+  Google Drive is not part of parity and may not delay it.
+- Only the manual operator phrase `run weekly task` creates a versioned,
   client-encrypted Google Drive recovery archive from the newest verified
-  accessible snapshot and verify the uploaded metadata/hash. Never copy a live
-  WAL database, overwrite the only archive, hide snapshot age or equate Drive
-  presence with active-runtime authority.
+  accessible snapshot and verifies the uploaded metadata/hash. Never copy a
+  live WAL database, overwrite the only archive, hide snapshot age or equate
+  Drive presence with active-runtime authority.
 - Production credentials, webhook URLs, private keys and host addresses never
   enter tracked files, patches, logs or chat summaries.
-- Secret-bearing recovery files may enter Drive only inside the reviewed
-  encrypted archive. SSH private keys are excluded without exception.
+- Either Codex as primary AI operator or Claude as backup AI operator may run
+  the same agent-neutral weekly workflow through its own Drive access.
+  Secret-bearing recovery files may enter Drive only inside the reviewed
+  encrypted archive. Recovery keys and SSH private keys are excluded without
+  exception.
 - Read ignored `AGENTS.local.md` when present. Never commit it or local backup
   artifacts.
 

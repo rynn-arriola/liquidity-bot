@@ -424,7 +424,9 @@ These are implementation requirements, not suggestions.
     resize an order, change the 20-slot capacity, alter a reward/economics gate
     or modify any risk baseline. It adds no venue REST request or WebSocket
     subscription. Resting side-hours and score-hours both sum concurrent sides
-    and may exceed 24.
+    and may exceed 24. A backward wall-clock sample must add zero score, retain
+    the last accepted timestamp as a high-water mark and remain diagnostic
+    only; it may not escape into per-market service recovery or retirement.
 73. Operator stop is a mutation boundary, not merely an outer-loop condition.
     A stop delivered while a multi-market decision sweep is in progress must
     prevent the next owner from entering the ordinary plan/apply path. The

@@ -3,21 +3,20 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Diagnose the stopped laptop's score-clock capacity loss
+## 0. Push, load and naturally accept the score-clock containment
 The operator stopped the laptop normally at 02:00Z. The final runner record
 proved `flat=true`, and the post-stop authenticated dashboard proved zero
 orders, zero positions and zero ownership ambiguity. Do not restart without a
 separate operator decision.
 
-Immediately before the stop, authenticated state showed 10/20 quoting markets
-and 17 resting orders. The run logged 34 `commissioning score clock moved
-backwards` failures, and the market-service recovery path retired several
-affected markets. Determine whether stale per-market decision timestamps race
-the shared score timestamp or the system wall clock actually regressed. Cover
-the complete 20-slot service, recovery, retirement and score-telemetry flow;
-telemetry must not reduce trading availability under safety invariant 72. Add
-a focused regression, reverse it to prove failure, and run the complete suite
-before proposing a reviewed restart.
+The local repair for the earlier 10/20 `OBSERVED` state passed a focused
+20-market service regression, an old-code reversal that retired all 20, and all
+806 desktop tests. Push it to GitHub, run parity, load it on the stopped laptop and run
+the laptop suite before any separately authorized restart. Natural acceptance
+must show 20 bound owners remain available if `[score-clock] ...
+action=ignored_stale_sample` occurs; score must add nothing until wall time
+catches its retained high-water mark. No clock fault may appear as
+`market_service:*`, `service_failed_RuntimeError` or a market retirement.
 
 ## 1. Observe the laptop as the only production runtime
 The operator explicitly authorized the laptop start. Commit `04fddb1` is
@@ -45,13 +44,14 @@ Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-
 runtime snapshot and known-account-state gates.
 
-## 1a. Complete AI-operated Drive parity recovery
-Every parity run must add a versioned encrypted archive to `Liquidity Bot
-Private Recovery`, whether one or both computers are online. Finish the safe
-SQLite packager, source/role/time/commit/hash/integrity manifest, client-side
-encryption and connector readback; exclude SSH keys and never overwrite the
-only copy. Peer git sync already passed both-online on `20ee039f`; test Drive's
-one-online/both-online flows. Until then report Drive pending, never raw data.
+## 1a. Complete the separate manual weekly Drive recovery
+Parity is PC/laptop/GitHub only. `run weekly task` separately uploads one
+versioned encrypted archive; Codex or Claude may use its own Drive access. The
+agent-neutral packager creates online SQLite snapshots, an integrity/hash
+manifest, bounded logs and streaming AES-256-GCM. A 391,163,120-byte laptop
+archive from 03:39Z has 14 artifacts; both databases and the laptop-to-PC hash
+passed. Upload/readback and a restore drill remain because the operator deferred
+Drive. Never upload recovery/SSH keys, raw SQLite/WAL files or plaintext.
 
 ## 2. Remaining natural acceptance
 The latest stopped runner loaded `31f815c`. Continue accepting these paths

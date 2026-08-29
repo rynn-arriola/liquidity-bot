@@ -547,6 +547,11 @@ class CommissioningRunner:
         self._daily_score_pending: dict[str, float] = {}
         self._daily_score_committed: dict[str, float] = {}
         self._score_observed_at: datetime | None = None
+        # Diagnostic only. Wall clocks can step backwards when the host
+        # corrects time. Score accrual treats the last accepted timestamp as a
+        # high-water mark; this counter makes that containment visible without
+        # feeding the condition into market retirement or order decisions.
+        self._score_clock_reversals = 0
         self._earnings_observed_at: datetime | None = None
         self._earnings_by_status: dict[str, Decimal] = {}
         # Account-wide but date-scoped to this bot; see `bot_era.py`.
@@ -2025,7 +2030,29 @@ class CommissioningRunner:
             started_at = self._score_observed_at
             seconds = (now - started_at).total_seconds()
             if seconds < 0:
-                raise RuntimeError("commissioning score clock moved backwards")
+                # Score is observation-only (safety invariant 72). A host
+                # wall-clock correction must not escape into
+                # `_service_bound_markets`, where a generic service exception
+                # is deliberately interpreted as a market-local trading
+                # failure and retires the slot. Keep the accepted high-water
+                # mark so the reversed interval is neither double-counted nor
+                # assigned to the wrong ET reward day. Once wall time catches
+                # up, accrual resumes from that mark.
+                self._score_clock_reversals += 1
+                count = self._score_clock_reversals
+                if count == 1 or (count & (count - 1)) == 0:
+                    try:
+                        print(
+                            f"[score-clock] at={now.isoformat()} "
+                            f"high_water={started_at.isoformat()} "
+                            f"reversals={count} action=ignored_stale_sample",
+                            flush=True,
+                        )
+                    except Exception:
+                        # Even diagnostics about observational containment are
+                        # not allowed to affect market availability.
+                        pass
+                return
             day_pieces = split_reward_day_interval(started_at, now)
             for slug, state in self._markets.items():
                 rate = sum(state.score_by_side.values())

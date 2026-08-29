@@ -2523,6 +2523,51 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner.ledger.score_seconds_for_day("2026-08-25"),
             Decimal("40.0"))
 
+    async def test_backward_score_clock_cannot_retire_any_of_twenty_slots(self):
+        """Observation clock corrections cannot reduce quoting capacity."""
+
+        runner, _, _ = self.build_runner()
+        slugs = tuple(f"market-{index:02d}" for index in range(20))
+        runner._bind_markets(slugs)
+        future = NOW + timedelta(seconds=10)
+        runner._score_observed_at = future
+        for slug in slugs:
+            state = runner.state_for(slug)
+            # Keep this focused on the economics/score service stage: neither
+            # metadata nor book REST refresh is due during the pass.
+            state.next_contract_refresh = future + timedelta(minutes=1)
+            state.next_book_refresh = future + timedelta(minutes=1)
+
+        stop = await runner._service_bound_markets()
+
+        self.assertEqual(stop, "")
+        self.assertEqual(len(runner.active_slugs), 20)
+        self.assertEqual(runner._retired, {})
+        self.assertEqual(runner._score_observed_at, future)
+        self.assertEqual(runner._score_clock_reversals, 20)
+        self.assertFalse(any(
+            key.startswith("market_service:")
+            for key in runner._runtime_error_counts))
+
+    async def test_backward_score_sample_is_ignored_until_clock_catches_up(self):
+        runner, _, _ = self.build_runner()
+        runner._score_by_side = {"bid": 2.0}
+        high_water = NOW + timedelta(seconds=10)
+        runner._score_observed_at = high_water
+
+        runner._accrue_score(NOW)
+
+        self.assertEqual(runner._score_seconds, 0)
+        self.assertEqual(runner._daily_score_pending, {})
+        self.assertEqual(runner._score_observed_at, high_water)
+        self.assertEqual(runner._score_clock_reversals, 1)
+
+        runner._accrue_score(high_water + timedelta(seconds=5))
+
+        self.assertEqual(runner._score_seconds, 10)
+        self.assertEqual(runner._score_observed_at,
+                         high_water + timedelta(seconds=5))
+
     async def test_twenty_recovery_cancel_owners_all_gain_terminal_proof(self):
         """A disconnect-sized cancel set repairs in bounded fair batches."""
 

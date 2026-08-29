@@ -32,7 +32,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   Response-backed 403 means that exact request failed; timeout, connection loss,
   5xx, malformed success and absence remain ambiguous. Only later mutation
   success proves account mutation access recovered.
-- **Risk now has one quantity authority.** The approved profile derives portfolio/market/account limits as `30×/4×/8×` size; 20 slots and six hours stay fixed.
+- **Risk now has one quantity authority.** The approved profile derives portfolio exposure/market exposure/market loss/account limits as `30×/9×/4×/8×` size; 20 slots and six hours stay fixed. The selected next-start size 13 maps to `$390/$117/$52/$104`, and the launcher/selector/reconciler consume that same value.
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.
 - **Bound capacity can remain economically idle.** Lifecycle repairs do not

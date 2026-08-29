@@ -3,16 +3,16 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Load and naturally accept the score-clock containment
+## 0. Deploy the reviewed candidate at size 13, then accept score-clock containment
 The operator stopped the laptop normally at 02:00Z. The final runner record
 proved `flat=true`, and the post-stop authenticated dashboard proved zero
 orders, zero positions and zero ownership ambiguity. Do not restart without a
 separate operator decision.
 
-Repair `4d074ba` for the earlier 10/20 `OBSERVED` state is pushed with clean
-PC/laptop/GitHub parity after a focused 20-market regression, an old-code
-reversal that retired all 20, and 806 desktop tests. Load it into the stopped
-WSL runtime and run the laptop suite before any separately authorized restart. Natural acceptance
+Repair `4d074ba` is pushed with clean PC/laptop/GitHub parity after the focused
+20-market regression, old-code reversal and 806 tests. The 2026-08-29 review
+repeated all 806 and checked size 13 through the shared authority/limits; deploy
+to stopped WSL, run its suite, and explicitly pass `13` only on an authorized start. Natural acceptance
 must show 20 bound owners remain available if `[score-clock] ...
 action=ignored_stale_sample` occurs; score must add nothing until wall time
 catches its retained high-water mark. No clock fault may appear as

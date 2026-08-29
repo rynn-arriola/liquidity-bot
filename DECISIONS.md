@@ -20,16 +20,16 @@ show the operator the discrepancy.
 | Choice | Decision in force |
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
-| Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
+| Quote size | 13 contracts on the next separately authorized start; the stopped runtime last used 10. Whole values 5-30 are supported and restart-scoped |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
 | Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary 20-market service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
-| Portfolio exposure | `30 × quote size`: 20 slot-notionals plus a proportional 10-notional cushion; $300 at size 10 |
-| Market loss stop | `4 × quote size`; $40 at size 10 |
-| Account loss threshold | `8 × quote size`; $80 at size 10 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
+| Portfolio / market exposure | `30 × / 9 × quote size`; $390 / $117 at size 13. Portfolio is 20 slot-notionals plus a proportional 10-notional cushion |
+| Market loss stop | `4 × quote size`; $52 at size 13 |
+| Account loss threshold | `8 × quote size`; $104 at size 13 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Measurement only; never cancel/repost automatically |
 | Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
@@ -41,7 +41,7 @@ share one size-scaled threshold, not permission to remove either sensor.
 The marked sensor blocks new entries immediately. When inventory is open, it
 must not force a loss-realizing shutdown from paper movement alone: it waits
 for a breach-time position to close and a later adjusted balance. A confirmed
-A confirmed result may stop even while another position remains open. The
+result may stop even while another position remains open. The
 realized sensor independently pauses new risk at the same scaled threshold.
 
 ## Reporting and data choices

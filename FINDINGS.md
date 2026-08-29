@@ -6,7 +6,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ```
 ## Current high-value findings
 - **Parity needs two truths, not one sync bucket.** GitHub owns tracked files;
-  the live-safe online ledger backup is verified private recovery evidence only.
+  the bounded live-safe ledger backup is verified private recovery evidence only.
 - **Twenty-four slots are not a Polymarket API limit.** The 2026-08-29 full business-load audit separates documented limits, measured stream behavior and modeled REST/CPU/exposure ceilings; exact telemetry and bounded canaries remain required. [API capacity evidence](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
 - **Application silence was mistaken for private-transport failure.** In about eight hours the old runner detected roughly 123 silences and recorded 120 recoveries covering 133 shards, all `cancels=0`, without associated 403/429, risk stop, unknown absence or quarantine. The SDK transport answered Ping/Pong while exposing only JSON to the old clock. Deployed `a1ba212` records awaited Pongs and fails closed on probe loss; 810 WSL tests and reversal passed, while natural timeout acceptance is pending. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
 - **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting. The deployed high-water repair naturally contained another backward sample at 04:19:49Z, then reached 20/20 with no retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).

@@ -154,6 +154,16 @@ class CheckParityTests(unittest.TestCase):
             with self.assertRaises(check_parity.ParityUnavailable):
                 check_parity._runtime_state(config, fetch=False)
 
+    def test_wsl_github_fetch_is_bounded(self):
+        config = {
+            "host": "poly-laptop",
+            "wsl_distro": "Ubuntu-24.04",
+            "wsl_repo": "/home/polybot/liquidity-bot",
+            "source_role": "ACTIVE-LAPTOP",
+        }
+        script = check_parity._runtime_inspection_script(config, fetch=True)
+        self.assertIn("@('timeout','45s','git'", script)
+
     def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
         command = check_parity.peer_powershell_command(
             r"C:\Users\O'Brien\liquidity-bot",

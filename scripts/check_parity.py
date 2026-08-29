@@ -444,7 +444,7 @@ def _runtime_inspection_script(config: Mapping[str, str], *, fetch: bool) -> str
     distro = _powershell_literal(config["wsl_distro"])
     repo = _powershell_literal(config["wsl_repo"])
     fetch_row = (
-        "Invoke-Wsl @('git','-C',$runtimeRepo,'fetch','--quiet','origin','main')"
+        "Invoke-Wsl @('timeout','45s','git','-C',$runtimeRepo,'fetch','--quiet','origin','main')"
         if fetch
         else ""
     )

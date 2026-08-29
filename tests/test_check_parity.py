@@ -105,7 +105,23 @@ class CheckParityTests(unittest.TestCase):
 
         self.assertIn("O''Brien", decoded)
         self.assertIn("--sync --no-peer", decoded)
+        self.assertIn("--no-fetch", decoded)
         self.assertIn("Remove-Item Env:PARITY_PEER_HOST", decoded)
+
+    def test_peer_command_imports_bundle_before_safe_sync(self):
+        command = check_parity.peer_powershell_command(
+            r"C:\repo",
+            sync=True,
+            bundle_name=".liquidity-parity-test.bundle",
+        )
+
+        self.assertIn("git fetch $parityBundle", command)
+        self.assertIn("refs/remotes/origin/main:refs/remotes/origin/main", command)
+        self.assertIn("Remove-Item -LiteralPath $parityBundle", command)
+        self.assertLess(
+            command.index("git fetch $parityBundle"),
+            command.index("scripts/check_parity.py"),
+        )
 
     def test_offline_peer_is_returned_as_pending_evidence(self):
         completed = subprocess.CompletedProcess(
@@ -119,10 +135,59 @@ class CheckParityTests(unittest.TestCase):
                 "poly-laptop",
                 r"C:\repo",
                 sync=True,
+                github_head="a" * 40,
             )
 
         self.assertEqual(code, 255)
         self.assertEqual(output, "connection timed out")
+
+    def test_matching_peer_skips_bundle_copy(self):
+        completed = subprocess.CompletedProcess(
+            args=["ssh"], returncode=0, stdout="peer ok", stderr=""
+        )
+        with (
+            mock.patch.object(
+                check_parity, "_peer_head", return_value=(0, "a" * 40)
+            ),
+            mock.patch.object(
+                check_parity, "_run", return_value=completed
+            ) as run,
+        ):
+            code, output = check_parity.peer_parity(
+                "poly-laptop",
+                r"C:\repo",
+                sync=True,
+                github_head="a" * 40,
+            )
+
+        self.assertEqual((code, output), (0, "peer ok"))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][0], "ssh")
+
+    def test_behind_peer_receives_verified_origin_bundle(self):
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with (
+            mock.patch.object(
+                check_parity, "_peer_head", return_value=(0, "b" * 40)
+            ),
+            mock.patch.object(
+                check_parity, "_run", return_value=completed
+            ) as run,
+        ):
+            code, _ = check_parity.peer_parity(
+                "poly-laptop",
+                r"C:\repo",
+                sync=True,
+                github_head="a" * 40,
+            )
+
+        self.assertEqual(code, 0)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][:3], ("git", "bundle", "create"))
+        self.assertEqual(commands[1][0], "scp")
+        self.assertEqual(commands[2][0], "ssh")
 
     def test_incomplete_peer_arguments_fail_closed_without_git_work(self):
         with (

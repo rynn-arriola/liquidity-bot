@@ -16,10 +16,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from typing import Mapping, Sequence
+import uuid
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -185,34 +188,69 @@ def _powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def peer_powershell_command(repo: str, sync: bool) -> str:
+def peer_powershell_command(
+    repo: str,
+    sync: bool,
+    *,
+    bundle_name: str = "",
+) -> str:
     """Build the recursion-safe command executed on a Windows peer."""
     parity_arguments = "--sync" if sync else ""
-    return "\n".join(
+    rows = [
+        "$ErrorActionPreference = 'Stop'",
+        "$ProgressPreference = 'SilentlyContinue'",
+        f"$parityRepo = {_powershell_literal(repo)}",
+        "if (-not (Test-Path -LiteralPath (Join-Path $parityRepo '.git'))) {",
+        "  Write-Error ('peer repository not found: ' + $parityRepo)",
+        "  exit 2",
+        "}",
+        "Set-Location -LiteralPath $parityRepo",
+        "Remove-Item Env:PARITY_PEER_HOST -ErrorAction SilentlyContinue",
+        "Remove-Item Env:PARITY_PEER_REPO -ErrorAction SilentlyContinue",
+    ]
+    if bundle_name:
+        rows.extend(
+            (
+                f"$parityBundle = Join-Path $HOME {_powershell_literal(bundle_name)}",
+                "& git fetch $parityBundle "
+                "'refs/remotes/origin/main:refs/remotes/origin/main'",
+                "$parityFetchCode = $LASTEXITCODE",
+                "if ($parityFetchCode -ne 0) {",
+                "  Remove-Item -LiteralPath $parityBundle -Force "
+                "-ErrorAction SilentlyContinue",
+                "  exit $parityFetchCode",
+                "}",
+            )
+        )
+    rows.extend(
+        (
+            f"& python -B scripts/check_parity.py --no-fetch "
+            f"{parity_arguments} --no-peer",
+            "$parityCode = $LASTEXITCODE",
+        )
+    )
+    if bundle_name:
+        rows.append(
+            "Remove-Item -LiteralPath $parityBundle -Force "
+            "-ErrorAction SilentlyContinue"
+        )
+    rows.append("exit $parityCode")
+    return "\n".join(rows)
+
+
+def _peer_head(host: str, repo: str) -> tuple[int, str]:
+    command = "\n".join(
         (
             "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
             f"$parityRepo = {_powershell_literal(repo)}",
             "if (-not (Test-Path -LiteralPath (Join-Path $parityRepo '.git'))) {",
-            "  Write-Error ('peer repository not found: ' + $parityRepo)",
             "  exit 2",
             "}",
-            "Set-Location -LiteralPath $parityRepo",
-            "Remove-Item Env:PARITY_PEER_HOST -ErrorAction SilentlyContinue",
-            "Remove-Item Env:PARITY_PEER_REPO -ErrorAction SilentlyContinue",
-            f"& python -B scripts/check_parity.py {parity_arguments} --no-peer",
+            "& git -C $parityRepo rev-parse HEAD",
             "exit $LASTEXITCODE",
         )
     )
-
-
-def peer_parity(
-    host: str,
-    repo: str,
-    *,
-    sync: bool,
-) -> tuple[int, str]:
-    """Run the same safe parity check on an available Windows peer."""
-    command = peer_powershell_command(repo, sync)
     encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
     result = _run(
         (
@@ -230,6 +268,80 @@ def peer_parity(
         ),
         check=False,
     )
+    assert isinstance(result.stdout, str)
+    assert isinstance(result.stderr, str)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        return result.returncode, detail
+    for row in result.stdout.splitlines():
+        candidate = row.strip()
+        if re.fullmatch(r"[0-9a-fA-F]{40,64}", candidate):
+            return 0, candidate.lower()
+    return 2, "peer did not return a commit id"
+
+
+def peer_parity(
+    host: str,
+    repo: str,
+    *,
+    sync: bool,
+    github_head: str,
+) -> tuple[int, str]:
+    """Run the same safe parity check on an available Windows peer."""
+    head_code, head_or_detail = _peer_head(host, repo)
+    if head_code:
+        return head_code, head_or_detail
+
+    bundle_name = ""
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    if head_or_detail != github_head.lower():
+        temporary = tempfile.TemporaryDirectory(prefix="liquidity-parity-")
+        bundle_path = Path(temporary.name) / "origin-main.bundle"
+        _run(("git", "bundle", "create", str(bundle_path), "origin/main"))
+        bundle_name = f".liquidity-parity-{uuid.uuid4().hex}.bundle"
+        copied = _run(
+            (
+                "scp",
+                "-q",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                str(bundle_path),
+                f"{host}:{bundle_name}",
+            ),
+            check=False,
+        )
+        assert isinstance(copied.stdout, str)
+        assert isinstance(copied.stderr, str)
+        if copied.returncode:
+            temporary.cleanup()
+            return copied.returncode, copied.stderr.strip() or copied.stdout.strip()
+
+    command = peer_powershell_command(
+        repo,
+        sync,
+        bundle_name=bundle_name,
+    )
+    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+    result = _run(
+        (
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            host,
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded,
+        ),
+        check=False,
+    )
+    if temporary is not None:
+        temporary.cleanup()
     assert isinstance(result.stdout, str)
     assert isinstance(result.stderr, str)
     output = result.stdout.strip()
@@ -373,6 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 peer_host,
                 peer_repo,
                 sync=args.sync,
+                github_head=github_head,
             )
             print(f"  peer        : {peer_host}")
             if peer_code == 0:

@@ -581,7 +581,9 @@ def _capture_runtime_script(config: Mapping[str, str]) -> str:
             f"$runtimeRepo = {_powershell_literal(config['wsl_repo'])}",
             "$windowsOutput = Join-Path $HOME '.liquidity-bot\\parity'",
             "New-Item -ItemType Directory -Force -Path $windowsOutput | Out-Null",
-            "$wslOutput = (& wsl.exe -d $runtimeDistro -- wslpath -a -u $windowsOutput).Trim()",
+            "$drive = $windowsOutput.Substring(0,1).ToLowerInvariant()",
+            "$tail = $windowsOutput.Substring(2).Replace('\\','/')",
+            "$wslOutput = '/mnt/' + $drive + $tail",
             "& wsl.exe -d $runtimeDistro --cd $runtimeRepo -- .venv/bin/python -B scripts/runtime_parity_snapshot.py create --repo $runtimeRepo --output-dir $wslOutput "
             f"--source-role {_powershell_literal(config['source_role'])}",
             "exit $LASTEXITCODE",

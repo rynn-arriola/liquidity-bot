@@ -191,6 +191,18 @@ class CheckParityTests(unittest.TestCase):
                 check_parity.capture_runtime_ledger(config, create=False)
         powershell.assert_not_called()
 
+    def test_ledger_capture_converts_windows_path_without_wslpath(self):
+        config = {
+            "host": "poly-laptop",
+            "windows_repo": r"C:\Users\operator\liquidity-bot",
+            "wsl_distro": "Ubuntu-24.04",
+            "wsl_repo": "/home/polybot/liquidity-bot",
+            "source_role": "ACTIVE-LAPTOP",
+        }
+        script = check_parity._capture_runtime_script(config)
+        self.assertIn("$windowsOutput.Substring(2).Replace", script)
+        self.assertNotIn("wslpath", script)
+
     def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
         command = check_parity.peer_powershell_command(
             r"C:\Users\O'Brien\liquidity-bot",

@@ -27,8 +27,8 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   performance
 - **Laptop schedules:** four read-only backup/report systemd timers are active;
   a stopped-safe ledger backup passed; no trading service is installed/enabled
-- **Desktop cold backup:** inactive; its fresh 22:40Z laptop execution-ledger
-  recovery copy is 162,324,480 bytes and matches the laptop SHA-256 with SQLite
+- **Desktop cold backup:** inactive; its latest parity execution-ledger recovery
+  copy matches the laptop SHA-256 and passes SQLite
   integrity `ok`. It is not activated; no credential path, trading process,
   service, timer or API check exists there
 - **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; slots, horizon and REST rate stay fixed

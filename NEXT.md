@@ -3,28 +3,24 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Deploy the reviewed candidate at size 13, then accept score-clock containment
-The operator stopped the laptop normally at 02:00Z. The final runner record
-proved `flat=true`, and the post-stop authenticated dashboard proved zero
-orders, zero positions and zero ownership ambiguity. Do not restart without a
-separate operator decision.
+## 0. Continue natural acceptance of the size-13 deployment
+Commit `08b5b70` is active after 807 desktop/laptop tests, exact marker/source
+proof and a flat/order-free preflight. At 04:21Z it held 20/20 slots, 38
+quantity-13 orders and zero positions/absent rows or risk stop. One current
+mutation was normal churn, not a stuck owner.
 
-Repair `4d074ba` is pushed with clean PC/laptop/GitHub parity after the focused
-20-market regression, old-code reversal and 806 tests. The 2026-08-29 review
-repeated all 806 and checked size 13 through the shared authority/limits; deploy
-to stopped WSL, run its suite, and explicitly pass `13` only on an authorized start. Natural acceptance
-must show 20 bound owners remain available if `[score-clock] ...
-action=ignored_stale_sample` occurs; score must add nothing until wall time
-catches its retained high-water mark. No clock fault may appear as
-`market_service:*`, `service_failed_RuntimeError` or a market retirement.
+The score-clock repair already received natural acceptance: one backward sample
+logged `action=ignored_stale_sample`, added no retirement and the runner reached
+20/20. Continue observing quantity-13 fills/exits, risk scaling, stream
+freshness and mutation resolution; do not induce a fault.
 
 ## 1. Observe the laptop as the only production runtime
-The operator explicitly authorized the laptop start. Commit `04fddb1` is
-loaded after all 785 laptop WSL tests passed. The 00:42Z
-authenticated acceptance found the runner/supervisor healthy, 20/20 quoting
-markets, 39 resting orders, zero positions, zero absent/unresolved state and no
-risk stop or 403/access denial. The laptop is now the only writable ledger/API
-owner; the former server is destroyed and the desktop is prepared but inactive.
+The operator explicitly authorized the laptop start. Commit `08b5b70` is
+loaded after all 807 laptop WSL tests passed. The 04:21Z authenticated
+acceptance found the runner/supervisor healthy, 20/20 quoting markets, 38
+resting size-13 orders, zero positions/absent rows and no risk stop or access
+denial. The laptop is the only writable ledger/API owner; the former server is
+destroyed and the desktop is prepared but inactive.
 
 On the desktop, `run parity check` verifies/fast-forwards only tracked files
 against GitHub. Its old recovery databases are not current laptop production

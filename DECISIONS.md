@@ -20,7 +20,7 @@ show the operator the discrepancy.
 | Choice | Decision in force |
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
-| Quote size | 13 contracts on the next separately authorized start; the stopped runtime last used 10. Whole values 5-30 are supported and restart-scoped |
+| Quote size | 13 contracts live; whole values 5-30 are supported and restart-scoped |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |

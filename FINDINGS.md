@@ -5,10 +5,10 @@ Before theorizing, search both files:
 rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_*.md
 ```
 ## Current high-value findings
-- **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting, 17 orders, zero positions and zero ambiguity. `OBSERVED` meant selected but without a local working order—the result of retirement, not a reduced slot setting. The local repair retains a timestamp high-water mark, adds zero for stale time and cannot reach retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
-- **Laptop commissioning was accepted.** After 785 WSL tests and a
-  flat/order-free preflight, `04fddb1` reached 20/20 markets and 39 orders with
-  zero positions/ambiguity or server-era 403. [Evidence](docs/history/LAPTOP_ACTIVATION_2026-08-28.md).
+- **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting. The deployed high-water repair naturally contained another backward sample at 04:19:49Z, then reached 20/20 with no retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+- **Laptop commissioning is live at size 13.** After 807 WSL tests and a
+  flat/order-free preflight, `08b5b70` reached 20/20 markets and 38 quantity-13
+  orders with zero positions/absent rows or risk stop.
 - **Desktop cold standby is prepared and inactive.** Its 787 offline tests passed; handoff still requires a current laptop snapshot. [Evidence](docs/history/DESKTOP_COLD_BACKUP_SETUP_2026-08-28.md).
 - **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one `UNCERTAIN` create; its finished market caused three fast empty-book deaths, not a slot defect. Stopped repair blocks same-market orders because Retail never receives the local client ID.
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed 180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
@@ -32,7 +32,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   Response-backed 403 means that exact request failed; timeout, connection loss,
   5xx, malformed success and absence remain ambiguous. Only later mutation
   success proves account mutation access recovered.
-- **Risk now has one quantity authority.** The approved profile derives portfolio exposure/market exposure/market loss/account limits as `30×/9×/4×/8×` size; 20 slots and six hours stay fixed. The selected next-start size 13 maps to `$390/$117/$52/$104`, and the launcher/selector/reconciler consume that same value.
+- **Risk now has one quantity authority.** The live size 13 maps to portfolio/market exposure/market loss/account limits `$390/$117/$52/$104`; the launcher, selector and reconciler share it while 20 slots and six hours stay fixed.
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.
 - **Bound capacity can remain economically idle.** Lifecycle repairs do not

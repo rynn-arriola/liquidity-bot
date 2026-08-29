@@ -3,24 +3,21 @@
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 
 ## Verified state
-- **Verified:** 2026-08-29 00:00 ET / 2026-08-29 04:00 UTC
-- **Liquidity bot:** STOPPED normally on the laptop at the operator's request;
-  supervisor PID 778 and runner PID 785 are absent
+- **Verified:** 2026-08-29 00:22 ET / 2026-08-29 04:22 UTC
+- **Liquidity bot:** LIVE on the laptop; supervisor PID 1649 and runner PID
+  1656 are active, with the isolated TV dashboard PID 1681
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
-- **Stop proof:** the final runner record says `operator_sigterm` and
-  `flat=true`; the post-stop authenticated dashboard found zero venue orders,
-  zero positions, zero absent/unresolved state and no risk stop
-- **Loaded source:** `04fddb1`; its trading core remains the reviewed `31f815c`
-  repair and it adds only the isolated read-only TV dashboard/startup hook
-- **Verification:** laptop passed 785 pre-start tests; the current desktop deployment candidate passed 806 offline tests, the focused 20-slot backward-clock regression and a size-13 authorization/propagation check
+- **Start proof:** authenticated pre-start state had zero orders/positions and
+  zero absent/unresolved rows; at 04:21Z the live account had 38 resting orders
+  across 20/20 slots, zero positions/absent rows and one current mutation
+- **Loaded source:** `08b5b70`; `DEPLOYED_COMMIT`, WSL HEAD and source/tests match
+- **Verification:** 807 desktop and 807 laptop tests pass; both new repairs have focused regressions and deliberate reversals
 - **Maker-lab:** stopped
-- **Laptop runtime:** Ubuntu 24.04 WSL2 is running but the runner and supervisor
-  are inactive; Python 3.12, pinned SDK,
-  last-used size 10, restricted credentials and exact stopped execution/scalp snapshots
-  are installed; ledger integrity/hashes passed and all 785 tests passed
-- **Laptop account proof:** the 00:39Z preflight was flat/order-free; the
-  00:42Z authenticated live read found 39 working orders across all 20 slots
-  and zero positions
+- **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
+  dependency, size 13, restricted credentials and exact execution/scalp data
+  are active; the ledger stayed authoritative through the stopped deployment
+- **Laptop account proof:** the 04:21Z authenticated read found 38 working
+  orders across 20/20 slots, zero positions/absent rows and no risk stop
 - **Laptop access/power:** Windows and WSL use the same US residential Comcast
   egress with no active VPN adapter observed; Retail health returned 200/OK;
   AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum
@@ -31,15 +28,15 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   databases, credentials and archives match byte-for-byte;
   both databases pass integrity and WSL files are owner-only. No active ledger,
   credential path, trading process, service, timer or API check exists there
-- **Next-start quantity:** size 13 is reviewed but not active while stopped: $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; slots, horizon and REST rate stay fixed
-- **Display/defect:** TV remains read-only. Score-only backward-clock exceptions caused the earlier 10/20 `OBSERVED` state by retiring markets. The high-water-mark repair in `4d074ba` cannot retire any of 20 slots; it is pushed and present in both Windows checkouts but not loaded into the stopped WSL runtime. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; slots, horizon and REST rate stay fixed
+- **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
 ## Active operating envelope
 | Setting | Current decision |
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
-| Quote size | 13 contracts on the next separately authorized start; the last stopped run used 10 |
+| Quote size | 13 contracts live |
 | Concurrent capacity | 20 market slots |
 | Entry horizon | Six hours |
 | League filter | None |
@@ -67,13 +64,13 @@ selected residential runtime. The containment remains installed.
 
 ## Current operating instruction
 
-The laptop remains the sole stopped owner; the desktop is an inactive manual
+The laptop remains the sole live owner; the desktop is an inactive manual
 backup. Any handoff requires stop, venue proof and a verified ledger snapshot.
 
 Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects
 the desktop with full handoff. Parity now means PC/laptop/GitHub only. Drive is
 a separate manual `run weekly task`; its first encrypted laptop archive passed
-local/transferred verification but was not uploaded; three-way parity passed clean on `4d73121`; local size-13 decision documentation is newer and must be reviewed/pushed before deployment.
+local/transferred verification but was not uploaded; three-way parity passed clean on `08b5b70` before deployment.
 
 ## Current records
 

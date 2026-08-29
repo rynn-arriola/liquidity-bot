@@ -8,10 +8,10 @@ Search it before designing a repair:
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
 
-## Reviewed and pushed; deployment pending
-- **A backward score clock turned half the slate into `OBSERVED`.** A non-decreasing score high-water mark now contains the telemetry fault with zero accrual and zero retirement. The 20-market regression, old-code reversal and all 806 tests pass; trading policy and venue traffic are unchanged. The 2026-08-29 pre-deployment review repeated the full 806-test suite and size-13 propagation check. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
-- **The laptop deployment suite lacked the recovery tool's encryption dependency.** `cryptography==50.0.0` is now a pinned project dependency with a declaration regression; startup remained blocked and no trading process ran.
-- **Rejected TV requests intermittently reset Windows sockets.** The read-only handler now drains only a bounded small body before returning 405; ten consecutive POST regressions prove the response and trading remains isolated.
+## Deployed and live-accepted in `08b5b70`
+- **A backward score clock turned half the slate into `OBSERVED`.** The high-water containment passed its regression/reversal and naturally logged one ignored stale sample before reaching 20/20 slots with no retirement. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+- **The laptop deployment suite lacked the recovery tool's encryption dependency.** `cryptography==50.0.0` is pinned with a declaration regression; the corrected laptop suite passed 807/807 before startup.
+- **Rejected TV requests intermittently reset Windows sockets.** The read-only handler drains only a bounded small body before returning 405; regression/reversal and 807 tests pass, with trading still isolated.
 
 ## Latest deployed post-flat refill repair
 

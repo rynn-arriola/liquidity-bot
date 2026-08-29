@@ -32,7 +32,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   both databases pass integrity and WSL files are owner-only. No active ledger,
   credential path, trading process, service, timer or API check exists there
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
-- **Display/defect:** TV remains read-only. Score-only backward-clock exceptions caused the earlier 10/20 `OBSERVED` state by retiring markets. The reviewed local high-water-mark repair cannot retire any of 20 slots; it is not pushed or loaded on the stopped laptop. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+- **Display/defect:** TV remains read-only. Score-only backward-clock exceptions caused the earlier 10/20 `OBSERVED` state by retiring markets. The high-water-mark repair in `4d074ba` cannot retire any of 20 slots; it is pushed and present in both Windows checkouts but not loaded into the stopped WSL runtime. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
 ## Active operating envelope
@@ -73,7 +73,7 @@ backup. Any handoff requires stop, venue proof and a verified ledger snapshot.
 Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects
 the desktop with full handoff. Parity now means PC/laptop/GitHub only. Drive is
 a separate manual `run weekly task`; its first encrypted laptop archive passed
-local and transferred-copy verification but was not uploaded by operator choice.
+local/transferred verification but was not uploaded; three-way parity passed clean on `4d074ba`.
 
 ## Current records
 

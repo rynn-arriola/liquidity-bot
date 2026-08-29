@@ -143,6 +143,22 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
         await pool.next_event(timeout=1)
         pool.assert_live(now=datetime.now(timezone.utc))
 
+    async def test_positive_transport_pong_prevents_false_quiet_shard_alarm(self):
+        pool = self.pool()
+        await pool.start([f"market-{i}" for i in range(16)])
+        self.addAsyncCleanup(pool.close)
+        now = datetime.now(timezone.utc)
+        pool._shard_last_message_at[1] = now - timedelta(seconds=181)
+        FakeStream.instances[1].last_transport_at = now
+
+        pool.assert_live(now=now)
+
+        # A stale transport clock cannot hide the same application silence.
+        FakeStream.instances[1].last_transport_at = (
+            now - timedelta(seconds=181))
+        with self.assertRaisesRegex(AdapterError, r"shard silence: 2"):
+            pool.assert_live(now=now)
+
     async def test_silent_shard_is_overlap_replaced_without_closing_healthy(self):
         pool = PrivateStreamPool(object(), factory=SnapshotStream)
         await pool.start([f"market-{i}" for i in range(16)])

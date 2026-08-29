@@ -8,6 +8,9 @@ Search it before designing a repair:
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
 
+## Repaired in tracked source; not loaded into the live runner
+- **Quiet private shards were repeatedly classified as dead.** The old clock saw only JSON and ignored healthy protocol Ping/Pong. Each connection now records only an awaited Pong; missing/failing proof enters existing recovery, and REST still cannot certify the socket. Focused suites passed 23/23 and 16/16, the deliberate reversal failed exactly, and all 810 tests passed. The live PID was not restarted. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
+
 ## Deployed and live-accepted in `08b5b70`
 - **A backward score clock turned half the slate into `OBSERVED`.** The high-water containment passed its regression/reversal and naturally logged one ignored stale sample before reaching 20/20 slots with no retirement. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **The laptop deployment suite lacked the recovery tool's encryption dependency.** `cryptography==50.0.0` is pinned with a declaration regression; the corrected laptop suite passed 807/807 before startup.
@@ -15,11 +18,7 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 ## Latest deployed post-flat refill repair
 
-- **Post-flat refill waited behind serial full-slate service.** The repair
-  prioritizes proven mandatory gaps, revalidates cache no older than 120 seconds,
-  preserves exit/ownership and 900-second idle rules, and measures delay and
-  slot-minutes. Sixty-seven focused, 766 local/server and a reversal passed;
-  `2ece3c3` is active. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
+- **Post-flat refill waited behind serial full-slate service.** The repair prioritizes proven mandatory gaps, revalidates cache no older than 120 seconds, preserves exit/ownership and 900-second idle rules, and measures delay and slot-minutes. Sixty-seven focused, 766 local/server and a reversal passed; `2ece3c3` is active. [Evidence](docs/history/POST_FLAT_REFILL_2026-08-28.md).
 
 ## Latest deployed defect repair; containment live-accepted
 

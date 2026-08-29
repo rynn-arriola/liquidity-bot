@@ -62,6 +62,20 @@ class FakeSocket:
         self.calls.append(("balance", request_id))
 
 
+class PongConnection:
+    def __init__(self, *, failure: Exception | None = None):
+        self.failure = failure
+        self.pings = 0
+
+    async def ping(self):
+        self.pings += 1
+        if self.failure is not None:
+            raise self.failure
+        pong = asyncio.get_running_loop().create_future()
+        pong.set_result(0.001)
+        return pong
+
+
 class FakeFactory:
     def __init__(self, market_socket, private_socket):
         self.market_socket = market_socket
@@ -235,6 +249,39 @@ class StreamTests(unittest.TestCase):
         events = self.run_async(scenario())
         self.assertEqual([event.payload for event in events], [1, 2, 3])
         self.assertTrue(all(event.received_at is not None for event in events))
+
+    def test_private_transport_pong_is_positive_liveness_proof(self):
+        async def scenario():
+            client = FakeClient()
+            connection = PongConnection()
+            client.private_socket._ws = connection
+            stream = PrivateReadOnlyStream(client)
+            await stream.start(["market-one"])
+            stream._last_transport_at = None
+            try:
+                await stream._probe_transport_once()
+                return connection.pings, stream.last_transport_at
+            finally:
+                await stream.close()
+
+        pings, observed_at = self.run_async(scenario())
+        self.assertEqual(pings, 1)
+        self.assertIsNotNone(observed_at)
+
+    def test_private_transport_probe_fails_closed(self):
+        async def scenario():
+            client = FakeClient()
+            client.private_socket._ws = PongConnection(
+                failure=TimeoutError("no pong"))
+            stream = PrivateReadOnlyStream(client)
+            await stream.start(["market-one"])
+            try:
+                await stream._probe_transport_once()
+            finally:
+                await stream.close()
+
+        with self.assertRaisesRegex(AdapterError, "transport Ping failed"):
+            self.run_async(scenario())
 
     def test_private_event_carries_single_market_subscription_scope(self):
         async def scenario():

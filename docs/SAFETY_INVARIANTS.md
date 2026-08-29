@@ -475,9 +475,13 @@ These are implementation requirements, not suggestions.
     cancel or IOC exit may never be blocked or delayed by buying power or a
     prior entry rejection. Buying power is never equity, P&L or flat proof.
 79. REST account freshness cannot certify WebSocket liveness. Every private
-    shard and the market connection owns an independent last-message clock;
-    180 seconds of silence enters the existing bounded scoped recovery. If both
-    stream families are stale they are rebuilt together. A single-family
+    shard owns an independent clock advanced only by a decoded application
+    message or a positively awaited WebSocket protocol Pong; the market
+    connection retains its independent last-message clock. A private transport
+    probe that fails, times out or becomes unavailable enters the existing
+    fail-closed stream recovery. A connection with neither form of positive
+    proof for 180 seconds enters bounded scoped recovery. If both stream
+    families are stale they are rebuilt together. A single-family
     private recovery may preserve orders only under invariant 64's overlap and
     whole-account proof; otherwise it quarantines. REST requests use a
     15-second timeout. Only confirmed 429 reads may honor bounded

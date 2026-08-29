@@ -3,6 +3,9 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
+## 0a. Load and naturally accept private Ping/Pong liveness
+Tracked source now requires an awaited protocol Pong when no private JSON arrives. All 810 tests and the focused regression/reversal passed, but runner `08b5b70` remains loaded. Do not restart just for this repair. At the next authorized safe restart, accept a quiet interval beyond 180 seconds without false handoff and confirm real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
+
 ## 0. Continue natural acceptance of the size-13 deployment
 Commit `08b5b70` is active after 807 desktop/laptop tests, exact marker/source
 proof and a flat/order-free preflight. At 04:21Z it held 20/20 slots, 38

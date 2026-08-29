@@ -32,6 +32,14 @@ MARKETS_PER_PRIVATE_CONNECTION = 8
 # stream data. REST may bridge a short socket gap, but cannot prove that each
 # WebSocket connection itself remains alive.
 STREAM_SILENCE_TIMEOUT_SECONDS = 180.0
+# The official SDK's transport already sends WebSocket Ping frames, but its
+# public event interface exposes only JSON messages.  Quiet private accounts
+# can therefore receive no application event before the silence deadline even
+# while the socket is answering Pings.  Keep an independently verified Pong
+# clock per connection instead of mistaking business-message silence for a
+# dead transport.
+PRIVATE_TRANSPORT_PING_INTERVAL_SECONDS = 60.0
+PRIVATE_TRANSPORT_PING_TIMEOUT_SECONDS = 10.0
 
 
 class MarketReadOnlyStream:
@@ -291,6 +299,8 @@ class PrivateReadOnlyStream:
         self._started = False
         self._order_snapshot_complete = False
         self._balance_snapshot_seen = False
+        self._last_transport_at: datetime | None = None
+        self._transport_task: asyncio.Task[None] | None = None
         self._market_scope_by_request_id: dict[str, tuple[str, ...] | None] = {}
         # The installed SDK emits every decoded JSON object on `message`
         # before its convenience event. Register once to avoid duplicates.
@@ -318,6 +328,53 @@ class PrivateReadOnlyStream:
 
     def _on_close(self, *_: Any) -> None:
         self._queue.put_nowait(AdapterError("private WebSocket disconnected"))
+
+    @property
+    def last_transport_at(self) -> datetime | None:
+        """Latest positive WebSocket Ping/Pong proof for this connection."""
+
+        return self._last_transport_at
+
+    async def _probe_transport_once(self) -> None:
+        """Require one protocol Pong without making a venue API request.
+
+        ``polymarket-us`` doesn't currently expose Ping on its wrapper, while
+        its pinned ``websockets`` connection does.  Missing internals fail
+        closed into the existing stream recovery rather than silently
+        certifying liveness after an SDK change.
+        """
+
+        connection = getattr(self._socket, "_ws", None)
+        ping = getattr(connection, "ping", None)
+        if not callable(ping):
+            raise AdapterError(
+                "private WebSocket transport Ping is unavailable")
+        try:
+            pong = await ping()
+            await asyncio.wait_for(
+                pong, timeout=PRIVATE_TRANSPORT_PING_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise AdapterError(
+                f"private WebSocket transport Ping failed: {exc}") from exc
+        self._last_transport_at = datetime.now(timezone.utc)
+
+    async def _monitor_transport(self) -> None:
+        """Continuously turn positive Pongs into per-shard liveness proof."""
+
+        while True:
+            try:
+                await asyncio.sleep(PRIVATE_TRANSPORT_PING_INTERVAL_SECONDS)
+                await self._probe_transport_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._queue.put_nowait(
+                    exc if isinstance(exc, AdapterError)
+                    else AdapterError(
+                        f"private WebSocket transport monitor failed: {exc}"))
+                return
 
     async def start(self, slugs: Iterable[str] | None = None) -> None:
         if self._started:
@@ -389,6 +446,8 @@ class PrivateReadOnlyStream:
                 pass
             raise AdapterError(f"private WebSocket startup failed: {exc}") from exc
         self._started = True
+        self._last_transport_at = datetime.now(timezone.utc)
+        self._transport_task = asyncio.create_task(self._monitor_transport())
 
     @property
     def initial_state_ready(self) -> bool:
@@ -435,10 +494,18 @@ class PrivateReadOnlyStream:
         return tuple(events)
 
     async def close(self) -> None:
+        if self._transport_task is not None:
+            self._transport_task.cancel()
+            try:
+                await self._transport_task
+            except asyncio.CancelledError:
+                pass
+            self._transport_task = None
         try:
             await self._socket.close()
         finally:
             self._started = False
+            self._last_transport_at = None
             self._market_scope_by_request_id.clear()
             self._order_snapshot_complete = False
             self._balance_snapshot_seen = False
@@ -671,6 +738,12 @@ class PrivateStreamPool:
             return tuple(range(len(self._streams) or 1))
         stale: list[int] = []
         for index, observed_at in enumerate(self._shard_last_message_at):
+            transport_at = (
+                getattr(self._streams[index], "last_transport_at", None)
+                if index < len(self._streams) else None)
+            if transport_at is not None and (
+                    observed_at is None or transport_at > observed_at):
+                observed_at = transport_at
             if observed_at is None:
                 stale.append(index)
                 continue

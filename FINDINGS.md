@@ -5,6 +5,7 @@ Before theorizing, search both files:
 rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_*.md
 ```
 ## Current high-value findings
+- **Application silence was mistaken for private-transport failure.** In about eight hours the live runner detected roughly 123 silences and recorded 120 recoveries covering 133 shards, all `cancels=0`, without associated 403/429, risk stop, unknown absence or quarantine. The SDK's transport answered protocol Ping/Pong while exposing only JSON to the old clock. The stopped-source fix records awaited Pongs, fails closed on probe loss and passed 810 tests plus reversal; it is not loaded. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
 - **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting. The deployed high-water repair naturally contained another backward sample at 04:19:49Z, then reached 20/20 with no retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Laptop commissioning is live at size 13.** After 807 WSL tests and a
   flat/order-free preflight, `08b5b70` reached 20/20 markets and 38 quantity-13

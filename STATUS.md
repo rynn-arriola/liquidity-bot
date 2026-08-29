@@ -3,15 +3,18 @@
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 
 ## Verified state
-- **Verified:** 2026-08-29 00:22 ET / 2026-08-29 04:22 UTC
+- **Verified:** 2026-08-29 08:14 ET / 2026-08-29 12:14 UTC
 - **Liquidity bot:** LIVE on the laptop; supervisor PID 1649 and runner PID
   1656 are active, with the isolated TV dashboard PID 1681
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Start proof:** authenticated pre-start state had zero orders/positions and
   zero absent/unresolved rows; at 04:21Z the live account had 38 resting orders
   across 20/20 slots, zero positions/absent rows and one current mutation
-- **Loaded source:** `08b5b70`; `DEPLOYED_COMMIT`, WSL HEAD and source/tests match
-- **Verification:** 807 desktop and 807 laptop tests pass; both new repairs have focused regressions and deliberate reversals
+- **Loaded source:** runner `DEPLOYED_COMMIT` remains `08b5b70`; WSL HEAD is
+  `45ba2f60`; no process was restarted for the tracked private-liveness repair
+- **Verification:** the repaired tracked source passes 810 laptop WSL tests;
+  its focused stream/pool suites pass 23/23 and 16/16 and its deliberate
+  reversal fails exactly. The running process has not loaded that repair
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data

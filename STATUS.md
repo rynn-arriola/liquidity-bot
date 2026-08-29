@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 20:16 ET / 2026-08-29 00:16 UTC
+- **Verified:** 2026-08-28 20:20 ET / 2026-08-29 00:20 UTC
 - **Liquidity bot:** STOPPED; laptop supervisor and runner are absent
 - **Former server:** destroyed by the operator; it cannot run the bot, retain
   credentials or execute its old crontab
@@ -40,7 +40,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 | Setting | Current decision |
 |---|---|
-| Production runtime | Former server destroyed; laptop selected as the next primary but not started; desktop is cold standby |
+| Production runtime | Laptop is primary but not started; desktop is manual cold backup; former server destroyed |
 | Quote size | 10 contracts |
 | Concurrent capacity | 20 market slots |
 | Entry horizon | Six hours |
@@ -68,12 +68,12 @@ signals. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 
 ## Current operating instruction
 
-The former server is destroyed. The laptop is selected next primary and the
-desktop its cold standby, but no local runner is authorized yet. Laptop parity,
-direct recovery pulls, runtime/tests, authenticated flat account read,
-home-network/power preflight and schedule migration pass. Before an explicit
-start, prove the desktop runner absent and make the laptop the sole writable
-ledger/API owner. Do not use a proxy or run both machines at once.
+The former server is destroyed. The laptop is primary and the desktop is manual
+cold backup; no runner is authorized yet. Laptop parity, recovery,
+runtime/tests, authenticated flat account read, network/power preflight and
+schedules pass. Before an explicit start, confirm the desktop runner absent and
+make the laptop the sole writable ledger/API owner. Never run both machines or
+use automatic failover/proxy egress.
 
 ## Current records
 

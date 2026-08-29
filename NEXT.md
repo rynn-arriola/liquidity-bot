@@ -16,12 +16,12 @@ The former server's authorized 22:56Z start repaired all 20 legacy intents. Thre
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
 zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
-Do not restart on this host. The operator selected the laptop as the next
-primary live runtime and the desktop as a manual cold standby. At 23:21Z the
+The operator selected the laptop as primary and the desktop as its manual cold
+backup. At 23:21Z the
 desktop received direct online snapshots of the production and spread-scalp
 databases plus restricted credentials, the deployed recovery archive and a
-full-log/crontab diagnostic archive; all validated. The laptop still needs its
-own direct verified pull rather than a cloud-synced copy.
+full-log/crontab diagnostic archive; all validated. It must never run
+concurrently with the laptop.
 
 Laptop parity, the Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight,
 direct verified execution/scalp/recovery/diagnostic pull, credential loading,
@@ -31,7 +31,7 @@ installed and enabled; no trading service is installed or enabled.
 
 Before laptop activation:
 
-1. prove the desktop runner absent and make the laptop the sole writable
+1. confirm the desktop runner absent and make the laptop the sole writable
    ledger/API owner (the former server is destroyed, the laptop runner is
    absent and the 00:07Z account snapshot was flat/order-free); and
 2. start only after the operator explicitly authorizes it, then observe the

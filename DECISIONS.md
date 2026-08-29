@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The laptop is the selected next primary runtime and the desktop is its cold standby, but neither may start until the credential-safe single-owner handoff is complete and the operator explicitly authorizes the start |
+| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The laptop is the primary live runtime and the desktop is its manual cold backup. Neither may start until credential-safe single ownership and explicit operator authorization; they must never run together |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
@@ -61,10 +61,10 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.
-- The laptop is the intended primary live runtime. The desktop is for
-  development, monitoring and manual cold standby. Exactly one machine may own
-  the live API credentials and active ledger at a time; there is no automatic
-  failover and the two machines must never run the bot concurrently.
+- The laptop is the primary live runtime. The desktop is for development,
+  monitoring and manual cold backup only. Exactly one machine may own/use the
+  live API credentials and active ledger at a time; there is no automatic
+  failover and the two machines must never run concurrently.
 - The active SQLite ledger follows the live runtime. It must move only as a
   verified stopped-runtime snapshot during a deliberate handoff and must never
   be bidirectionally synchronized through GitHub, OneDrive, Dropbox or another
@@ -96,9 +96,9 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - No new droplet based solely on the transient August 26 location denial.
 - No residential proxy, disguised IP or other attempt to evade Polymarket's
   location/access controls; obtain support confirmation before changing hosts.
-- No unattended or automatic desktop/laptop failover; a handoff requires the
-  old runner to be absent, known account state, a verified ledger snapshot and
-  an explicit operator start decision on the new owner.
+- No unattended or automatic desktop/laptop failover. A handoff requires the
+  old runner to be absent, known account state, a verified stopped-runtime
+  ledger snapshot and explicit start authorization on the new owner.
 
 When the operator changes one of these choices, update this file and
 [STATUS.md](STATUS.md) in the same task and record the evidence or implementation

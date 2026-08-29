@@ -3,8 +3,23 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Observe the laptop as the only live runtime
+## 0. Diagnose the stopped laptop's score-clock capacity loss
+The operator stopped the laptop normally at 02:00Z. The final runner record
+proved `flat=true`, and the post-stop authenticated dashboard proved zero
+orders, zero positions and zero ownership ambiguity. Do not restart without a
+separate operator decision.
 
+Immediately before the stop, authenticated state showed 10/20 quoting markets
+and 17 resting orders. The run logged 34 `commissioning score clock moved
+backwards` failures, and the market-service recovery path retired several
+affected markets. Determine whether stale per-market decision timestamps race
+the shared score timestamp or the system wall clock actually regressed. Cover
+the complete 20-slot service, recovery, retirement and score-telemetry flow;
+telemetry must not reduce trading availability under safety invariant 72. Add
+a focused regression, reverse it to prove failure, and run the complete suite
+before proposing a reviewed restart.
+
+## 1. Observe the laptop as the only production runtime
 The operator explicitly authorized the laptop start. Commit `04fddb1` is
 loaded after all 785 laptop WSL tests passed. The 00:42Z
 authenticated acceptance found the runner/supervisor healthy, 20/20 quoting
@@ -12,22 +27,10 @@ markets, 39 resting orders, zero positions, zero absent/unresolved state and no
 risk stop or 403/access denial. The laptop is now the only writable ledger/API
 owner; the former server is destroyed and the desktop is prepared but inactive.
 
-The former server's authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
-received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
-zero unresolved/retired and zero positions/orders proved containment. The
-normal stop completed flat in about 30 seconds. Do not induce more probes.
-The operator selected the laptop as primary and the desktop as its manual cold
-backup. The desktop now has Ubuntu 24.04 WSL2, an isolated Python environment
-and owner-only inactive copies of the stopped-server execution/scalp databases,
-credentials and archives. Both database checks, byte comparisons, shell syntax
-and all 787 offline tests pass. Active runtime paths, processes and units are
-absent. It must never run concurrently with the laptop.
-
-Laptop parity, its Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight,
-direct verified execution/scalp/recovery/diagnostic pull, credential loading,
-SQLite integrity/hashes and all 785 tests passed. The active copies live in
-WSL rather than OneDrive. Four matching systemd report/backup timers are
-installed and enabled; no trading service is installed or enabled.
+The former server is destroyed. The laptop remains the sole production owner;
+the prepared desktop is an inactive manual cold backup and must never run
+concurrently. Detailed commissioning and backup evidence remains linked from
+`STATUS.md`.
 
 On the desktop, `run parity check` verifies/fast-forwards only tracked files
 against GitHub. Its old recovery databases are not current laptop production
@@ -47,8 +50,7 @@ Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-
 runtime snapshot and known-account-state gates.
 
-## 1. Remaining natural acceptance
-
+## 2. Remaining natural acceptance
 The latest stopped runner loaded `31f815c`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
@@ -67,7 +69,7 @@ Private-only silence now has natural acceptance with unchanged PID and
 global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
 only if recurrence shows a local liveness defect rather than venue/network loss.
 
-## 2. Accept the deployed post-flat mandatory refill
+## 3. Accept the deployed post-flat mandatory refill
 
 Commit `2ece3c3` is active after authenticated flat/order-free proof, a graceful
 stop, parity, 766 server tests and a clean size-10 restart. Natural acceptance
@@ -80,7 +82,7 @@ idle early eviction, restored `active=20`, and materially lower
 exit or position merely to test it. Through 22:14Z there was no
 `[top-up-request]`; the 22:11Z `trigger=scheduled` refill is not acceptance.
 
-## 3. Accept rate-limited private-shard recovery
+## 4. Accept rate-limited private-shard recovery
 
 Commit `a8d91d0` is active. Its clean startup reached 20/20 quoting, 37 resting
 orders, zero positions, zero absent and zero persistent unresolved state without
@@ -90,7 +92,7 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 4. Collect fixed-GTC evidence
+## 5. Collect fixed-GTC evidence
 
 Commit `de1478b` repaired the cumulative-gap defect and is deployed. The live
 report proves 20 GTC starts, 20/20 feature rows, 20 clean paths and zero false
@@ -102,14 +104,14 @@ to load forward decode/drop interval closure. It loads on the next natural
 supervisor restart. Collect three complete days plus one held-out day before
 any strategy proposal, and never add overlapping cohorts as separate profit.
 
-## 5. One unresolved mutation can have account-wide availability cost
+## 6. One unresolved mutation can have account-wide availability cost
 
 Review whether unrelated proven-safe markets can continue while one owner is
 ambiguous without weakening the account-wide unowned-order invariant. Raising
 a timeout is not a fix; the venue has hidden accepted state longer than prior
 timeout values.
 
-## 6. Graceful stop success is not proof of flatness
+## 7. Graceful stop success is not proof of flatness
 
 `stop_commissioning.sh` primarily proves process termination; the runner can
 end with `flat=false`. Decide whether the script should fail when the final

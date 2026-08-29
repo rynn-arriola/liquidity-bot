@@ -3,14 +3,13 @@
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 
 ## Verified state
-
-- **Verified:** 2026-08-28 20:52 ET / 2026-08-29 00:52 UTC
-- **Liquidity bot:** LIVE on the laptop per operator; last authenticated proof
-  found supervisor PID 778 and runner PID 785
+- **Verified:** 2026-08-28 22:00 ET / 2026-08-29 02:00 UTC
+- **Liquidity bot:** STOPPED normally on the laptop at the operator's request;
+  supervisor PID 778 and runner PID 785 are absent
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
-- **Live proof:** the 00:42Z authenticated dashboard found 20/20 quoting
-  markets, 39 resting orders, zero positions, zero absent/unresolved state and
-  no risk stop; laptop mutations succeeded without a 403/access error
+- **Stop proof:** the final runner record says `operator_sigterm` and
+  `flat=true`; the post-stop authenticated dashboard found zero venue orders,
+  zero positions, zero absent/unresolved state and no risk stop
 - **Loaded source:** `04fddb1`; its trading core remains the reviewed `31f815c`
   repair and it adds only the isolated read-only TV dashboard/startup hook
 - **Verification:** laptop passed 785 pre-start tests; desktop passed 787 offline tests; trading source is unchanged
@@ -32,11 +31,12 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   both databases pass integrity and WSL files are owner-only. No active ledger,
   credential path, trading process, service, timer or API check exists there
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
-- **Measurement/display:** studies remain observational; TV auto-opens and uses zero venue calls. The Gain/P&L table update awaits a laptop dashboard-only reload
+- **Display/defect:** TV remains read-only. At 01:58Z authenticated state had
+  only 10/20 quoting markets and 17 orders after 34 score-clock reversals;
+  diagnose this unresolved availability/reward defect before any restart
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
 ## Active operating envelope
-
 | Setting | Current decision |
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
@@ -68,7 +68,7 @@ selected residential runtime. The containment remains installed.
 
 ## Current operating instruction
 
-The laptop is the sole live ledger/API owner. The desktop is powered and
+The laptop remains the sole ledger/API owner but is stopped. The desktop is powered and
 prepared only as an inactive manual cold backup; do not start its bot, recreate
 the former server, or use automatic failover/proxy egress.
 Any handoff begins with a graceful stop plus authenticated venue proof and a

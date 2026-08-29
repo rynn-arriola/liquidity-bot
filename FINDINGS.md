@@ -9,9 +9,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ```
 ## Current high-value findings
 
-- **Laptop commissioning passes; start remains unauthorized.** WSL2 runtime/data,
-  flat proof and timers pass; server is destroyed and desktop is manual backup.
-  The local-only TV view opens failure-isolated after runner proof.
+- **Laptop commissioning is live and accepted.** After 785 WSL tests and a
+  flat/order-free preflight, `04fddb1` reached 20/20 markets and 39 orders with
+  zero positions/ambiguity or server-era 403. [Evidence](docs/history/LAPTOP_ACTIVATION_2026-08-28.md).
 - **Desktop recovery is verified.** The execution ledger (31,038 orders/2,642 fills), 1.35 GB nine-table scalp database, restricted credentials, deployed archive and full-log/crontab archive validated. These are recovery copies, not permission for a second bot.
 - **A no-ID PLACE was misclassified as recovery risk.** An 18:35Z 504 left one `UNCERTAIN` create; its finished market caused three fast empty-book deaths, not a slot defect. Stopped repair blocks same-market orders because Retail never receives the local client ID.
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed 180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.

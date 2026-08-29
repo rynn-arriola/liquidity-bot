@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The laptop is the primary live runtime and the desktop is its manual cold backup. Neither may start until credential-safe single ownership and explicit operator authorization; they must never run together |
+| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is now the sole live runtime; the desktop is confirmed off and remains its manual cold backup. They must never run together |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |

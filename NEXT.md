@@ -3,14 +3,14 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-## 0. Migrate the only live runtime to the laptop
+## 0. Observe the laptop as the only live runtime
 
-The bot is stopped after authenticated recovery proved zero working orders and
-the authoritative ledger snapshot proved zero nonzero positions. Commit
-`31f815c` is pushed and deployed; all 13 hashes matched and all 776 local/server
-tests passed. On 2026-08-29 00:07Z the laptop independently authenticated and
-again found zero working orders/positions. The operator then destroyed the old
-server. Do not start either workstation without a new operator instruction.
+The operator confirmed the desktop off and explicitly authorized the laptop
+start. Commit `04fddb1` is loaded after all 785 WSL tests passed. The 00:42Z
+authenticated acceptance found the runner/supervisor healthy, 20/20 quoting
+markets, 39 resting orders, zero positions, zero absent/unresolved state and no
+risk stop or 403/access denial. The laptop is now the only writable ledger/API
+owner; the former server is destroyed and the desktop remains a cold backup.
 
 The former server's authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
@@ -29,15 +29,9 @@ SQLite integrity/hashes and all 776 tests now pass. The active copies live in
 WSL rather than OneDrive. Four matching systemd report/backup timers are
 installed and enabled; no trading service is installed or enabled.
 
-Before laptop activation:
-
-1. confirm the desktop runner absent and make the laptop the sole writable
-   ledger/API owner (the former server is destroyed, the laptop runner is
-   absent and the 00:07Z account snapshot was flat/order-free); and
-2. start only after the operator explicitly authorizes it, then observe the
-   startup, 20-slot state, orders, streams and errors. The local TV dashboard
-   should open automatically after runner proof; confirm `LIVE`, fresh ledger/
-   log/scope ages and the complete slot map. Its data is not venue flat proof.
+Continue natural live observation of fills, exits, stream freshness, 20-slot
+ownership and access errors. The local TV dashboard is active but remains
+local evidence rather than venue flat proof.
 
 Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-

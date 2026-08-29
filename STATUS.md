@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 20:15 ET / 2026-08-29 00:15 UTC
+- **Verified:** 2026-08-28 20:16 ET / 2026-08-29 00:16 UTC
 - **Liquidity bot:** STOPPED; laptop supervisor and runner are absent
 - **Former server:** destroyed by the operator; it cannot run the bot, retain
   credentials or execute its old crontab
@@ -25,8 +25,8 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   egress with no active VPN adapter observed; Retail health returned 200/OK;
   AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum
   performance
-- **Laptop schedules:** four read-only backup/report systemd timers are enabled;
-  no trading service is installed or enabled
+- **Laptop schedules:** four read-only backup/report systemd timers are active;
+  a stopped-safe ledger backup passed; no trading service is installed/enabled
 - **Recovery copy on desktop:** the 23:21Z execution ledger passed integrity
   (`31,038` orders, `2,642` fills, 139.1 MB); the 23:38Z scalp database passed
   integrity with all nine tables (1.35 GB); restricted credentials, the 352-file

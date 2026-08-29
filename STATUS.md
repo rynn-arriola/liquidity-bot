@@ -4,7 +4,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 19:42 ET / 23:42 UTC
+- **Verified:** 2026-08-28 20:11 ET / 2026-08-29 00:11 UTC
 - **Liquidity bot:** STOPPED; supervisor and runner are absent
 - **Stop proof:** 23:00Z authenticated dashboard found zero positions/orders;
   the 23:01Z graceful-stop record ended `flat=true`
@@ -14,6 +14,15 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   startup repair and cooperative-loop backoff are implemented; focused tests and three deliberate
   reversals plus all 776 local/server tests pass; all 13 deployed hashes matched
 - **Maker-lab:** stopped
+- **Laptop runtime:** Ubuntu 24.04 WSL2 outside OneDrive; Python 3.12, pinned SDK,
+  size 10, restricted credentials and exact stopped execution/scalp snapshots
+  are installed; ledger integrity/hashes passed and all 776 tests passed
+- **Laptop account proof:** the 00:07Z authenticated read found zero positions
+  and zero working orders; the local runner/supervisor are absent
+- **Laptop access/power:** Windows and WSL use the same US residential Comcast
+  egress with no active VPN adapter observed; Retail health returned 200/OK;
+  AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum
+  performance
 - **Recovery copy on desktop:** the 23:21Z execution ledger passed integrity
   (`31,038` orders, `2,642` fills, 139.1 MB); the 23:38Z scalp database passed
   integrity with all nine tables (1.35 GB); restricted credentials, the 352-file
@@ -41,39 +50,30 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Active incident and accepted containment
 
-From 22:07 UTC, Retail order mutations returned structured HTTP 403/code 7
-location/VPN denials. The old gateway mislabeled these positive rejections as
-ambiguous, creating no-ID `UNCERTAIN` PLACE intents. Retirement then consumed
-all 20 owners. Private-shard silence recovered safely and the post-flat fast
-path never ran, so neither caused this collapse.
+From 22:07 UTC, Retail mutations returned HTTP 403/code 7 location/VPN
+denials. The old gateway mislabeled them as ambiguous no-ID PLACE intents and
+retirement consumed all 20 owners. The deployed repair fails only the rejected
+intent, limits later entry probes, preserves cancels/reducers and repairs only
+legacy rows with exact persisted rejection proof.
 
-The deployed repair fails a response-backed 403 intent, opens a 60-second
-new-entry circuit, alerts once, and probes recovery with one later desired
-entry. Cancels and reducers bypass an entry denial; only a rejection of their
-own request opens a short 10-second risk-mutation circuit. Each circuit clears
-only on a successful mutation in its scope. Startup also repairs
-only legacy rows containing the exact persisted 403/code-7 rejection proof;
-timeouts, 5xx, absence and near-matches remain unresolved. [Full evidence and
-verification](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
-
-The authorized 22:56Z start repaired exactly 20 legacy intents, bound all 20
-owners and made three probes about 72 seconds apart. Every probe received the
-same VPN/proxy 403. Later slots backed off locally: zero owners retired, zero
-intents remained unresolved and the account stayed flat/order-free. This
-accepts containment, not access recovery; no quote could rest.
-
-The forced stop exposed a second defect: all-no-ID repair can complete without
-an `await`, making ready stream tasks spin the loop and starve Unix signal
-callbacks. Every outer pass now yields, and a fully no-ID-blocked active slate
-adds a 250ms idle backoff without adding API calls or changing strategy.
+The 22:56Z acceptance repaired 20 rows, retained 20 owners and kept zero
+unresolved/retired through three denied probes. The account stayed flat and no
+quote could rest: containment passed, access recovery did not. A separate
+cooperative yield/backoff repair prevents the all-no-ID loop from starving
+signals. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 
 ## Current operating instruction
 
 Keep trading disabled on this server; no manual restart. The laptop is the
 selected next primary and the desktop its cold standby, but no local runner is
-authorized yet. Complete the laptop's independent parity, direct verified
-recovery pull, runtime/network preflight and single-owner handoff before an
-explicit start. Do not use a residential proxy or run both machines at once.
+authorized yet. Laptop parity, direct verified execution/scalp/recovery pulls,
+Linux runtime, tests, account read and home-network/power preflight pass. Four
+replacement laptop report/backup timers are installed but disabled: SSH became
+unreachable before the preserved server crontab could be disabled, so enabling
+both copies would duplicate work. Before an explicit start, complete that
+schedule handoff, prove the desktop runner absent and make the laptop the sole
+writable ledger/API owner. Do not use a residential proxy or run both machines
+at once.
 
 ## Current records
 

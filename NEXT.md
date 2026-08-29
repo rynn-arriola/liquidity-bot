@@ -8,8 +8,9 @@ This file contains unfinished work. Completed implementation history is in
 The bot is stopped after authenticated recovery proved zero working orders and
 the authoritative ledger snapshot proved zero nonzero positions. Commit
 `31f815c` is pushed and deployed; all 13 hashes matched and all 776 local/server
-tests passed. Do not restart the current server or either workstation without a
-new operator instruction.
+tests passed. On 2026-08-29 00:07Z the laptop independently authenticated and
+again found zero working orders/positions. Do not restart the current server or
+either workstation without a new operator instruction.
 
 The authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
@@ -22,18 +23,20 @@ databases plus restricted credentials, the deployed recovery archive and a
 full-log/crontab diagnostic archive; all validated. The laptop still needs its
 own direct verified pull rather than a cloud-synced copy.
 
+Laptop parity, the Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight,
+direct verified execution/scalp/recovery/diagnostic pull, credential loading,
+SQLite integrity/hashes and all 776 tests now pass. The active copies live in
+WSL rather than OneDrive. Four matching systemd report/backup timers are
+installed but disabled.
+
 Before laptop activation:
 
-1. run parity on the laptop and establish its supported Linux/WSL production
-   environment, dependencies, power/network settings and no-VPN home egress;
-2. install the ignored local backup helper and a machine-specific SSH key, then
-   pull and verify both SQLite databases, credentials, deployed recovery archive
-   and diagnostic archive directly from the server;
-3. prove the server and desktop have no runner, verify current account state,
-   and make the laptop the sole writable ledger/API owner;
-4. move authenticated reports and backups off DigitalOcean before live use so
-   the rejected host does not keep sharing credentials or REST budget; and
-5. start only after the operator explicitly authorizes it, then observe the
+1. regain SSH access, disable the preserved server crontab and enable/verify the
+   four laptop timers; never run both schedule sets together;
+2. prove the desktop runner absent and make the laptop the sole writable
+   ledger/API owner (the current server and laptop runners are already absent,
+   and the 00:07Z account snapshot was flat/order-free); and
+3. start only after the operator explicitly authorizes it, then observe the
    startup, 20-slot state, orders, streams and errors.
 
 Never use GitHub or a general file-sync service for the live SQLite database or

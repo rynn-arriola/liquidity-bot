@@ -47,3 +47,18 @@ added.
 Natural acceptance remains pending until the next separately authorized safe
 restart. It requires a quiet interval beyond 180 seconds without false handoff,
 and retention of bounded recovery when positive Ping/Pong proof actually fails.
+
+## Deployment
+
+At 12:19Z the operator authorized a flat-gated deployment and restart.
+Authenticated reads immediately before and after the graceful stop, plus the
+runner's final `operator_sigterm`/`flat=true` record, proved zero orders and
+positions. The stopped WSL checkout fast-forwarded to `a1ba212`; the true WSL
+source passed all 810 tests, its HEAD and `DEPLOYED_COMMIT` matched, and the
+runner import resolved inside `/home/polybot/liquidity-bot/src`.
+
+The size-13 restart began at 12:25Z. Authenticated 12:27Z acceptance found 35
+resting orders across 18 quoting markets, zero positions, no absent/unknown
+orders and no risk stop. Two current intents cleared locally by 12:28Z, when
+the ledger held 37 orders on 19 markets with zero unresolved state. Natural
+acceptance of the greater-than-180-second liveness boundary remains pending.

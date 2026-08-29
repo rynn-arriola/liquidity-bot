@@ -8,8 +8,8 @@ Search it before designing a repair:
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
 
-## Repaired in tracked source; not loaded into the live runner
-- **Quiet private shards were repeatedly classified as dead.** The old clock saw only JSON and ignored healthy protocol Ping/Pong. Each connection now records only an awaited Pong; missing/failing proof enters existing recovery, and REST still cannot certify the socket. Focused suites passed 23/23 and 16/16, the deliberate reversal failed exactly, and all 810 tests passed. The live PID was not restarted. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
+## Deployed in `a1ba212`; natural timeout acceptance pending
+- **Quiet private shards were repeatedly classified as dead.** The old clock saw only JSON and ignored healthy protocol Ping/Pong. Each connection now records only an awaited Pong; missing/failing proof enters existing recovery, and REST still cannot certify the socket. Focused suites passed 23/23 and 16/16, the deliberate reversal failed exactly, and all 810 deployed WSL tests passed. The flat-gated restart loaded the repair at 12:25Z. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
 
 ## Deployed and live-accepted in `08b5b70`
 - **A backward score clock turned half the slate into `OBSERVED`.** The high-water containment passed its regression/reversal and naturally logged one ignored stale sample before reaching 20/20 slots with no retirement. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).

@@ -4,13 +4,13 @@ This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
 ## 0a. Load and naturally accept private Ping/Pong liveness
-Tracked source now requires an awaited protocol Pong when no private JSON arrives. All 810 tests and the focused regression/reversal passed, but runner `08b5b70` remains loaded. Do not restart just for this repair. At the next authorized safe restart, accept a quiet interval beyond 180 seconds without false handoff and confirm real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
+Commit `a1ba212` is deployed after a flat-gated restart and 810 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 
 ## 0. Continue natural acceptance of the size-13 deployment
-Commit `08b5b70` is active after 807 desktop/laptop tests, exact marker/source
-proof and a flat/order-free preflight. At 04:21Z it held 20/20 slots, 38
-quantity-13 orders and zero positions/absent rows or risk stop. One current
-mutation was normal churn, not a stuck owner.
+Commit `a1ba212` is active after 810 deployed WSL tests, exact marker/source
+proof and repeated flat/order-free preflight. At 12:27Z it held 18/20 quoting
+slots, 35 quantity-13 orders and zero positions/absent/unknown rows or risk
+stop; the two current mutations resolved locally by 12:28Z.
 
 The score-clock repair already received natural acceptance: one backward sample
 logged `action=ignored_stale_sample`, added no retirement and the runner reached
@@ -18,11 +18,11 @@ logged `action=ignored_stale_sample`, added no retirement and the runner reached
 freshness and mutation resolution; do not induce a fault.
 
 ## 1. Observe the laptop as the only production runtime
-The operator explicitly authorized the laptop start. Commit `08b5b70` is
-loaded after all 807 laptop WSL tests passed. The 04:21Z authenticated
-acceptance found the runner/supervisor healthy, 20/20 quoting markets, 38
-resting size-13 orders, zero positions/absent rows and no risk stop or access
-denial. The laptop is the only writable ledger/API owner; the former server is
+The operator explicitly authorized the laptop restart. Commit `a1ba212` is
+loaded after all 810 laptop WSL tests passed. The 12:27Z authenticated
+acceptance found the runner/supervisor healthy, 18/20 quoting markets, 35
+resting size-13 orders, zero positions/absent/unknown rows and no risk stop.
+The laptop is the only writable ledger/API owner; the former server is
 destroyed and the desktop is prepared but inactive.
 
 On the desktop, `run parity check` verifies/fast-forwards only tracked files

@@ -14,9 +14,9 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 - **Verification:** all 830 tests pass from the deployed WSL source. At 14:27Z
   authenticated acceptance found 34 orders on 19/20 quoting markets, zero
   positions/absent/unresolved rows and no risk stop
-- **API capacity measurement:** startup made 373 attempts/146.9s with no
-  failures; the next 64s made 116 at 1.813/s but received 10 execution-history
-  Cloudflare `1015`/429s. The bot stayed live/flat; no slot increase is authorized
+- **API capacity measurement:** startup made 373 attempts/146.9s clean; the next
+  64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
+  with 105 clean reads. The bot stayed live/flat; no slot increase is authorized
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data

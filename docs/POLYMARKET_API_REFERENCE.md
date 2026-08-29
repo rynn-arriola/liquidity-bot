@@ -149,6 +149,12 @@ Cloudflare limit can bind first. Twenty slots must remain the ceiling while
 ordinary windows and a no-429 restart are collected; no width canary is
 authorized from this sample.
 
+The immediately following 66.2-second window recovered without an operator or
+process change: 105 reads (`1.585/s`), including six execution-history calls,
+completed with zero failures and zero 429s. This bounds the observed incident
+to a transient restart/rolling window; it does not erase the failed window or
+prove that another restart will be clean.
+
 The offline capacity model deliberately uses more conservative mutation input
 than that action-line rate and preserves 25% of the internal 4/s governor:
 

@@ -110,7 +110,7 @@ The following inventory was audited end to end on 2026-08-29:
 | Balance freshness | One balance read every 5 seconds: `0.20/s`. | Account-wide, fixed. |
 | Non-trading cash proof | Every 15 seconds, current one-page cash activity plus a second bracketing balance: `2/15 = 0.133/s`. More activity pages add directly. | Account-wide, page-sensitive. |
 | Whole-account reconciliation | Every 10 seconds, at least one complete open-order page, one position page and one execution-activity page: `3/10 = 0.30/s`. Extra pages and individually unresolved/absent order reads add directly. | Account-wide plus ambiguity-sensitive. |
-| Bound-market metadata and rewards | Deployed code performs two reads per market per minute: `2N/60`. The locally tested batching change uses one slug-filtered market read plus one symbol-filtered incentive read per bounded group of eight: `2 × ceil(N/8) / 60`. Startup validation still reads every bound book and has its own finite burst. | Linear before batching; stepwise after batching. |
+| Bound-market metadata and rewards | The deployed batching uses one slug-filtered market read plus one symbol-filtered incentive read per bounded group of eight: `2 × ceil(N/8) / 60`. Startup validation still reads every bound book and has its own finite burst. | Stepwise by private-shard-sized group. |
 | Quiet-book REST fallback | A market with no recent streamed full book becomes due after 3 seconds, so demand is approximately `N × quiet_fraction / 3` requests/second. Its decision book is stale at 5 seconds. | The dominant degraded-feed term; a silent full slate cannot be made fresh by polling at scale. |
 | Mutations | Creates, cancels and IOC reductions share the governor. They are event-driven and never automatically retried. | Depends on fill/cancel/replace business activity, not slot count alone. |
 | Market selection | On the measured planning assumptions, 52 catalog pages, 4 incentive pages and up to 60 candidate books every 900 seconds: `116/900 = 0.129/s` on average, but a 116-request burst with a 29-second floor at 4 requests/second. | Catalog/page/book-sensitive burst. |
@@ -135,6 +135,20 @@ There was one rate-limit event in the window. The new local limiter telemetry
 is required before treating exact category rates, response latency, wait tails
 or 429 count as measured production inputs.
 
+The flat-gated `2aa9fec` deployment supplied the first exact 20-slot transport
+measurement. Its startup window through 14:27:13Z covered 146.9 seconds and
+373 attempts (`338` reads, `35` mutations, `2.539/s`), with no failures,
+governor wait p99 `0.217s`, response p99 `0.964s` and maximum queue depth one.
+The following 64.0-second window covered 116 attempts (`1.813/s`) but recorded
+10 confirmed Cloudflare `1015`/HTTP 429 responses. Runtime evidence localized
+the repeated rejection to `GET /v1/portfolio/activities` execution-history
+backfill while order placement, account reconciliation and private-stream
+handling continued. This proves that low average aggregate RPS does not by
+itself make a restart window comfortable: an endpoint-specific or rolling
+Cloudflare limit can bind first. Twenty slots must remain the ceiling while
+ordinary windows and a no-429 restart are collected; no width canary is
+authorized from this sample.
+
 The offline capacity model deliberately uses more conservative mutation input
 than that action-line rate and preserves 25% of the internal 4/s governor:
 
@@ -156,11 +170,11 @@ before increasing production width.
 
 ### Evidence required before choosing the durable maximum
 
-The locally tested code logs a secret-free 60-second API budget window with
+The deployed code logs a secret-free 60-second API budget window with
 attempt counts by fixed category, read/mutation split, response and governor
 wait p95/p99/max, live/max queue depth, failures and confirmed 429s. It does not
 make a diagnostic request and never records slugs, order IDs, credentials or
-payloads. It is not deployed as of this entry.
+payloads. It was deployed at `2aa9fec` on 2026-08-29.
 
 After an independently authorized flat-gated deployment, keep production at 20
 slots long enough to capture ordinary, selection-burst, busy and recovery

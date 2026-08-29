@@ -3,15 +3,15 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-**Capacity ceiling remains open:** the local audit authorizes no deployment, restart, slot or risk change. At a separately authorized flat-gated deployment, retain 20 slots, collect limiter/latency/CPU/stream evidence across ordinary, selection, busy and natural-recovery windows, replay it, then use bounded canaries. Resolve whole-slate quiet-book fallback and any exposure increase separately. [Criteria and scenarios](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
+**Capacity ceiling remains open:** instrumentation is deployed at `2aa9fec`, but the first 20-slot restart produced 10 Cloudflare `1015`/429s on execution-history backfill despite only `1.813` aggregate attempts/s in that window. Keep 20 slots, isolate the endpoint/rolling-window cause, obtain no-429 ordinary and restart windows, then replay evidence before any bounded canary. Resolve whole-slate quiet-book fallback and any exposure increase separately. [Criteria and measurements](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
 ## 0a. Load and naturally accept private Ping/Pong liveness
-Commit `a1ba212` is deployed after a flat-gated restart and 810 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
+Commit `2aa9fec` includes the `a1ba212` repair and is deployed after a flat-gated restart and 830 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 
 ## 0. Continue natural acceptance of the size-13 deployment
-Commit `a1ba212` is active after 810 deployed WSL tests, exact marker/source
-proof and repeated flat/order-free preflight. At 12:27Z it held 18/20 quoting
-slots, 35 quantity-13 orders and zero positions/absent/unknown rows or risk
-stop; the two current mutations resolved locally by 12:28Z.
+Commit `2aa9fec` is active after 830 deployed WSL tests and exact marker/source
+proof. At 14:27Z it held 19/20 quoting slots, 34 quantity-13 orders and zero
+positions/absent/unresolved rows or risk stop. Continue observing the measured
+execution-history 429s as part of the capacity gate.
 
 The score-clock repair already received natural acceptance: one backward sample
 logged `action=ignored_stale_sample`, added no retirement and the runner reached

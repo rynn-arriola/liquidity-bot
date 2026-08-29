@@ -3,24 +3,24 @@
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 
 ## Verified state
-- **Verified:** 2026-08-29 08:28 ET / 2026-08-29 12:28 UTC
-- **Liquidity bot:** LIVE on the laptop; supervisor PID 11785 and runner PID
-  11792 are active, with the isolated TV dashboard PID 1681
+- **Verified:** 2026-08-29 10:28 ET / 2026-08-29 14:28 UTC
+- **Liquidity bot:** LIVE on the laptop; supervisor PID 14497 and runner PID
+  14504 are active, with the isolated TV dashboard PID 1681
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
-- **Restart proof:** the old runner stopped at 12:19:57Z with
-  `operator_sigterm` and `flat=true`; authenticated snapshots before and after
-  stop and immediately before start each proved zero orders and positions
-- **Loaded source:** WSL HEAD and `DEPLOYED_COMMIT` are `a1ba212`; the runner imports the WSL tree
-- **Verification:** all 810 tests pass from the deployed WSL source. At 12:27Z
-  authenticated acceptance found 35 orders on 18/20 quoting markets, zero
-  positions/absent/unknown rows and no risk stop; two normal current mutations
-  resolved locally by 12:28Z to 37 orders on 19 markets and zero unresolved
+- **Restart proof:** the old runner stopped at 14:20:23Z with
+  `operator_sigterm` and `flat=true`; the post-stop authenticated snapshot
+  proved zero orders and positions before the deployment started
+- **Loaded source:** WSL HEAD and `DEPLOYED_COMMIT` are `2aa9fec`; the runner imports the WSL tree
+- **Verification:** all 830 tests pass from the deployed WSL source. At 14:27Z
+  authenticated acceptance found 34 orders on 19/20 quoting markets, zero
+  positions/absent/unresolved rows and no risk stop
+- **API capacity measurement:** startup made 373 attempts/146.9s with no
+  failures; the next 64s made 116 at 1.813/s but received 10 execution-history
+  Cloudflare `1015`/429s. The bot stayed live/flat; no slot increase is authorized
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data
   are active; the ledger stayed authoritative through the stopped deployment
-- **Laptop account proof:** the 04:21Z authenticated read found 38 working
-  orders across 20/20 slots, zero positions/absent rows and no risk stop
 - **Laptop access/power:** Windows and WSL use the same US residential Comcast
   egress with no active VPN adapter observed; Retail health returned 200/OK;
   AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum

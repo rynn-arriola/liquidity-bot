@@ -28,6 +28,10 @@ Before diagnosing, changing, deploying, stopping or starting anything:
    For a rollback or stable-version request, read
    [docs/STABLE_RELEASE.md](docs/STABLE_RELEASE.md) before touching git,
    deployment files, databases or the running process.
+   For the laptop live display, automatic browser behavior, or a visual 20-slot
+   diagnosis, read [docs/TV_DASHBOARD.md](docs/TV_DASHBOARD.md). Its local
+   snapshot is operational evidence with an age, never authenticated venue
+   proof.
 5. Verify live facts when the question is operational. Markdown is the latest
    handoff, not the venue. Process state comes from the server, deployed code
    from `DEPLOYED_COMMIT` plus file hashes, configuration from the running

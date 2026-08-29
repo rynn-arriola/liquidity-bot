@@ -32,8 +32,8 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   integrity with all nine tables (1.35 GB); restricted credentials, the 352-file
   `31f815c` recovery archive and a full-log/crontab archive also validated
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
-- **Measurement:** spread-scalp collector is isolated; adverse-fill and queue
-  studies remain observational; scheduled reports/backups remain independent
+- **Measurement/display:** studies remain observational; the reviewed local TV
+  view auto-opens after runner proof, uses zero venue calls and cannot fail trading
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
 ## Active operating envelope

@@ -104,6 +104,10 @@ market selection. At minimum, preserve these rules:
 - Reporting/measurement failures must remain isolated from trading behavior
   unless the operator explicitly authorizes a strategy gate.
 - A watchlist measurement is not permission to change live behavior.
+- Operator displays should prefer local read-only telemetry. They must expose
+  source and age, preserve unknown values, redact secrets, provide no mutation
+  route and fail independently of trading startup. A local 20-slot scope is not
+  authenticated current order or position proof.
 
 ## Historical routing
 

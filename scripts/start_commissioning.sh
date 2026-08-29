@@ -72,3 +72,9 @@ fi
 echo "supervisor pid(s): $(supervisor_pids | tr '\n' ' ')"
 echo "runner pid(s):     $(runner_pids | tr '\n' ' ')"
 echo "log: $(pwd)/logs/commissioning.log"
+
+# The TV view is an independent read-only observer.  A display/browser failure
+# must never convert a successful trading startup into a failed startup.
+if ! ./scripts/start_tv_dashboard.sh --open; then
+    echo "WARNING: bot is running, but the optional TV dashboard did not start"
+fi

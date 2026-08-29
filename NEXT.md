@@ -35,7 +35,9 @@ Before laptop activation:
    ledger/API owner (the former server is destroyed, the laptop runner is
    absent and the 00:07Z account snapshot was flat/order-free); and
 2. start only after the operator explicitly authorizes it, then observe the
-   startup, 20-slot state, orders, streams and errors.
+   startup, 20-slot state, orders, streams and errors. The local TV dashboard
+   should open automatically after runner proof; confirm `LIVE`, fresh ledger/
+   log/scope ages and the complete slot map. Its data is not venue flat proof.
 
 Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-

@@ -340,6 +340,13 @@ stops and session fee cap derive automatically from it. Portfolio exposure is
 ./scripts/stop_commissioning.sh
 ```
 
+On WSL, a successful bot start also launches and opens the read-only Liquidity
+TV dashboard at `http://localhost:8787`. It reads only the local ledger, log and
+process table, makes zero venue API calls and cannot block a successful trading
+startup. Its 20-slot map is age-labelled local stream-scope evidence, not venue
+flatness proof. See [Liquidity TV dashboard](docs/TV_DASHBOARD.md) for the
+display, LAN and manual lifecycle commands.
+
 The optional almost-front queue study is measurement-only and starts with the
 normal runner once its reviewed code is deployed. It uses a separate bounded
 public-trade socket and has no cancel/repost path. Inspect its coverage without

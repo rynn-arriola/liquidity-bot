@@ -1,0 +1,160 @@
+"use strict";
+
+const byId = (id) => document.getElementById(id);
+const formatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+});
+
+let lastSnapshot = null;
+let lastReceived = null;
+
+function readableAge(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "unknown age";
+  const value = Math.max(0, Math.floor(Number(seconds)));
+  if (value < 2) return "just now";
+  if (value < 60) return `${value}s ago`;
+  if (value < 3600) return `${Math.floor(value / 60)}m ${value % 60}s ago`;
+  if (value < 86400) return `${Math.floor(value / 3600)}h ${Math.floor((value % 3600) / 60)}m ago`;
+  return `${Math.floor(value / 86400)}d ago`;
+}
+
+function metric(value) {
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function shortMarket(slug) {
+  if (!slug) return "Available capacity";
+  const clean = slug.replace(/^aec-/, "");
+  if (clean.length <= 28) return clean;
+  return `${clean.slice(0, 13)}…${clean.slice(-12)}`;
+}
+
+function setIndicator(id, state) {
+  const element = byId(id);
+  element.className = state;
+}
+
+function renderSlots(slots) {
+  const grid = byId("slot-grid");
+  grid.replaceChildren();
+  const safeSlots = Array.isArray(slots) ? slots : [];
+  for (let index = 0; index < 20; index += 1) {
+    const source = safeSlots[index] || { number: index + 1, market: null, status: "empty" };
+    const slot = document.createElement("article");
+    slot.className = `slot ${source.status || "empty"}`;
+    slot.title = source.market || "No market in the latest observed scope";
+
+    const number = document.createElement("span");
+    number.className = "slot-number";
+    number.textContent = `SLOT ${String(source.number || index + 1).padStart(2, "0")}`;
+    const market = document.createElement("span");
+    market.className = "slot-market";
+    market.textContent = shortMarket(source.market);
+    const status = document.createElement("span");
+    status.className = "slot-status";
+    status.textContent = source.status === "quoting" ? "resting order" : (source.status || "empty");
+    slot.append(number, market, status);
+    grid.append(slot);
+  }
+}
+
+function activityTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : formatter.format(parsed);
+}
+
+function renderActivity(activity) {
+  const list = byId("activity-list");
+  list.replaceChildren();
+  if (!Array.isArray(activity) || activity.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty-activity";
+    empty.textContent = "No matching local events in the recent log tail.";
+    list.append(empty);
+    return;
+  }
+  for (const item of activity.slice(0, 9)) {
+    const row = document.createElement("li");
+    row.className = "activity-item";
+    const dot = document.createElement("i");
+    dot.className = `activity-dot ${item.kind || "system"}`;
+    const text = document.createElement("span");
+    text.className = "activity-text";
+    text.textContent = item.message || "Local event";
+    const time = document.createElement("time");
+    time.className = "activity-time";
+    time.textContent = activityTime(item.at);
+    row.append(dot, text, time);
+    list.append(row);
+  }
+}
+
+function render(data) {
+  lastSnapshot = data;
+  lastReceived = Date.now();
+  const ledger = data.ledger || {};
+  const process = data.process || {};
+  const log = data.log || {};
+  const scope = ledger.scope;
+  const mode = ["live", "stale", "degraded", "offline"].includes(data.mode) ? data.mode : "degraded";
+  byId("mode-dot").className = `mode-dot ${mode}`;
+  byId("mode-label").textContent = mode.toUpperCase();
+
+  let detail = "Trading runner is not detected on this machine.";
+  if (mode === "live") detail = "Runner detected · local telemetry is fresh";
+  if (mode === "stale") detail = "Runner detected · local activity has gone quiet";
+  if (mode === "degraded") detail = "Runner detected · one or more local sources are unavailable";
+  byId("mode-detail").textContent = detail;
+
+  byId("working-orders").textContent = metric(ledger.working_orders);
+  byId("working-markets").textContent = ledger.working_markets === null || ledger.working_markets === undefined ? "unknown markets" : `${ledger.working_markets} market${ledger.working_markets === 1 ? "" : "s"}`;
+  byId("scope-size").textContent = scope ? metric(scope.size) : "—";
+  byId("scope-age").textContent = scope ? `${scope.status || "observed"} · ${readableAge(scope.age_seconds)}` : "No scope snapshot";
+  byId("positions").textContent = metric(ledger.positions);
+  const attentionKnown = ledger.unresolved_intents !== null && ledger.unresolved_intents !== undefined && ledger.unknown_orders !== null && ledger.unknown_orders !== undefined;
+  byId("attention-count").textContent = attentionKnown ? String(ledger.unresolved_intents + ledger.unknown_orders) : "—";
+  byId("attention-detail").textContent = attentionKnown ? `${ledger.unresolved_intents} unresolved · ${ledger.unknown_orders} unknown` : "intent + unknown unavailable";
+
+  byId("runner-state").textContent = process.runner ? `UP · ${readableAge(process.runner_uptime_seconds).replace(" ago", "")}` : "STOPPED";
+  byId("supervisor-state").textContent = process.supervisor ? "UP" : "STOPPED";
+  byId("ledger-state").textContent = ledger.available ? readableAge(ledger.age_seconds) : "UNAVAILABLE";
+  byId("log-state").textContent = log.available ? readableAge(log.age_seconds) : "UNAVAILABLE";
+  setIndicator("runner-indicator", process.runner ? "good" : "bad");
+  setIndicator("supervisor-indicator", process.supervisor ? "good" : "bad");
+  setIndicator("ledger-indicator", ledger.available ? (ledger.age_seconds > 120 ? "warn" : "good") : "bad");
+  setIndicator("log-indicator", log.available ? (log.age_seconds > 120 ? "warn" : "good") : "bad");
+
+  renderSlots(ledger.slots);
+  renderActivity(data.activity);
+  byId("footer-source").textContent = data.source || "LOCAL READ-ONLY";
+  updateObservationAge();
+}
+
+function updateObservationAge() {
+  if (!lastReceived) return;
+  const elapsed = (Date.now() - lastReceived) / 1000;
+  byId("observed-age").textContent = readableAge(elapsed);
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    render(await response.json());
+  } catch (error) {
+    byId("mode-dot").className = "mode-dot degraded";
+    byId("mode-label").textContent = "DISPLAY DISCONNECTED";
+    byId("mode-detail").textContent = "The local dashboard service is not responding.";
+  }
+}
+
+function updateClock() {
+  byId("clock").innerHTML = `${formatter.format(new Date())} <small>ET</small>`;
+  updateObservationAge();
+}
+
+updateClock();
+refresh();
+setInterval(updateClock, 1000);
+setInterval(refresh, 1000);

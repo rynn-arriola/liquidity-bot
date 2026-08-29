@@ -3,27 +3,48 @@
 Every AI session on every machine begins with
 [AI_OPERATOR.md](../AI_OPERATOR.md), [STATUS.md](../STATUS.md) and
 [DECISIONS.md](../DECISIONS.md). `STATUS.md` is the handoff snapshot, but the
-server and venue remain authoritative for live state.
+the one active runtime and venue remain authoritative for live state.
+
+> **Current transition (2026-08-28):** the former DigitalOcean server was
+> destroyed. The laptop is the selected next primary and the desktop is cold
+> standby. Exactly one machine may hold the writable live ledger and run
+> authenticated processes. Old droplet commands below are historical only.
+
+## Laptop live view
+
+The supported local runtime is Ubuntu under WSL2 on the Windows laptop. After
+the WSL launcher proves the bot stayed up, it automatically starts the isolated
+TV dashboard and asks Windows to open `http://localhost:8787` in the default
+browser. Dashboard failure cannot fail the bot start. Press `F11` for a
+full-screen display or mirror the laptop over HDMI.
+
+The display uses only the local read-only ledger/log/process table and zero
+venue calls. See [Liquidity TV dashboard](TV_DASHBOARD.md). A second LAN device
+may use `http://<laptop-LAN-IP>:8787` only when WSL networking and Windows
+Firewall permit private access; never expose that port through the router.
 
 The goal: open a laptop, desktop or phone and pick up exactly where the last
-session stopped. Most of that already works through git. The one thing that does
-not travel is SSH access to the droplet.
+session stopped. Tracked state travels through git; credentials and the writable
+ledger travel only through a deliberate stopped-runtime handoff.
 
 ## What is portable, and what is not
 
 | | how it travels |
 |---|---|
 | code, AI instructions, findings and handoffs | `git pull --ff-only` |
-| what is actually deployed | `DEPLOYED_COMMIT` on the droplet |
-| authoritative trading history, logs, ledger | droplet; ignored workstation backups are copies, never live authority |
-| Polymarket API keys, Discord webhooks | **droplet only — no workstation needs them** |
-| SSH access to the droplet | per-machine, set up once (below) |
+| what is actually loaded | `DEPLOYED_COMMIT` on the one active runtime |
+| authoritative trading history, logs, ledger | the one active runtime; ignored copies elsewhere are recovery only |
+| Polymarket API keys, Discord webhooks | the one active runtime only; never GitHub or file sync |
+| retired droplet SSH | no current endpoint; historical instructions only |
 
-**No workstation needs the API credentials.** The bot runs on the droplet, which
-already holds them. Deploying, testing, starting, stopping and querying the
-ledger are all done over SSH. A workstation only needs to be able to log in.
+During the current laptop migration, only the selected laptop may receive the
+ignored credential file and become live. The desktop copy is disaster recovery
+and must not run concurrently. The destroyed server cannot be a fallback.
 
-## Authorising a new machine
+## Retired droplet access procedure (historical—do not run)
+
+The host described below no longer exists. This section explains older records;
+it is not a current setup or recovery procedure.
 
 Generate a key **on the machine that will use it**. Never copy a private key
 between machines — that is the thing that makes keys unsafe. Copying the

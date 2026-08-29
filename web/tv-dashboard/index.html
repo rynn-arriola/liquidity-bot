@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Liquidity Bot — Live View</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"></div>
+  <main class="dashboard">
+    <header class="topbar">
+      <div class="identity">
+        <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <p class="eyebrow">POLYMARKET US · LIQUIDITY ENGINE</p>
+          <h1>Commissioning Live View</h1>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="source-label"><span class="shield">◆</span> LOCAL READ-ONLY</div>
+        <div id="clock" class="clock">--:--:-- <small>ET</small></div>
+      </div>
+    </header>
+
+    <section class="status-strip" aria-live="polite">
+      <div class="status-primary">
+        <span id="mode-dot" class="mode-dot offline"></span>
+        <div>
+          <p id="mode-label" class="mode-label">CONNECTING</p>
+          <p id="mode-detail" class="mode-detail">Waiting for a local snapshot…</p>
+        </div>
+      </div>
+      <div class="freshness">
+        <span>LAST LOCAL OBSERVATION</span>
+        <strong id="observed-age">—</strong>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="Bot metrics">
+      <article class="metric-card orders">
+        <p>RESTING ORDERS</p>
+        <strong id="working-orders">—</strong>
+        <span id="working-markets">— markets</span>
+      </article>
+      <article class="metric-card scope">
+        <p>OBSERVED SCOPE</p>
+        <strong><span id="scope-size">—</span><small>/20</small></strong>
+        <span id="scope-age">No scope snapshot</span>
+      </article>
+      <article class="metric-card positions">
+        <p>OPEN POSITIONS</p>
+        <strong id="positions">—</strong>
+        <span>local ledger</span>
+      </article>
+      <article class="metric-card attention">
+        <p>NEEDS ATTENTION</p>
+        <strong id="attention-count">—</strong>
+        <span id="attention-detail">intent + unknown</span>
+      </article>
+    </section>
+
+    <div class="content-grid">
+      <section class="panel slots-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">CAPACITY MAP</p>
+            <h2>20 Market Slots</h2>
+          </div>
+          <div class="legend" aria-label="Slot status legend">
+            <span><i class="quoting"></i>Resting</span>
+            <span><i class="observed"></i>Observed</span>
+            <span><i class="position"></i>Position</span>
+            <span><i class="attention"></i>Attention</span>
+          </div>
+        </div>
+        <div id="slot-grid" class="slot-grid" aria-live="polite"></div>
+        <p class="scope-note">Scope is the latest local stream binding—not a venue snapshot. Age is shown so stale data stays unmistakable.</p>
+      </section>
+
+      <aside class="right-column">
+        <section class="panel health-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">RUNTIME</p>
+              <h2>System Health</h2>
+            </div>
+          </div>
+          <div class="health-list">
+            <div class="health-row"><span><i id="runner-indicator"></i>Trading runner</span><strong id="runner-state">—</strong></div>
+            <div class="health-row"><span><i id="supervisor-indicator"></i>Supervisor</span><strong id="supervisor-state">—</strong></div>
+            <div class="health-row"><span><i id="ledger-indicator"></i>Local ledger</span><strong id="ledger-state">—</strong></div>
+            <div class="health-row"><span><i id="log-indicator"></i>Activity log</span><strong id="log-state">—</strong></div>
+          </div>
+          <div class="isolation-note">
+            <span class="shield">◆</span>
+            <div><strong>Business logic isolated</strong><small>This screen never contacts Polymarket.</small></div>
+          </div>
+        </section>
+
+        <section class="panel activity-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">LOCAL EVENT TAIL</p>
+              <h2>Recent Activity</h2>
+            </div>
+          </div>
+          <ol id="activity-list" class="activity-list"><li class="empty-activity">Waiting for local events…</li></ol>
+        </section>
+      </aside>
+    </div>
+
+    <footer>
+      <span id="footer-source">LOCAL READ-ONLY · ZERO VENUE API CALLS</span>
+      <span>Refreshes every second</span>
+    </footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

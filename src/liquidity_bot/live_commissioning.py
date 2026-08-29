@@ -166,6 +166,16 @@ MAINTENANCE_POLL_SECONDS = 60.0
 # synchronous iteration.
 RUN_LOOP_COOPERATIVE_YIELD_SECONDS = 0.01
 NO_ID_REPAIR_IDLE_SECONDS = 0.25
+API_BUDGET_LOG_SECONDS = 60.0
+
+# Bound-market metadata and incentive rows are both bulk-readable. Refresh one
+# private-shard-sized scope at a time: this replaces sixteen per-market calls
+# with two while ensuring one malformed/failed response can affect at most the
+# same eight owners as one private shard. A short look-ahead coalesces timers
+# that were previously staggered by serial REST completion.
+CONTRACT_REFRESH_SECONDS = 60.0
+CONTRACT_REFRESH_BATCH_SIZE = 8
+CONTRACT_REFRESH_LOOKAHEAD_SECONDS = 5.0
 
 RETIRED_EXIT_RETRY_SECONDS = 60
 
@@ -863,9 +873,33 @@ class CommissioningRunner:
         """
         state = self.state_for(slug or self.market_slug)
         slug = state.slug
-        state.market = await self.gateway.fetch_market(slug)
+        market = await self.gateway.fetch_market(slug)
         incentives = await self.gateway.fetch_incentives([slug])
-        state.incentive = incentives.get(slug)
+        self._apply_contracts(
+            state,
+            market=market,
+            incentive=incentives.get(slug),
+            now=now,
+            for_exit=for_exit,
+        )
+
+    def _apply_contracts(
+        self,
+        state: MarketState,
+        *,
+        market: MarketMetadata,
+        incentive: MarketIncentive | None,
+        now: datetime,
+        for_exit: bool,
+    ) -> None:
+        """Apply already-fetched rows with the original per-market gates."""
+
+        slug = state.slug
+        if market.slug != slug:
+            raise CommissioningUnavailable(
+                f"contract batch returned {market.slug} for {slug}")
+        state.market = market
+        state.incentive = incentive
         if for_exit:
             return
         if state.incentive is None:
@@ -925,6 +959,63 @@ class CommissioningRunner:
         state.reward_authorization_lost_at = None
         state.reward_authorization_loss_reason = None
         state.reward_authorization_loss_confirmed_at = None
+
+    async def _refresh_due_contract_batches(
+        self, now: datetime, slugs: tuple[str, ...],
+    ) -> None:
+        """Bulk-refresh due owners without widening one failure past 8 slots."""
+
+        due_before = now + timedelta(
+            seconds=CONTRACT_REFRESH_LOOKAHEAD_SECONDS)
+        due = [
+            slug for slug in slugs
+            if slug in self._markets
+            and (
+                self.state_for(slug).next_contract_refresh is None
+                or self.state_for(slug).next_contract_refresh <= due_before
+            )
+        ]
+        for offset in range(0, len(due), CONTRACT_REFRESH_BATCH_SIZE):
+            if self._stop_requested:
+                return
+            chunk = tuple(due[offset:offset + CONTRACT_REFRESH_BATCH_SIZE])
+            try:
+                markets = await self.gateway.fetch_markets_by_slugs(chunk)
+                incentives = await self.gateway.fetch_incentives(chunk)
+            except Exception as exc:
+                for slug in chunk:
+                    state = self.state_for(slug)
+                    state.incentive = None
+                    state.reward_eligible = frozenset()
+                    await self._report_runtime_error(
+                        f"market_incentive_refresh:{slug}", exc)
+                    state.next_contract_refresh = self._now() + timedelta(
+                        seconds=CONTRACT_REFRESH_SECONDS)
+                continue
+            completed_at = self._now()
+            for slug in chunk:
+                state = self.state_for(slug)
+                try:
+                    market = markets.get(slug)
+                    if market is None:
+                        raise CommissioningUnavailable(
+                            f"{slug} is absent from the complete contract batch")
+                    self._apply_contracts(
+                        state,
+                        market=market,
+                        incentive=incentives.get(slug),
+                        now=completed_at,
+                        for_exit=self._is_barred_from_quoting(slug),
+                    )
+                    self._runtime_error_counts.pop(
+                        f"market_incentive_refresh:{slug}", None)
+                except Exception as exc:
+                    state.incentive = None
+                    state.reward_eligible = frozenset()
+                    await self._report_runtime_error(
+                        f"market_incentive_refresh:{slug}", exc)
+                state.next_contract_refresh = self._now() + timedelta(
+                    seconds=CONTRACT_REFRESH_SECONDS)
 
     async def _refresh_book(
         self, now: datetime, slug: str | None = None,
@@ -3496,6 +3587,38 @@ class CommissioningRunner:
                 continue
         return waiting
 
+    def _log_api_budget(self, now: datetime) -> None:
+        """Emit only local limiter evidence; never make a diagnostic request."""
+
+        read = getattr(self.gateway.limiter, "telemetry", None)
+        if not callable(read):
+            return
+        evidence = read(reset=True)
+        categories = ",".join(
+            f"{name}:{count}"
+            for name, count in evidence.attempts_by_category
+        ) or "none"
+        print(
+            f"[api-budget] at={now.isoformat()} "
+            f"seconds={evidence.elapsed_seconds:.1f} "
+            f"attempts={evidence.attempts} "
+            f"rps={evidence.attempted_requests_per_second:.3f} "
+            f"reads={evidence.read_attempts} "
+            f"mutations={evidence.mutation_attempts} "
+            f"failures={evidence.failed_responses} "
+            f"rate_limited={evidence.rate_limited_responses} "
+            f"wait_p95={evidence.wait_p95_seconds:.3f} "
+            f"wait_p99={evidence.wait_p99_seconds:.3f} "
+            f"wait_max={evidence.max_wait_seconds:.3f} "
+            f"response_p95={evidence.response_p95_seconds:.3f} "
+            f"response_p99={evidence.response_p99_seconds:.3f} "
+            f"response_max={evidence.max_response_seconds:.3f} "
+            f"waiting={evidence.waiting_now} "
+            f"max_waiting={evidence.max_waiting} "
+            f"categories={categories}",
+            flush=True,
+        )
+
     def _idle_market_reasons(self) -> tuple[tuple[str, int], ...]:
         """Why each managed market is not resting an order, most common first.
 
@@ -4147,6 +4270,9 @@ class CommissioningRunner:
         serviced_slugs = self.managed_slugs() if slugs is None else slugs
         if slugs is None and self._post_flat_top_up_can_preempt(self._now()):
             return ""
+        if slugs is None:
+            await self._refresh_due_contract_batches(
+                self._now(), serviced_slugs)
         for slug in serviced_slugs:
             if slug not in self._markets:
                 continue
@@ -4175,7 +4301,8 @@ class CommissioningRunner:
         """
 
         state = self.state_for(slug)
-        if state.next_contract_refresh is None or now >= state.next_contract_refresh:
+        if (state.next_contract_refresh is None
+                or now >= state.next_contract_refresh):
             try:
                 # A barred market never quotes, so the gates that guard
                 # quoting have nothing to protect here -- applying them would
@@ -4196,7 +4323,8 @@ class CommissioningRunner:
                 state.reward_eligible = frozenset()
                 await self._report_runtime_error(
                     f"market_incentive_refresh:{slug}", exc)
-            state.next_contract_refresh = self._now() + timedelta(minutes=1)
+            state.next_contract_refresh = self._now() + timedelta(
+                seconds=CONTRACT_REFRESH_SECONDS)
         # Keep the book last among this market's REST work so metadata latency
         # cannot age the book before the decision that follows.
         try:
@@ -6908,6 +7036,8 @@ class CommissioningRunner:
             next_earnings = now + timedelta(
                 seconds=self.config.earnings_refresh_seconds)
             next_selection = self._initial_market_selection_due(now)
+            next_api_budget_log = now + timedelta(
+                seconds=API_BUDGET_LOG_SECONDS)
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
             queue_measurement_task = asyncio.create_task(
@@ -6955,6 +7085,10 @@ class CommissioningRunner:
                     stop_reason = stream_stop
                     break
                 now = self._now()
+                if now >= next_api_budget_log:
+                    self._log_api_budget(now)
+                    next_api_budget_log = now + timedelta(
+                        seconds=API_BUDGET_LOG_SECONDS)
                 if now >= next_balance:
                     try:
                         await self._refresh_balance(now)

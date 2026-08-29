@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from liquidity_bot.adapters import AsyncReadOnlyGateway
+from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
 from liquidity_bot.errors import AdapterError
 from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
 from liquidity_bot.live_orders import (
@@ -251,6 +251,22 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.ledger.apply_order_event(
             "private_ws", "exchange-new", order_state(), received_at=NOW)
         self.assertEqual(self.ledger.unresolved_intents(), [])
+
+    def test_real_limiter_records_mutation_without_retrying_it(self):
+        limiter = AsyncIntervalLimiter()
+        gateway = AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter))
+        self.client.orders.create_results = [
+            {"id": "exchange-one", "executions": []}]
+
+        self.run_async(gateway.create({"marketSlug": "market-one"}))
+        evidence = limiter.telemetry()
+
+        self.assertEqual(evidence.attempts, 1)
+        self.assertEqual(evidence.read_attempts, 0)
+        self.assertEqual(evidence.mutation_attempts, 1)
+        self.assertEqual(
+            evidence.attempts_by_category, (("mutation_create", 1),))
 
     def test_same_market_pending_place_reports_wait_without_network(self):
         """The specific wait path must be reachable before the state gate."""

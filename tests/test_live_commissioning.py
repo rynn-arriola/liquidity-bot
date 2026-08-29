@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from liquidity_bot.account_snapshots import ExecutionHistoryBatch
+from liquidity_bot.adapters import AsyncIntervalLimiter
 from liquidity_bot.commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
@@ -90,6 +91,12 @@ class FakeMarkets:
             "sportsMarketTypeV2": "SPORTS_MARKET_TYPE_MONEYLINE",
             "question": "Fake commissioning market?",
         }}
+
+    async def list(self, params):
+        rows = []
+        for slug in params.get("slug", ()):
+            rows.append((await self.retrieve_by_slug(slug))["market"])
+        return {"markets": rows}
 
     async def book(self, slug):
         self.book_calls += 1
@@ -422,6 +429,102 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         )
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
+
+    async def test_api_budget_log_uses_limiter_evidence_without_network(self):
+        runner, client, _ = self.build_runner()
+        limiter = AsyncIntervalLimiter()
+        runner.gateway.limiter = limiter
+        await limiter.wait(
+            operation="markets.book(secret-market-slug)",
+            request_kind="read",
+        )
+        output = io.StringIO()
+
+        with patch("sys.stdout", output):
+            runner._log_api_budget(NOW)
+
+        self.assertEqual(client.markets.book_calls, 0)
+        self.assertIn("[api-budget]", output.getvalue())
+        self.assertIn("categories=market_book:1", output.getvalue())
+        self.assertNotIn("secret-market-slug", output.getvalue())
+        self.assertEqual(limiter.telemetry().attempts, 0)
+
+    async def test_due_contract_refresh_uses_bounded_bulk_requests(self):
+        runner, _, _ = self.build_runner()
+        runner.config = replace(runner.config, max_markets=20)
+        slugs = tuple(f"market-{index}" for index in range(20))
+        runner._bind_markets(slugs)
+
+        async def markets_for(batch):
+            return {
+                slug: fake_selection(slug).selected.market
+                for slug in batch
+            }
+
+        async def incentives_for(batch):
+            return {
+                slug: fake_selection(slug).selected.incentive
+                for slug in batch
+            }
+
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(
+            side_effect=markets_for)
+        runner.gateway.fetch_incentives = AsyncMock(
+            side_effect=incentives_for)
+
+        await runner._refresh_due_contract_batches(NOW, slugs)
+
+        market_batches = [
+            call.args[0]
+            for call in runner.gateway.fetch_markets_by_slugs.await_args_list
+        ]
+        incentive_batches = [
+            call.args[0]
+            for call in runner.gateway.fetch_incentives.await_args_list
+        ]
+        self.assertEqual([len(batch) for batch in market_batches], [8, 8, 4])
+        self.assertEqual(incentive_batches, market_batches)
+        self.assertTrue(all(
+            runner.state_for(slug).market is not None
+            and runner.state_for(slug).incentive is not None
+            and runner.state_for(slug).next_contract_refresh
+            == NOW + timedelta(seconds=60)
+            for slug in slugs
+        ))
+
+    async def test_contract_batch_failure_is_contained_to_eight_markets(self):
+        runner, _, _ = self.build_runner()
+        runner.config = replace(runner.config, max_markets=16)
+        slugs = tuple(f"market-{index}" for index in range(16))
+        runner._bind_markets(slugs)
+        for slug in slugs:
+            runner.state_for(slug).incentive = (
+                fake_selection(slug).selected.incentive)
+        healthy = {
+            slug: fake_selection(slug).selected.market
+            for slug in slugs[8:]
+        }
+        healthy_incentives = {
+            slug: fake_selection(slug).selected.incentive
+            for slug in slugs[8:]
+        }
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(side_effect=(
+            AdapterError("simulated first batch failure"), healthy,
+        ))
+        runner.gateway.fetch_incentives = AsyncMock(
+            return_value=healthy_incentives)
+
+        await runner._refresh_due_contract_batches(NOW, slugs)
+
+        self.assertEqual(runner.gateway.fetch_incentives.await_count, 1)
+        self.assertTrue(all(
+            runner.state_for(slug).incentive is None
+            for slug in slugs[:8]
+        ))
+        self.assertTrue(all(
+            runner.state_for(slug).incentive is not None
+            for slug in slugs[8:]
+        ))
 
     async def test_building_observation_records_actual_queue_separately_from_model(self):
         runner, _, _ = self.build_runner()

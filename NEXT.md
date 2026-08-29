@@ -3,6 +3,7 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
+**Capacity ceiling remains open:** the local audit authorizes no deployment, restart, slot or risk change. At a separately authorized flat-gated deployment, retain 20 slots, collect limiter/latency/CPU/stream evidence across ordinary, selection, busy and natural-recovery windows, replay it, then use bounded canaries. Resolve whole-slate quiet-book fallback and any exposure increase separately. [Criteria and scenarios](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
 ## 0a. Load and naturally accept private Ping/Pong liveness
 Commit `a1ba212` is deployed after a flat-gated restart and 810 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 

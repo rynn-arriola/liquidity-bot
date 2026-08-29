@@ -9,13 +9,14 @@ and is never retried automatically.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
-from .adapters import AsyncReadOnlyGateway
+from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
 from .errors import AdapterError
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
@@ -178,10 +179,27 @@ class AsyncTradingGateway:
     async def _mutation(self, operation: str, call: Any) -> Any:
         # Never use AsyncReadOnlyGateway._call here: its confirmed-429 retry is
         # correct for reads but can duplicate an order after an ambiguous POST.
-        await self.gateway.limiter.wait()
+        if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
+            await self.gateway.limiter.wait(
+                operation=operation, request_kind="mutation")
+        else:
+            # Preserve the long-standing zero-argument protocol for injected
+            # deterministic gates used by tests and dry-run composition.
+            await self.gateway.limiter.wait()
+        started_at = time.monotonic()
         try:
-            return await call()
+            result = await call()
+            if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
+                self.gateway.limiter.record_result(
+                    duration_seconds=time.monotonic() - started_at)
+            return result
         except Exception as exc:
+            if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
+                self.gateway.limiter.record_result(
+                    duration_seconds=time.monotonic() - started_at,
+                    status_code=self.gateway._status_code(exc),
+                    failed=True,
+                )
             # Preserve structured metadata if the SDK boundary has already
             # normalized the exception. Re-normalizing an AdapterError would
             # discard its code because it no longer carries the raw body.

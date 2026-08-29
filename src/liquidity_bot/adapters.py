@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -30,6 +32,7 @@ __all__ = [
     "AdapterError",
     "AsyncIntervalLimiter",
     "AsyncReadOnlyGateway",
+    "LimiterTelemetry",
     "parse_book_response",
     "parse_trade_response",
     "REST_REQUEST_TIMEOUT_SECONDS",
@@ -306,6 +309,81 @@ def parse_trade_response(response: Any, *, expected_slug: str | None = None) -> 
     )
 
 
+@dataclass(frozen=True)
+class LimiterTelemetry:
+    """Bounded, secret-free request-attempt evidence from one limiter."""
+
+    elapsed_seconds: float
+    attempts: int
+    read_attempts: int
+    mutation_attempts: int
+    successful_responses: int
+    failed_responses: int
+    rate_limited_responses: int
+    attempts_by_category: tuple[tuple[str, int], ...]
+    attempted_requests_per_second: float
+    wait_p50_seconds: float
+    wait_p95_seconds: float
+    wait_p99_seconds: float
+    max_wait_seconds: float
+    response_p50_seconds: float
+    response_p95_seconds: float
+    response_p99_seconds: float
+    max_response_seconds: float
+    waiting_now: int
+    max_waiting: int
+
+
+def _percentile(values: tuple[float, ...], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(
+        0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+    return ordered[index]
+
+
+def _request_category(operation: str, request_kind: str) -> str:
+    """Collapse variable IDs/slugs so telemetry cannot leak or grow forever."""
+
+    clean = str(operation or "").strip()
+    if request_kind == "mutation":
+        if clean == "POST /v1/orders":
+            return "mutation_create"
+        if clean.startswith("POST /v1/order/") and clean.endswith("/cancel"):
+            return "mutation_cancel"
+        return "mutation_other"
+    if clean.startswith("markets.book("):
+        return "market_book"
+    if clean.startswith("markets.retrieve_by_slug("):
+        return "market_contract"
+    if clean.startswith("markets.settlement("):
+        return "market_settlement"
+    if clean == "markets.list(slug-filtered)":
+        return "market_contract_batch"
+    if clean.startswith("markets.list(") or clean.startswith("events.list("):
+        return "market_discovery"
+    if clean == "GET /v1/incentives (symbol-filtered)":
+        return "incentive_contract_batch"
+    if clean == "GET /v1/incentives/earnings":
+        return "earnings"
+    if clean.startswith("GET /v1/incentives"):
+        return "incentive_discovery"
+    if clean == "GET /v1/orders/open":
+        return "open_orders"
+    if clean == "GET /v1/portfolio/positions":
+        return "positions"
+    if clean == "GET /v1/portfolio/activities":
+        return "execution_history"
+    if clean == "GET /v1/portfolio/activities (cash only)":
+        return "cash_history"
+    if clean == "GET /v1/account/balances":
+        return "balance"
+    if clean.startswith("GET /v1/order/"):
+        return "order_retrieve"
+    return "read_other"
+
+
 class AsyncIntervalLimiter:
     """One non-blocking request gate shared by a gateway instance."""
 
@@ -315,6 +393,18 @@ class AsyncIntervalLimiter:
         self.minimum_interval_seconds = float(minimum_interval_seconds)
         self._lock = asyncio.Lock()
         self._next_at = 0.0
+        self._telemetry_started_at = time.monotonic()
+        self._attempts = 0
+        self._read_attempts = 0
+        self._mutation_attempts = 0
+        self._successful_responses = 0
+        self._failed_responses = 0
+        self._rate_limited_responses = 0
+        self._attempts_by_category: Counter[str] = Counter()
+        self._wait_samples: deque[float] = deque(maxlen=4096)
+        self._response_samples: deque[float] = deque(maxlen=4096)
+        self._waiting = 0
+        self._max_waiting = 0
 
     @classmethod
     def from_rate(cls, requests_per_second: float) -> "AsyncIntervalLimiter":
@@ -325,13 +415,92 @@ class AsyncIntervalLimiter:
             raise ValueError("requests_per_second must be in (0, 20]")
         return cls(1.0 / rate)
 
-    async def wait(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            if now < self._next_at:
-                await asyncio.sleep(self._next_at - now)
+    async def wait(
+        self, *, operation: str = "", request_kind: str = "read",
+    ) -> None:
+        if request_kind not in {"read", "mutation"}:
+            raise ValueError("request_kind must be read or mutation")
+        queued_at = time.monotonic()
+        self._waiting += 1
+        self._max_waiting = max(self._max_waiting, self._waiting)
+        try:
+            async with self._lock:
                 now = time.monotonic()
-            self._next_at = now + self.minimum_interval_seconds
+                if now < self._next_at:
+                    await asyncio.sleep(self._next_at - now)
+                    now = time.monotonic()
+                self._next_at = now + self.minimum_interval_seconds
+        finally:
+            self._waiting -= 1
+        waited = max(0.0, time.monotonic() - queued_at)
+        self._attempts += 1
+        if request_kind == "mutation":
+            self._mutation_attempts += 1
+        else:
+            self._read_attempts += 1
+        self._attempts_by_category[
+            _request_category(operation, request_kind)
+        ] += 1
+        self._wait_samples.append(waited)
+
+    def record_result(
+        self, *, duration_seconds: float, status_code: int | None = None,
+        failed: bool = False,
+    ) -> None:
+        """Record the outcome of one already-counted attempt."""
+
+        duration = max(0.0, float(duration_seconds))
+        self._response_samples.append(duration)
+        if failed:
+            self._failed_responses += 1
+        else:
+            self._successful_responses += 1
+        if status_code == 429:
+            self._rate_limited_responses += 1
+
+    def telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
+        """Return local limiter evidence without making an API request."""
+
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._telemetry_started_at)
+        samples = tuple(self._wait_samples)
+        responses = tuple(self._response_samples)
+        result = LimiterTelemetry(
+            elapsed_seconds=elapsed,
+            attempts=self._attempts,
+            read_attempts=self._read_attempts,
+            mutation_attempts=self._mutation_attempts,
+            successful_responses=self._successful_responses,
+            failed_responses=self._failed_responses,
+            rate_limited_responses=self._rate_limited_responses,
+            attempts_by_category=tuple(sorted(self._attempts_by_category.items())),
+            attempted_requests_per_second=(
+                self._attempts / elapsed if elapsed > 0 else 0.0
+            ),
+            wait_p50_seconds=_percentile(samples, 0.50),
+            wait_p95_seconds=_percentile(samples, 0.95),
+            wait_p99_seconds=_percentile(samples, 0.99),
+            max_wait_seconds=max(samples, default=0.0),
+            response_p50_seconds=_percentile(responses, 0.50),
+            response_p95_seconds=_percentile(responses, 0.95),
+            response_p99_seconds=_percentile(responses, 0.99),
+            max_response_seconds=max(responses, default=0.0),
+            waiting_now=self._waiting,
+            max_waiting=self._max_waiting,
+        )
+        if reset:
+            self._telemetry_started_at = now
+            self._attempts = 0
+            self._read_attempts = 0
+            self._mutation_attempts = 0
+            self._successful_responses = 0
+            self._failed_responses = 0
+            self._rate_limited_responses = 0
+            self._attempts_by_category.clear()
+            self._wait_samples.clear()
+            self._response_samples.clear()
+            self._max_waiting = self._waiting
+        return result
 
 
 class AsyncReadOnlyGateway:
@@ -454,12 +623,34 @@ class AsyncReadOnlyGateway:
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
-            await self.limiter.wait()
+            if isinstance(self.limiter, AsyncIntervalLimiter):
+                await self.limiter.wait(operation=operation, request_kind="read")
+            else:
+                # Test doubles and externally supplied compatible gates retain
+                # the original zero-argument protocol.
+                await self.limiter.wait()
+            started_at = time.monotonic()
             try:
-                return await call()
-            except AdapterError:
+                result = await call()
+                if isinstance(self.limiter, AsyncIntervalLimiter):
+                    self.limiter.record_result(
+                        duration_seconds=time.monotonic() - started_at)
+                return result
+            except AdapterError as exc:
+                if isinstance(self.limiter, AsyncIntervalLimiter):
+                    self.limiter.record_result(
+                        duration_seconds=time.monotonic() - started_at,
+                        status_code=self._status_code(exc),
+                        failed=True,
+                    )
                 raise
             except Exception as exc:
+                if isinstance(self.limiter, AsyncIntervalLimiter):
+                    self.limiter.record_result(
+                        duration_seconds=time.monotonic() - started_at,
+                        status_code=self._status_code(exc),
+                        failed=True,
+                    )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text
                 # "Global Rate Limit Exceeded" even though it is not a rate
@@ -558,8 +749,13 @@ class AsyncReadOnlyGateway:
                 query["statuses"] = statuses
             if token:
                 query["page_token"] = token
+            operation = (
+                "GET /v1/incentives (symbol-filtered)"
+                if symbols is not None
+                else "GET /v1/incentives (unfiltered)"
+            )
             response = await self._call(
-                "GET /v1/incentives",
+                operation,
                 lambda query=query: self.client.get(
                     "/v1/incentives", query=query, authenticated=True),
             )

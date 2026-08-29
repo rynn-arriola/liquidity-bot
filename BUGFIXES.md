@@ -7,6 +7,7 @@ Search it before designing a repair:
 ```powershell
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
+- **Local only; capacity/API instrumentation is not deployed:** steady contract/reward refresh scaled as two REST reads per market per minute, consuming 0.80/s at 24 slots before books, reconciliation or mutations. The tested repair bulk-reads bounded private-shard-sized groups (8/8/4 at 20), retains exact per-market validation/exit gates and contains a failed group; secret-free limiter telemetry measures reads, mutations, retries, response/wait tails, queueing and 429s without an API call. Focused lifecycle tests, deliberate batch-size reversal and all 830 tests pass. The whole-slate quiet-book fallback remains an identified design limit, so no production width is authorized. [Capacity evidence](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
 
 ## Deployed in `a1ba212`; natural timeout acceptance pending
 - **Quiet private shards were repeatedly classified as dead.** The old clock saw only JSON and ignored healthy protocol Ping/Pong. Each connection now records only an awaited Pong; missing/failing proof enters existing recovery, and REST still cannot certify the socket. Focused suites passed 23/23 and 16/16, the deliberate reversal failed exactly, and all 810 deployed WSL tests passed. The flat-gated restart loaded the repair at 12:25Z. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).

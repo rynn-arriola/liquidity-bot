@@ -202,6 +202,35 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(limiter.calls, 2)
         self.assertEqual(sleeps, [0.25])
 
+    def test_limiter_telemetry_counts_each_429_attempt_and_response(self):
+        class Client(FakeClient):
+            async def get(self, path, *, query=None, authenticated=False):
+                response = self.get_responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        async def no_sleep(_seconds):
+            return None
+
+        client = Client()
+        client.get_responses = [RateLimited("slow down"), fixture("earnings.json")]
+        limiter = AsyncIntervalLimiter()
+
+        self.run_async(AsyncReadOnlyGateway(
+            client,
+            limiter=limiter,
+            retry_attempts=2,
+            sleep=no_sleep,
+        ).fetch_earnings())
+        evidence = limiter.telemetry()
+
+        self.assertEqual(evidence.attempts, 2)
+        self.assertEqual(evidence.failed_responses, 1)
+        self.assertEqual(evidence.successful_responses, 1)
+        self.assertEqual(evidence.rate_limited_responses, 1)
+        self.assertEqual(evidence.attempts_by_category, (("earnings", 2),))
+
     def test_429_honors_retry_after_and_preserves_diagnostics(self):
         class Client(FakeClient):
             async def get(self, path, *, query=None, authenticated=False):
@@ -257,6 +286,35 @@ class GatewayTests(unittest.TestCase):
         self.assertAlmostEqual(limiter.minimum_interval_seconds, 0.25)
         with self.assertRaises(ValueError):
             AsyncIntervalLimiter.from_rate(21)
+
+    def test_limiter_telemetry_classifies_reads_without_variable_identity(self):
+        client = FakeClient()
+        client.market_response = None
+        client.markets.market_response = fixture("market.json")
+        limiter = AsyncIntervalLimiter()
+        gateway = AsyncReadOnlyGateway(client, limiter=limiter)
+
+        self.run_async(gateway.fetch_market("market-one"))
+        evidence = limiter.telemetry()
+
+        self.assertEqual(evidence.attempts, 1)
+        self.assertEqual(evidence.read_attempts, 1)
+        self.assertEqual(evidence.mutation_attempts, 0)
+        self.assertEqual(
+            evidence.attempts_by_category, (("market_contract", 1),))
+        self.assertNotIn("market-one", repr(evidence))
+
+    def test_limiter_telemetry_reset_starts_a_new_local_window(self):
+        limiter = AsyncIntervalLimiter()
+
+        self.run_async(limiter.wait(operation="GET /v1/account/balances"))
+        first = limiter.telemetry(reset=True)
+        second = limiter.telemetry()
+
+        self.assertEqual(first.attempts, 1)
+        self.assertEqual(first.attempts_by_category, (("balance", 1),))
+        self.assertEqual(second.attempts, 0)
+        self.assertEqual(second.attempts_by_category, ())
 
     def test_malformed_incentive_collection_is_not_empty_success(self):
         client = FakeClient()
@@ -425,6 +483,24 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(set(result), {"market-one"})
         self.assertEqual(client.markets.list_calls[0], {
             "slug": ["market-one"], "limit": 1, "offset": 0})
+
+    def test_bulk_contract_telemetry_is_separate_from_discovery(self):
+        client = FakeClient()
+        client.markets.list_responses = [{"markets": [
+            fixture("market.json")["market"]]}]
+        incentive_page = fixture("incentives_page_1.json")
+        incentive_page["nextPageToken"] = ""
+        client.get_responses = [incentive_page]
+        limiter = AsyncIntervalLimiter()
+        gateway = AsyncReadOnlyGateway(client, limiter=limiter)
+
+        self.run_async(gateway.fetch_markets_by_slugs(["market-one"]))
+        self.run_async(gateway.fetch_incentives(["market-one"]))
+
+        self.assertEqual(limiter.telemetry().attempts_by_category, (
+            ("incentive_contract_batch", 1),
+            ("market_contract_batch", 1),
+        ))
 
     def test_measurement_settlement_requires_matching_bounded_value(self):
         client = FakeClient()

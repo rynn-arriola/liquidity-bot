@@ -32,6 +32,11 @@ Official references:
   bulk-loads the active sports catalog, applies metadata gates in memory, then
   requests incentives in batches of at most 40 candidate symbols. These reads
   use the same 4 requests/second limiter as books, reconciliation, and mutations.
+- Steady bound-owner refresh uses the same symbol filter in groups of at most
+  eight and joins it to one slug-filtered market-list read. Every returned row
+  still passes the original exact per-market lifecycle and reward gate; a
+  missing/malformed row fails only that owner, and a transport failure affects
+  at most that private-shard-sized group.
 - Continue pagination with `nextPageToken`; do not assume the requested page
   size was honored.
 - Only rows whose `programType` is `liquidityProgram` enter book-liquidity
@@ -230,7 +235,9 @@ Official references:
 
 ## Request budget
 
-- The documented account-level ceiling is 20 requests/second.
+- Retail documents 20 authenticated requests/second per API key and 20 public
+  requests/second per IP. Institutional endpoint/firm limits are a different
+  interface and do not replace either Retail ceiling.
 - This project defaults to 4 REST requests/second through one shared async gate,
   including trading and reconciliation calls.
 - The gate is process-local. Server dashboards and other authenticated tools do
@@ -238,6 +245,11 @@ Official references:
   during recovery and interpret them as additional account/IP request load.
 - Every attempt passes through that gate exactly once; callers do not pace
   manually.
+- The real gate records a bounded, secret-free local window: fixed operation
+  categories, read/mutation attempt counts, response and gate-wait percentiles,
+  live/max waiters, failures and confirmed 429 responses. Reading/resetting the
+  window makes no venue request and categories never contain a slug, order ID,
+  payload or credential.
 - Only a confirmed HTTP 429 receives bounded read retry/backoff. State-changing
   requests never auto-retry. A parseable numeric or HTTP-date `Retry-After` is
   honored up to 60 seconds; otherwise the existing bounded exponential delay
@@ -251,6 +263,10 @@ Official references:
   refreshed by REST before its five-second decision freshness limit. The
   three-second fallback uses the same 4 requests/second gate and is skipped
   when a newer WebSocket book already arrived.
+- That fallback is not a scalable replacement for the market stream: a silent
+  N-market slate demands approximately `N/3` book reads per second. Capacity
+  planning must preserve stream recovery and stale-book fail-closed behavior
+  and cannot certify a wide slate by assuming whole-slate REST polling works.
 - REST books are timestamped at response receipt, not request start, and their
   refresh runs after slower account/incentive work. The decision clock is read
   again after all awaited calls; an unresolved-intent reconciliation always

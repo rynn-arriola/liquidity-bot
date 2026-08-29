@@ -80,18 +80,96 @@ runner. Production polls it hourly at minute 23 through an isolated schedule.
 
 ## Audited official pages
 
-Last reviewed: **2026-08-28**.
+Last reviewed: **2026-08-29**.
 
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
 | Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. The isolated hourly RSS monitor establishes a baseline without history spam, alerts only unseen items and retains unseen state after notification failure. | Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. The monitor remains diagnostic and cannot change trading behavior. |
-| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 reads use bounded numeric or HTTP-date `Retry-After` when present and exponential fallback otherwise; mutations never auto-retry. | The trader guide's institutional firm/endpoint limits do not replace the Retail 20 requests/second per-key ceiling. The limiter is process-local, so concurrent external reports on the same key still aggregate at the venue. |
+| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 reads use bounded numeric or HTTP-date `Retry-After` when present and exponential fallback otherwise; mutations never auto-retry. Local request telemetry is categorized and redacted; it adds no diagnostic request. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. Institutional firm/endpoint limits do not replace them. The project's 4/second governor is a conservative internal ceiling, not venue capacity. It is process-local, so another process on the same key or public IP still contributes venue load. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. A response-backed 403 fails only its exact intent and opens a one-minute new-entry circuit. Cancels/reducers bypass entry denial; their own rejection gets a 10-second safety circuit. Successful mutations prove recovery only for their scope. Safe status, structured error code and trace/request ID survive adapter boundaries. | Generic advice to retry POST must never override mutation ambiguity safety. Retail code 7 location/VPN denial was observed on 2026-08-28 while public status was operational; it is account-specific evidence, not cancellation, flatness, a permanent ban or permission to restart. Trace IDs are retained on raised errors and logs, not stored as a new durable ledger relation. |
 | Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus retained Retail `/v1/portfolio/activities` backfill recent executions; exactly one account leg is selected with `isAggressor`; execution and trade IDs deduplicate independently; trade state is durable; a linked `TRADE_STATE_BUSTED` fill is reversed exactly once and excluded from P&L/basis/counts. | Venue history can be reset and is never negative evidence. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
 | Order management | [Trader guide](https://docs.polymarket.us/trader-guide/order-management), [Retail orders](https://docs.polymarket.us/api-reference/orders/overview) | Reward quotes are asynchronous post-only GTC limits; forced reductions are bounded IOC limits; local validation covers identity, open state, price bounds, tick and minimum quantity; HTTP 200/order ID is acknowledgement only; stream/REST state proves acceptance, fills and cancellation; cancel-confirm-replace prevents overlapping ownership. New-risk post-only quotes are gated by cached `buyingPower`, successful submissions reserve it for the rest of the sweep, and structured rejection delays are market-local. | Buying power never substitutes for equity/P&L and never blocks reducing quotes, cancels or IOC exits. Expected post-only races wait only one second; balance/risk and unknown validation rejects wait longer locally. Preview is deliberately not called per quote, and batch mutation remains unused. |
-| Connection issues | [Trader guide](https://docs.polymarket.us/trader-guide/connection-issues), [Retail WebSocket reference](https://docs.polymarket.us/api-reference/websocket/overview) | Close/error signals trigger bounded exponential reconnect; new risk stops during recovery; reconnect requires REST reconciliation and fresh private snapshots; sustained venue failure enters a maintenance pause and requires three successful authenticated account reads before normal recovery. Every private shard accepts only a decoded application message or positively awaited WebSocket protocol Pong as liveness; the market socket retains its independent last-message deadline. The deadline is 180 seconds and owned SDK clients use a 15-second REST timeout. | REST reconciliation can bridge a brief stream gap but cannot certify socket liveness. Quiet private shards must not be declared dead while protocol Pong proves the transport, but failed, timed-out or unavailable Ping/Pong proof fails closed into recovery. If both stream families are stale they are rebuilt together; one stale family uses its scoped bounded recovery. |
-| Market data and settlement | [Retail markets](https://docs.polymarket.us/api-reference/market/overview), [market WebSocket](https://docs.polymarket.us/api-reference/websocket/markets) | The isolated scalp study stores full books, public trades, documented book statistics and settlement, with a combined scope capped at 100 markets. | On 2026-08-28 observed Retail list responses omitted the documented list-level volume fields even when volume ordering was requested. Do not treat absence as zero or claim server ranking; discover upcoming markets and rank homogeneous observed full-book `sharesTraded` instead. Settlement uses observed Retail `marketSlug` plus `settlementPrice`, not an inferred list state. |
+| Connection issues | [Trader guide](https://docs.polymarket.us/trader-guide/connection-issues), [Retail WebSocket reference](https://docs.polymarket.us/api-reference/websocket/overview), [private WebSocket](https://docs.polymarket.us/api-reference/websocket/private) | Close/error signals trigger bounded exponential reconnect; new risk stops during recovery; reconnect requires REST reconciliation and fresh private snapshots; sustained venue failure enters a maintenance pause and requires three successful authenticated account reads before normal recovery. Every private shard accepts only a decoded application message or positively awaited WebSocket protocol Pong as liveness; the market socket retains its independent last-message deadline. The deadline is 180 seconds and owned SDK clients use a 15-second REST timeout. | Retail documents at most 100 market slugs in one subscription. Separately, live measurement on 2026-08-14 found that an 11th private subscription on one connection is rejected asynchronously. Because position updates omit market identity, this project uses one position subscription per market plus one all-market order subscription and one balance subscription: eight markets per private connection. That measured implementation constraint must not be confused with the documented 100-market subscription width. |
+| Market data and settlement | [Retail markets](https://docs.polymarket.us/api-reference/market/overview), [market WebSocket](https://docs.polymarket.us/api-reference/websocket/markets) | The isolated scalp study stores full books, public trades, documented book statistics and settlement, with a combined scope capped at 100 markets. Real-time books use the market WebSocket; REST books are a bounded freshness fallback, not the intended continuous feed. | Retail documents at most 100 markets per market-data subscription and explicitly recommends WebSocket rather than continuous REST polling. On 2026-08-28 observed Retail list responses omitted the documented list-level volume fields even when volume ordering was requested. A 2026-08-29 read-only stream probe stayed healthy at 29 subscribed markets; two nonpublishing books at widths 24 and 29 were market-specific silence, not evidence of a socket-width cap. Settlement uses observed Retail `marketSlug` plus `settlementPrice`, not an inferred list state. |
+
+## API capacity and scaling evidence
+
+This section separates official limits, observed implementation behavior and
+scenario modeling. A modeled slot ceiling is never promoted to a venue fact or
+production authorization.
+
+### Business-logic consumers of the shared REST governor
+
+The live process does more than place and cancel orders. Its steady and burst
+work must all fit through the same conservative 4-request/second process gate.
+The following inventory was audited end to end on 2026-08-29:
+
+| Responsibility | Current cadence and request demand | Scaling behavior |
+|---|---|---|
+| Balance freshness | One balance read every 5 seconds: `0.20/s`. | Account-wide, fixed. |
+| Non-trading cash proof | Every 15 seconds, current one-page cash activity plus a second bracketing balance: `2/15 = 0.133/s`. More activity pages add directly. | Account-wide, page-sensitive. |
+| Whole-account reconciliation | Every 10 seconds, at least one complete open-order page, one position page and one execution-activity page: `3/10 = 0.30/s`. Extra pages and individually unresolved/absent order reads add directly. | Account-wide plus ambiguity-sensitive. |
+| Bound-market metadata and rewards | Deployed code performs two reads per market per minute: `2N/60`. The locally tested batching change uses one slug-filtered market read plus one symbol-filtered incentive read per bounded group of eight: `2 × ceil(N/8) / 60`. Startup validation still reads every bound book and has its own finite burst. | Linear before batching; stepwise after batching. |
+| Quiet-book REST fallback | A market with no recent streamed full book becomes due after 3 seconds, so demand is approximately `N × quiet_fraction / 3` requests/second. Its decision book is stale at 5 seconds. | The dominant degraded-feed term; a silent full slate cannot be made fresh by polling at scale. |
+| Mutations | Creates, cancels and IOC reductions share the governor. They are event-driven and never automatically retried. | Depends on fill/cancel/replace business activity, not slot count alone. |
+| Market selection | On the measured planning assumptions, 52 catalog pages, 4 incentive pages and up to 60 candidate books every 900 seconds: `116/900 = 0.129/s` on average, but a 116-request burst with a 29-second floor at 4 requests/second. | Catalog/page/book-sensitive burst. |
+| Earnings | One earnings read every 900 seconds: about `0.0011/s`. | Fixed. |
+| Recovery and retry | Confirmed 429 read retries, private-stream handoff proof, missing-order repair, pagination and maintenance probes consume additional reads. Unknown mutations do not retry. | Failure- and page-sensitive; must be measured in tail windows. |
+
+Selection and service are largely serial. Response latency below the 0.25-second
+governor interval is hidden by the gate; slower responses reduce effective
+throughput and lengthen head-of-line delay even when average request rate is
+below four. Capacity replay therefore accepts response latency as an explicit
+input and checks deadlines/backlog as well as average requests per second.
+
+### Measured live baseline and modeled scenarios
+
+Read-only log analysis of the laptop session from its 2026-08-29 12:25 UTC
+restart through a 4,649.7-second observation window found 221 planned action
+lines (`126` post-only places, `91` cancels and `4` IOC placements), or
+`0.0475/s`; 204 reconciliation log events, or `0.0439/s`; 47 priority replans;
+and selection scans with recorded duration p50 `33.8s` and p95/max `44.9s`.
+Those action lines are planning evidence, not exact transport-attempt counts.
+There was one rate-limit event in the window. The new local limiter telemetry
+is required before treating exact category rates, response latency, wait tails
+or 429 count as measured production inputs.
+
+The offline capacity model deliberately uses more conservative mutation input
+than that action-line rate and preserves 25% of the internal 4/s governor:
+
+| Scenario | Explicit assumptions | Result after bounded contract batching |
+|---|---|---|
+| Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier. | At 24 slots: `1.76/s` (44% of the gate), zero five-minute replay misses/backlog. API/public-only modeled ceiling: 56 slots. |
+| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Modeled REST ceiling with 25% headroom: 19 slots. At 20 slots the estimate is `3.01/s`, just beyond the 3/s comfort budget. |
+| Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages. | API-only modeled ceiling: 6 slots. At 20 slots demand is `7.50/s`, proving this is a degraded-feed design limit, not a viable scaling mode. New risk still fails closed on stale books; the correct scale design is bounded fallback plus stream recovery, not whole-slate REST polling. |
+
+These results do **not** select 19, 24 or 56 as the final production width.
+They prove that 24 is not a documented venue slot limit and that average normal
+REST load is not currently the first modeled constraint. A 2026-08-29 point
+sample measured the runner at `0.564` of one CPU core at 20 slots; a deliberately
+conservative linear projection reaches the `0.75`-core comfort budget at 26
+slots. Current portfolio policy provides 30 quote-size units; preserving its
+25% cushion caps fully utilized width at 24 slots. Both are project constraints,
+not API limits, and both require new measurement or an explicit risk decision
+before increasing production width.
+
+### Evidence required before choosing the durable maximum
+
+The locally tested code logs a secret-free 60-second API budget window with
+attempt counts by fixed category, read/mutation split, response and governor
+wait p95/p99/max, live/max queue depth, failures and confirmed 429s. It does not
+make a diagnostic request and never records slugs, order IDs, credentials or
+payloads. It is not deployed as of this entry.
+
+After an independently authorized flat-gated deployment, keep production at 20
+slots long enough to capture ordinary, selection-burst, busy and recovery
+windows. Feed those measured distributions into the offline scheduler, then
+raise width only in bounded canaries. The durable maximum is the highest width
+that preserves the chosen request headroom with zero safety-deadline misses,
+zero sustained backlog/429s, acceptable response/wait tails, proven stream
+coverage, CPU/thermal headroom and the separately authorized portfolio cushion.
+No single clean minute and no raw official 20/s ceiling can establish it.
 
 ## Safety interpretations that must not be lost
 

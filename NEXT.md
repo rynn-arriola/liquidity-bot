@@ -5,29 +5,33 @@ This file contains unfinished work. Completed implementation history is in
 
 ## 0. Observe the laptop as the only live runtime
 
-The operator confirmed the desktop off and explicitly authorized the laptop
-start. Commit `04fddb1` is loaded after all 785 WSL tests passed. The 00:42Z
+The operator explicitly authorized the laptop start. Commit `04fddb1` is
+loaded after all 785 laptop WSL tests passed. The 00:42Z
 authenticated acceptance found the runner/supervisor healthy, 20/20 quoting
 markets, 39 resting orders, zero positions, zero absent/unresolved state and no
 risk stop or 403/access denial. The laptop is now the only writable ledger/API
-owner; the former server is destroyed and the desktop remains a cold backup.
+owner; the former server is destroyed and the desktop is prepared but inactive.
 
 The former server's authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
 zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
 The operator selected the laptop as primary and the desktop as its manual cold
-backup. At 23:21Z the
-desktop received direct online snapshots of the production and spread-scalp
-databases plus restricted credentials, the deployed recovery archive and a
-full-log/crontab diagnostic archive; all validated. It must never run
-concurrently with the laptop.
+backup. The desktop now has Ubuntu 24.04 WSL2, an isolated Python environment
+and owner-only inactive copies of the stopped-server execution/scalp databases,
+credentials and archives. Both database checks, byte comparisons, shell syntax
+and all 787 offline tests pass. Active runtime paths, processes and units are
+absent. It must never run concurrently with the laptop.
 
-Laptop parity, the Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight,
+Laptop parity, its Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight,
 direct verified execution/scalp/recovery/diagnostic pull, credential loading,
-SQLite integrity/hashes and all 776 tests now pass. The active copies live in
+SQLite integrity/hashes and all 785 tests passed. The active copies live in
 WSL rather than OneDrive. Four matching systemd report/backup timers are
 installed and enabled; no trading service is installed or enabled.
+
+On the desktop, `run parity check` verifies/fast-forwards only tracked files
+against GitHub. Its old recovery databases are not current laptop production
+state; any handoff still requires a new stopped-runtime snapshot from the laptop.
 
 Continue natural live observation of fills, exits, stream freshness, 20-slot
 ownership and access errors. The local TV dashboard is active but remains

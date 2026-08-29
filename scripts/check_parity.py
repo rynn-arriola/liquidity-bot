@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Safe workstation sync and read-only production parity check.
+"""Safe workstation sync and optional read-only production parity check.
 
 Run this command independently on every workstation.  GitHub is the rendezvous
-point between workstations; the production server is checked against its
-DEPLOYED_COMMIT rather than being required to equal a newer docs-only HEAD.
+point between workstations.  When a production host exists, it can additionally
+be checked against DEPLOYED_COMMIT rather than being required to equal a newer
+docs-only HEAD.
 """
 
 from __future__ import annotations
@@ -154,11 +155,26 @@ def _short(commit: str) -> str:
     return commit[:8]
 
 
+def workstation_problems(worktree: str, local_matches: bool) -> list[str]:
+    """Return actionable local/GitHub parity failures."""
+    problems: list[str] = []
+    if worktree:
+        problems.append("workstation has local changes")
+        for row in worktree.splitlines()[:10]:
+            problems.append(f"  {row}")
+    if not local_matches:
+        problems.append(
+            "workstation HEAD does not equal the GitHub source of truth"
+        )
+    return problems
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Verify this workstation against GitHub and production against "
-            "its deployed commit. Makes no venue request and never controls the bot."
+            "Verify this workstation against GitHub and, when supplied, "
+            "production against its deployed commit. Makes no venue request "
+            "and never controls the bot."
         )
     )
     parser.add_argument(
@@ -188,7 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    print("Liquidity bot four-way parity")
+    print("Liquidity bot machine parity")
     print(f"  workstation : {platform.node() or 'unknown'}")
 
     try:
@@ -234,10 +250,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "  local/GitHub: " + relation
         )
 
+        problems = workstation_problems(worktree, local_matches)
         if not args.host:
-            raise ParityUnavailable(
-                "server not checked: pass --host user@host or set DROPLET_HOST"
+            print("  production  : not checked (no current server configured)")
+            if problems:
+                print("\nVERDICT: PARITY DRIFT")
+                for problem in problems:
+                    print(f"  - {problem}")
+                return 1
+            print("\nVERDICT: WORKSTATION PARITY OK")
+            print(
+                "GitHub is the tracked-file source of truth. Run this same "
+                "command on the other workstation; one machine cannot prove "
+                "or update the other machine's local files."
             )
+            return 0
         if not args.key.is_file():
             raise ParityUnavailable(f"SSH key not found: {args.key}")
 
@@ -277,15 +304,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "are newer on GitHub; this is allowed"
             )
 
-        problems: list[str] = []
-        if not worktree_clean:
-            problems.append("workstation has local changes")
-            for row in worktree.splitlines()[:10]:
-                problems.append(f"  {row}")
-        if not local_matches:
-            problems.append(
-                "workstation HEAD does not equal the GitHub source of truth"
-            )
         problems.extend(server_differences)
         if changed_after_deploy:
             problems.append("GitHub has undeployed source/test changes")

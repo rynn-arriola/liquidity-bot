@@ -49,6 +49,20 @@ class CheckParityTests(unittest.TestCase):
             ],
         )
 
+    def test_clean_matching_workstation_has_no_problem(self):
+        self.assertEqual(check_parity.workstation_problems("", True), [])
+
+    def test_workstation_problems_report_dirty_and_mismatched_state(self):
+        self.assertEqual(
+            check_parity.workstation_problems(" M STATUS.md\n?? local.txt", False),
+            [
+                "workstation has local changes",
+                "   M STATUS.md",
+                "  ?? local.txt",
+                "workstation HEAD does not equal the GitHub source of truth",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

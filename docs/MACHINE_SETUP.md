@@ -6,8 +6,8 @@ Every AI session on every machine begins with
 the one active runtime and venue remain authoritative for live state.
 
 > **Current transition (2026-08-28):** the former DigitalOcean server was
-> destroyed. The laptop is the selected next primary and the desktop is cold
-> standby. Exactly one machine may hold the writable live ledger and run
+> destroyed. The laptop is the live primary and the desktop is a prepared but
+> inactive cold standby. Exactly one machine may hold the writable live ledger and run
 > authenticated processes. Old droplet commands below are historical only.
 
 ## Laptop live view
@@ -34,12 +34,27 @@ ledger travel only through a deliberate stopped-runtime handoff.
 | code, AI instructions, findings and handoffs | `git pull --ff-only` |
 | what is actually loaded | `DEPLOYED_COMMIT` on the one active runtime |
 | authoritative trading history, logs, ledger | the one active runtime; ignored copies elsewhere are recovery only |
-| Polymarket API keys, Discord webhooks | the one active runtime only; never GitHub or file sync |
+| Polymarket API keys, Discord webhooks | active path on one runtime only; encrypted/restricted recovery copies stay inactive and never use GitHub or file sync |
 | retired droplet SSH | no current endpoint; historical instructions only |
 
-During the current laptop migration, only the selected laptop may receive the
-ignored credential file and become live. The desktop copy is disaster recovery
-and must not run concurrently. The destroyed server cannot be a fallback.
+Only the selected laptop may expose credentials and the ledger at the active
+runtime paths. The desktop copies live under `data/cold-backup/`, are recovery
+material only and must not run concurrently. The destroyed server cannot be a fallback.
+
+## Desktop cold-backup state
+
+The desktop has Ubuntu 24.04 WSL2, Python 3.12 and an isolated clone at
+`/home/rynn/liquidity-bot`. It has no trading service or reporting timer. Its
+active ledger and credential paths are absent; owner-only recovery material is
+stored under `data/cold-backup/` with a `COLD_BACKUP_ONLY` marker. AC sleep and
+hibernation are disabled so an explicitly authorized manual handoff can stay up.
+
+The recovery databases came from the stopped former server, not the currently
+running laptop. They are useful for disaster recovery but are not current enough
+for an ordinary handoff. Before the desktop may trade: stop the laptop, prove
+the account state, transfer and verify a fresh stopped-runtime laptop snapshot,
+activate the files deliberately, run preflight, and obtain explicit start
+authorization. See the dated [setup evidence](history/DESKTOP_COLD_BACKUP_SETUP_2026-08-28.md).
 
 ## Retired droplet access procedure (historical—do not run)
 
@@ -129,30 +144,20 @@ then independently proves that production matches its deployed marker.
 From each Windows workstation run:
 
 ```powershell
-python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST> --key "$env:USERPROFILE\.ssh\makerlab_droplet"
-```
-
-You can keep the connection details in local environment variables instead:
-
-```powershell
-$env:DROPLET_HOST = "root@<DROPLET_HOST>"
-$env:DROPLET_KEY = "$env:USERPROFILE\.ssh\makerlab_droplet"
 python -B scripts/check_parity.py --sync
 ```
 
-Never commit those values. The command safely updates only one state: a clean
+The command safely updates only one state: a clean
 `main` checkout that is strictly behind GitHub is fast-forwarded. Otherwise it
-reads git/server hashes. It does not query Polymarket, start or stop a process,
+reads local/GitHub state. It does not query Polymarket, start or stop a process,
 deploy code, or alter the ledger. A successful result means:
 
 - this workstation is clean and exactly at GitHub `main`;
-- server `src/` and `tests/` content match `DEPLOYED_COMMIT` after harmless
-  Windows/Linux line-ending normalization;
-- GitHub has no newer runner/test change waiting for deployment.
+- the other workstation must still run the same command independently.
 
 Documentation and analysis utilities can be newer than the deployed runtime;
-that is reported but is not code drift. Run the command on both machines before
-saying all four locations match. On a dirty or diverged checkout, stop and
+that is not permission to restart the laptop. Run the command on both machines
+before saying all three locations match. On a dirty or diverged checkout, stop and
 preserve the local work. Only use `git pull --ff-only` on a clean checkout that
 is simply behind.
 
@@ -184,28 +189,21 @@ before theorising about a bug. The answer should route through
 
 ```bash
 git pull --ff-only
-python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST>
-ssh -i ~/.ssh/makerlab_droplet root@<DROPLET_HOST> \
-    'cd /root/liquidity-bot && cat DEPLOYED_COMMIT && ./scripts/status_commissioning.sh'
+python -B scripts/check_parity.py --sync
 ```
 
 Then read `AI_OPERATOR.md` and follow its routing. `AGENTS.md` and `CLAUDE.md`
 only make different agents discover that same source. Also read an ignored
 workstation `AGENTS.local.md` when present.
 
-Do not require `DEPLOYED_COMMIT` to equal the newest GitHub HEAD: a docs-only
-commit may correctly be newer. Trust `PARITY OK`, which verifies the deployed
-file contents against the marker and separately detects newer runner/test
-changes. Nothing writes the marker automatically, so its hash proof remains
-mandatory.
+Do not infer the laptop's live commit, ledger or process state from another
+machine's parity result. Read those on the laptop; `DEPLOYED_COMMIT` remains its
+loaded-source marker and does not update automatically.
 
 ## Backups
 
-`scripts/backup_ledger.py` runs nightly at 04:17 UTC and keeps 30 dated
-snapshots in `backups/daily/`. They live on the same droplet and **do not
-survive losing it**. Pulling one down is manual:
-
-```bash
-scp -i ~/.ssh/makerlab_droplet \
-    root@<DROPLET_HOST>:/root/liquidity-bot/backups/daily/commissioning-*.db .
-```
+The laptop's read-only backup timer keeps dated snapshots locally. A second
+machine copy is manual: stop the live runtime, prove account state, copy the
+SQLite files without live file sync, verify hashes and `PRAGMA quick_check`,
+and keep them under an inactive recovery path. A same-disk snapshot is not
+protection against losing that machine.

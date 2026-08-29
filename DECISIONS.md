@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is now the sole live runtime; the desktop is confirmed off and remains its manual cold backup. They must never run together |
+| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |
@@ -64,8 +64,8 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.
-- The laptop is the primary live runtime. The desktop is for development,
-  monitoring and manual cold backup only. Exactly one machine may own/use the
+- The laptop is the primary live runtime. The desktop is prepared for development,
+  offline verification and manual cold backup only. Exactly one machine may use the
   live API credentials and active ledger at a time; there is no automatic
   failover and the two machines must never run concurrently.
 - The active SQLite ledger follows the live runtime. It must move only as a
@@ -78,7 +78,8 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - “Run parity check” means run `scripts/check_parity.py --sync` on the current
   workstation. It automatically fetches and fast-forwards a clean behind-only
   checkout to GitHub `main`. Both workstation runs are required before claiming
-  the desktop, laptop, GitHub and server are all current.
+  the desktop, laptop and GitHub are all current. A production host is checked
+  only when one actually exists.
 - Parity permission does not authorize overwriting dirty/diverged work,
   deploying trading code or restarting production. Those remain explicit
   review/operator decisions.

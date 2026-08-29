@@ -79,23 +79,23 @@ realized sensor independently pauses new risk at the same scaled threshold.
   live file-sync service. Backups on the inactive machine are recovery copies,
   not a second writable authority.
 - Compare runtime to `DEPLOYED_COMMIT` plus source/test hashes, not a newer documentation-only commit.
-- “Run parity” means run `scripts/check_parity.py --sync` on the current
-  workstation and, when reachable through its machine-local SSH coordinates,
-  run the same safe check on the peer. A clean behind-only checkout may
-  fast-forward to GitHub `main`; dirty, ahead or diverged work is preserved.
-- Parity has exactly three authorities—PC, laptop and GitHub—and never waits for Drive.
-- Parity permission authorizes only those clean fast-forwards. It does not
-  authorize overwriting dirty or diverged work, deploying trading code,
-  activating a recovery ledger or starting/restarting production.
+- “Run parity” runs `scripts/check_parity.py --sync` here and on a reachable SSH
+  peer. Clean behind-only checkouts may fast-forward; all other work is preserved.
+- It also checks WSL/loaded source and places a hash/integrity-verified online
+  ledger backup on reachable PCs; ignored copies are never writable authority.
+- WSL may live-fast-forward only docs, tests and parity tooling. Runner/config/
+  launcher changes require reviewed deployment. Parity never waits for Drive.
+- Parity cannot overwrite dirty/diverged work, expose secrets, deploy trading
+  code, activate a recovery ledger, hand off ownership or control the bot.
 - “Run weekly task” manually creates and verifies one new client-encrypted
   archive in Drive folder `Liquidity Bot Private Recovery`. It is not
   scheduled. Report source/role/time/hash/age; never describe a stale copy as
   current. Codex is the primary AI operator and Claude is the backup AI
   operator; either may run the same workflow through its own Drive access.
-- Local databases, archives and keys are not repository parity and must never
-  be committed. Runtime recovery material may
-  travel only as the verified encrypted Drive archive above; recovery keys and
-  SSH private keys never enter that archive.
+- Databases, archives, credentials, logs and keys must never be committed. The
+  execution ledger may travel between PC and laptop only as a verified SQLite
+  online-backup copy over key-authenticated SSH; Drive accepts only the separate
+  verified encrypted weekly archive. Private/recovery keys enter neither.
 
 ## Decisions explicitly not authorized
 

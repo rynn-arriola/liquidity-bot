@@ -26,9 +26,9 @@ resting size-13 orders, zero positions/absent/unknown rows and no risk stop.
 The laptop is the only writable ledger/API owner; the former server is
 destroyed and the desktop is prepared but inactive.
 
-On the desktop, `run parity check` verifies/fast-forwards only tracked files
-against GitHub. Its old recovery databases are not current laptop production
-state; any handoff still requires a new stopped-runtime snapshot from the laptop.
+`run parity check` now verifies PC/laptop/GitHub/WSL and refreshes a private,
+integrity-checked execution-ledger recovery copy. It never activates that copy;
+handoff still requires a stopped-runtime snapshot and account proof.
 
 Continue natural live observation of fills, exits, stream freshness, 20-slot
 ownership and access errors. The local TV dashboard is active but remains

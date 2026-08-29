@@ -71,9 +71,9 @@ The laptop remains the sole live owner; the desktop is an inactive manual
 backup. Any handoff requires stop, venue proof and a verified ledger snapshot.
 
 Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects
-the desktop with full handoff. Parity now means PC/laptop/GitHub only. Drive is
-a separate manual `run weekly task`; its first encrypted laptop archive passed
-local/transferred verification but was not uploaded; three-way parity passed clean on `08b5b70` before deployment.
+the desktop with full handoff. Parity covers PC/laptop/GitHub, laptop WSL and a
+verified private execution-ledger recovery copy; no secret/database enters git
+and no copy is activated. Drive remains the separate manual `run weekly task`.
 
 ## Current records
 

@@ -95,6 +95,65 @@ class CheckParityTests(unittest.TestCase):
                 ("poly-laptop", r"C:\Users\operator\liquidity-bot"),
             )
 
+    def test_runtime_config_is_private_optional_and_strict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            self.assertIsNone(check_parity.load_runtime_config(path))
+            path.write_text(
+                json.dumps(
+                    {
+                        "host": "poly-laptop",
+                        "wsl_distro": "Ubuntu-24.04",
+                        "wsl_repo": "/home/polybot/liquidity-bot",
+                        "source_role": "ACTIVE-LAPTOP",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                check_parity.load_runtime_config(path)["host"], "poly-laptop"
+            )
+            path.write_text(json.dumps({"secret": "no"}), encoding="utf-8")
+            with self.assertRaises(check_parity.ParityUnavailable):
+                check_parity.load_runtime_config(path)
+
+    def test_live_runtime_sync_allows_only_docs_tests_and_parity_tools(self):
+        safe = [
+            "STATUS.md",
+            "docs/MACHINE_SETUP.md",
+            "tests/test_check_parity.py",
+            "scripts/check_parity.py",
+            "scripts/runtime_parity_snapshot.py",
+        ]
+        blocked = [
+            "src/liquidity_bot/live_commissioning.py",
+            "pyproject.toml",
+            "scripts/start_commissioning.sh",
+            "credentials.py",
+        ]
+        self.assertTrue(all(check_parity._runtime_path_is_live_safe(p) for p in safe))
+        self.assertFalse(any(check_parity._runtime_path_is_live_safe(p) for p in blocked))
+
+    def test_offline_runtime_is_pending_but_bad_evidence_is_a_failure(self):
+        config = {
+            "host": "poly-laptop",
+            "wsl_distro": "Ubuntu-24.04",
+            "wsl_repo": "/home/polybot/liquidity-bot",
+            "source_role": "ACTIVE-LAPTOP",
+        }
+        offline = subprocess.CompletedProcess(
+            args=["ssh"], returncode=255, stdout="", stderr="timed out"
+        )
+        failed = subprocess.CompletedProcess(
+            args=["ssh"], returncode=1, stdout="", stderr="bad runtime evidence"
+        )
+        with mock.patch.object(check_parity, "_encoded_powershell", return_value=offline):
+            with self.assertRaises(check_parity.RuntimePending):
+                check_parity._runtime_state(config, fetch=False)
+        with mock.patch.object(check_parity, "_encoded_powershell", return_value=failed):
+            with self.assertRaises(check_parity.ParityUnavailable):
+                check_parity._runtime_state(config, fetch=False)
+
     def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
         command = check_parity.peer_powershell_command(
             r"C:\Users\O'Brien\liquidity-bot",

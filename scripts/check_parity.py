@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe workstation sync and optional read-only production parity check.
+"""Safe workstation, WSL runtime and private-ledger parity check.
 
 Run this command independently on every workstation.  GitHub is the rendezvous
 point between workstations.  When a production host exists, it can additionally
@@ -18,6 +18,7 @@ from pathlib import Path
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,10 +30,35 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REMOTE_ROOT = "/root/liquidity-bot"
 DEPLOYED_PATHS = ("src/liquidity_bot", "tests")
 LOCAL_PEER_CONFIG = REPO_ROOT / ".local-tools" / "parity_peer.json"
+LOCAL_RUNTIME_CONFIG = REPO_ROOT / ".local-tools" / "parity_runtime.json"
+RUNTIME_SNAPSHOT_SCRIPT = REPO_ROOT / "scripts" / "runtime_parity_snapshot.py"
+RUNTIME_BACKUP_DIR = REPO_ROOT / "data" / "cold-backup" / "laptop-runtime"
+SAFE_LIVE_RUNTIME_SYNC_PREFIXES = (
+    "docs/",
+    "tests/",
+)
+SAFE_LIVE_RUNTIME_SYNC_FILES = {
+    "AGENTS.md",
+    "AI_OPERATOR.md",
+    "BUGFIXES.md",
+    "CLAUDE.md",
+    "DECISIONS.md",
+    "FINDINGS.md",
+    "NEXT.md",
+    "README.md",
+    "STATUS.md",
+    "WATCHLIST.md",
+    "scripts/check_parity.py",
+    "scripts/runtime_parity_snapshot.py",
+}
 
 
 class ParityUnavailable(RuntimeError):
     """A required parity authority could not be read."""
+
+
+class RuntimePending(ParityUnavailable):
+    """The configured active-runtime machine is offline or unreachable."""
 
 
 def load_peer_config(path: Path = LOCAL_PEER_CONFIG) -> tuple[str, str]:
@@ -56,6 +82,39 @@ def load_peer_config(path: Path = LOCAL_PEER_CONFIG) -> tuple[str, str]:
             f"invalid peer config {path}: host and repo must be set together"
         )
     return host.strip(), repo.strip()
+
+
+def load_runtime_config(path: Path = LOCAL_RUNTIME_CONFIG) -> dict[str, str] | None:
+    """Read private coordinates for the one active laptop WSL runtime."""
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ParityUnavailable(f"invalid runtime config {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ParityUnavailable(f"invalid runtime config {path}: expected object")
+    allowed = {"host", "wsl_distro", "wsl_repo", "source_role"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ParityUnavailable(
+            f"invalid runtime config {path}: unknown field(s) {sorted(unknown)}"
+        )
+    values = {
+        "host": payload.get("host", ""),
+        "wsl_distro": payload.get("wsl_distro", "Ubuntu-24.04"),
+        "wsl_repo": payload.get("wsl_repo", "/home/polybot/liquidity-bot"),
+        "source_role": payload.get("source_role", "ACTIVE-LAPTOP"),
+    }
+    if not all(isinstance(value, str) for value in values.values()):
+        raise ParityUnavailable(
+            f"invalid runtime config {path}: every value must be a string"
+        )
+    if not values["wsl_distro"].strip() or not values["wsl_repo"].strip():
+        raise ParityUnavailable(
+            f"invalid runtime config {path}: distro and WSL repo are required"
+        )
+    return {key: value.strip() for key, value in values.items()}
 
 
 def _run(
@@ -350,6 +409,248 @@ def peer_parity(
     return result.returncode, output
 
 
+def _encoded_powershell(
+    script: str,
+    *,
+    host: str = "",
+    timeout: int = 15,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    command: list[str] = []
+    if host:
+        command.extend(
+            (
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={timeout}",
+                host,
+            )
+        )
+    command.extend(
+        (
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded,
+        )
+    )
+    return _run(command, check=False)
+
+
+def _runtime_inspection_script(config: Mapping[str, str], *, fetch: bool) -> str:
+    distro = _powershell_literal(config["wsl_distro"])
+    repo = _powershell_literal(config["wsl_repo"])
+    fetch_row = (
+        "Invoke-Wsl @('git','-C',$runtimeRepo,'fetch','--quiet','origin','main')"
+        if fetch
+        else ""
+    )
+    return "\n".join(
+        (
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+            f"$runtimeDistro = {distro}",
+            f"$runtimeRepo = {repo}",
+            "function Invoke-Wsl([string[]]$CommandArgs) {",
+            "  $value = & wsl.exe -d $runtimeDistro -- @CommandArgs 2>&1",
+            "  if ($LASTEXITCODE -ne 0) { throw (($value | Out-String).Trim()) }",
+            "  return (($value | Out-String).Trim())",
+            "}",
+            fetch_row,
+            "$head = Invoke-Wsl @('git','-C',$runtimeRepo,'rev-parse','HEAD')",
+            "$origin = Invoke-Wsl @('git','-C',$runtimeRepo,'rev-parse','origin/main')",
+            "$branch = Invoke-Wsl @('git','-C',$runtimeRepo,'branch','--show-current')",
+            "$tracked = Invoke-Wsl @('git','-C',$runtimeRepo,'status','--porcelain=v1','--untracked-files=no')",
+            "$counts = Invoke-Wsl @('git','-C',$runtimeRepo,'rev-list','--left-right','--count','HEAD...origin/main')",
+            "$parts = $counts -split '\\s+'",
+            "$changed = @()",
+            "if ([int]$parts[1] -gt 0) {",
+            "  $rawChanged = Invoke-Wsl @('git','-C',$runtimeRepo,'diff','--name-only','HEAD..origin/main')",
+            "  if ($rawChanged) { $changed = @($rawChanged -split \"`r?`n\") }",
+            "}",
+            "$marker = Invoke-Wsl @('cat',($runtimeRepo + '/DEPLOYED_COMMIT'))",
+            "$deployChanged = Invoke-Wsl @('git','-C',$runtimeRepo,'diff','--name-only',($marker + '..HEAD'),'--','src/liquidity_bot','pyproject.toml')",
+            "$state = [ordered]@{",
+            "  head = $head; origin_head = $origin; deployed_commit = $marker;",
+            "  branch = $branch; tracked_status = $tracked;",
+            "  ahead = [int]$parts[0]; behind = [int]$parts[1];",
+            "  changed_from_github = @($changed);",
+            "  deployed_runtime_changes = @($deployChanged -split \"`r?`n\" | Where-Object { $_ });",
+            "}",
+            "$state | ConvertTo-Json -Compress -Depth 4",
+        )
+    )
+
+
+def _parse_runtime_json(output: str) -> dict[str, object]:
+    for row in reversed(output.splitlines()):
+        candidate = row.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and "head" in payload:
+            return payload
+    raise ParityUnavailable("WSL runtime did not return a state record")
+
+
+def _runtime_state(
+    config: Mapping[str, str], *, fetch: bool
+) -> dict[str, object]:
+    result = _encoded_powershell(
+        _runtime_inspection_script(config, fetch=fetch), host=config["host"]
+    )
+    assert isinstance(result.stdout, str)
+    assert isinstance(result.stderr, str)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        if config["host"] and result.returncode == 255:
+            raise RuntimePending(f"active runtime host is unreachable: {detail[-300:]}")
+        raise ParityUnavailable(f"WSL runtime inspection failed: {detail[-500:]}")
+    return _parse_runtime_json(result.stdout)
+
+
+def _runtime_path_is_live_safe(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return normalized in SAFE_LIVE_RUNTIME_SYNC_FILES or normalized.startswith(
+        SAFE_LIVE_RUNTIME_SYNC_PREFIXES
+    )
+
+
+def _sync_runtime_checkout(config: Mapping[str, str]) -> None:
+    script = "\n".join(
+        (
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+            f"$runtimeDistro = {_powershell_literal(config['wsl_distro'])}",
+            f"$runtimeRepo = {_powershell_literal(config['wsl_repo'])}",
+            "& wsl.exe -d $runtimeDistro -- git -C $runtimeRepo merge --ff-only origin/main",
+            "exit $LASTEXITCODE",
+        )
+    )
+    result = _encoded_powershell(script, host=config["host"])
+    assert isinstance(result.stdout, str)
+    assert isinstance(result.stderr, str)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ParityUnavailable(f"WSL safe fast-forward failed: {detail[-500:]}")
+
+
+def runtime_checkout_parity(
+    config: Mapping[str, str], *, sync: bool
+) -> tuple[dict[str, object], str]:
+    state = _runtime_state(config, fetch=sync)
+    action = "none"
+    changed = [str(path) for path in state.get("changed_from_github", [])]
+    safe_changes = all(_runtime_path_is_live_safe(path) for path in changed)
+    if (
+        sync
+        and state.get("branch") == "main"
+        and not state.get("tracked_status")
+        and int(state.get("ahead", 0)) == 0
+        and int(state.get("behind", 0)) > 0
+        and safe_changes
+    ):
+        _sync_runtime_checkout(config)
+        action = f"fast-forwarded {state['behind']} live-safe commit(s)"
+        state = _runtime_state(config, fetch=False)
+    elif sync and int(state.get("behind", 0)) > 0 and not safe_changes:
+        action = "blocked: GitHub changes require reviewed deployment"
+    return state, action
+
+
+def _capture_runtime_script(config: Mapping[str, str]) -> str:
+    return "\n".join(
+        (
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+            f"$runtimeDistro = {_powershell_literal(config['wsl_distro'])}",
+            f"$runtimeRepo = {_powershell_literal(config['wsl_repo'])}",
+            "$windowsOutput = Join-Path $HOME '.liquidity-bot\\parity'",
+            "New-Item -ItemType Directory -Force -Path $windowsOutput | Out-Null",
+            "$wslOutput = (& wsl.exe -d $runtimeDistro -- wslpath -a -u $windowsOutput).Trim()",
+            "& wsl.exe -d $runtimeDistro --cd $runtimeRepo -- .venv/bin/python -B scripts/runtime_parity_snapshot.py create --repo $runtimeRepo --output-dir $wslOutput "
+            f"--source-role {_powershell_literal(config['source_role'])}",
+            "exit $LASTEXITCODE",
+        )
+    )
+
+
+def capture_runtime_ledger(config: Mapping[str, str]) -> dict[str, object]:
+    result = _encoded_powershell(
+        _capture_runtime_script(config), host=config["host"], timeout=30
+    )
+    assert isinstance(result.stdout, str)
+    assert isinstance(result.stderr, str)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        if config["host"] and result.returncode == 255:
+            raise RuntimePending(f"active runtime host is unreachable: {detail[-300:]}")
+        raise ParityUnavailable(f"ledger online backup failed: {detail[-500:]}")
+
+    with tempfile.TemporaryDirectory(prefix="ledger-parity-transfer-") as raw:
+        transfer = Path(raw)
+        if config["host"]:
+            for name in ("commissioning-latest.db", "commissioning-latest.json"):
+                copied = _run(
+                    (
+                        "scp",
+                        "-q",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        f"{config['host']}:.liquidity-bot/parity/{name}",
+                        str(transfer / name),
+                    ),
+                    check=False,
+                )
+                assert isinstance(copied.stdout, str)
+                assert isinstance(copied.stderr, str)
+                if copied.returncode:
+                    detail = copied.stderr.strip() or copied.stdout.strip()
+                    if copied.returncode == 255:
+                        raise RuntimePending(
+                            f"active runtime host became unreachable: {detail[-300:]}"
+                        )
+                    raise ParityUnavailable(f"ledger transfer failed: {detail[-500:]}")
+        else:
+            source = Path.home() / ".liquidity-bot" / "parity"
+            for name in ("commissioning-latest.db", "commissioning-latest.json"):
+                shutil.copy2(source / name, transfer / name)
+
+        installed = _run(
+            (
+                sys.executable,
+                "-B",
+                str(RUNTIME_SNAPSHOT_SCRIPT),
+                "install",
+                "--source-dir",
+                str(transfer),
+                "--output-dir",
+                str(RUNTIME_BACKUP_DIR),
+            ),
+            check=False,
+        )
+        assert isinstance(installed.stdout, str)
+        assert isinstance(installed.stderr, str)
+        if installed.returncode:
+            detail = installed.stderr.strip() or installed.stdout.strip()
+            raise ParityUnavailable(f"ledger verification/install failed: {detail[-500:]}")
+        try:
+            payload = json.loads(installed.stdout.strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise ParityUnavailable("ledger installer returned invalid evidence") from exc
+        if not isinstance(payload, dict):
+            raise ParityUnavailable("ledger installer returned invalid evidence")
+        return payload
+
+
 def workstation_problems(worktree: str, local_matches: bool) -> list[str]:
     """Return actionable local/GitHub parity failures."""
     problems: list[str] = []
@@ -415,6 +716,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--no-peer",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-runtime",
         action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -505,6 +811,74 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print("  peer        : not configured (run separately on other workstation)")
 
+        runtime_pending = False
+        runtime_config = None if args.no_runtime else load_runtime_config()
+        if runtime_config is None:
+            if args.no_runtime:
+                print("  WSL runtime : intentionally skipped")
+            else:
+                runtime_pending = True
+                print("  WSL runtime : not configured (pending)")
+        else:
+            try:
+                runtime_state, runtime_action = runtime_checkout_parity(
+                    runtime_config, sync=args.sync
+                )
+                runtime_head = str(runtime_state["head"])
+                runtime_origin = str(runtime_state["origin_head"])
+                runtime_marker = str(runtime_state["deployed_commit"])
+                runtime_ahead = int(runtime_state.get("ahead", 0))
+                runtime_behind = int(runtime_state.get("behind", 0))
+                runtime_dirty = bool(runtime_state.get("tracked_status"))
+                deploy_changes = [
+                    str(path)
+                    for path in runtime_state.get("deployed_runtime_changes", [])
+                ]
+                print(
+                    "  WSL runtime : "
+                    + (runtime_config["host"] or "this workstation")
+                )
+                print(f"  WSL HEAD    : {_short(runtime_head)}")
+                print(f"  loaded mark : {_short(runtime_marker)}")
+                print(f"  WSL action  : {runtime_action}")
+                if runtime_dirty:
+                    problems.append("WSL runtime has tracked local changes")
+                if runtime_ahead or runtime_behind or runtime_head != runtime_origin:
+                    problems.append(
+                        "WSL runtime checkout does not equal GitHub "
+                        f"({runtime_ahead} ahead / {runtime_behind} behind)"
+                    )
+                if deploy_changes:
+                    problems.append(
+                        "WSL source differs from DEPLOYED_COMMIT; reviewed deployment required"
+                    )
+                    problems.extend(f"  {path}" for path in deploy_changes[:20])
+                if args.sync:
+                    ledger = capture_runtime_ledger(runtime_config)
+                    database = ledger.get("database", {})
+                    if not isinstance(database, dict):
+                        raise ParityUnavailable(
+                            "ledger snapshot returned no database evidence"
+                        )
+                    print("  ledger copy : VERIFIED PRIVATE RECOVERY COPY")
+                    print(f"  captured UTC: {ledger.get('created_at', 'unknown')}")
+                    print(
+                        "  ledger hash : "
+                        + str(database.get("sha256", "unknown"))[:12]
+                    )
+                    print(
+                        "  ledger bytes: "
+                        + str(database.get("bytes", "unknown"))
+                    )
+            except RuntimePending as exc:
+                runtime_pending = True
+                print("  WSL runtime : UNAVAILABLE (pending; preserved)")
+                print(f"  runtime info: {str(exc)[-160:]}")
+            except ParityUnavailable as exc:
+                print("  WSL runtime : FAILED")
+                print(f"  runtime info: {str(exc)[-160:]}")
+                problems.append(f"runtime/ledger parity failed: {exc}")
+
         if not args.host:
             print("  production  : not checked (no current server configured)")
             if problems:
@@ -512,13 +886,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for problem in problems:
                     print(f"  - {problem}")
                 return 1
-            if peer_pending:
-                print("\nVERDICT: CURRENT WORKSTATION PARITY OK · PEER PENDING")
+            if peer_pending or runtime_pending:
+                pending = []
+                if peer_pending:
+                    pending.append("PEER")
+                if runtime_pending:
+                    pending.append("RUNTIME/LEDGER")
+                print(
+                    "\nVERDICT: CURRENT WORKSTATION PARITY OK · "
+                    + "/".join(pending)
+                    + " PENDING"
+                )
             elif peer_host:
-                print("\nVERDICT: BOTH WORKSTATIONS PARITY OK")
+                print("\nVERDICT: WORKSTATIONS/RUNTIME/LEDGER PARITY OK")
             else:
                 print("\nVERDICT: WORKSTATION PARITY OK")
-            print("GitHub is the tracked-file source of truth.")
+            print(
+                "GitHub is tracked-file truth; the verified private ledger copy "
+                "is never committed."
+            )
             return 0
         if not args.key.is_file():
             raise ParityUnavailable(f"SSH key not found: {args.key}")

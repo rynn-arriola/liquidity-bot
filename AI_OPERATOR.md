@@ -50,26 +50,23 @@ present, but never commit it.
 
 ## Desktop, laptop, GitHub and production parity
 
-GitHub is the tracked-file synchronization point between the desktop and
-laptop. Production is not a git checkout, so it is
-not required to equal a newer documentation-only GitHub commit. It must instead
-satisfy both of these conditions:
+GitHub is the tracked-file synchronization point between desktop, laptop
+Windows and the laptop WSL production checkout. The loaded process may be
+older than a documentation/tooling-only GitHub commit. It must satisfy:
 
 1. its `src/` and `tests/` content matches the commit named by
    `DEPLOYED_COMMIT` after expected Windows/Linux line-ending normalization;
 2. GitHub has no newer `src/` or `tests/` change waiting to be deployed.
 
-Before starting tracked work and again after the final push, run:
+Before tracked work and again after the final push, run:
 
 ```powershell
-python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST> --key "$env:USERPROFILE\.ssh\makerlab_droplet"
+python -B scripts/check_parity.py --sync
 ```
 
-The host and key may instead come from the local-only `DROPLET_HOST` and
-`DROPLET_KEY` environment variables. Never put either value in tracked files.
 The command fetches `origin/main`, automatically fast-forwards a clean
-behind-only `main` checkout, reads git and server hashes, and makes no venue
-request or bot-control call. GitHub `main` is the one source of truth for
+behind-only `main` checkout, reads WSL/loaded-source evidence, and makes no venue
+request or bot-control call. GitHub `main` is the source of truth for
 tracked files. Commit ancestry, never timestamps, decides which copy is newer.
 
 Machine-local `.local-tools/parity_peer.json` may name the other workstation's
@@ -82,6 +79,10 @@ and resolve the discrepancy rather than pulling over them. Use
 scripts newer than the loaded runtime are allowed when runner source and tests
 still match the deployed marker.
 
+Machine-local `.local-tools/parity_runtime.json` names the laptop WSL checkout.
+Parity may live-fast-forward only documentation, tests and its own parity tools;
+any runner/config/launcher change is reported as requiring reviewed deployment.
+
 When the operator says **"run parity"**, **"run parity check"** or **"run
 three-way parity check"**, perform every applicable step below:
 
@@ -89,13 +90,16 @@ three-way parity check"**, perform every applicable step below:
 2. If the SSH peer is reachable, check and safely update it in the same run. If
    it is offline, mark it pending; do not make its absence fail the available
    workstation or pretend the peer is current.
+3. Inspect laptop WSL HEAD, `DEPLOYED_COMMIT` and tracked state. Create its
+   execution-ledger copy through SQLite online backup, verify integrity/hash,
+   and install it under ignored `data/cold-backup/laptop-runtime/` on each
+   reachable workstation. It is a recovery copy, never writable authority.
 
-The phrase authorizes git fetch and clean behind-only fast-forwards on both
-reachable workstations. Parity has exactly three authorities: PC, laptop and
-GitHub. It does not use Google Drive and must not wait for a recovery archive.
-It does not authorize overwriting/committing dirty work, choosing a side of
-diverged history, deploying trading code, handing off the writable ledger or
-starting/restarting the bot.
+The phrase authorizes those git fast-forwards and verified private ledger-copy
+updates. GitHub receives tracked files only; databases, credentials, webhooks,
+keys, logs, environments and caches never enter git. Parity does not use Drive,
+overwrite dirty/diverged work, deploy trading code, activate the copied ledger,
+hand off ownership, or start/restart the bot.
 
 The separate phrase **"run weekly task"** authorizes one manual Drive recovery
 run. Either Codex (primary AI operator) or Claude (backup AI operator) may use

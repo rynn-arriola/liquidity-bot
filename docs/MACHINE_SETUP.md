@@ -33,7 +33,8 @@ ledger travel only through a deliberate stopped-runtime handoff.
 |---|---|
 | code, AI instructions, findings and handoffs | `git pull --ff-only` |
 | what is actually loaded | `DEPLOYED_COMMIT` on the one active runtime |
-| authoritative trading history, logs, ledger | the one active runtime; ignored copies elsewhere are recovery only |
+| writable trading ledger | one active runtime; parity makes ignored, verified recovery copies only |
+| measurement DBs/logs | active runtime plus encrypted weekly recovery; not copied by ordinary parity |
 | Polymarket API keys, Discord webhooks | active path on one runtime only; encrypted/restricted recovery copies stay inactive and never use GitHub or file sync |
 | retired droplet SSH | no current endpoint; historical instructions only |
 
@@ -151,28 +152,38 @@ python -B scripts/check_parity.py --sync
 ```
 
 The command safely updates only a clean `main` checkout that is strictly behind
-GitHub, locally and on a reachable configured peer. Otherwise it reads git
-state. It does not query Polymarket, start or stop a process, deploy code, or
-alter the ledger. A successful result means:
+GitHub, locally and on a reachable peer. It also inspects laptop WSL and creates
+a throttled SQLite online-backup of `data/commissioning.db`; it never copies the
+live DB/WAL directly, queries Polymarket or controls the bot. Success means:
 
 - this workstation is clean and exactly at GitHub `main`;
 - a reachable peer was checked and matched, or an unreachable peer was clearly
-  marked pending.
+  marked pending;
+- WSL tracked state and loaded source are accounted for; and
+- `data/cold-backup/laptop-runtime/` contains a private recovery copy whose
+  manifest hash and SQLite integrity check match its capture.
 
-Documentation and analysis utilities can be newer than the deployed runtime;
-that is not permission to restart the laptop. On a dirty or diverged checkout,
-stop and preserve the local work. Only use `git pull --ff-only` on a clean
-checkout that is simply behind.
+While live, WSL auto-sync is restricted to docs, tests and the two parity tools.
+Any runner, configuration or launcher change is reported and left for reviewed
+deployment. Dirty/diverged work is always preserved.
 
-The AI then completes the private-data half of the same operator request using
-the connected Google Drive connector. Every `run parity` adds a new versioned,
-client-encrypted archive under `Liquidity Bot Private Recovery`, even when both
-computers are online. Prefer a newly verified snapshot from the active laptop.
-If the laptop is off, upload the newest already-verified recovery copy that the
-desktop can access and label its true source/capture time; this preserves a
-recovery point but does not make it current laptop state. Read back the Drive
-metadata/hash after upload. Never upload a raw live database, WAL/SHM file,
-unencrypted credential/webhook, or SSH private key.
+`.local-tools/parity_runtime.json` privately identifies the active WSL host,
+distro and repo. The copied ledger is never activated by parity and contains no
+credentials. Measurement DBs are intentionally omitted because copying their
+multi-gigabyte history every parity is wasteful. `run weekly task` separately
+creates the encrypted full recovery archive for Drive.
+
+Keep this ignored file on both PCs. On the laptop use an empty `host`; on the
+desktop use the key-authenticated laptop SSH alias:
+
+```json
+{
+  "host": "poly-laptop",
+  "wsl_distro": "Ubuntu-24.04",
+  "wsl_repo": "/home/polybot/liquidity-bot",
+  "source_role": "ACTIVE-LAPTOP"
+}
+```
 
 **Start every coding agent from inside the repo directory.** Codex discovers
 `AGENTS.md` and Claude discovers `CLAUDE.md`; both are thin pointers to the
@@ -215,14 +226,12 @@ loaded-source marker and does not update automatically.
 
 ## Backups
 
-The laptop's read-only backup timer keeps dated snapshots locally. A second
-machine copy is manual: stop the live runtime, prove account state, copy the
-SQLite files without live file sync, verify hashes and `PRAGMA quick_check`,
-and keep them under an inactive recovery path. A same-disk snapshot is not
-protection against losing that machine.
+The laptop timer keeps dated snapshots locally. Ordinary parity adds a current
+execution-ledger recovery copy to each reachable workstation using the online
+backup API, SHA-256 and `PRAGMA integrity_check`. A deliberate handoff still
+requires stopping the runtime, proving account state and explicitly activating
+a fresh stopped snapshot; parity never does that.
 
-Google Drive supplies the off-machine recovery copy during every AI-operated
-parity run. Archives are append-only/versioned and include a manifest with the
-source machine, `ACTIVE` or `RECOVERY` role, UTC capture time, loaded commit,
-included-file hashes and SQLite integrity evidence. Drive is not a writable
-ledger mirror and is never an automatic failover trigger.
+The separate weekly task creates the encrypted, versioned full recovery archive
+for Drive, including measurement data and a manifest. Drive is not parity, a
+writable ledger mirror or an automatic failover trigger.

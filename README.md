@@ -8,10 +8,11 @@
 This is a multi-agent project, primarily operated with Codex.
 `AI_OPERATOR.md` is the one agent-neutral instruction and routing source;
 `AGENTS.md` and `CLAUDE.md` are thin auto-discovery pointers only. To check
-desktop, laptop, GitHub and production consistency, ask an AI to **"run parity
-check"**; the command safely fast-forwards a clean behind-only checkout and
-must be run independently on both
-workstations.
+desktop, laptop, GitHub, private recovery and production consistency, ask an AI
+to **"run parity"**. A reachable peer is checked over key-only SSH, clean
+behind-only checkouts may fast-forward, and a verified encrypted recovery
+archive is always added through the Google Drive connector. An offline peer is
+reported pending rather than assumed current.
 
 AI-facing root files are deliberately compact. Detailed completed evidence is
 preserved under [`docs/history/`](docs/history/README.md) and loaded only when

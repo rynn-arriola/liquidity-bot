@@ -27,11 +27,6 @@ markets, 39 resting orders, zero positions, zero absent/unresolved state and no
 risk stop or 403/access denial. The laptop is now the only writable ledger/API
 owner; the former server is destroyed and the desktop is prepared but inactive.
 
-The former server is destroyed. The laptop remains the sole production owner;
-the prepared desktop is an inactive manual cold backup and must never run
-concurrently. Detailed commissioning and backup evidence remains linked from
-`STATUS.md`.
-
 On the desktop, `run parity check` verifies/fast-forwards only tracked files
 against GitHub. Its old recovery databases are not current laptop production
 state; any handoff still requires a new stopped-runtime snapshot from the laptop.
@@ -50,6 +45,14 @@ Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-
 runtime snapshot and known-account-state gates.
 
+## 1a. Complete AI-operated Drive parity recovery
+Every parity run must add a versioned encrypted archive to `Liquidity Bot
+Private Recovery`, whether one or both computers are online. Finish the safe
+SQLite packager, source/role/time/commit/hash/integrity manifest, client-side
+encryption and connector readback; exclude SSH keys and never overwrite the
+only copy. Test one-online and both-online flows. Until then report Drive
+pending instead of uploading raw or unencrypted data.
+
 ## 2. Remaining natural acceptance
 The latest stopped runner loaded `31f815c`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
@@ -64,10 +67,9 @@ only when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-Private-only silence now has natural acceptance with unchanged PID and
-`cancels=0`. Simultaneous market/private silence still uses the documented
-global quarantine and caused a temporary slate rebuild at 16:22Z; investigate
-only if recurrence shows a local liveness defect rather than venue/network loss.
+Private-only silence has natural acceptance with unchanged PID and `cancels=0`.
+Simultaneous market/private silence still uses global quarantine; investigate
+only if recurrence proves a local defect rather than venue/network loss.
 
 ## 3. Accept the deployed post-flat mandatory refill
 
@@ -106,10 +108,8 @@ any strategy proposal, and never add overlapping cohorts as separate profit.
 
 ## 6. One unresolved mutation can have account-wide availability cost
 
-Review whether unrelated proven-safe markets can continue while one owner is
-ambiguous without weakening the account-wide unowned-order invariant. Raising
-a timeout is not a fix; the venue has hidden accepted state longer than prior
-timeout values.
+Review whether proven-safe markets can continue around one ambiguous owner
+without weakening account-wide ownership. A longer timeout is not a fix.
 
 ## 7. Graceful stop success is not proof of flatness
 

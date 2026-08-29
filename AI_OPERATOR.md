@@ -48,18 +48,20 @@ tracked root `AGENTS.md` is only a thin Codex auto-discovery pointer,
 rules. A workstation may also have an ignored `AGENTS.local.md`; read it when
 present, but never commit it.
 
-## Desktop, laptop, GitHub and production parity
+## Desktop, laptop, GitHub, Drive and production parity
 
-GitHub is the synchronization point between the desktop and laptop. Production
-is not a git checkout, so it is not required to equal a newer documentation-
-only GitHub commit. It must instead satisfy both of these conditions:
+GitHub is the tracked-file synchronization point between the desktop and
+laptop. The Google Drive folder `Liquidity Bot Private Recovery` is the
+AI-managed rendezvous for versioned, client-encrypted runtime recovery
+archives that must not enter git. Production is not a git checkout, so it is
+not required to equal a newer documentation-only GitHub commit. It must instead
+satisfy both of these conditions:
 
 1. its `src/` and `tests/` content matches the commit named by
    `DEPLOYED_COMMIT` after expected Windows/Linux line-ending normalization;
 2. GitHub has no newer `src/` or `tests/` change waiting to be deployed.
 
-Run this independently from **each** workstation before starting tracked work
-and again after the final push:
+Before starting tracked work and again after the final push, run:
 
 ```powershell
 python -B scripts/check_parity.py --sync --host root@<DROPLET_HOST> --key "$env:USERPROFILE\.ssh\makerlab_droplet"
@@ -72,21 +74,47 @@ behind-only `main` checkout, reads git and server hashes, and makes no venue
 request or bot-control call. GitHub `main` is the one source of truth for
 tracked files. Commit ancestry, never timestamps, decides which copy is newer.
 
-`PARITY OK` on one workstation proves only that workstation, GitHub and the
-server. It cannot inspect the other workstation; run it there too. If the
-worktree is dirty, behind, ahead or diverged, preserve the files and resolve
-the discrepancy rather than pulling over them. Use `git pull --ff-only` only
-from a clean behind-only checkout. Documentation/scripts newer than the server
-are allowed when runner source and tests still match the deployed marker.
+Machine-local `.local-tools/parity_peer.json` may name the other workstation's
+SSH alias and repository path. When the peer is reachable, the command runs the
+same check there and may fast-forward its clean behind-only `main`; when it is
+offline, the current workstation can still pass but the peer is explicitly
+`PENDING`. If either worktree is dirty, ahead or diverged, preserve the files
+and resolve the discrepancy rather than pulling over them. Use
+`git pull --ff-only` only from a clean behind-only checkout. Documentation or
+scripts newer than the loaded runtime are allowed when runner source and tests
+still match the deployed marker.
 
-When the operator says **"run parity check"** or **"run four-way parity
-check"**, run this command with `--sync` on the current machine, identify which
-machine was actually checked, and explicitly say that the second workstation
-still needs its own run unless evidence from that machine is available. This
-phrase authorizes fetch and a clean fast-forward only. It does not authorize
-overwriting/committing dirty work, choosing a side of diverged history,
-deploying newer trading code, or restarting the bot. Report those conditions
-and preserve the files for review.
+When the operator says **"run parity"**, **"run parity check"** or **"run
+four-way parity check"**, perform every applicable step below:
+
+1. Run the command with `--sync` on the current machine.
+2. If the SSH peer is reachable, check and safely update it in the same run. If
+   it is offline, mark it pending; do not make its absence fail the available
+   workstation or pretend the peer is current.
+3. Always use the connected Google Drive connector to add a new verified,
+   versioned recovery archive to `Liquidity Bot Private Recovery`, even when
+   both computers are online. Prefer the active laptop's newest safe snapshot.
+   If it is unavailable, upload only the newest already-verified accessible
+   recovery copy and label its source role and capture time truthfully.
+4. Read back the Drive file metadata and report its source, capture time, hash
+   and age. An upload success is not evidence that an offline machine or live
+   ledger is current.
+
+The phrase authorizes git fetch, clean behind-only fast-forwards on both
+reachable workstations and the versioned Drive archive write/readback. It does
+not authorize overwriting/committing dirty work, choosing a side of diverged
+history, uploading a raw live SQLite/WAL file, exposing an unencrypted secret,
+deploying trading code, handing off the writable ledger or starting/restarting
+the bot. Never upload SSH private keys. If the encryption packager or Drive
+connector is unavailable, mark the Drive dimension pending instead of sending
+unsafe material.
+
+The unqualified instruction **"run the bot"** always means the laptop. The
+desktop may be selected only when the operator explicitly says **"run it on
+the computer"**, **"run it on the PC"** or equivalent. That explicit target
+does not bypass the single-owner handoff: prove the other runner absent, verify
+account state, transfer a current stopped-runtime ledger snapshot and complete
+normal preflight before starting the desktop.
 
 ## How to work with the operator
 

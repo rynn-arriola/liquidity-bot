@@ -10,7 +10,9 @@ docs-only HEAD.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import json
 import os
 from pathlib import Path
 import platform
@@ -23,10 +25,34 @@ from typing import Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REMOTE_ROOT = "/root/liquidity-bot"
 DEPLOYED_PATHS = ("src/liquidity_bot", "tests")
+LOCAL_PEER_CONFIG = REPO_ROOT / ".local-tools" / "parity_peer.json"
 
 
 class ParityUnavailable(RuntimeError):
     """A required parity authority could not be read."""
+
+
+def load_peer_config(path: Path = LOCAL_PEER_CONFIG) -> tuple[str, str]:
+    """Read optional machine-local peer coordinates without tracking them."""
+    if not path.is_file():
+        return "", ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ParityUnavailable(f"invalid peer config {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ParityUnavailable(f"invalid peer config {path}: expected object")
+    host = payload.get("host", "")
+    repo = payload.get("repo", "")
+    if not isinstance(host, str) or not isinstance(repo, str):
+        raise ParityUnavailable(
+            f"invalid peer config {path}: host/repo must be strings"
+        )
+    if bool(host.strip()) != bool(repo.strip()):
+        raise ParityUnavailable(
+            f"invalid peer config {path}: host and repo must be set together"
+        )
+    return host.strip(), repo.strip()
 
 
 def _run(
@@ -155,6 +181,63 @@ def _short(commit: str) -> str:
     return commit[:8]
 
 
+def _powershell_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def peer_powershell_command(repo: str, sync: bool) -> str:
+    """Build the recursion-safe command executed on a Windows peer."""
+    parity_arguments = "--sync" if sync else ""
+    return "\n".join(
+        (
+            "$ErrorActionPreference = 'Stop'",
+            f"$parityRepo = {_powershell_literal(repo)}",
+            "if (-not (Test-Path -LiteralPath (Join-Path $parityRepo '.git'))) {",
+            "  Write-Error ('peer repository not found: ' + $parityRepo)",
+            "  exit 2",
+            "}",
+            "Set-Location -LiteralPath $parityRepo",
+            "Remove-Item Env:PARITY_PEER_HOST -ErrorAction SilentlyContinue",
+            "Remove-Item Env:PARITY_PEER_REPO -ErrorAction SilentlyContinue",
+            f"& python -B scripts/check_parity.py {parity_arguments} --no-peer",
+            "exit $LASTEXITCODE",
+        )
+    )
+
+
+def peer_parity(
+    host: str,
+    repo: str,
+    *,
+    sync: bool,
+) -> tuple[int, str]:
+    """Run the same safe parity check on an available Windows peer."""
+    command = peer_powershell_command(repo, sync)
+    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+    result = _run(
+        (
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            host,
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded,
+        ),
+        check=False,
+    )
+    assert isinstance(result.stdout, str)
+    assert isinstance(result.stderr, str)
+    output = result.stdout.strip()
+    if result.stderr.strip():
+        output = "\n".join(part for part in (output, result.stderr.strip()) if part)
+    return result.returncode, output
+
+
 def workstation_problems(worktree: str, local_matches: bool) -> list[str]:
     """Return actionable local/GitHub parity failures."""
     problems: list[str] = []
@@ -202,12 +285,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="fast-forward a clean, behind-only main checkout to origin/main",
     )
+    parser.add_argument(
+        "--peer-host",
+        default=os.environ.get("PARITY_PEER_HOST", ""),
+        help=(
+            "optional SSH alias for the other Windows workstation; defaults "
+            "to PARITY_PEER_HOST or .local-tools/parity_peer.json"
+        ),
+    )
+    parser.add_argument(
+        "--peer-repo",
+        default=os.environ.get("PARITY_PEER_REPO", ""),
+        help=(
+            "repository path on the peer; defaults to PARITY_PEER_REPO or "
+            ".local-tools/parity_peer.json"
+        ),
+    )
+    parser.add_argument(
+        "--no-peer",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
 
     print("Liquidity bot machine parity")
     print(f"  workstation : {platform.node() or 'unknown'}")
 
     try:
+        configured_peer_host, configured_peer_repo = (
+            ("", "") if args.no_peer else load_peer_config()
+        )
+        peer_host = args.peer_host or configured_peer_host
+        peer_repo = args.peer_repo or configured_peer_repo
+        if bool(peer_host) != bool(peer_repo):
+            raise ParityUnavailable(
+                "peer host and repository must be configured together"
+            )
+        if args.no_peer:
+            peer_host = peer_repo = ""
+
         if not args.no_fetch:
             _git("fetch", "--quiet", "origin", "main")
 
@@ -251,6 +367,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         problems = workstation_problems(worktree, local_matches)
+        peer_pending = False
+        if peer_host:
+            peer_code, peer_output = peer_parity(
+                peer_host,
+                peer_repo,
+                sync=args.sync,
+            )
+            print(f"  peer        : {peer_host}")
+            if peer_code == 0:
+                print("  peer state  : MATCH")
+            elif peer_code == 1:
+                print("  peer state  : DRIFT")
+                problems.append(
+                    "reachable peer has dirty, ahead, diverged or mismatched state"
+                )
+                for row in peer_output.splitlines()[-12:]:
+                    problems.append(f"  peer: {row}")
+            else:
+                peer_pending = True
+                print("  peer state  : UNAVAILABLE (pending; preserved)")
+                if peer_output:
+                    print(f"  peer detail : {peer_output.splitlines()[-1][:160]}")
+        else:
+            print("  peer        : not configured (run separately on other workstation)")
+
         if not args.host:
             print("  production  : not checked (no current server configured)")
             if problems:
@@ -258,12 +399,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for problem in problems:
                     print(f"  - {problem}")
                 return 1
-            print("\nVERDICT: WORKSTATION PARITY OK")
-            print(
-                "GitHub is the tracked-file source of truth. Run this same "
-                "command on the other workstation; one machine cannot prove "
-                "or update the other machine's local files."
-            )
+            if peer_pending:
+                print("\nVERDICT: CURRENT WORKSTATION PARITY OK · PEER PENDING")
+            elif peer_host:
+                print("\nVERDICT: BOTH WORKSTATIONS PARITY OK")
+            else:
+                print("\nVERDICT: WORKSTATION PARITY OK")
+            print("GitHub is the tracked-file source of truth.")
             return 0
         if not args.key.is_file():
             raise ParityUnavailable(f"SSH key not found: {args.key}")
@@ -315,12 +457,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"  - {problem}")
             return 1
 
-        print("\nVERDICT: PARITY OK")
-        print(
-            "GitHub is the tracked-file source of truth. Run this same command "
-            "on the other workstation; one machine cannot prove or update the "
-            "other machine's local files."
-        )
+        if peer_pending:
+            print("\nVERDICT: CURRENT WORKSTATION/SERVER OK · PEER PENDING")
+        else:
+            print("\nVERDICT: PARITY OK")
+        print("GitHub is the tracked-file source of truth.")
         return 0
     except ParityUnavailable as exc:
         print(f"\nVERDICT: PARITY UNKNOWN\n  - {exc}", file=sys.stderr)

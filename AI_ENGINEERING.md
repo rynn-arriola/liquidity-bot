@@ -86,12 +86,21 @@ market selection. At minimum, preserve these rules:
 
 ## Multi-machine and secret handling
 
-- Run `python -B scripts/check_parity.py --sync ...` from each workstation.
-  One workstation cannot prove the other's uncommitted files.
+- Run `python -B scripts/check_parity.py --sync ...` from the current
+  workstation. When machine-local peer coordinates are configured and the peer
+  is online, run the same check there over key-only SSH; an offline peer remains
+  pending because one workstation cannot prove its inaccessible files.
 - A clean behind-only `main` may fast-forward. Dirty, ahead or diverged work is
   preserved for review; timestamps never choose a winner.
+- Every operator-requested parity run must also create a versioned,
+  client-encrypted Google Drive recovery archive from the newest verified
+  accessible snapshot and verify the uploaded metadata/hash. Never copy a live
+  WAL database, overwrite the only archive, hide snapshot age or equate Drive
+  presence with active-runtime authority.
 - Production credentials, webhook URLs, private keys and host addresses never
   enter tracked files, patches, logs or chat summaries.
+- Secret-bearing recovery files may enter Drive only inside the reviewed
+  encrypted archive. SSH private keys are excluded without exception.
 - Read ignored `AGENTS.local.md` when present. Never commit it or local backup
   artifacts.
 

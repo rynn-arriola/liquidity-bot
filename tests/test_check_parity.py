@@ -1,6 +1,11 @@
 import importlib.util
+import base64
+import json
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_parity.py"
@@ -62,6 +67,76 @@ class CheckParityTests(unittest.TestCase):
                 "workstation HEAD does not equal the GitHub source of truth",
             ],
         )
+
+    def test_peer_config_is_optional_and_requires_host_repo_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.json"
+            self.assertEqual(check_parity.load_peer_config(path), ("", ""))
+
+            path.write_text(json.dumps({"host": "poly-pc"}), encoding="utf-8")
+            with self.assertRaises(check_parity.ParityUnavailable):
+                check_parity.load_peer_config(path)
+
+    def test_peer_config_reads_machine_local_coordinates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "peer.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "host": "poly-laptop",
+                        "repo": r"C:\Users\operator\liquidity-bot",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                check_parity.load_peer_config(path),
+                ("poly-laptop", r"C:\Users\operator\liquidity-bot"),
+            )
+
+    def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
+        command = check_parity.peer_powershell_command(
+            r"C:\Users\O'Brien\liquidity-bot",
+            sync=True,
+        )
+        encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+        decoded = base64.b64decode(encoded).decode("utf-16le")
+
+        self.assertIn("O''Brien", decoded)
+        self.assertIn("--sync --no-peer", decoded)
+        self.assertIn("Remove-Item Env:PARITY_PEER_HOST", decoded)
+
+    def test_offline_peer_is_returned_as_pending_evidence(self):
+        completed = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=255,
+            stdout="",
+            stderr="connection timed out",
+        )
+        with mock.patch.object(check_parity, "_run", return_value=completed):
+            code, output = check_parity.peer_parity(
+                "poly-laptop",
+                r"C:\repo",
+                sync=True,
+            )
+
+        self.assertEqual(code, 255)
+        self.assertEqual(output, "connection timed out")
+
+    def test_incomplete_peer_arguments_fail_closed_without_git_work(self):
+        with (
+            mock.patch.object(
+                check_parity, "load_peer_config", return_value=("", "")
+            ),
+            mock.patch.object(check_parity, "_git") as git,
+        ):
+            code = check_parity.main(
+                ["--no-fetch", "--peer-host", "poly-laptop"]
+            )
+
+        self.assertEqual(code, 2)
+        git.assert_not_called()
 
 
 if __name__ == "__main__":

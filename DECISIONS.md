@@ -67,6 +67,8 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.
+- Unqualified “run the bot” targets the laptop. Only explicit “run on the
+  computer/PC” selects the desktop, still with the single-owner handoff/preflight.
 - The laptop is the primary live runtime. The desktop is prepared for development,
   offline verification and manual cold backup only. Exactly one machine may use the
   live API credentials and active ledger at a time; there is no automatic
@@ -78,16 +80,22 @@ realized sensor independently pauses new risk at the same scaled threshold.
   not a second writable authority.
 - The selected runtime is compared to `DEPLOYED_COMMIT` plus exact source/test
   hashes, not blindly to the newest documentation-only GitHub commit.
-- “Run parity check” means run `scripts/check_parity.py --sync` on the current
-  workstation. It automatically fetches and fast-forwards a clean behind-only
-  checkout to GitHub `main`. Both workstation runs are required before claiming
-  the desktop, laptop and GitHub are all current. A production host is checked
-  only when one actually exists.
-- Parity permission does not authorize overwriting dirty/diverged work,
-  deploying trading code or restarting production. Those remain explicit
-  review/operator decisions.
+- “Run parity” means run `scripts/check_parity.py --sync` on the current
+  workstation and, when reachable through its machine-local SSH coordinates,
+  run the same safe check on the peer. A clean behind-only checkout may
+  fast-forward to GitHub `main`; dirty, ahead or diverged work is preserved.
+- Every parity run adds a verified, versioned, client-encrypted archive to
+  Drive folder `Liquidity Bot Private Recovery`, even when a peer is offline.
+  Report source/role/time/hash/age; never describe a stale copy as current.
+- Parity permission authorizes those clean fast-forwards and the versioned
+  Drive archive write/readback. It does not authorize overwriting dirty or
+  diverged work, deploying trading code, activating a recovery ledger or
+  starting/restarting production. Those remain explicit review/operator
+  decisions.
 - Local databases, recovery archives, SSH keys and other ignored files are not
-  repository parity. They remain machine-specific and must never be committed.
+  repository parity and must never be committed. Runtime recovery material may
+  travel only as the verified encrypted Drive archive above; SSH private keys
+  never enter that archive.
 
 ## Decisions explicitly not authorized
 

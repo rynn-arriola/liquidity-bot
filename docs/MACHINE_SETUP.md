@@ -134,12 +134,15 @@ same droplet-only `maker-lab/credentials.py` file as the status and error
 webhooks. Keep that file mode `0600`; never paste its values into a tracked file,
 cron line, command-line argument, log, or Markdown document.
 
-## Keeping machines in sync
+## Keeping machines and private recovery data in sync
 
-There is no safe way for a command running on the desktop to inspect arbitrary
-uncommitted files on the laptop, or vice versa. GitHub is therefore the meeting
-point: each workstation proves that its clean HEAD equals `origin/main`, and
-then independently proves that production matches its deployed marker.
+GitHub is the meeting point for tracked files. The machine-local
+`.local-tools/parity_peer.json` gives the parity command the other computer's
+key-only SSH alias and repository path without committing either value. When
+both computers are online, a parity run checks both and safely fast-forwards
+either clean behind-only `main` checkout. It never overwrites dirty, ahead or
+diverged work. When one computer is off, the available machine completes its
+own check and reports the peer pending.
 
 From each Windows workstation run:
 
@@ -147,19 +150,29 @@ From each Windows workstation run:
 python -B scripts/check_parity.py --sync
 ```
 
-The command safely updates only one state: a clean
-`main` checkout that is strictly behind GitHub is fast-forwarded. Otherwise it
-reads local/GitHub state. It does not query Polymarket, start or stop a process,
-deploy code, or alter the ledger. A successful result means:
+The command safely updates only a clean `main` checkout that is strictly behind
+GitHub, locally and on a reachable configured peer. Otherwise it reads git
+state. It does not query Polymarket, start or stop a process, deploy code, or
+alter the ledger. A successful result means:
 
 - this workstation is clean and exactly at GitHub `main`;
-- the other workstation must still run the same command independently.
+- a reachable peer was checked and matched, or an unreachable peer was clearly
+  marked pending.
 
 Documentation and analysis utilities can be newer than the deployed runtime;
-that is not permission to restart the laptop. Run the command on both machines
-before saying all three locations match. On a dirty or diverged checkout, stop and
-preserve the local work. Only use `git pull --ff-only` on a clean checkout that
-is simply behind.
+that is not permission to restart the laptop. On a dirty or diverged checkout,
+stop and preserve the local work. Only use `git pull --ff-only` on a clean
+checkout that is simply behind.
+
+The AI then completes the private-data half of the same operator request using
+the connected Google Drive connector. Every `run parity` adds a new versioned,
+client-encrypted archive under `Liquidity Bot Private Recovery`, even when both
+computers are online. Prefer a newly verified snapshot from the active laptop.
+If the laptop is off, upload the newest already-verified recovery copy that the
+desktop can access and label its true source/capture time; this preserves a
+recovery point but does not make it current laptop state. Read back the Drive
+metadata/hash after upload. Never upload a raw live database, WAL/SHM file,
+unencrypted credential/webhook, or SSH private key.
 
 **Start every coding agent from inside the repo directory.** Codex discovers
 `AGENTS.md` and Claude discovers `CLAUDE.md`; both are thin pointers to the
@@ -207,3 +220,9 @@ machine copy is manual: stop the live runtime, prove account state, copy the
 SQLite files without live file sync, verify hashes and `PRAGMA quick_check`,
 and keep them under an inactive recovery path. A same-disk snapshot is not
 protection against losing that machine.
+
+Google Drive supplies the off-machine recovery copy during every AI-operated
+parity run. Archives are append-only/versioned and include a manifest with the
+source machine, `ACTIVE` or `RECOVERY` role, UTC capture time, loaded commit,
+included-file hashes and SQLite integrity evidence. Drive is not a writable
+ledger mirror and is never an automatic failover trigger.

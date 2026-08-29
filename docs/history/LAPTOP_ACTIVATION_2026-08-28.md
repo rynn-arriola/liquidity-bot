@@ -23,3 +23,8 @@ The laptop is the sole writable ledger/API owner. The desktop remains off as a
 manual cold backup and must never run concurrently. A future handoff requires
 a graceful stop, authenticated venue proof and a verified stopped-runtime
 ledger snapshot.
+
+At 00:44Z and 00:45Z, private shards 1 and 3 naturally crossed their silence
+deadlines. Both overlap recoveries completed with `cancels=0`, the same runner
+PID and all 39 orders preserved; local state remained 20 markets, zero
+positions, zero unresolved intents and zero unknown orders.

@@ -21,8 +21,8 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   reconciled 34 orders, then Cloudflare `1015`/429 on balance drove quarantine;
   the same PID rebuilt. Dashboards do not share the runner limiter; avoid repeated
   recovery probes. Search handoff-rate-limit/quarantine.
-- **Private-only and whole-stream silence have different order cost.** Six natural
-  private-shard repairs preserved 32-35 orders with `cancels=0`; simultaneous
+- **Private-only and whole-stream silence have different order cost.** Eight natural
+  private-shard repairs (two on the laptop) preserved 32-39 orders with `cancels=0`; simultaneous
   251-second market/private silence at 16:22Z globally quarantined and rebuilt to 30. Neither was HTTP 429 or a 20-slot cap.
 - **The 2026-08-28 one-order state was a 403 cascade, not low supply.** Retail
   returned HTTP 403/code 7 location denials, but the old mutation path wrote

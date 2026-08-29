@@ -164,6 +164,27 @@ class CheckParityTests(unittest.TestCase):
         script = check_parity._runtime_inspection_script(config, fetch=True)
         self.assertIn("@('timeout','45s','git'", script)
 
+    def test_existing_peer_snapshot_is_transferred_without_recapture(self):
+        config = {
+            "host": "poly-laptop",
+            "wsl_distro": "Ubuntu-24.04",
+            "wsl_repo": "/home/polybot/liquidity-bot",
+            "source_role": "ACTIVE-LAPTOP",
+        }
+        with (
+            mock.patch.object(check_parity, "_encoded_powershell") as powershell,
+            mock.patch.object(check_parity, "_run") as run,
+        ):
+            run.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=2,
+                stdout="",
+                stderr="stop after proving no capture",
+            )
+            with self.assertRaises(check_parity.ParityUnavailable):
+                check_parity.capture_runtime_ledger(config, create=False)
+        powershell.assert_not_called()
+
     def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
         command = check_parity.peer_powershell_command(
             r"C:\Users\O'Brien\liquidity-bot",

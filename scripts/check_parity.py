@@ -581,17 +581,22 @@ def _capture_runtime_script(config: Mapping[str, str]) -> str:
     )
 
 
-def capture_runtime_ledger(config: Mapping[str, str]) -> dict[str, object]:
-    result = _encoded_powershell(
-        _capture_runtime_script(config), host=config["host"], timeout=30
-    )
-    assert isinstance(result.stdout, str)
-    assert isinstance(result.stderr, str)
-    if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip()
-        if config["host"] and result.returncode == 255:
-            raise RuntimePending(f"active runtime host is unreachable: {detail[-300:]}")
-        raise ParityUnavailable(f"ledger online backup failed: {detail[-500:]}")
+def capture_runtime_ledger(
+    config: Mapping[str, str], *, create: bool = True
+) -> dict[str, object]:
+    if create:
+        result = _encoded_powershell(
+            _capture_runtime_script(config), host=config["host"], timeout=30
+        )
+        assert isinstance(result.stdout, str)
+        assert isinstance(result.stderr, str)
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            if config["host"] and result.returncode == 255:
+                raise RuntimePending(
+                    f"active runtime host is unreachable: {detail[-300:]}"
+                )
+            raise ParityUnavailable(f"ledger online backup failed: {detail[-500:]}")
 
     with tempfile.TemporaryDirectory(prefix="ledger-parity-transfer-") as raw:
         transfer = Path(raw)
@@ -786,6 +791,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         problems = workstation_problems(worktree, local_matches)
         peer_pending = False
+        peer_runtime_snapshot_ready = False
         if peer_host:
             peer_code, peer_output = peer_parity(
                 peer_host,
@@ -796,6 +802,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  peer        : {peer_host}")
             if peer_code == 0:
                 print("  peer state  : MATCH")
+                peer_runtime_snapshot_ready = (
+                    "ledger copy : VERIFIED PRIVATE RECOVERY COPY" in peer_output
+                )
             elif peer_code == 1:
                 print("  peer state  : DRIFT")
                 problems.append(
@@ -854,7 +863,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                     problems.extend(f"  {path}" for path in deploy_changes[:20])
                 if args.sync:
-                    ledger = capture_runtime_ledger(runtime_config)
+                    ledger = capture_runtime_ledger(
+                        runtime_config,
+                        create=not (
+                            runtime_config["host"] == peer_host
+                            and peer_runtime_snapshot_ready
+                        ),
+                    )
                     database = ledger.get("database", {})
                     if not isinstance(database, dict):
                         raise ParityUnavailable(

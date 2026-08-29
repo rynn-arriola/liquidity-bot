@@ -32,6 +32,7 @@ ACTIVE_ORDER_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 UNRESOLVED_INTENT_STATES = ("PREPARED", "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN")
 SLOT_CAPACITY = 20
 MAX_ACTIVITY_LINES = 12
+MAX_REJECTED_REQUEST_BODY_BYTES = 64 * 1024
 
 _MARKET_RE = re.compile(r"\bmarket=([^\s]+)")
 _AT_RE = re.compile(r"\bat=([^\s]+)")
@@ -537,7 +538,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:  # noqa: N802
         self._serve(head=True)
 
+    def _discard_rejected_body(self) -> None:
+        """Drain a small rejected body before replying on Windows sockets."""
+
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            return
+        try:
+            length = int(raw_length)
+        except ValueError:
+            self.close_connection = True
+            return
+        if length < 0 or length > MAX_REJECTED_REQUEST_BODY_BYTES:
+            self.close_connection = True
+            return
+        if length:
+            self.rfile.read(length)
+
     def do_POST(self) -> None:  # noqa: N802
+        # Responding while request bytes remain unread can make Windows close
+        # the connection with RST after the 405 headers are sent. The client
+        # then sees a transport abort instead of the deliberate read-only
+        # response. Drain only a bounded body; this endpoint still performs no
+        # mutation and large/malformed requests force the connection closed.
+        self._discard_rejected_body()
         self._write(HTTPStatus.METHOD_NOT_ALLOWED, b"read only\n", "text/plain; charset=utf-8")
 
     do_PUT = do_POST

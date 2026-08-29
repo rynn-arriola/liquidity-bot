@@ -229,10 +229,16 @@ class TvDashboardTests(unittest.TestCase):
                     self.assertEqual(response.headers["Cache-Control"], "no-store")
                     self.assertEqual(response.headers["X-Frame-Options"], "DENY")
                     self.assertEqual(payload["schema_version"], 1)
-                with self.assertRaises(HTTPError) as caught:
-                    urlopen(Request(f"{url}/api/state", data=b"{}", method="POST"), timeout=2)
-                self.assertEqual(caught.exception.code, 405)
-                caught.exception.close()
+                # Repeat the rejected body path: on Windows an unread request
+                # body intermittently reset the socket after the server had
+                # logged 405, hiding the intended read-only response.
+                for _ in range(10):
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(Request(
+                            f"{url}/api/state", data=b"{}", method="POST"),
+                            timeout=2)
+                    self.assertEqual(caught.exception.code, 405)
+                    caught.exception.close()
             finally:
                 server.shutdown()
                 server.server_close()

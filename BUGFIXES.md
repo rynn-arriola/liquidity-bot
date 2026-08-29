@@ -10,6 +10,8 @@ rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 
 ## Reviewed and pushed; deployment pending
 - **A backward score clock turned half the slate into `OBSERVED`.** A non-decreasing score high-water mark now contains the telemetry fault with zero accrual and zero retirement. The 20-market regression, old-code reversal and all 806 tests pass; trading policy and venue traffic are unchanged. The 2026-08-29 pre-deployment review repeated the full 806-test suite and size-13 propagation check. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
+- **The laptop deployment suite lacked the recovery tool's encryption dependency.** `cryptography==50.0.0` is now a pinned project dependency with a declaration regression; startup remained blocked and no trading process ran.
+- **Rejected TV requests intermittently reset Windows sockets.** The read-only handler now drains only a bounded small body before returning 405; ten consecutive POST regressions prove the response and trading remains isolated.
 
 ## Latest deployed post-flat refill repair
 

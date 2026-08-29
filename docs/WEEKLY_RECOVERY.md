@@ -14,7 +14,8 @@ may execute the same workflow through its own connected Google Drive access.
 2. Use SQLite's online backup API for `data/commissioning.db` and
    `data/scalp.db`; never copy their live files, WAL or SHM companions.
 3. Run `scripts/recovery_archive.py build` with the machine-local key stored
-   outside every repository and cloud-synchronized folder.
+   outside every repository and cloud-synchronized folder. Its pinned
+   encryption runtime is installed by the normal `pip install -e .` setup.
    The archive includes a source/role/time/commit/hash/integrity manifest,
    small non-secret runtime state and bounded diagnostic log tails.
 4. Run `scripts/recovery_archive.py verify` before upload. Both restored SQLite

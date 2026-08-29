@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import tomllib
 import unittest
 
 from scripts.recovery_archive import (
@@ -15,6 +16,14 @@ from scripts.recovery_archive import (
 
 
 class RecoveryArchiveTests(unittest.TestCase):
+    def test_encryption_runtime_is_a_declared_project_dependency(self):
+        project = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "pyproject.toml")
+            .read_text(encoding="utf-8"))
+
+        self.assertIn(
+            "cryptography==50.0.0", project["project"]["dependencies"])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(
             prefix="liquidity-recovery-test-")

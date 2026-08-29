@@ -32,8 +32,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   both databases pass integrity and WSL files are owner-only. No active ledger,
   credential path, trading process, service, timer or API check exists there
 - **Risk scaling:** size 10 = $300 portfolio, $40 market, $80 session/$80 hard
-- **Measurement/display:** studies remain observational; the reviewed local TV
-  view auto-opens after runner proof, uses zero venue calls and cannot fail trading
+- **Measurement/display:** studies remain observational; TV auto-opens and uses zero venue calls. The Gain/P&L table update awaits a laptop dashboard-only reload
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
 ## Active operating envelope

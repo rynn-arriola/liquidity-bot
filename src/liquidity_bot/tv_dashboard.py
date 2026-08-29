@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
+import math
 import mimetypes
 from pathlib import Path
 import re
@@ -25,6 +27,7 @@ from urllib.parse import urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASSETS = PROJECT_ROOT / "web" / "tv-dashboard"
+DEFAULT_GAIN_CACHE = PROJECT_ROOT / "data" / "tv-gain-snapshot.json"
 ACTIVE_ORDER_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 UNRESOLVED_INTENT_STATES = ("PREPARED", "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN")
 SLOT_CAPACITY = 20
@@ -78,6 +81,115 @@ def _open_read_only(path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     return connection
+
+
+def _gain_unavailable(error: str) -> dict[str, Any]:
+    return {
+        "available": False,
+        "error": error,
+        "generated_at": None,
+        "age_seconds": None,
+        "headline": None,
+        "rows": [],
+    }
+
+
+def _money_value(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"{field} is invalid") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"{field} is not finite")
+    return format(parsed, "f")
+
+
+def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
+    """Read and validate the isolated hourly snapshot; never query the venue."""
+
+    if path is None:
+        return _gain_unavailable("gain snapshot is not configured")
+    try:
+        if path.stat().st_size > 128_000:
+            raise ValueError("gain snapshot is unexpectedly large")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            raise ValueError("gain snapshot schema is unsupported")
+        generated_at = _parse_time(payload.get("generated_at"))
+        if generated_at is None:
+            raise ValueError("gain snapshot time is invalid")
+        source_rows = payload.get("rows")
+        if not isinstance(source_rows, list) or len(source_rows) > 7:
+            raise ValueError("gain snapshot rows are invalid")
+        rows: list[dict[str, Any]] = []
+        dates: list[str] = []
+        current_days = 0
+        for index, source in enumerate(source_rows):
+            if not isinstance(source, dict):
+                raise ValueError(f"gain row {index} is invalid")
+            date_et = str(source.get("date_et") or "")
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_et):
+                raise ValueError(f"gain row {index} date is invalid")
+            datetime.fromisoformat(date_et)
+            current_day = source.get("current_day") is True
+            current_days += int(current_day)
+            side_hours = float(source.get("side_hours"))
+            if not math.isfinite(side_hours) or side_hours < 0:
+                raise ValueError(f"gain row {index} side hours are invalid")
+            net_status = str(source.get("net_status") or "")
+            if net_status not in {"finalized", "pending"}:
+                raise ValueError(f"gain row {index} net status is invalid")
+            net = _money_value(source.get("net"), f"gain row {index} net")
+            if net_status == "finalized" and net is None:
+                raise ValueError(f"gain row {index} finalized net is missing")
+            rows.append({
+                "date_et": date_et,
+                "current_day": current_day,
+                "trading": _money_value(
+                    source.get("trading"), f"gain row {index} trading"),
+                "trading_estimate": source.get("trading_estimate") is True,
+                "gain": _money_value(
+                    source.get("gain"), f"gain row {index} gain"),
+                "pending": _money_value(
+                    source.get("pending"), f"gain row {index} pending"),
+                "side_hours": side_hours,
+                "net": net,
+                "net_status": net_status,
+            })
+            dates.append(date_et)
+        if len(set(dates)) != len(dates) or dates != sorted(dates):
+            raise ValueError("gain snapshot dates are not unique and ordered")
+        if current_days > 1:
+            raise ValueError("gain snapshot has multiple current days")
+        source_headline = payload.get("headline")
+        if not isinstance(source_headline, dict):
+            raise ValueError("gain snapshot headline is invalid")
+        since = str(source_headline.get("overall_since_et") or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+            raise ValueError("gain snapshot overall boundary is invalid")
+        headline = {
+            "today_pnl": _money_value(
+                source_headline.get("today_pnl"), "today pnl"),
+            "overall_pnl": _money_value(
+                source_headline.get("overall_pnl"), "overall pnl"),
+            "overall_trading": _money_value(
+                source_headline.get("overall_trading"), "overall trading"),
+            "overall_gain": _money_value(
+                source_headline.get("overall_gain"), "overall gain"),
+            "overall_since_et": since,
+        }
+        return {
+            "available": True,
+            "error": None,
+            "generated_at": _iso(generated_at),
+            "age_seconds": _age_seconds(generated_at, now),
+            "headline": headline,
+            "rows": rows,
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return _gain_unavailable(str(exc))
 
 
 def _process_snapshot() -> list[dict[str, Any]]:
@@ -306,6 +418,7 @@ def collect_state(
     *,
     now: datetime | None = None,
     processes: Iterable[dict[str, Any]] | None = None,
+    gain_cache: Path | None = None,
 ) -> dict[str, Any]:
     """Build one local-only snapshot. Unknown data remains unknown, never zero."""
 
@@ -344,6 +457,7 @@ def collect_state(
             "age_seconds": log_age,
             "error": log_error,
         },
+        "gain_report": _read_gain_snapshot(gain_cache, observed_at),
         "activity": activity,
     }
 
@@ -359,10 +473,12 @@ def _client_is_local(address: str) -> bool:
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "LiquidityTV/1"
 
-    def __init__(self, *args: Any, database: Path, log: Path, assets: Path, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, database: Path, log: Path, assets: Path,
+                 gain_cache: Path | None = None, **kwargs: Any) -> None:
         self.database = database
         self.log = log
         self.assets = assets.resolve()
+        self.gain_cache = gain_cache
         super().__init__(*args, **kwargs)
 
     def _headers(self, content_type: str, length: int, *, cache: str = "no-store") -> None:
@@ -391,7 +507,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/api/state":
-            body = json.dumps(collect_state(self.database, self.log), separators=(",", ":")).encode()
+            body = json.dumps(
+                collect_state(
+                    self.database, self.log, gain_cache=self.gain_cache),
+                separators=(",", ":")).encode()
             self._write(HTTPStatus.OK, body, "application/json; charset=utf-8", head=head)
             return
         asset_name = {"/": "index.html", "/index.html": "index.html", "/styles.css": "styles.css", "/app.js": "app.js"}.get(path)
@@ -438,6 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--database", type=Path, default=PROJECT_ROOT / "data" / "commissioning.db")
     parser.add_argument("--log", type=Path, default=PROJECT_ROOT / "logs" / "commissioning.log")
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
+    parser.add_argument("--gain-cache", type=Path, default=DEFAULT_GAIN_CACHE)
     return parser
 
 
@@ -445,7 +565,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.assets.is_dir():
         raise SystemExit(f"dashboard assets unavailable: {args.assets}")
-    handler = partial(DashboardHandler, database=args.database, log=args.log, assets=args.assets)
+    handler = partial(
+        DashboardHandler, database=args.database, log=args.log,
+        assets=args.assets, gain_cache=args.gain_cache)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Liquidity TV dashboard: http://{args.host}:{args.port}", flush=True)
     print("Source: local read-only ledger/log; zero venue API calls", flush=True)

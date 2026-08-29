@@ -13,7 +13,8 @@ echo "[hourly-reward-table] at=${STAMP} starting"
 
 flock -n data/reward-table-hourly.lock \
     timeout 90s nice -n 10 .venv/bin/python -B scripts/reward_table.py \
-        --days 7 --post-discord --quiet
+        --days 7 --post-discord --quiet \
+        --dashboard-cache data/tv-gain-snapshot.json
 CODE=$?
 if [ "$CODE" -ne 0 ]; then
     echo "[hourly-reward-table] at=${STAMP} failed code=${CODE}"

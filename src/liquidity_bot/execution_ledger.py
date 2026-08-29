@@ -522,6 +522,18 @@ class ExecutionLedger:
             "ON execution_fills(trade_id)")
         self.connection.commit()
 
+    @classmethod
+    def open_read_only(cls, path: str | Path) -> "ExecutionLedger":
+        """Open an existing ledger without schema, WAL, or migration writes."""
+
+        ledger = cls.__new__(cls)
+        ledger.path = Path(path)
+        ledger.connection = sqlite3.connect(
+            f"{ledger.path.resolve().as_uri()}?mode=ro", uri=True)
+        ledger.connection.row_factory = sqlite3.Row
+        ledger.connection.execute("PRAGMA query_only=ON")
+        return ledger
+
     # Additive-only migrations. `CREATE TABLE IF NOT EXISTS` silently leaves an
     # existing table alone, so a new column never reaches a database that has
     # already been created -- and this ledger is never rebuilt, because it is

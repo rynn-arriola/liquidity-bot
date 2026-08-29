@@ -6,16 +6,37 @@ the trading process.
 
 ## What it proves—and what it does not
 
-The screen reads only three local sources:
+The screen reads only four local sources:
 
 - the SQLite execution ledger opened with `mode=ro` and `query_only`;
 - the tail of `logs/commissioning.log`, with credentials and webhook URLs
   redacted; and
 - the local process table.
+- `data/tv-gain-snapshot.json`, atomically published by the existing isolated
+  hourly account report after its bounded reads complete.
 
 It makes **zero Polymarket API calls**, has no venue client, exposes no mutation
 route and never writes the ledger. Its one-second refresh therefore does not
 share REST allowance with quoting, selection, reconciliation or exits.
+Refreshing the screen never reruns the hourly account report. A missing,
+invalid or old gain snapshot stays visibly unavailable/stale rather than
+falling back to a venue call or false zero.
+
+## P&L and gain display
+
+The top adds a separate two-card row for `Today P&L` and `Overall P&L`; the
+existing four-card runtime row remains unchanged beneath it. Today uses the
+hourly report's account trading value for the current ET day. Overall uses the
+runner's established bot-only formula: lifetime
+ledger trading plus finalized bot-era gain since 2026-08-14. Pending is context
+only and never enters either finalized Net or Overall P&L.
+
+The additional table is ordered exactly as `Date ET`, `Trading`, `Gain`,
+`Pending`, `Side Hours`, `Net`. Side Hours is merged resting time per market and
+side, split at ET midnight, so several simultaneous sides can total above 24 in
+one day. `~` identifies a historical trading estimate; `Not posted`, `Pending`
+and `Unavailable` remain distinct. The visible dashboard says Gain rather than
+reward while preserving the underlying accounting meaning.
 
 The 20-slot map is the latest locally recorded queue-stream scope. It is the
 right local diagnostic for which markets were bound, but it is not a current

@@ -54,7 +54,10 @@ realized sensor independently pauses new risk at the same scaled threshold.
 - Pending rewards are displayed but never counted as paid or finalized net.
 - The laptop TV dashboard starts automatically after a successful bot start.
   It remains local/read-only, consumes no venue API budget, and a display or
-  browser failure must not fail or restart trading.
+  browser failure must not fail or restart trading. Preserve every existing
+  card and panel; add Today P&L and Overall P&L at the top and append the daily
+  table in this order: `Date ET`, `Trading`, `Gain`, `Pending`, `Side Hours`,
+  `Net`. Visible TV copy says Gain, not reward, and Net always excludes pending.
 - “Run daily task” means the local-only backup utility described by the ignored
   workstation `AGENTS.local.md`. It is manual, never scheduled, never pushed, and
   must not stop or restart the bot.

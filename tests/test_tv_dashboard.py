@@ -16,6 +16,7 @@ from liquidity_bot.tv_dashboard import (
     DashboardHandler,
     _client_is_local,
     _open_read_only,
+    _read_gain_snapshot,
     collect_state,
 )
 
@@ -24,6 +25,34 @@ NOW = datetime(2026, 8, 28, 23, 0, tzinfo=timezone.utc)
 
 
 class TvDashboardTests(unittest.TestCase):
+    def _gain_cache(self, root: Path) -> Path:
+        path = root / "tv-gain-snapshot.json"
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "generated_at": "2026-08-28T22:59:30Z",
+            "time_zone": "America/New_York",
+            "unbalanced_markets": 4,
+            "headline": {
+                "today_pnl": "-44.52",
+                "overall_pnl": "10.70",
+                "overall_trading": "-130.65",
+                "overall_gain": "141.35",
+                "overall_since_et": "2026-08-14",
+            },
+            "rows": [{
+                "date_et": "2026-08-28",
+                "current_day": True,
+                "trading": "-44.52",
+                "trading_estimate": False,
+                "gain": "14.32",
+                "pending": "0",
+                "side_hours": 416.65,
+                "net": "-30.20",
+                "net_status": "finalized",
+            }],
+        }), encoding="utf-8")
+        return path
+
     def _fixture(self, root: Path) -> tuple[Path, Path]:
         database = root / "commissioning.db"
         log = root / "commissioning.log"
@@ -115,6 +144,35 @@ class TvDashboardTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_gain_snapshot_is_local_validated_and_exposed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            cache = self._gain_cache(root)
+            before = cache.stat()
+
+            state = collect_state(
+                database, log, now=NOW, processes=[], gain_cache=cache)
+
+            report = state["gain_report"]
+            self.assertTrue(report["available"])
+            self.assertEqual(report["age_seconds"], 30)
+            self.assertEqual(report["headline"]["today_pnl"], "-44.52")
+            self.assertEqual(report["headline"]["overall_pnl"], "10.70")
+            self.assertEqual(report["rows"][0]["side_hours"], 416.65)
+            self.assertEqual(cache.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_corrupt_gain_snapshot_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            cache = Path(directory) / "cache.json"
+            cache.write_text('{"schema_version":1,"rows":"wrong"}', encoding="utf-8")
+
+            report = _read_gain_snapshot(cache, NOW)
+
+            self.assertFalse(report["available"])
+            self.assertEqual(report["rows"], [])
+            self.assertIsNone(report["headline"])
+
     def test_missing_schema_stays_unknown_instead_of_claiming_flat(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -194,10 +252,17 @@ class TvDashboardTests(unittest.TestCase):
         html = (root / "index.html").read_text(encoding="utf-8")
         javascript = (root / "app.js").read_text(encoding="utf-8")
         self.assertIn("20 Market Slots", html)
+        self.assertIn("TODAY P&amp;L", html)
+        self.assertIn("OVERALL P&amp;L", html)
+        headers = ["Date ET", "Trading", "Gain", "Pending", "Side Hours", "Net"]
+        self.assertEqual([html.index(f">{header}<") for header in headers], sorted(
+            html.index(f">{header}<") for header in headers))
         self.assertIn("This screen never contacts Polymarket", html)
         self.assertIn('fetch("/api/state"', javascript)
         self.assertIn("index < 20", javascript)
         self.assertNotIn("polymarket.us", javascript.lower())
+        self.assertNotIn("reward", html.lower())
+        self.assertNotIn("reward", javascript.lower())
 
 
 if __name__ == "__main__":

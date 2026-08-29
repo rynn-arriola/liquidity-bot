@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import asdict
@@ -92,6 +93,21 @@ class ExecutionLedgerTests(unittest.TestCase):
 
     def tearDown(self):
         self.ledger.close()
+
+    def test_read_only_open_reuses_accounting_without_writing(self):
+        observed = self.path.stat()
+        reader = ExecutionLedger.open_read_only(self.path)
+        try:
+            self.assertEqual(reader.realized_pnl(), Decimal("0"))
+            with self.assertRaisesRegex(sqlite3.OperationalError, "readonly"):
+                reader.connection.execute(
+                    "INSERT INTO execution_orders(market_slug) VALUES ('x')")
+        finally:
+            reader.close()
+        after = self.path.stat()
+        self.assertEqual(
+            (after.st_size, after.st_mtime_ns),
+            (observed.st_size, observed.st_mtime_ns))
 
     def test_pre_submit_intent_survives_crash_and_is_idempotent(self):
         created = self.ledger.prepare_intent(

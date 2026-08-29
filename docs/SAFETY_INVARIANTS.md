@@ -403,8 +403,14 @@ These are implementation requirements, not suggestions.
     committed. Discord output is capped at seven ET days and uses two narrow
     fixed-width monospaced tables whose row widths are regression-tested; it
     must not depend on pipe-table rendering or color. Presence and validation
-    of the report-only webhook are required by the hourly process alone; a
-    missing or malformed value may not block trading secret loading. Report
+    of the report-only webhook are required by the hourly process alone. The
+    same completed run may atomically publish one owner-only seven-day JSON
+    snapshot for the TV dashboard. That cache must preserve ET dates, account
+    trading, finalized gain, pending context, merged side-hours and pending-safe
+    net semantics. Overall P&L is lifetime ledger realised P&L plus bot-era PAID
+    gain; pending is excluded. The TV service may only validate/read the cache:
+    it has no venue client, credential load or fallback account request.
+    A missing or malformed value may not block trading secret loading. Report
     failure cannot stop, restart or alter the runner.
 72. Liquidity-duration and score accounting are telemetry, never trading
     authority. LIVE `Resting side-hours` must use the same durable-order

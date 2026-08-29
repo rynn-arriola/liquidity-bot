@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -12,8 +13,8 @@ from scripts.reward_table import (
     AccountMetricUnavailable, AccountRealizedToday,
     _historical_nontrading_cash_changes, _nontrading_cash_today,
     _opening_cash_for_day, account_realized_today, build_discord_payload,
-    historical_account_trading_by_day, render_table,
-    resting_side_hours_by_day)
+    build_dashboard_snapshot, historical_account_trading_by_day, render_table,
+    resting_side_hours_by_day, write_dashboard_snapshot)
 from liquidity_bot.cash_activity import NontradingCashChange
 
 
@@ -172,6 +173,43 @@ class RewardTableTests(unittest.TestCase):
                 generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
                 unbalanced_markets=0)
 
+    def test_dashboard_snapshot_has_today_overall_and_pending_safe_rows(self):
+        days = [date(2026, 8, 24), date(2026, 8, 25)]
+        payload = build_dashboard_snapshot(
+            days,
+            pnl={day.isoformat(): Decimal("-10") for day in days},
+            paid={"2026-08-24": Decimal("15")},
+            pending={"2026-08-25": Decimal("20")},
+            resting_hours={"2026-08-24": 24.5, "2026-08-25": 31.25},
+            today=date(2026, 8, 25),
+            generated_at=datetime(2026, 8, 25, 17, tzinfo=timezone.utc),
+            unbalanced_markets=4,
+            overall_trading=Decimal("-130.65"),
+            account_realized=AccountRealizedToday(Decimal("-44.52"), "ok"),
+        )
+
+        self.assertEqual(payload["headline"], {
+            "today_pnl": "-44.52",
+            "overall_pnl": "-115.65",
+            "overall_trading": "-130.65",
+            "overall_gain": "15",
+            "overall_since_et": "2026-08-14",
+        })
+        self.assertEqual(payload["rows"][0]["net"], "5")
+        self.assertEqual(payload["rows"][0]["net_status"], "finalized")
+        self.assertIsNone(payload["rows"][1]["net"])
+        self.assertEqual(payload["rows"][1]["net_status"], "pending")
+        self.assertEqual(payload["rows"][1]["gain"], "0")
+        self.assertEqual(payload["rows"][1]["pending"], "20")
+        self.assertEqual(payload["rows"][1]["side_hours"], 31.25)
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "dashboard" / "latest.json"
+            write_dashboard_snapshot(cache, payload)
+            self.assertEqual(
+                json.loads(cache.read_text(encoding="utf-8")), payload)
+            self.assertEqual(list(cache.parent.glob(".*.tmp")), [])
+
     def test_historical_account_day_replaces_incomplete_pair_estimate(self):
         connection = sqlite3.connect(self.database)
         connection.executemany(
@@ -264,6 +302,7 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("timeout 90s", wrapper)
         self.assertIn("nice -n 10", wrapper)
         self.assertIn("--days 7 --post-discord --quiet", wrapper)
+        self.assertIn("--dashboard-cache data/tv-gain-snapshot.json", wrapper)
         self.assertNotIn("discord.com/api/webhooks", wrapper)
         self.assertIn("require_rewards_webhook=True", report)
 

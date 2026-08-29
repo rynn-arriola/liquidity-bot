@@ -22,6 +22,25 @@ function metric(value) {
   return value === null || value === undefined ? "—" : String(value);
 }
 
+function numericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function money(value, { signed = false, missing = "—" } = {}) {
+  const number = numericValue(value);
+  if (number === null) return missing;
+  const sign = signed && number >= 0 ? "+" : "";
+  return `$${sign}${number.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function applyMoneyTone(element, value) {
+  const number = numericValue(value);
+  element.classList.remove("positive", "negative", "neutral");
+  element.classList.add(number === null || number === 0 ? "neutral" : (number > 0 ? "positive" : "negative"));
+}
+
 function shortMarket(slug) {
   if (!slug) return "Available capacity";
   const clean = slug.replace(/^aec-/, "");
@@ -90,6 +109,77 @@ function renderActivity(activity) {
   }
 }
 
+function appendMoneyCell(row, value, { signed = false, missing = "—", estimate = false } = {}) {
+  const cell = document.createElement("td");
+  cell.className = "gain-money";
+  cell.textContent = `${estimate && numericValue(value) !== null ? "~" : ""}${money(value, { signed, missing })}`;
+  applyMoneyTone(cell, value);
+  row.append(cell);
+}
+
+function renderGainReport(report) {
+  const todayPnl = byId("today-pnl");
+  const overallPnl = byId("overall-pnl");
+  const body = byId("gain-table-body");
+  body.replaceChildren();
+
+  if (!report || !report.available || !report.headline) {
+    todayPnl.textContent = "—";
+    overallPnl.textContent = "—";
+    applyMoneyTone(todayPnl, null);
+    applyMoneyTone(overallPnl, null);
+    byId("today-pnl-detail").textContent = "Waiting for hourly snapshot";
+    byId("overall-pnl-detail").textContent = "Trading + finalized gain";
+    byId("gain-report-age").textContent = "Unavailable";
+    byId("gain-report-state").textContent = "LOCAL SNAPSHOT NOT YET AVAILABLE";
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.className = "gain-empty";
+    cell.textContent = "Waiting for the first hourly snapshot…";
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+
+  const headline = report.headline;
+  todayPnl.textContent = money(headline.today_pnl, { signed: true });
+  overallPnl.textContent = money(headline.overall_pnl, { signed: true });
+  applyMoneyTone(todayPnl, headline.today_pnl);
+  applyMoneyTone(overallPnl, headline.overall_pnl);
+  byId("today-pnl-detail").textContent = "Account trading · current ET day";
+  byId("overall-pnl-detail").textContent = `Since ${headline.overall_since_et} ET`;
+  byId("gain-report-age").textContent = readableAge(report.age_seconds);
+  const stale = Number(report.age_seconds) > 7200;
+  byId("gain-report-state").textContent = stale ? "SNAPSHOT STALE" : "LOCAL SNAPSHOT READY";
+
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  for (const item of rows) {
+    const row = document.createElement("tr");
+    if (item.current_day) row.className = "current-day";
+    const dateCell = document.createElement("th");
+    dateCell.scope = "row";
+    dateCell.textContent = `${item.date_et}${item.current_day ? " · TODAY" : ""}`;
+    row.append(dateCell);
+    appendMoneyCell(row, item.trading, { signed: true, missing: "Unavailable", estimate: item.trading_estimate });
+    appendMoneyCell(row, item.gain, { missing: "Not posted" });
+    appendMoneyCell(row, item.pending, { missing: "Not posted" });
+    const hours = document.createElement("td");
+    hours.className = "side-hours";
+    hours.textContent = Number.isFinite(Number(item.side_hours)) ? Number(item.side_hours).toFixed(2) : "—";
+    row.append(hours);
+    if (item.net_status === "finalized") {
+      appendMoneyCell(row, item.net, { signed: true });
+    } else {
+      const net = document.createElement("td");
+      net.className = "gain-money pending-net";
+      net.textContent = "Pending";
+      row.append(net);
+    }
+    body.append(row);
+  }
+}
+
 function render(data) {
   lastSnapshot = data;
   lastReceived = Date.now();
@@ -127,6 +217,7 @@ function render(data) {
 
   renderSlots(ledger.slots);
   renderActivity(data.activity);
+  renderGainReport(data.gain_report);
   byId("footer-source").textContent = data.source || "LOCAL READ-ONLY";
   updateObservationAge();
 }

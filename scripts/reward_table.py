@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -41,6 +43,8 @@ from liquidity_bot.cash_activity import (  # noqa: E402
     fetch_nontrading_cash_changes,
 )
 from liquidity_bot.errors import AdapterError  # noqa: E402
+from liquidity_bot.bot_era import BOT_ERA_START_DATE  # noqa: E402
+from liquidity_bot.execution_ledger import ExecutionLedger  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK, reward_day  # noqa: E402
 from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
@@ -334,6 +338,96 @@ def _trading_is_estimate(
             and day_value.isoformat() not in account_history)
 
 
+def _dashboard_money(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value, "f")
+
+
+def build_dashboard_snapshot(
+    days: list[date], *, pnl: dict, paid: dict, pending: dict,
+    resting_hours: dict[str, float], today: date, generated_at: datetime,
+    unbalanced_markets: int,
+    overall_trading: Decimal,
+    account_realized: AccountRealizedToday | None = None,
+    account_history: dict[str, Decimal] | None = None,
+) -> dict[str, Any]:
+    """Build the bounded local file consumed by the zero-API TV dashboard."""
+
+    if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+        raise ValueError("generated_at must be timezone-aware")
+    if len(days) > 7:
+        raise ValueError("the TV dashboard supports at most 7 days")
+
+    rows: list[dict[str, Any]] = []
+    for day_value in days:
+        key = day_value.isoformat()
+        trading = _displayed_trading(
+            day_value, today=today, pnl=pnl,
+            account_realized=account_realized,
+            account_history=account_history)
+        paid_value = paid.get(key)
+        pending_value = pending.get(key)
+        has_gain = paid_value is not None or pending_value is not None
+        gain = paid_value if paid_value is not None else (
+            Decimal(0) if has_gain else None)
+        pending_gain = pending_value if pending_value is not None else (
+            Decimal(0) if has_gain else None)
+        finalized = (
+            trading is not None and paid_value is not None
+            and not pending_value)
+        net = trading + paid_value if finalized else None
+        rows.append({
+            "date_et": key,
+            "current_day": day_value == today,
+            "trading": _dashboard_money(trading),
+            "trading_estimate": _trading_is_estimate(
+                day_value, today=today, account_history=account_history),
+            "gain": _dashboard_money(gain),
+            "pending": _dashboard_money(pending_gain),
+            "side_hours": round(float(resting_hours.get(key, 0.0)), 6),
+            "net": _dashboard_money(net),
+            "net_status": "finalized" if finalized else "pending",
+        })
+    paid_total = sum((Decimal(str(value)) for value in paid.values()), Decimal(0))
+    overall_pnl = overall_trading + paid_total
+    today_row = next((row for row in rows if row["current_day"]), None)
+    return {
+        "schema_version": 1,
+        "generated_at": generated_at.astimezone(timezone.utc).isoformat()
+        .replace("+00:00", "Z"),
+        "time_zone": "America/New_York",
+        "unbalanced_markets": int(unbalanced_markets),
+        "headline": {
+            "today_pnl": today_row["trading"] if today_row else None,
+            "overall_pnl": _dashboard_money(overall_pnl),
+            "overall_trading": _dashboard_money(overall_trading),
+            "overall_gain": _dashboard_money(paid_total),
+            "overall_since_et": BOT_ERA_START_DATE,
+        },
+        "rows": rows,
+    }
+
+
+def write_dashboard_snapshot(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically publish one private local dashboard snapshot."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    encoded = json.dumps(
+        payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(encoded)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def render_table(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
@@ -559,6 +653,9 @@ async def main() -> int:
     parser.add_argument(
         "--quiet", action="store_true",
         help="suppress the table on stdout; requires --post-discord")
+    parser.add_argument(
+        "--dashboard-cache", type=Path,
+        help="atomically publish the seven-day local TV dashboard snapshot")
     args = parser.parse_args()
     if args.days <= 0:
         parser.error("--days must be positive")
@@ -570,6 +667,11 @@ async def main() -> int:
     days = [today - timedelta(days=n)
             for n in range(args.days - 1, -1, -1)]
     pnl, _, unbalanced = trading_by_day(args.db, CLEAN_FROM)
+    ledger = ExecutionLedger.open_read_only(args.db)
+    try:
+        overall_trading = ledger.realized_pnl()
+    finally:
+        ledger.close()
     gateway = AsyncReadOnlyGateway(
         client_from_environment(),
         limiter=AsyncIntervalLimiter.from_rate(ACCOUNT_REPORT_RATE_PER_SECOND),
@@ -600,6 +702,16 @@ async def main() -> int:
         days, pnl=pnl, paid=paid, pending=pending,
         resting_hours=resting, elapsed_hours=elapsed, today=today,
         account_realized=account_realized, account_history=history)
+    if args.dashboard_cache is not None:
+        write_dashboard_snapshot(
+            args.dashboard_cache,
+            build_dashboard_snapshot(
+                days, pnl=pnl, paid=paid, pending=pending,
+                resting_hours=resting, today=today, generated_at=now,
+                unbalanced_markets=unbalanced,
+                overall_trading=overall_trading,
+                account_realized=account_realized,
+                account_history=history))
     if not args.quiet:
         print(table)
         print()

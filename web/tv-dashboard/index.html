@@ -38,6 +38,19 @@
       </div>
     </section>
 
+    <section class="pnl-metrics" aria-label="Profit and loss">
+      <article class="metric-card pnl today-pnl">
+        <p>TODAY P&amp;L</p>
+        <strong id="today-pnl">—</strong>
+        <span id="today-pnl-detail">Waiting for hourly snapshot</span>
+      </article>
+      <article class="metric-card pnl overall-pnl">
+        <p>OVERALL P&amp;L</p>
+        <strong id="overall-pnl">—</strong>
+        <span id="overall-pnl-detail">Trading + finalized gain</span>
+      </article>
+    </section>
+
     <section class="metrics" aria-label="Bot metrics">
       <article class="metric-card orders">
         <p>RESTING ORDERS</p>
@@ -110,6 +123,40 @@
         </section>
       </aside>
     </div>
+
+    <section class="panel gain-table-panel" aria-labelledby="gain-table-title">
+      <div class="panel-heading gain-table-heading">
+        <div>
+          <p class="eyebrow">ET DAILY PERFORMANCE</p>
+          <h2 id="gain-table-title">7-Day Gain Table</h2>
+        </div>
+        <div class="gain-freshness">
+          <span>LATEST HOURLY SNAPSHOT</span>
+          <strong id="gain-report-age">—</strong>
+        </div>
+      </div>
+      <div class="gain-table-scroll">
+        <table class="gain-table">
+          <thead>
+            <tr>
+              <th scope="col">Date ET</th>
+              <th scope="col">Trading</th>
+              <th scope="col">Gain</th>
+              <th scope="col">Pending</th>
+              <th scope="col">Side Hours</th>
+              <th scope="col">Net</th>
+            </tr>
+          </thead>
+          <tbody id="gain-table-body">
+            <tr><td colspan="6" class="gain-empty">Waiting for the first hourly snapshot…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="gain-table-note">
+        <span id="gain-report-state">LOCAL SNAPSHOT NOT YET AVAILABLE</span>
+        <span>Pending is shown but never included in Net.</span>
+      </div>
+    </section>
 
     <footer>
       <span id="footer-source">LOCAL READ-ONLY · ZERO VENUE API CALLS</span>

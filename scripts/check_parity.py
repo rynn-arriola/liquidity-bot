@@ -94,7 +94,7 @@ def load_runtime_config(path: Path = LOCAL_RUNTIME_CONFIG) -> dict[str, str] | N
         raise ParityUnavailable(f"invalid runtime config {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ParityUnavailable(f"invalid runtime config {path}: expected object")
-    allowed = {"host", "wsl_distro", "wsl_repo", "source_role"}
+    allowed = {"host", "windows_repo", "wsl_distro", "wsl_repo", "source_role"}
     unknown = set(payload) - allowed
     if unknown:
         raise ParityUnavailable(
@@ -102,6 +102,7 @@ def load_runtime_config(path: Path = LOCAL_RUNTIME_CONFIG) -> dict[str, str] | N
         )
     values = {
         "host": payload.get("host", ""),
+        "windows_repo": payload.get("windows_repo", ""),
         "wsl_distro": payload.get("wsl_distro", "Ubuntu-24.04"),
         "wsl_repo": payload.get("wsl_repo", "/home/polybot/liquidity-bot"),
         "source_role": payload.get("source_role", "ACTIVE-LAPTOP"),
@@ -110,9 +111,12 @@ def load_runtime_config(path: Path = LOCAL_RUNTIME_CONFIG) -> dict[str, str] | N
         raise ParityUnavailable(
             f"invalid runtime config {path}: every value must be a string"
         )
-    if not values["wsl_distro"].strip() or not values["wsl_repo"].strip():
+    if not all(
+        values[field].strip()
+        for field in ("windows_repo", "wsl_distro", "wsl_repo")
+    ):
         raise ParityUnavailable(
-            f"invalid runtime config {path}: distro and WSL repo are required"
+            f"invalid runtime config {path}: Windows repo, distro and WSL repo are required"
         )
     return {key: value.strip() for key, value in values.items()}
 
@@ -444,7 +448,7 @@ def _runtime_inspection_script(config: Mapping[str, str], *, fetch: bool) -> str
     distro = _powershell_literal(config["wsl_distro"])
     repo = _powershell_literal(config["wsl_repo"])
     fetch_row = (
-        "Invoke-Wsl @('timeout','45s','git','-C',$runtimeRepo,'fetch','--quiet','origin','main')"
+        "Invoke-Wsl @('timeout','45s','git','-C',$runtimeRepo,'fetch','--quiet',$verifiedWindowsRepo,'main:refs/remotes/origin/main')"
         if fetch
         else ""
     )
@@ -454,6 +458,10 @@ def _runtime_inspection_script(config: Mapping[str, str], *, fetch: bool) -> str
             "$ProgressPreference = 'SilentlyContinue'",
             f"$runtimeDistro = {distro}",
             f"$runtimeRepo = {repo}",
+            f"$windowsRepo = {_powershell_literal(config['windows_repo'])}",
+            "$drive = $windowsRepo.Substring(0,1).ToLowerInvariant()",
+            "$tail = $windowsRepo.Substring(2).Replace('\\','/')",
+            "$verifiedWindowsRepo = '/mnt/' + $drive + $tail",
             "function Invoke-Wsl([string[]]$CommandArgs) {",
             "  $value = & wsl.exe -d $runtimeDistro -- @CommandArgs 2>&1",
             "  if ($LASTEXITCODE -ne 0) { throw (($value | Out-String).Trim()) }",

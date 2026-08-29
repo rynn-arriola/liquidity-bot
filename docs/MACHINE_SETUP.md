@@ -179,6 +179,7 @@ desktop use the key-authenticated laptop SSH alias:
 ```json
 {
   "host": "poly-laptop",
+  "windows_repo": "C:\\Users\\rynna\\OneDrive\\Documents\\Bots\\liquidity-bot",
   "wsl_distro": "Ubuntu-24.04",
   "wsl_repo": "/home/polybot/liquidity-bot",
   "source_role": "ACTIVE-LAPTOP"

@@ -103,6 +103,7 @@ class CheckParityTests(unittest.TestCase):
                 json.dumps(
                     {
                         "host": "poly-laptop",
+                        "windows_repo": r"C:\Users\operator\liquidity-bot",
                         "wsl_distro": "Ubuntu-24.04",
                         "wsl_repo": "/home/polybot/liquidity-bot",
                         "source_role": "ACTIVE-LAPTOP",
@@ -137,6 +138,7 @@ class CheckParityTests(unittest.TestCase):
     def test_offline_runtime_is_pending_but_bad_evidence_is_a_failure(self):
         config = {
             "host": "poly-laptop",
+            "windows_repo": r"C:\Users\operator\liquidity-bot",
             "wsl_distro": "Ubuntu-24.04",
             "wsl_repo": "/home/polybot/liquidity-bot",
             "source_role": "ACTIVE-LAPTOP",
@@ -154,19 +156,23 @@ class CheckParityTests(unittest.TestCase):
             with self.assertRaises(check_parity.ParityUnavailable):
                 check_parity._runtime_state(config, fetch=False)
 
-    def test_wsl_github_fetch_is_bounded(self):
+    def test_wsl_fetch_from_verified_windows_checkout_is_bounded(self):
         config = {
             "host": "poly-laptop",
+            "windows_repo": r"C:\Users\operator\liquidity-bot",
             "wsl_distro": "Ubuntu-24.04",
             "wsl_repo": "/home/polybot/liquidity-bot",
             "source_role": "ACTIVE-LAPTOP",
         }
         script = check_parity._runtime_inspection_script(config, fetch=True)
         self.assertIn("@('timeout','45s','git'", script)
+        self.assertIn("$verifiedWindowsRepo", script)
+        self.assertNotIn("'origin','main'", script)
 
     def test_existing_peer_snapshot_is_transferred_without_recapture(self):
         config = {
             "host": "poly-laptop",
+            "windows_repo": r"C:\Users\operator\liquidity-bot",
             "wsl_distro": "Ubuntu-24.04",
             "wsl_repo": "/home/polybot/liquidity-bot",
             "source_role": "ACTIVE-LAPTOP",

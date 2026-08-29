@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Sequence
+import uuid
 
 
 DATABASE_NAME = "commissioning-latest.db"
@@ -106,7 +107,7 @@ def create_snapshot(
 
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="ledger-parity-", dir=output_dir) as raw:
+    with tempfile.TemporaryDirectory(prefix="ledger-parity-") as raw:
         temporary = Path(raw)
         database = temporary / DATABASE_NAME
         source_uri = source_path.as_uri() + "?mode=ro"
@@ -148,8 +149,17 @@ def create_snapshot(
             encoding="utf-8",
         )
 
-        os.replace(database, output_dir / DATABASE_NAME)
-        os.replace(manifest_path, output_dir / MANIFEST_NAME)
+        token = uuid.uuid4().hex
+        staged_database = output_dir / f".{DATABASE_NAME}.{token}.tmp"
+        staged_manifest = output_dir / f".{MANIFEST_NAME}.{token}.tmp"
+        try:
+            shutil.copy2(database, staged_database)
+            shutil.copy2(manifest_path, staged_manifest)
+            os.replace(staged_database, output_dir / DATABASE_NAME)
+            os.replace(staged_manifest, output_dir / MANIFEST_NAME)
+        finally:
+            staged_database.unlink(missing_ok=True)
+            staged_manifest.unlink(missing_ok=True)
     return verify_snapshot(output_dir)
 
 

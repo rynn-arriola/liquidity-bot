@@ -56,6 +56,10 @@ class RuntimeParitySnapshotTests(unittest.TestCase):
                 )
             finally:
                 copied.close()
+            self.assertEqual(
+                sorted(path.name for path in output.iterdir()),
+                [runtime_snapshot.DATABASE_NAME, runtime_snapshot.MANIFEST_NAME],
+            )
 
     def test_verify_rejects_database_tampering(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -155,6 +155,17 @@ completed with zero failures and zero 429s. This bounds the observed incident
 to a transient restart/rolling window; it does not erase the failed window or
 prove that another restart will be clean.
 
+A natural router outage on 2026-08-29 supplied the first deployed network-loss
+window. DNS failures and timeouts disconnected public/private streams from
+about 17:48Z; the runner quarantined new risk and reconciled/canceled until an
+18:01Z authenticated snapshot proved zero positions and zero resting orders.
+The 735.6-second telemetry window recorded 380 attempts, 40 transport failures,
+zero 429s, response p95/p99/max `10.013/10.016/15.004s` and maximum limiter
+queue depth one. After connectivity returned, the same PID committed a fresh
+20-market top-up at 18:01:55Z and resumed placements at 18:02:18Z without a
+restart. This accepts safe flat recovery from one outage; it is not evidence
+that every network-loss duration or in-flight mutation outcome is harmless.
+
 The offline capacity model deliberately uses more conservative mutation input
 than that action-line rate and preserves 25% of the internal 4/s governor:
 

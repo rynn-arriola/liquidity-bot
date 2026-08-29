@@ -72,8 +72,8 @@ The laptop remains the sole stopped owner; the desktop is an inactive manual
 backup. Any handoff requires stop, venue proof and a verified ledger snapshot.
 
 Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects
-the desktop with full handoff. `Run parity` checks reachable clean workstations
-and adds encrypted Drive recovery; packaging/readback remains open.
+the desktop with full handoff. Peer parity passed PC/laptop/GitHub on `20ee039f`;
+encrypted Drive packaging/connector readback remains open.
 
 ## Current records
 

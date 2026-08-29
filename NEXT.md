@@ -50,8 +50,8 @@ Every parity run must add a versioned encrypted archive to `Liquidity Bot
 Private Recovery`, whether one or both computers are online. Finish the safe
 SQLite packager, source/role/time/commit/hash/integrity manifest, client-side
 encryption and connector readback; exclude SSH keys and never overwrite the
-only copy. Test one-online and both-online flows. Until then report Drive
-pending instead of uploading raw or unencrypted data.
+only copy. Peer git sync already passed both-online on `20ee039f`; test Drive's
+one-online/both-online flows. Until then report Drive pending, never raw data.
 
 ## 2. Remaining natural acceptance
 The latest stopped runner loaded `31f815c`. Continue accepting these paths

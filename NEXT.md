@@ -9,10 +9,10 @@ The bot is stopped after authenticated recovery proved zero working orders and
 the authoritative ledger snapshot proved zero nonzero positions. Commit
 `31f815c` is pushed and deployed; all 13 hashes matched and all 776 local/server
 tests passed. On 2026-08-29 00:07Z the laptop independently authenticated and
-again found zero working orders/positions. Do not restart the current server or
-either workstation without a new operator instruction.
+again found zero working orders/positions. The operator then destroyed the old
+server. Do not start either workstation without a new operator instruction.
 
-The authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
+The former server's authorized 22:56Z start repaired all 20 legacy intents. Three entry probes
 received the same VPN/proxy 403 while later slots backed off locally; 20 owners,
 zero unresolved/retired and zero positions/orders proved containment. The
 normal stop completed flat in about 30 seconds. Do not induce more probes.
@@ -27,16 +27,14 @@ Laptop parity, the Ubuntu 24.04 WSL2 runtime, dependencies, AC/network preflight
 direct verified execution/scalp/recovery/diagnostic pull, credential loading,
 SQLite integrity/hashes and all 776 tests now pass. The active copies live in
 WSL rather than OneDrive. Four matching systemd report/backup timers are
-installed but disabled.
+installed and enabled; no trading service is installed or enabled.
 
 Before laptop activation:
 
-1. regain SSH access, disable the preserved server crontab and enable/verify the
-   four laptop timers; never run both schedule sets together;
-2. prove the desktop runner absent and make the laptop the sole writable
-   ledger/API owner (the current server and laptop runners are already absent,
-   and the 00:07Z account snapshot was flat/order-free); and
-3. start only after the operator explicitly authorizes it, then observe the
+1. prove the desktop runner absent and make the laptop the sole writable
+   ledger/API owner (the former server is destroyed, the laptop runner is
+   absent and the 00:07Z account snapshot was flat/order-free); and
+2. start only after the operator explicitly authorizes it, then observe the
    startup, 20-slot state, orders, streams and errors.
 
 Never use GitHub or a general file-sync service for the live SQLite database or

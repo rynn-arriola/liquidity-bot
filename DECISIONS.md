@@ -19,7 +19,7 @@ show the operator the discrepancy.
 
 | Choice | Decision in force |
 |---|---|
-| Production runtime | Trading is disabled on the current server after repeated Polymarket VPN/proxy 403s. The laptop is the selected next primary runtime and the desktop is its cold standby, but neither may start until the credential-safe ledger migration, parity and compliant-access preflight are complete and the operator explicitly authorizes the start |
+| Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The laptop is the selected next primary runtime and the desktop is its cold standby, but neither may start until the credential-safe single-owner handoff is complete and the operator explicitly authorizes the start |
 | Quote size | 10 contracts live; whole values 5-30 may be configured, but no non-10 size activates without an explicit safe restart decision |
 | Concurrent market capacity | 20 slots |
 | Entry horizon | Six hours before the modeled pregame boundary |

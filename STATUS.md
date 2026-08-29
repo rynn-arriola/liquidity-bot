@@ -4,8 +4,10 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **Verified:** 2026-08-28 20:11 ET / 2026-08-29 00:11 UTC
-- **Liquidity bot:** STOPPED; supervisor and runner are absent
+- **Verified:** 2026-08-28 20:15 ET / 2026-08-29 00:15 UTC
+- **Liquidity bot:** STOPPED; laptop supervisor and runner are absent
+- **Former server:** destroyed by the operator; it cannot run the bot, retain
+  credentials or execute its old crontab
 - **Stop proof:** 23:00Z authenticated dashboard found zero positions/orders;
   the 23:01Z graceful-stop record ended `flat=true`
 - **Stop method:** normal SIGTERM completed in about 30 seconds; no force used
@@ -23,6 +25,8 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   egress with no active VPN adapter observed; Retail health returned 200/OK;
   AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum
   performance
+- **Laptop schedules:** four read-only backup/report systemd timers are enabled;
+  no trading service is installed or enabled
 - **Recovery copy on desktop:** the 23:21Z execution ledger passed integrity
   (`31,038` orders, `2,642` fills, 139.1 MB); the 23:38Z scalp database passed
   integrity with all nine tables (1.35 GB); restricted credentials, the 352-file
@@ -36,7 +40,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 | Setting | Current decision |
 |---|---|
-| Production runtime | Current server stopped/disabled; laptop selected as the next primary but not started; desktop is cold standby |
+| Production runtime | Former server destroyed; laptop selected as the next primary but not started; desktop is cold standby |
 | Quote size | 10 contracts |
 | Concurrent capacity | 20 market slots |
 | Entry horizon | Six hours |
@@ -64,16 +68,12 @@ signals. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
 
 ## Current operating instruction
 
-Keep trading disabled on this server; no manual restart. The laptop is the
-selected next primary and the desktop its cold standby, but no local runner is
-authorized yet. Laptop parity, direct verified execution/scalp/recovery pulls,
-Linux runtime, tests, account read and home-network/power preflight pass. Four
-replacement laptop report/backup timers are installed but disabled: SSH became
-unreachable before the preserved server crontab could be disabled, so enabling
-both copies would duplicate work. Before an explicit start, complete that
-schedule handoff, prove the desktop runner absent and make the laptop the sole
-writable ledger/API owner. Do not use a residential proxy or run both machines
-at once.
+The former server is destroyed. The laptop is selected next primary and the
+desktop its cold standby, but no local runner is authorized yet. Laptop parity,
+direct recovery pulls, runtime/tests, authenticated flat account read,
+home-network/power preflight and schedule migration pass. Before an explicit
+start, prove the desktop runner absent and make the laptop the sole writable
+ledger/API owner. Do not use a proxy or run both machines at once.
 
 ## Current records
 

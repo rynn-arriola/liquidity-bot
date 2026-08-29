@@ -66,7 +66,9 @@ def _deployed_commit(repo: Path) -> str | None:
 def inspect_database(path: Path) -> dict[str, object]:
     if not path.is_file():
         raise RuntimeSnapshotError(f"SQLite snapshot is missing: {path}")
-    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    connection = sqlite3.connect(
+        path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True
+    )
     try:
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         tables = [
@@ -87,6 +89,11 @@ def inspect_database(path: Path) -> dict[str, object]:
         "integrity": integrity,
         "tables": tables,
     }
+
+
+def _remove_snapshot_sidecars(directory: Path) -> None:
+    for suffix in ("-wal", "-shm", "-journal"):
+        (directory / f"{DATABASE_NAME}{suffix}").unlink(missing_ok=True)
 
 
 def create_snapshot(
@@ -157,6 +164,7 @@ def create_snapshot(
             shutil.copy2(manifest_path, staged_manifest)
             os.replace(staged_database, output_dir / DATABASE_NAME)
             os.replace(staged_manifest, output_dir / MANIFEST_NAME)
+            _remove_snapshot_sidecars(output_dir)
         finally:
             staged_database.unlink(missing_ok=True)
             staged_manifest.unlink(missing_ok=True)
@@ -198,6 +206,7 @@ def install_snapshot(source_dir: Path, output_dir: Path) -> dict[str, object]:
         verify_snapshot(temporary)
         os.replace(temporary / DATABASE_NAME, output_dir / DATABASE_NAME)
         os.replace(temporary / MANIFEST_NAME, output_dir / MANIFEST_NAME)
+        _remove_snapshot_sidecars(output_dir)
     verify_snapshot(output_dir)
     return manifest
 

@@ -78,6 +78,11 @@ class RuntimeParitySnapshotTests(unittest.TestCase):
             source = root / "source"
             destination = root / "destination"
             runtime_snapshot.create_snapshot(self._repo_with_ledger(root), source)
+            destination.mkdir()
+            for suffix in ("-wal", "-shm", "-journal"):
+                (destination / f"{runtime_snapshot.DATABASE_NAME}{suffix}").write_bytes(
+                    b"stale-sidecar"
+                )
 
             installed = runtime_snapshot.install_snapshot(source, destination)
 
@@ -91,6 +96,12 @@ class RuntimeParitySnapshotTests(unittest.TestCase):
                 )
             )
             self.assertEqual(parsed["source"], "data/commissioning.db")
+            self.assertFalse(
+                any(
+                    (destination / f"{runtime_snapshot.DATABASE_NAME}{suffix}").exists()
+                    for suffix in ("-wal", "-shm", "-journal")
+                )
+            )
 
     def test_source_must_remain_inside_repository(self):
         with tempfile.TemporaryDirectory() as directory:

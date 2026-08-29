@@ -165,6 +165,12 @@ queue depth one. After connectivity returned, the same PID committed a fresh
 20-market top-up at 18:01:55Z and resumed placements at 18:02:18Z without a
 restart. This accepts safe flat recovery from one outage; it is not evidence
 that every network-loss duration or in-flight mutation outcome is harmless.
+The subsequent 20-slot rebuild produced a clean 73.0-second burst of 208
+attempts (`2.849/s`: 180 reads and 28 creates), with zero failures/429s and
+maximum limiter queue depth one. The following 80.1-second ordinary window
+returned to 150 attempts (`1.873/s`) with zero failures/429s. Thus recovery can
+approach the project's 3/s comfort budget even when steady state remains well
+below it; canary decisions must include recovery bursts, not only quiet means.
 
 The offline capacity model deliberately uses more conservative mutation input
 than that action-line rate and preserves 25% of the internal 4/s governor:

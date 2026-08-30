@@ -119,3 +119,11 @@ rows and no risk stop. No API backpressure, JSON-state, mutation-quarantine,
 traceback or runtime error appeared. Natural acceptance of a real shared
 cooldown remains open; it must prove the nonzero governing lane and bounded
 single-event behavior without inducing a venue fault.
+
+A later 19:35:37Z window reported `cooldown_background=2.7`,
+`cooldown_entry=0.0`, `cooldown_safety=0.0`, `shared=1` and local
+`rate_limited=0`. The deadline cleared by the next window and both windows had
+zero failures. This accepts merged governing-lane visibility and isolation of
+entry/safety from a background deadline. It does not identify the publishing
+cooperating process or accept the deferred-selection behavior because no
+`[api-backpressure]` event occurred.

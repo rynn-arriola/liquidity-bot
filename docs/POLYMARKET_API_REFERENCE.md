@@ -242,6 +242,16 @@ this coordinator. No local implementation can guarantee that Cloudflare will
 never emit the first 429, but cooperating laptop workloads now stop multiplying
 the request budget and all observe the same response.
 
+The first `0ff6e3c6` live acceptance supplied an important observability check.
+At 19:35:37Z the runner reported `cooldown_background=2.7` and `shared=1`
+beside process-local `rate_limited=0`; entry and safety cooldowns remained zero,
+and the next window showed all lanes back at zero with no failures. The line
+therefore proved that a governing shared background deadline is visible without
+inventing a local 429 or blocking safety traffic. The aggregate line cannot by
+itself attribute which cooperating process published that deadline, and no
+selection deferral occurred, so natural acceptance of the one-event
+`[api-backpressure]` path remains open.
+
 The flat-gated 2026-08-30 `859b891` restart supplied that second clean restart
 sample. Its first 152.0 seconds made 416 attempts (`370` reads, `46` mutations,
 `2.736/s`) with zero failures and zero 429s; wait p99 was `0.223s`, response p99

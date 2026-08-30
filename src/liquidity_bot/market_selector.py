@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Iterable
 
 from .adapters import AsyncReadOnlyGateway
-from .errors import AdapterError
+from .errors import AdapterError, ApiAdmissionDeferred
 from .fill_hazard import (
     MondayFillHazardModel,
     historical_reward_yield_prior,
@@ -509,6 +509,12 @@ class RewardMarketSelector:
                     policy=self.policy,
                     fill_hazard_model=self.fill_hazard_model,
                 ))
+            except ApiAdmissionDeferred:
+                # Host backpressure is one scan-level outcome, not one broken
+                # market per remaining candidate. Stop immediately so the
+                # caller can honor the shared cooldown without inflating the
+                # operator-facing selection-failure count.
+                raise
             except (AdapterError, ValueError) as exc:
                 failures.append(f"{market.slug}:book:{type(exc).__name__}")
 
@@ -599,6 +605,12 @@ class RewardMarketSelector:
                     policy=self.policy,
                     fill_hazard_model=self.fill_hazard_model,
                 )
+            except ApiAdmissionDeferred:
+                # A local admission decline says nothing about this market's
+                # viability. Preserve the cached selection and let the runner
+                # retry after the shared cooldown instead of silently treating
+                # this and every later candidate as nonviable.
+                raise
             except (AdapterError, AmbiguousIncentiveError, ValueError):
                 continue
             if opportunity.viable_sides:

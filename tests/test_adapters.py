@@ -411,6 +411,70 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(entry_delay, 0.0)
             self.assertEqual(entry_cooldown, 0.0)
 
+    def test_shared_telemetry_reports_a_peer_process_cooldown(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            publisher = AsyncIntervalLimiter(shared_state_path=state)
+            observer = AsyncIntervalLimiter(shared_state_path=state)
+            self.run_async(publisher.record_result(
+                duration_seconds=0.1, status_code=429, failed=True,
+                retry_after_seconds=30.0, traffic_class="background"))
+
+            local_only = observer.telemetry()
+            shared = self.run_async(observer.shared_telemetry())
+
+            self.assertEqual(
+                local_only.background_cooldown_remaining_seconds, 0.0)
+            self.assertGreater(
+                shared.background_cooldown_remaining_seconds, 25.0)
+            self.assertEqual(shared.entry_cooldown_remaining_seconds, 0.0)
+            self.assertEqual(shared.safety_cooldown_remaining_seconds, 0.0)
+            self.assertEqual(shared.rate_limited_responses, 0)
+
+    def test_shared_telemetry_reads_state_off_the_event_loop(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            limiter = AsyncIntervalLimiter(
+                shared_state_path=Path(directory) / "api-rate-limiter.state")
+            event_loop_thread = threading.get_ident()
+            worker_threads = []
+
+            def read_cooldowns():
+                worker_threads.append(threading.get_ident())
+                return {"background": 4.0}
+
+            with patch.object(
+                    limiter, "_read_shared_cooldowns",
+                    side_effect=read_cooldowns):
+                evidence = self.run_async(limiter.shared_telemetry())
+
+            self.assertEqual(len(worker_threads), 1)
+            self.assertNotEqual(worker_threads[0], event_loop_thread)
+            self.assertEqual(
+                evidence.background_cooldown_remaining_seconds, 4.0)
+
+    def test_shared_telemetry_file_failure_is_reporting_only(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            limiter = AsyncIntervalLimiter(
+                shared_state_path=Path(directory) / "api-rate-limiter.state")
+            with patch.object(
+                    limiter, "_read_shared_cooldowns",
+                    side_effect=OSError("temporary evidence read failure")):
+                evidence = self.run_async(limiter.shared_telemetry())
+
+            self.assertEqual(evidence.cooldown_remaining_seconds, 0.0)
+
     def test_background_429_does_not_cool_safety_or_entry(self):
         limiter = AsyncIntervalLimiter()
 

@@ -472,7 +472,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         output = io.StringIO()
 
         with patch("sys.stdout", output):
-            runner._log_api_budget(NOW)
+            await runner._log_api_budget(NOW)
 
         self.assertEqual(client.markets.book_calls, 0)
         self.assertIn("[api-budget]", output.getvalue())
@@ -480,6 +480,30 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("categories=market_book:1", output.getvalue())
         self.assertNotIn("secret-market-slug", output.getvalue())
         self.assertEqual(limiter.telemetry().attempts, 0)
+
+    async def test_preflight_waits_for_local_api_backpressure_without_alert(self):
+        runner, _, _ = self.build_runner()
+        deferred = ApiAdmissionDeferred(
+            "background API cooldown active; request not sent",
+            operation="markets.list(page)",
+            error_code="LOCAL_API_COOLDOWN",
+            retry_after_seconds=30.0,
+        )
+        runner.preflight = AsyncMock(side_effect=[deferred, "LIVE"])
+        runner._release_partial_startup = AsyncMock()
+        runner._report_runtime_error = AsyncMock()
+        runner.sleep = AsyncMock()
+
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            mode = await runner.preflight_until_ready()
+
+        self.assertEqual(mode, "LIVE")
+        runner._release_partial_startup.assert_awaited_once()
+        runner.sleep.assert_awaited_once_with(30.0)
+        runner._report_runtime_error.assert_not_awaited()
+        self.assertIn("component=startup", output.getvalue())
+        self.assertIn("requests_sent=0", output.getvalue())
 
     async def test_runner_pnl_cache_is_written_only_to_the_test_sandbox(self):
         runner, _, _ = self.build_runner()
@@ -9318,6 +9342,47 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("selection_source=cached_revalidated", text)
         self.assertIn("post_flat_wait_seconds=", text)
         self.assertIn("post_flat_underfilled_slot_minutes=", text)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_cached_revalidation_backpressure_does_not_fallback_to_scan(self):
+        runner = await self.armed()
+        now = runner._now()
+        cached = multi_selection("market-three", "market-four")
+
+        class DeferredSelector:
+            def __init__(self):
+                self.select_calls = 0
+                self.revalidate_calls = 0
+
+            async def select(self, *, now):
+                self.select_calls += 1
+                return cached
+
+            async def revalidate_viable(self, slugs, *, now):
+                self.revalidate_calls += 1
+                raise ApiAdmissionDeferred(
+                    "entry API cooldown active; request not sent",
+                    operation="markets.book(market-three)",
+                    error_code="LOCAL_API_COOLDOWN",
+                    retry_after_seconds=30.0,
+                )
+
+        selector = DeferredSelector()
+        runner.reward_selector = selector
+        runner._market_selection = cached
+        runner._market_selection_observed_at = now - timedelta(seconds=60)
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner._replacement_candidates_for_top_up(
+                now,
+                exclude=set(),
+                wanted=1,
+                allow_cached_selection=True,
+            )
+
+        self.assertEqual(selector.revalidate_calls, 1)
+        self.assertEqual(selector.select_calls, 0)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

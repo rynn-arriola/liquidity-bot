@@ -1598,6 +1598,21 @@ class CommissioningRunner:
                 mode = await self.preflight()
                 self._runtime_error_counts.pop("startup_unavailable", None)
                 return mode
+            except ApiAdmissionDeferred as exc:
+                # A cooperating process published a host cooldown before this
+                # read crossed the network boundary. Startup is still flat and
+                # safe: discard partial bindings, wait once, and re-prove the
+                # complete preflight without consuming an outage/error budget.
+                attempt = 0
+                venue_failure_streak = 0
+                await self._release_partial_startup()
+                if self._stop_requested:
+                    raise CommissioningRefused(
+                        "operator stopped during API admission backpressure"
+                    ) from exc
+                delay = self._api_admission_delay(exc)
+                self._log_api_backpressure("startup", delay)
+                await self.sleep(delay)
             except AdapterError as exc:
                 # Do not let maintenance consume the supervisor's three-fast-
                 # crash allowance.  Only positively identified transport/5xx
@@ -3503,13 +3518,17 @@ class CommissioningRunner:
                 continue
         return waiting
 
-    def _log_api_budget(self, now: datetime) -> None:
-        """Emit only local limiter evidence; never make a diagnostic request."""
+    async def _log_api_budget(self, now: datetime) -> None:
+        """Emit limiter evidence without making a diagnostic API request."""
 
-        read = getattr(self.gateway.limiter, "telemetry", None)
-        if not callable(read):
-            return
-        evidence = read(reset=True)
+        read = getattr(self.gateway.limiter, "shared_telemetry", None)
+        if callable(read):
+            evidence = await read(reset=True)
+        else:
+            read = getattr(self.gateway.limiter, "telemetry", None)
+            if not callable(read):
+                return
+            evidence = read(reset=True)
         categories = ",".join(
             f"{name}:{count}"
             for name, count in evidence.attempts_by_category
@@ -5170,6 +5189,11 @@ class CommissioningRunner:
                     try:
                         refreshed = await revalidate(
                             candidates, now=self._now())
+                    except ApiAdmissionDeferred:
+                        # Backpressure is not evidence that the cache failed.
+                        # Do not immediately replace bounded entry revalidation
+                        # with a much larger background discovery scan.
+                        raise
                     except Exception as exc:
                         print(
                             f"[top-up-cache] at={self._now().isoformat()} "
@@ -6221,6 +6245,27 @@ class CommissioningRunner:
         attempt = max(1, self._runtime_error_counts.get(component, 1))
         return min(base * (2 ** min(attempt - 1, 5)), cap)
 
+    @staticmethod
+    def _api_admission_delay(exc: ApiAdmissionDeferred) -> float:
+        """Clamp an untrusted shared-cooldown hint to one bounded retry wait."""
+
+        try:
+            delay = float(exc.retry_after_seconds or 1.0)
+        except (TypeError, ValueError, OverflowError):
+            delay = 1.0
+        if not math.isfinite(delay):
+            delay = 1.0
+        return min(max(delay, 1.0), 60.0)
+
+    def _log_api_backpressure(self, component: str, delay: float) -> None:
+        """Record designed local deferral without calling it a venue error."""
+
+        print(
+            f"[api-backpressure] at={self._now().isoformat()} "
+            f"component={component} delay={delay:.1f}s requests_sent=0",
+            flush=True,
+        )
+
     def _is_retired(self, slug: str) -> bool:
         """True while a retired market's position is still being worked."""
 
@@ -6538,14 +6583,9 @@ class CommissioningRunner:
             # FAILED row during one shared cooldown. Reporting or quarantining
             # here would turn harmless backpressure into order churn.
             if exc.error_code != "LOCAL_API_INTERRUPTED":
-                try:
-                    delay = float(exc.retry_after_seconds or 1.0)
-                except (TypeError, ValueError, OverflowError):
-                    delay = 1.0
-                if not math.isfinite(delay):
-                    delay = 1.0
+                delay = self._api_admission_delay(exc)
                 deferred_until = self._now() + timedelta(
-                    seconds=min(max(delay, 1.0), 60.0))
+                    seconds=delay)
                 if (self._entry_mutation_blocked_until is None
                         or self._entry_mutation_blocked_until < deferred_until):
                     self._entry_mutation_blocked_until = deferred_until
@@ -7075,7 +7115,7 @@ class CommissioningRunner:
                     break
                 now = self._now()
                 if now >= next_api_budget_log:
-                    self._log_api_budget(now)
+                    await self._log_api_budget(now)
                     next_api_budget_log = now + timedelta(
                         seconds=API_BUDGET_LOG_SECONDS)
                 if now >= next_balance:
@@ -7223,6 +7263,12 @@ class CommissioningRunner:
                             consumed_post_flat_at)
                         next_selection = self._now() + timedelta(
                             seconds=self.config.market_selection_refresh_seconds)
+                    except ApiAdmissionDeferred as exc:
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
+                        delay = self._api_admission_delay(exc)
+                        self._log_api_backpressure("market_top_up", delay)
+                        next_selection = self._now() + timedelta(seconds=delay)
                     except Exception as exc:
                         self._clear_incremental_top_up_requests(
                             consumed_post_flat_at)
@@ -7262,6 +7308,11 @@ class CommissioningRunner:
                             "reward_market_selection_terminal", invariant)
                         stop_reason = f"critical:{invariant.code}"
                         break
+                    except ApiAdmissionDeferred as exc:
+                        delay = self._api_admission_delay(exc)
+                        self._log_api_backpressure(
+                            "reward_market_selection", delay)
+                        next_selection = self._now() + timedelta(seconds=delay)
                     except Exception as exc:
                         await self._report_runtime_error(
                             "reward_market_selection", exc)

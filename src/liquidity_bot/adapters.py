@@ -726,6 +726,50 @@ class AsyncIntervalLimiter:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    def _read_shared_cooldowns(self) -> dict[str, float]:
+        """Return bounded host cooldowns without mutating shared state.
+
+        This performs file IO and locking, so callers must run it in a worker.
+        A missing state file simply means no peer has published a cooldown yet.
+        """
+
+        path = self.shared_state_path
+        if path is None or fcntl is None or not path.is_file():
+            return {}
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                # Telemetry is evidence-only and must never queue trading
+                # behind a wedged diagnostic lock. The next 60-second window
+                # can report the peer deadline if this instant is contended.
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                try:
+                    state = self._read_shared_state(handle)
+                    now = time.time()
+                    return {
+                        traffic_class: max(
+                            0.0,
+                            self._shared_timestamp(
+                                state.get(
+                                    self._lane_cooldown_name(traffic_class),
+                                    0.0,
+                                ),
+                                now,
+                                maximum_future_seconds=(
+                                    self.RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS
+                                    if traffic_class == "safety" else
+                                    self.RATE_LIMIT_MAX_COOLDOWN_SECONDS
+                                ),
+                            ) - now,
+                        )
+                        for traffic_class in ("background", "entry", "safety")
+                    }
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            # Another process may rotate/remove an unused state file between
+            # the existence check and open. Admission will recreate it safely.
+            return {}
+
     async def wait(
         self, *, operation: str = "", request_kind: str = "read",
         traffic_class: str | None = None,
@@ -887,8 +931,11 @@ class AsyncIntervalLimiter:
                     chosen_class,
                 )
 
-    def telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
-        """Return local limiter evidence without making an API request."""
+    def _telemetry(
+        self, *, reset: bool,
+        shared_cooldowns: Mapping[str, float],
+    ) -> LimiterTelemetry:
+        """Build one evidence window, merging any worker-read host state."""
 
         now = time.monotonic()
         elapsed = max(0.0, now - self._telemetry_started_at)
@@ -896,7 +943,10 @@ class AsyncIntervalLimiter:
         responses = tuple(self._response_samples)
         class_cooldowns = {
             traffic_class: max(
-                0.0, deadline - now)
+                0.0,
+                deadline - now,
+                float(shared_cooldowns.get(traffic_class, 0.0)),
+            )
             for traffic_class, deadline in self._cooldown_until_by_class.items()
         }
         result = LimiterTelemetry(
@@ -941,6 +991,27 @@ class AsyncIntervalLimiter:
             self._response_samples.clear()
             self._max_waiting = self._waiting
         return result
+
+    def telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
+        """Return process-local limiter evidence without file or API IO."""
+
+        return self._telemetry(reset=reset, shared_cooldowns={})
+
+    async def shared_telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
+        """Return local evidence plus host cooldowns, reading off the loop."""
+
+        shared_cooldowns: Mapping[str, float] = {}
+        if self.shared_state_path is not None:
+            try:
+                shared_cooldowns = await asyncio.to_thread(
+                    self._read_shared_cooldowns)
+            except OSError:
+                # Reporting is operational evidence, never trading authority.
+                # Admission still fails normally if its required file access
+                # later fails; an evidence read must not stop the runner.
+                shared_cooldowns = {}
+        return self._telemetry(
+            reset=reset, shared_cooldowns=shared_cooldowns)
 
 
 def shared_api_limiter(

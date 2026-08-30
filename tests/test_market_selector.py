@@ -4,6 +4,7 @@ import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
 from liquidity_bot.fill_hazard import FillHazardEstimate
 from liquidity_bot.market_selector import (
     RewardMarketSelector,
@@ -125,7 +126,10 @@ class FakeGateway:
 
     async def fetch_book(self, slug):
         self.book_calls.append(slug)
-        return self.books[slug]
+        value = self.books[slug]
+        if isinstance(value, Exception):
+            raise value
+        return value
 
 
 class FixedFillHazard:
@@ -355,6 +359,60 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_cooldown_stops_scan_without_market_failures(self):
+        deferred = ApiAdmissionDeferred(
+            "background API cooldown active; request not sent",
+            operation="markets.book(one)",
+            error_code="LOCAL_API_COOLDOWN",
+            retry_after_seconds=30.0,
+        )
+        gateway = FakeGateway(
+            {slug: market(slug) for slug in ("one", "two", "three")},
+            {slug: incentive(slug, pool=1000)
+             for slug in ("one", "two", "three")},
+            {slug: deferred for slug in ("one", "two", "three")},
+        )
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            await RewardMarketSelector(gateway).select(now=NOW)
+
+        self.assertEqual(len(gateway.book_calls), 1)
+
+    async def test_real_book_failure_remains_one_market_failure(self):
+        gateway = FakeGateway(
+            {slug: market(slug) for slug in ("broken", "healthy")},
+            {slug: incentive(slug, pool=1000)
+             for slug in ("broken", "healthy")},
+            {
+                "broken": AdapterError("malformed book"),
+                "healthy": book("healthy"),
+            },
+        )
+
+        result = await RewardMarketSelector(gateway).select(now=NOW)
+
+        self.assertEqual(result.failures, ("broken:book:AdapterError",))
+        self.assertEqual(reward_market_slugs(result), ("healthy",))
+
+    async def test_shared_cooldown_stops_cached_revalidation(self):
+        deferred = ApiAdmissionDeferred(
+            "entry API cooldown active; request not sent",
+            operation="markets.book(one)",
+            error_code="LOCAL_API_COOLDOWN",
+            retry_after_seconds=30.0,
+        )
+        gateway = FakeGateway(
+            {slug: market(slug) for slug in ("one", "two")},
+            {slug: incentive(slug, pool=1000) for slug in ("one", "two")},
+            {slug: deferred for slug in ("one", "two")},
+        )
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            await RewardMarketSelector(gateway).revalidate_viable(
+                ("one", "two"), now=NOW)
+
+        self.assertEqual(gateway.book_calls, ["one"])
+
     async def test_cached_candidates_are_freshly_revalidated_without_catalog_scan(self):
         fresh = market("fresh")
         closed = MarketMetadata(

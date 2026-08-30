@@ -27,7 +27,9 @@ from typing import Any, Callable
 
 from polymarket_us import AsyncPolymarketUS
 
-from .account_snapshots import AsyncAccountSnapshotGateway
+from .account_snapshots import (
+    AccountEquitySnapshot, AsyncAccountSnapshotGateway,
+    account_equity_snapshot)
 from .bot_era import bot_era_rewards_by_status
 from .adapters import (
     AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
@@ -52,6 +54,7 @@ from .live_orders import (
     OrderRequest,
     build_order_payload,
 )
+from .live_pnl_cache import write_live_pnl_snapshot
 from .live_session import (
     ControlledActionDriver,
     ControlledTrialStartup,
@@ -65,7 +68,6 @@ from .market_selector import (
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
-from .pnl import open_inventory_cost
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
@@ -104,6 +106,7 @@ from .venue_state import PrivateLedgerProjector
 
 
 Clock = Callable[[], datetime]
+LIVE_PNL_CACHE_PATH = Path("data/tv-live-pnl.json")
 
 # Generous: with backoff capped at 60s this is roughly an hour of retrying
 # before a transient startup condition is finally treated as a refusal.
@@ -111,9 +114,9 @@ MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 
 # The runtime loss sensor needs the same positive cash classification as the
 # read-only reward report. One cash-only page currently covers the account;
-# four is the proven bounded ceiling. Including the second bracketing balance,
-# refreshing every fifteen seconds adds at most 0.33 request/s to the existing
-# 0.20 balance request/s, inside the shared 4 request/s governor.
+# four is the proven bounded ceiling. The marked-equity snapshot itself is a
+# balance/positions/balance bracket. A due cash-activity scan adds its page(s)
+# and one final equal-cash proof; all requests still share the 4/s governor.
 NONTRADING_CASH_MAX_PAGES = 4
 NONTRADING_CASH_REFRESH_SECONDS = 15.0
 
@@ -471,6 +474,12 @@ class CommissioningRunner:
         self._market_selection: RewardMarketSelection | None = None
         self._market_selection_observed_at: datetime | None = None
         self.balance: AccountBalance | None = None
+        # Cash-stable fiat + per-position `cashValue` snapshot.  Retail
+        # currently returns assetNotional=0 even with open positions, so no
+        # safety or reporting consumer may rebuild marked equity from the
+        # balance row alone.
+        self._equity_snapshot: AccountEquitySnapshot | None = None
+        self._live_pnl_cache_error = False
         self.started_at: datetime | None = None
         # Realised P&L already on the ledger when this session began. The loss
         # stop measures the change since then, never the lifetime total: it is
@@ -2072,10 +2081,12 @@ class CommissioningRunner:
         # freshness window when that proof completed, just like periodic
         # reconciliation, or a slow preflight can arrive at the loop stale.
         self.gate.on_rest_reconciled(self._now())
-        self.balance = await self.account.fetch_balance(observed_at=now)
+        self._equity_snapshot = await self.account.fetch_equity_snapshot(
+            observed_at=now)
+        self.balance = self._equity_snapshot.balance
         self.risk_guard = SessionRiskGuard(
             started_at=now,
-            starting_equity=self.balance.marked_equity,
+            starting_equity=self._equity_snapshot.marked_equity,
             max_session_loss=self.config.max_session_loss_usd,
             max_market_loss=self.config.max_market_loss_usd,
             max_duration_seconds=float("inf"),
@@ -2083,7 +2094,7 @@ class CommissioningRunner:
             hard_stop_loss=self.config.hard_stop_loss_usd,
         )
         self.risk_guard.observe_equity(
-            self.balance.marked_equity, observed_at=now)
+            self._equity_snapshot.marked_equity, observed_at=now)
         # Before any order can be placed. `SessionRiskGuard` stamped
         # `starting_equity` from this instant, which measures the process; this
         # re-points it at the ET day's opening equity from the ledger, so a
@@ -2873,13 +2884,7 @@ class CommissioningRunner:
     async def _refresh_balance(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
-        first = await self.account.fetch_balance(observed_at=now)
-        self.balance = first
-        # Realised P&L from the fill ledger, per market and in total. This
-        # used to attribute the whole account's marked-equity change to the
-        # primary market, which was wrong twice over: marked equity is not
-        # realised, and one market is not all of them.
-        self._roll_realized_baseline()
+        snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
 
         observed_at = self._now()
         adjustment_due = (
@@ -2898,31 +2903,46 @@ class CommissioningRunner:
                 through=observed_at,
                 max_pages=NONTRADING_CASH_MAX_PAGES,
             )
-            # Cash activity can complete while its pages are being read. Two
-            # equal settled-cash reads prove the adjustment and balance belong
-            # to one snapshot; marked asset notional may legitimately move.
+            # Cash activity can complete while its pages are being read. The
+            # snapshot already bracketed positions with equal cash reads; one
+            # final equal cash read proves the activity adjustment belongs to
+            # that same account state.
             second = await self.account.fetch_balance(observed_at=self._now())
-            if first.current_balance != second.current_balance:
+            if snapshot.balance.current_balance != second.current_balance:
                 raise AdapterError(
                     "settled cash changed during non-trading activity snapshot")
             if date.fromisoformat(risk_day(self._now())) != self._baseline_day:
                 raise AdapterError(
                     "ET risk day changed during non-trading activity snapshot")
-            self.balance = second
+            # Keep every consumer on the final bracketed balance row.  Do not
+            # publish any part of the candidate snapshot until all reads have
+            # succeeded; a failed activity bracket must leave the previous
+            # proven mark intact and merely let its freshness expire.
+            snapshot = account_equity_snapshot(
+                second, snapshot.positions, observed_at=snapshot.observed_at)
             self._nontrading_cash = nontrading
             self._nontrading_cash_observed_at = self._now()
             self._nontrading_cash_day = self._baseline_day
+
+        self._equity_snapshot = snapshot
+        self.balance = snapshot.balance
+        # Realised P&L from the fill ledger, per market and in total. This
+        # used to attribute the whole account's marked-equity change to the
+        # primary market, which was wrong twice over: marked equity is not
+        # realised, and one market is not all of them.
+        self._roll_realized_baseline()
 
         # Freshness begins only after every cash input is proven, not when the
         # first balance request entered the shared governor. A failed activity
         # scan therefore lets the existing 15-second risk freshness expire and
         # disables new risk instead of silently falling back to masked cash.
         observed_at = self._now()
-        # Raw marked equity includes rewards, deposits and withdrawals. They
-        # are not trading performance, so apply the same proven non-trading
-        # adjustment used by the realized-cash sensor before comparing the
-        # day opening mark to the hard-stop limit.
-        adjusted_equity = self.balance.marked_equity - self._nontrading_cash
+        # Fiat cash plus each open position's documented cashValue is the
+        # account mark.  Retail's balance-row assetNotional has been observed
+        # as zero with nonzero positions and therefore cannot protect this
+        # stop. Rewards, deposits and withdrawals are then removed exactly as
+        # they are from the realised sensor.
+        adjusted_equity = snapshot.marked_equity - self._nontrading_cash
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=observed_at)
         self.risk_guard.observe_realized(self._session_realized())
@@ -2936,6 +2956,55 @@ class CommissioningRunner:
                 for slug, value in self.ledger.realized_by_market().items()
             }
         self.risk_guard.observe_market_realized(market_realized)
+        self._publish_live_pnl_snapshot()
+
+    def _publish_live_pnl_snapshot(self) -> None:
+        """Refresh the dashboard mark without giving it venue access."""
+
+        snapshot = self._equity_snapshot
+        if (snapshot is None or self._baseline_day is None
+                or self._day_opening_equity is None
+                or self._nontrading_cash is None):
+            return
+        marked = snapshot.marked_trading_pnl(
+            opening_equity=self._day_opening_equity,
+            nontrading_cash=self._nontrading_cash)
+        realized = unrealized = None
+        if (self._cash_baseline is not None
+                and self._day_opening_equity == self._cash_baseline):
+            realized = snapshot.realized_trading_pnl(
+                opening_cash=self._cash_baseline,
+                nontrading_cash=self._nontrading_cash)
+            unrealized = snapshot.open_unrealized_pnl()
+            if realized is None or unrealized is None:
+                realized = unrealized = None
+        try:
+            write_live_pnl_snapshot(
+                LIVE_PNL_CACHE_PATH,
+                observed_at=snapshot.observed_at,
+                risk_date=self._baseline_day,
+                marked_pnl=marked,
+                realized_pnl=realized,
+                unrealized_pnl=unrealized,
+                nontrading_cash=self._nontrading_cash,
+            )
+            if self._live_pnl_cache_error:
+                print(
+                    f"[live-pnl-cache] at={self._now().isoformat()} "
+                    "state=recovered",
+                    flush=True,
+                )
+            self._live_pnl_cache_error = False
+        except (OSError, TypeError, ValueError) as exc:
+            # Local display is observation only. Log only the transition so a
+            # read-only disk fault cannot flood the trading log every sweep.
+            if not self._live_pnl_cache_error:
+                print(
+                    f"[live-pnl-cache] at={self._now().isoformat()} "
+                    f"state=failed reason={type(exc).__name__}:{exc}",
+                    flush=True,
+                )
+            self._live_pnl_cache_error = True
 
     async def _refresh_equity_for_decision(self, now: datetime) -> None:
         """Keep the account-risk observation fresh across a long slot sweep."""
@@ -2998,28 +3067,19 @@ class CommissioningRunner:
             if self._cash_activity_boundary is not None
             else self.ledger.realized_pnl() - self._realized_baseline
         )
-        if self.balance is None or self._cash_baseline is None:
+        if (self.balance is None or self._cash_baseline is None
+                or self._equity_snapshot is None):
             return ledger_value
         if (self._nontrading_cash is None
                 or self._nontrading_cash_day != self._baseline_day):
             raise RuntimeError("non-trading cash adjustment is unavailable")
         try:
-            realised = (
-                self.balance.current_balance
-                - self._cash_baseline
-                - self._nontrading_cash)
-            for slug in self._shutdown_slugs() or self.active_slugs:
-                position = self.ledger.position(slug)
-                if not position:
-                    continue
-                basis = self.ledger.inventory_basis(slug)
-                if basis is None:
-                    # Cannot value what we hold, so cash alone would read the
-                    # entry cost as a loss. Use the old path.
-                    return ledger_value
-                realised += open_inventory_cost(
-                    position, basis.average_entry_price)
-            return realised
+            realised = self._equity_snapshot.realized_trading_pnl(
+                opening_cash=self._cash_baseline,
+                nontrading_cash=self._nontrading_cash)
+            # Cannot value what we hold at basis, so cash alone would read the
+            # entry cost as a loss. Use the fill-ledger fallback.
+            return ledger_value if realised is None else realised
         except Exception:
             return ledger_value
 
@@ -3069,7 +3129,7 @@ class CommissioningRunner:
             return
         if self._baseline_day == today:
             return
-        if self.balance is None:
+        if self.balance is None or self._equity_snapshot is None:
             # Never write a baseline we cannot measure. `INSERT OR IGNORE`
             # makes the first write of a risk date permanent, so a zero stored
             # here could not be corrected for the rest of that day -- and a
@@ -3078,7 +3138,7 @@ class CommissioningRunner:
             # midnight. Both call sites fetch the balance immediately before
             # this, so skipping simply defers to the next pass.
             return
-        equity = self.balance.marked_equity
+        equity = self._equity_snapshot.marked_equity
         realized, cash = self.ledger.realized_pnl(), self.balance.current_balance
         opening_equity, opening_realized, opening_cash = (
             self.ledger.day_baseline(
@@ -4460,9 +4520,10 @@ class CommissioningRunner:
             "SELECT COUNT(*) n FROM execution_orders "
             "WHERE status='UNKNOWN_ABSENT' OR client_order_id LIKE 'venue:%'")[0]["n"]
         equity_change = Decimal("0")
-        if self.balance is not None and self.risk_guard is not None:
+        if self._equity_snapshot is not None and self.risk_guard is not None:
             equity_change = (
-                self.balance.marked_equity - self.risk_guard.starting_equity)
+                self._equity_snapshot.marked_equity
+                - self.risk_guard.starting_equity)
         place_count = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         entry_fills, exit_fills = self.ledger.fill_role_counts(
@@ -4545,18 +4606,42 @@ class CommissioningRunner:
             selection_failures=(
                 len(self._market_selection.failures)
                 if self._market_selection is not None else 0),
-            # Raw marked equity against the DAY's opening equity, from the
+            # Marked trading P&L against the DAY's opening equity, from the
             # ledger so a restart cannot reset it. Account-wide by nature:
-            # equity carries no per-system attribution (CLAUDE.md). This is
-            # the headline; rewards and other cash movements remain visible.
+            # equity carries no per-system attribution. Proven rewards,
+            # deposits and other non-trading cash are removed from this
+            # operator-facing headline just as they are from the hard guard.
             today_pnl_usd=(
-                self.balance.marked_equity - self._day_opening_equity
-                if self.balance is not None
-                and self._day_opening_equity is not None else Decimal("0")),
+                self._equity_snapshot.marked_trading_pnl(
+                    opening_equity=self._day_opening_equity,
+                    nontrading_cash=self._nontrading_cash)
+                if self._equity_snapshot is not None
+                and self._day_opening_equity is not None
+                and self._nontrading_cash is not None else Decimal("0")),
+            today_realized_pnl_usd=(
+                self._equity_snapshot.realized_trading_pnl(
+                    opening_cash=self._cash_baseline,
+                    nontrading_cash=self._nontrading_cash)
+                if self._equity_snapshot is not None
+                and self._cash_baseline is not None
+                and self._nontrading_cash is not None
+                # A carried position needs an opening basis to decompose the
+                # day's mark. The durable baseline currently stores opening
+                # cash and equity, so publish only the still-provable total.
+                and self._day_opening_equity == self._cash_baseline
+                else None),
+            today_unrealized_pnl_usd=(
+                self._equity_snapshot.open_unrealized_pnl()
+                if self._equity_snapshot is not None
+                and self._day_opening_equity == self._cash_baseline
+                else None),
+            today_pnl_as_of=(
+                self._equity_snapshot.observed_at
+                if self._equity_snapshot is not None else None),
             # Exact delta observed by `hard_stop_reached`. `_refresh_balance`
             # removes proven non-trading cash before updating the guard, so
-            # this meter can intentionally show more stop consumption than
-            # the raw account headline after a reward or deposit lands.
+            # the meter and marked-trading headline use the same accounting
+            # scope even when a reward or deposit lands.
             hard_stop_pnl_usd=(
                 self.risk_guard.current_equity
                 - self.risk_guard.starting_equity
@@ -6190,7 +6275,8 @@ class CommissioningRunner:
                     f"component={component} health=success "
                     f"stable={stable}/{MAINTENANCE_STABLE_READS} "
                     f"open_orders={len(orders)} positions={len(positions)} "
-                    f"equity={balance.marked_equity}",
+                    f"cash={balance.current_balance} "
+                    f"reported_asset_notional={balance.asset_notional}",
                     flush=True,
                 )
             except RuntimeInvariantViolation:

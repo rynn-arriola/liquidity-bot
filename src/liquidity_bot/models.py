@@ -148,6 +148,8 @@ class AccountBalance:
 
     @property
     def marked_equity(self) -> Decimal:
-        # Official account docs define currentBalance as fiat and
-        # assetNotional as the value of securities positions.
+        # Retained for compatibility with raw balance-row diagnostics only.
+        # Production Retail evidence showed assetNotional=0 with nonzero open
+        # positions, so risk/reporting consumers must use AccountEquitySnapshot
+        # (cash + per-position cashValue), never this shortcut.
         return self.current_balance + self.asset_notional

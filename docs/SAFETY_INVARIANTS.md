@@ -63,8 +63,12 @@ These are implementation requirements, not suggestions.
 25. Losses have a **4 × size** per-market threshold and one **8 × size**
     account threshold observed by two independent sensors: realized session
     loss pauses new risk, while adjusted marked-account-equity loss
-    (`currentBalance` plus `assetNotional`, less proven non-trading cash) is the
-    emergency sensor. A marked breach blocks every new entry immediately. If
+    (`currentBalance` plus every open position's Retail `cashValue`, less
+    proven non-trading cash) is the emergency sensor. Every complete mark is
+    bracketed by equal settled-cash reads; `assetNotional` is not used because
+    production returned zero while open positions had nonzero `cashValue`. A
+    missing/malformed position mark or moving cash fails closed. A marked
+    breach blocks every new entry immediately. If
     inventory is open it is provisional: existing exits keep running, a
     recovered mark cannot clear until a breach-time position is positively
     closed, and the decision requires a complete reconciliation followed by a
@@ -392,14 +396,18 @@ These are implementation requirements, not suggestions.
     walks must reach explicit EOF and share one report-local 1 request/sec
     limiter. Cash changes are assigned by completion `updateTime`; feed order
     is only creation order and may not prove an ET boundary.
-    The value is current cash minus ET opening cash and completed non-trading
-    cash, plus exact open-position basis. The current ET row and its net use
-    this value. A completed historical day uses adjacent native ET equity
+    Today's displayed value is current cash plus every open position's
+    `cashValue`, minus ET opening equity and completed non-trading cash. When
+    the day began flat and current basis is complete it is decomposed into
+    closed trading (cash change plus open basis) and open unrealized
+    (`cashValue - basis`); otherwise only the exact total is shown. The current
+    ET row and its net use this marked value. A completed historical day uses
+    adjacent native ET equity
     boundaries only when both prove flat and all non-trading cash is removed;
     otherwise it is visibly prefixed `~` and remains the balanced-pair
     estimate. An immutable historical scan may ignore completions after its
     fixed `through` boundary but must still reach EOF; the current bracketed
-    snapshot may not. Any moving balance, absent basis, unproven
+    snapshot may not. Any moving balance, absent position `cashValue`, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day
     rollover must render `Unavailable`, never a partial number. A nonblocking
     file lock prevents overlap and a 90-second timeout bounds runtime. Its
@@ -413,7 +421,13 @@ These are implementation requirements, not suggestions.
     snapshot for the TV dashboard. That cache must preserve ET dates, account
     trading, finalized gain, pending context, merged side-hours and pending-safe
     net semantics. Overall P&L is lifetime ledger realised P&L plus bot-era PAID
-    gain; pending is excluded. The TV service may only validate/read the cache:
+    gain; pending is excluded. The live runner may additionally publish an
+    atomic owner-only local cache of its latest already-proven account-wide
+    marked trading total and, only when the day began flat and basis is
+    complete, its closed/open breakdown. The cache excludes proven rewards,
+    deposits, withdrawals and transfers, expires at ET rollover and cannot
+    affect trading if its write fails. The TV service may only validate/read
+    either cache:
     it has no venue client, credential load or fallback account request.
     A missing or malformed value may not block trading secret loading. Report
     failure cannot stop, restart or alter the runner.
@@ -452,6 +466,11 @@ These are implementation requirements, not suggestions.
     adjustment is unproved. The same proven non-trading adjustment is removed
     from the separate account-wide marked-equity sensor so a reward, deposit or
     withdrawal cannot mask or fabricate a trading drawdown.
+    Discord, the hourly reward report and both dashboards must use the same
+    marked-trading equation for the current ET day. Closed realized P&L alone,
+    raw settled-cash change, and `currentBalance + assetNotional` are not valid
+    substitutes. A carried position without a proven opening basis may retain
+    the exact marked total but must render the closed/open split unavailable.
 75. An unavailable account read is not zero exposure. Operator reporting must
     publish venue orders, positions, balance and quoted markets only after the
     complete account snapshot succeeds. A first or later read failure must

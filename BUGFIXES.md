@@ -1,10 +1,10 @@
 # Production defect index
-
 History through 2026-08-27: [archive](docs/history/BUGFIXES_THROUGH_2026-08-27.md). Search it before designing a repair:
 
 ```powershell
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
+- **Reviewed; deployment/restart acceptance pending:** Discord/dashboard could show a gain while the account was losing because `assetNotional=0` hid open `cashValue` and closed P&L was mislabeled as marked. All current-day displays and HARD now share a cash-bracketed marked-trading equation; incomplete breakdowns fail closed. [Evidence](docs/history/ACCOUNT_MARKED_PNL_2026-08-30.md).
 - **Deployed in `859b891`; natural lifecycle acceptance pending:** eight bound markets reached kickoff together, but each expected `no longer pregame` refresh was treated as a recurring runtime error and refill waited for the ordinary 15-minute selector. A bound, positively observed kickoff now requests one immediate incremental top-up; startup still rejects already-started candidates, urgent inventory still has priority, and the existing flat, ownership, reconciliation, viability and pre-commit gates remain unchanged. The focused 48-test class, all 844 Windows/WSL tests and a deliberate reversal passed. [Evidence](docs/history/BOUND_LIFECYCLE_REFILL_2026-08-29.md).
 - **Deployed `c8a7a45` without a process restart:** the TV page was 1,542px tall in a 720px viewport, hiding lower information behind scrolling. A viewport-height grid, landscape slot map, height breakpoints and fit-aware activity tail now keep all panels on one screen from 800×600 through 1920×1080. Reversal failed and all 842 tests pass. [Evidence](docs/history/TV_DASHBOARD_VIEWPORT_FIT_2026-08-29.md).
 - **Deployed in `859b891`; first summary acceptance pending:** non-trading cash could make Discord's HARD bar under-report the unchanged stop's adjusted-equity consumption. The headline stays raw account P&L; HARD now reads the guard input. Reversal failed and all 844 deployed-checkout tests pass. [Evidence](docs/history/HARD_METER_NONTRADING_CASH_2026-08-29.md).

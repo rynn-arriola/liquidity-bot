@@ -9,6 +9,7 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import threading
 import unittest
+from decimal import Decimal
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -17,14 +18,35 @@ from liquidity_bot.tv_dashboard import (
     _client_is_local,
     _open_read_only,
     _read_gain_snapshot,
+    _read_live_pnl_snapshot,
     collect_state,
 )
+from liquidity_bot.live_pnl_cache import write_live_pnl_snapshot
 
 
 NOW = datetime(2026, 8, 28, 23, 0, tzinfo=timezone.utc)
 
 
 class TvDashboardTests(unittest.TestCase):
+    def _live_pnl_cache(
+        self, root: Path, *, risk_date: str = "2026-08-28",
+        realized: str | None = "-21.0368",
+        unrealized: str | None = "-0.1000",
+        marked: str = "-21.1368",
+    ) -> Path:
+        path = root / "tv-live-pnl.json"
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "observed_at": "2026-08-28T22:59:53Z",
+            "risk_date_et": risk_date,
+            "marked_pnl": marked,
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "nontrading_cash": "0",
+            "scope": "ACCOUNT_WIDE_TRADING",
+        }), encoding="utf-8")
+        return path
+
     def _gain_cache(self, root: Path) -> Path:
         path = root / "tv-gain-snapshot.json"
         path.write_text(json.dumps({
@@ -187,6 +209,79 @@ class TvDashboardTests(unittest.TestCase):
             self.assertFalse(report["available"])
             self.assertEqual(report["rows"], [])
             self.assertIsNone(report["headline"])
+
+    def test_live_runner_mark_is_validated_and_exposed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            cache = self._live_pnl_cache(root)
+
+            state = collect_state(
+                database, log, now=NOW, processes=[], live_pnl_cache=cache)
+
+            mark = state["live_pnl"]
+            self.assertTrue(mark["available"])
+            self.assertEqual(mark["age_seconds"], 7)
+            self.assertEqual(mark["marked_pnl"], "-21.1368")
+            self.assertEqual(mark["realized_pnl"], "-21.0368")
+            self.assertEqual(mark["unrealized_pnl"], "-0.1000")
+
+    def test_live_mark_with_inconsistent_breakdown_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            cache = self._live_pnl_cache(
+                Path(directory), unrealized="-0.09")
+
+            report = _read_live_pnl_snapshot(cache, NOW)
+
+            self.assertFalse(report["available"])
+            self.assertIn("does not reconcile", report["error"])
+
+    def test_previous_et_day_live_mark_fails_closed_after_rollover(self):
+        with TemporaryDirectory() as directory:
+            cache = self._live_pnl_cache(Path(directory))
+            after_midnight_et = datetime(
+                2026, 8, 29, 4, 0, 1, tzinfo=timezone.utc)
+
+            report = _read_live_pnl_snapshot(cache, after_midnight_et)
+
+            self.assertFalse(report["available"])
+            self.assertIn("previous ET day", report["error"])
+
+    def test_marked_total_remains_available_without_carried_basis_breakdown(self):
+        with TemporaryDirectory() as directory:
+            cache = self._live_pnl_cache(
+                Path(directory), realized=None, unrealized=None,
+                marked="-3.25")
+
+            report = _read_live_pnl_snapshot(cache, NOW)
+
+            self.assertTrue(report["available"])
+            self.assertEqual(report["marked_pnl"], "-3.25")
+            self.assertIsNone(report["realized_pnl"])
+            self.assertIsNone(report["unrealized_pnl"])
+
+    def test_runner_cache_writer_is_atomic_and_reconciled(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "nested" / "tv-live-pnl.json"
+
+            write_live_pnl_snapshot(
+                cache, observed_at=NOW, risk_date=NOW.date(),
+                marked_pnl=Decimal("-21.1368"),
+                realized_pnl=Decimal("-21.0368"),
+                unrealized_pnl=Decimal("-0.1000"),
+                nontrading_cash=Decimal("0"))
+
+            payload = json.loads(cache.read_text(encoding="utf-8"))
+            self.assertEqual(payload["marked_pnl"], "-21.1368")
+            self.assertEqual(list(cache.parent.glob(".*.tmp")), [])
+            with self.assertRaisesRegex(ValueError, "does not reconcile"):
+                write_live_pnl_snapshot(
+                    cache, observed_at=NOW, risk_date=NOW.date(),
+                    marked_pnl=Decimal("-21.13"),
+                    realized_pnl=Decimal("-21.03"),
+                    unrealized_pnl=Decimal("-0.09"),
+                    nontrading_cash=Decimal("0"))
 
     def test_missing_schema_stays_unknown_instead_of_claiming_flat(self):
         with TemporaryDirectory() as directory:

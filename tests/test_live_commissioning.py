@@ -13,7 +13,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from liquidity_bot.account_snapshots import ExecutionHistoryBatch
+from liquidity_bot.account_snapshots import (
+    AccountEquitySnapshot, ExecutionHistoryBatch)
 from liquidity_bot.adapters import AsyncIntervalLimiter
 from liquidity_bot.commissioning import (
     AUTO_REWARD_MARKET,
@@ -150,7 +151,23 @@ class FakePortfolio:
         self.cash_activities = []
 
     async def positions(self, params):
-        return {"positions": self.rows, "eof": True}
+        rows = {}
+        for slug, source in self.rows.items():
+            raw = dict(source)
+            quantity = abs(Decimal(str(
+                raw.get("netPositionDecimal") or raw.get("netPosition") or 0)))
+            if quantity and "cashValue" not in raw:
+                cost = raw.get("cost")
+                if isinstance(cost, dict):
+                    cost = cost.get("value")
+                # Most tests are about lifecycle rather than economics. Give
+                # their synthetic position a neutral documented mark; tests
+                # of P&L/stop behavior supply explicit cost and cashValue.
+                neutral = Decimal(str(cost)) if cost is not None else quantity / 2
+                raw["cashValue"] = {
+                    "value": str(neutral), "currency": "USD"}
+            rows[slug] = raw
+        return {"positions": rows, "eof": True}
 
     async def activities(self, params):
         if params.get("types"):
@@ -1135,7 +1152,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             runner.risk_guard.equity_observed_at,
-            NOW + timedelta(seconds=7),
+            NOW + timedelta(seconds=14),
         )
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -4546,26 +4563,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         start = Decimal("100")
 
-        # Paper movement is NOT the session stop. Open inventory marks against
-        # us constantly -- 320 contracts move $38 on twelve cents -- and
-        # stopping on that would end sessions that never lost a trade. Paper
-        # movement is assetNotional; cash is untouched by it.
+        # Paper movement is NOT the session stop. Use the documented position
+        # cashValue rather than assetNotional: production returned the latter
+        # as zero while positions were open.
         await runner._refresh_balance(NOW)
-        client.account.asset_notional = -(
-            runner.config.hard_stop_loss_usd - Decimal("1"))
+        client.account.current_balance = (
+            start - runner.config.hard_stop_loss_usd)
+        client.portfolio.rows = {runner.config.market_slug: {
+            "netPosition": "100", "netPositionDecimal": "100.0000",
+            "cost": {
+                "value": str(runner.config.hard_stop_loss_usd),
+                "currency": "USD"},
+            "cashValue": {"value": "1", "currency": "USD"},
+            "updateTime": NOW.isoformat(),
+        }}
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
         # A drop in settled CASH is a realised loss, and does stop. Cash moves
         # only when a trade executes, which is why the session stop reads it
         # rather than a total rebuilt from fills.
-        client.account.asset_notional = Decimal("0")
         client.account.current_balance = (
             start - runner.config.max_session_loss_usd)
         # Keep marked equity $1 inside the equally-sized hard stop. This
         # proves the realized sensor still pauses independently even though
         # both protections now use the same $80 threshold.
-        client.account.asset_notional = Decimal("1")
+        client.portfolio.rows = {runner.config.market_slug: {
+            "netPosition": "1", "netPositionDecimal": "1.0000",
+            "cost": {"value": "0", "currency": "USD"},
+            "cashValue": {"value": "1", "currency": "USD"},
+            "updateTime": NOW.isoformat(),
+        }}
         await runner._refresh_balance(NOW)
         # Since 2026-08-22 a first-day loss stop PAUSES: it blocks new risk and
         # clears at the next ET day rather than ending the session. What must
@@ -4575,7 +4603,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("loss limit",
                       " ".join(runner.risk_guard.blockers(now=NOW)))
         client.account.current_balance = start
-        client.account.asset_notional = Decimal("0")
+        client.portfolio.rows = {}
 
         # The ceiling is the one thing that still reads marked equity, because
         # its job is to catch what the ledger cannot explain.
@@ -5393,11 +5421,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         ceiling = runner.config.hard_stop_loss_usd
 
         client.portfolio.rows = {slug: {
-            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "netPosition": "100", "netPositionDecimal": "100.0000",
+            "cost": {"value": "90", "currency": "USD"},
+            "cashValue": {"value": "9", "currency": "USD"},
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = -(ceiling + Decimal("1"))
+        client.account.current_balance = Decimal("10")
         await runner._refresh_balance(NOW)
 
         self.assertIsNone(runner._stop_reason(NOW))
@@ -5433,11 +5463,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         slug = runner.config.market_slug
         ceiling = runner.config.hard_stop_loss_usd
         client.portfolio.rows = {slug: {
-            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "netPosition": "100", "netPositionDecimal": "100.0000",
+            "cost": {"value": "90", "currency": "USD"},
+            "cashValue": {"value": "9", "currency": "USD"},
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = -(ceiling + Decimal("1"))
+        client.account.current_balance = Decimal("10")
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
@@ -5464,12 +5496,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         slug = runner.config.market_slug
         client.portfolio.rows = {slug: {
-            "netPosition": "10", "netPositionDecimal": "10.0000",
+            "netPosition": "100", "netPositionDecimal": "100.0000",
+            "cost": {"value": "90", "currency": "USD"},
+            "cashValue": {"value": "9", "currency": "USD"},
             "updateTime": NOW.isoformat(),
         }}
         await runner._rest_reconcile(NOW)
-        client.account.asset_notional = -(
-            runner.config.hard_stop_loss_usd + Decimal("1"))
+        client.account.current_balance = Decimal("10")
         await runner._refresh_balance(NOW)
         self.assertIsNone(runner._stop_reason(NOW))
 
@@ -6794,23 +6827,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_summary_separates_account_pnl_from_hard_stop_input(self):
         """The live payload must preserve both conflicting truths.
 
-        Rewards can make raw account equity positive while the adjusted equity
-        guard is near its hard stop. Reporting the raw number in the HARD bar
-        would make the stop look unused immediately before it fires.
+        Rewards can make raw cash positive while adjusted marked trading is
+        negative and the guard is near its hard stop. The headline and HARD
+        bar must each preserve their exact input.
         """
         runner, _, notifier = self.build_runner(clock=TickingClock())
         await runner.preflight()
         now = runner._now()
         runner._day_opening_equity = Decimal("100")
-        runner.balance = AccountBalance(
-            current_balance=Decimal("150"),
+        balance = AccountBalance(
+            current_balance=Decimal("142.75"),
             asset_notional=Decimal("0"),
-            buying_power=Decimal("150"),
+            buying_power=Decimal("142.75"),
             observed_at=now)
+        runner.balance = balance
+        runner._equity_snapshot = AccountEquitySnapshot(
+            balance=balance, positions=(), position_value=Decimal("0"),
+            position_basis=Decimal("0"), observed_at=now)
+        runner._cash_baseline = Decimal("100")
+        runner._nontrading_cash = Decimal("50")
+        runner._nontrading_cash_day = runner._baseline_day
         runner.risk_guard.adopt_day_baseline(Decimal("100"))
         adjusted_loss = runner.config.hard_stop_loss_usd - Decimal("1")
         runner.risk_guard.observe_equity(
             Decimal("100") - adjusted_loss, observed_at=now)
+        runner.risk_guard.observe_realized(Decimal("-7.25"))
 
         await runner._send_summary(now)
 
@@ -6818,7 +6859,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         risk = next(
             field["value"] for field in embed["fields"]
             if "stop loss" in field["name"])
-        self.assertIn("TODAY  $+50.00", embed["description"])
+        self.assertIn("TRADING TODAY  $-7.25", embed["description"])
+        self.assertIn("closed $-7.25 + open mark $+0.00", embed["description"])
         self.assertIn(
             f"${adjusted_loss:.2f} / ${runner.config.hard_stop_loss_usd:.2f}",
             risk)

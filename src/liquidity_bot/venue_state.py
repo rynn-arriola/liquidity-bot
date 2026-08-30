@@ -183,21 +183,21 @@ def normalize_execution(
         raise AdapterError(f"execution is invalid: {exc}") from exc
 
 
-def _position_cost(raw: Mapping[str, Any]) -> Decimal | None:
-    """The venue's cost for a position, when it reports one.
+def _position_amount(raw: Mapping[str, Any], name: str) -> Decimal | None:
+    """A venue position money amount, when it reports one.
 
     Never used to infer QUANTITY -- that must stay netPositionDecimal, which
-    is exact. This is only a basis fallback for when the fills that opened a
-    position never arrived.
+    is exact.  Missing values remain unknown; callers that require a complete
+    marked-equity snapshot fail closed rather than substituting zero.
     """
 
-    value = _wire(raw, "cost", "cost")
+    value = _wire(raw, name, name)
     if isinstance(value, Mapping):
         value = value.get("value")
     if value is None:
         return None
     try:
-        return _decimal(value, "position.cost")
+        return _decimal(value, f"position.{name}")
     except AdapterError:
         return None
 
@@ -227,7 +227,9 @@ def normalize_position(
                                 fallback=observed_at),
             # Optional: the venue's own cost for this position. Used only as a
             # fallback when our fills cannot reconstruct the basis.
-            cost=_position_cost(raw),
+            cost=_position_amount(raw, "cost"),
+            cash_value=_position_amount(raw, "cashValue"),
+            realized=_position_amount(raw, "realized"),
         )
     except ValueError as exc:
         raise AdapterError(f"position is invalid: {exc}") from exc

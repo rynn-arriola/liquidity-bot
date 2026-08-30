@@ -25,11 +25,17 @@ falling back to a venue call or false zero.
 ## P&L and gain display
 
 The top adds a separate two-card row for `Today P&L` and `Overall P&L`; the
-existing four-card runtime row remains unchanged beneath it. Today uses the
-hourly report's account trading value for the current ET day. Overall uses the
+existing four-card runtime row remains unchanged beneath it. Today prefers the
+runner's latest already-proven local account mark: settled cash plus every open
+position's Retail `cashValue`, less the ET opening equity and positively
+classified non-trading cash. It displays the closed/open split only when the
+day began flat and every open basis is known. The hourly snapshot remains the
+fallback, and a cache from a previous ET day is rejected. Overall uses the
 runner's established bot-only formula: lifetime
 ledger trading plus finalized bot-era gain since 2026-08-14. Pending is context
-only and never enters either finalized Net or Overall P&L.
+only and never enters Today P&L, finalized Net or Overall P&L. The runner cache
+is an atomic owner-only local file and adds no dashboard venue request; a write
+failure is display-only and cannot block trading.
 
 The additional table is ordered exactly as `Date ET`, `Trading`, `Gain`,
 `Pending`, `Side Hours`, `Net`. Side Hours is merged resting time per market and

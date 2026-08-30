@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa: E402
-from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
+from liquidity_bot.account_snapshots import (  # noqa: E402
+    AsyncAccountSnapshotGateway, account_equity_snapshot)
 from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway  # noqa: E402
 from liquidity_bot.cash_activity import (  # noqa: E402
     CashActivityUnavailable,
@@ -73,10 +74,16 @@ AUDITED_DELAYED_ET_BASELINES = {
 class AccountRealizedToday:
     value: Decimal | None
     reason: str
+    marked_value: Decimal | None = None
+    open_unrealized: Decimal | None = None
     as_of: datetime | None = None
+    opening_equity: Decimal | None = None
     opening_cash: Decimal | None = None
     current_cash: Decimal | None = None
     position_basis: Decimal | None = None
+    position_value: Decimal | None = None
+    account_equity: Decimal | None = None
+    position_count: int | None = None
     nontrading_cash: Decimal | None = None
 
 
@@ -107,8 +114,9 @@ def _timestamp(value: Any, field: str) -> datetime:
     return result.astimezone(timezone.utc)
 
 
-def _opening_cash_for_day(db: str, day_value: date,
-                          boundary: datetime) -> Decimal:
+def _opening_marks_for_day(
+    db: str, day_value: date, boundary: datetime,
+) -> tuple[Decimal, Decimal]:
     try:
         connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
@@ -125,6 +133,7 @@ def _opening_cash_for_day(db: str, day_value: date,
     if row is None or row["opening_cash"] is None:
         raise AccountMetricUnavailable("ET opening-cash baseline is missing")
     stored = _decimal(row["opening_cash"], "opening cash")
+    stored_equity = _decimal(row["opening_equity"], "opening equity")
     source = str(row["source"] or "")
     try:
         corrected = corrected_opening_cash(
@@ -135,7 +144,7 @@ def _opening_cash_for_day(db: str, day_value: date,
     # timestamp belongs to the copied UTC row and must not be judged against
     # the fresh-ET two-minute tolerance.
     if source == "legacy_utc_cutover":
-        return corrected
+        return corrected, stored_equity + corrected - stored
     created_at = _timestamp(row["created_at"], "opening baseline")
     delta = created_at - boundary.astimezone(timezone.utc)
     audited = AUDITED_DELAYED_ET_BASELINES.get(day_value.isoformat())
@@ -148,7 +157,12 @@ def _opening_cash_for_day(db: str, day_value: date,
             or (delta > BASELINE_START_TOLERANCE and not audited_match)):
         raise AccountMetricUnavailable(
             "ET baseline was not captured at the day boundary")
-    return corrected
+    return corrected, stored_equity + corrected - stored
+
+
+def _opening_cash_for_day(db: str, day_value: date,
+                          boundary: datetime) -> Decimal:
+    return _opening_marks_for_day(db, day_value, boundary)[0]
 
 
 def historical_account_trading_by_day(
@@ -270,37 +284,46 @@ async def account_realized_today(
     boundary = datetime.combine(today, time.min, tzinfo=NEW_YORK).astimezone(
         timezone.utc)
     try:
-        opening_cash = _opening_cash_for_day(db, today, boundary)
+        opening_cash, opening_equity = _opening_marks_for_day(
+            db, today, boundary)
         account = AsyncAccountSnapshotGateway(gateway)
         first = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
         positions = await account.fetch_positions(
             observed_at=datetime.now(timezone.utc))
-        second = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
+        # The activity window ends after the position page but before the
+        # final cash read. If any trade/non-trading cash then lands, the final
+        # read differs and the mixed snapshot is rejected.
         as_of = datetime.now(timezone.utc)
+        nontrading = await _nontrading_cash_today(
+            gateway, boundary=boundary, through=as_of)
+        second = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
         if as_of.astimezone(NEW_YORK).date() != today:
             raise AccountMetricUnavailable(
                 "ET day changed during the account snapshot")
         if first.current_balance != second.current_balance:
             raise AccountMetricUnavailable(
                 "settled cash changed during the account snapshot")
-        basis = Decimal(0)
-        for position in positions:
-            if position.net_qty == 0:
-                continue
-            if position.cost is None:
-                raise AccountMetricUnavailable(
-                    f"open position has no venue basis: {position.market_slug}")
-            cost = _decimal(position.cost, "position basis")
-            if cost < 0:
-                raise AccountMetricUnavailable(
-                    f"open position basis is negative: {position.market_slug}")
-            basis += cost
-        nontrading = await _nontrading_cash_today(
-            gateway, boundary=boundary, through=as_of)
-        value = second.current_balance - opening_cash - nontrading + basis
+        snapshot = account_equity_snapshot(
+            second, positions, observed_at=as_of)
+        marked = snapshot.marked_trading_pnl(
+            opening_equity=opening_equity, nontrading_cash=nontrading)
+        # Without the opening position basis, a position carried across ET
+        # midnight cannot be split into today's closed and open components.
+        # The total marked change remains exact from opening equity.
+        realized = unrealized = None
+        if opening_equity == opening_cash:
+            realized = snapshot.realized_trading_pnl(
+                opening_cash=opening_cash, nontrading_cash=nontrading)
+            unrealized = snapshot.open_unrealized_pnl()
         return AccountRealizedToday(
-            value, "ok", as_of=as_of, opening_cash=opening_cash,
-            current_cash=second.current_balance, position_basis=basis,
+            realized, "ok", marked_value=marked,
+            open_unrealized=unrealized, as_of=as_of,
+            opening_equity=opening_equity, opening_cash=opening_cash,
+            current_cash=second.current_balance,
+            position_basis=snapshot.position_basis,
+            position_value=snapshot.position_value,
+            account_equity=snapshot.marked_equity,
+            position_count=sum(1 for item in positions if item.net_qty != 0),
             nontrading_cash=nontrading)
     except (AccountMetricUnavailable, AdapterError) as exc:
         return AccountRealizedToday(None, str(exc))
@@ -323,10 +346,22 @@ def _displayed_trading(
     """Prefer account truth, retaining the pair estimate as a fallback."""
 
     if day_value == today:
-        return account_realized.value if account_realized is not None else None
+        return _current_mark(account_realized)
     if account_history is not None and day_value.isoformat() in account_history:
         return account_history[day_value.isoformat()]
     return pnl.get(day_value.isoformat())
+
+
+def _current_mark(
+    account_realized: AccountRealizedToday | None,
+) -> Decimal | None:
+    """Return the current account mark, including legacy flat-only callers."""
+
+    if account_realized is None:
+        return None
+    return (account_realized.marked_value
+            if account_realized.marked_value is not None
+            else account_realized.value)
 
 
 def _trading_is_estimate(
@@ -400,6 +435,18 @@ def build_dashboard_snapshot(
         "unbalanced_markets": int(unbalanced_markets),
         "headline": {
             "today_pnl": today_row["trading"] if today_row else None,
+            "today_realized": _dashboard_money(
+                account_realized.value if account_realized is not None
+                and account_realized.open_unrealized is not None
+                else None),
+            "today_unrealized": _dashboard_money(
+                account_realized.open_unrealized
+                if account_realized is not None else None),
+            "today_as_of": (
+                account_realized.as_of.astimezone(timezone.utc).isoformat()
+                .replace("+00:00", "Z")
+                if account_realized is not None
+                and account_realized.as_of is not None else None),
             "overall_pnl": _dashboard_money(overall_pnl),
             "overall_trading": _dashboard_money(overall_trading),
             "overall_gain": _dashboard_money(paid_total),
@@ -492,10 +539,17 @@ def render_table(
     resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
     lines.extend([
         "",
-        (f"- Account realized today (ET): "
+        (f"- Account marked trading today (ET): "
+         f"**{_money(_current_mark(account_realized))}**"
+         if _current_mark(account_realized) is not None
+         else "- Account marked trading today (ET): **Unavailable**"),
+        (f"- Closed / open mark today: "
          f"**{_money(account_realized.value)}**"
-         if account_realized is not None and account_realized.value is not None
-         else "- Account realized today (ET): **Unavailable**"),
+         f" / **{_money(account_realized.open_unrealized)}**"
+         if account_realized is not None
+         and account_realized.value is not None
+         and account_realized.open_unrealized is not None
+         else "- Closed / open mark today: **Unavailable**"),
         f"- Displayed trading total (7d): **${float(trade_total):+,.2f}**",
         f"- Balanced-pair estimate (7d): **${float(pair_total):+,.2f}**",
         f"- Paid rewards: **${float(paid_total):,.2f}**",
@@ -508,10 +562,11 @@ def render_table(
         "reward is never counted in finalized net.",
         "Trading P&L uses account-wide ET equity boundaries where proven. "
         "Rows prefixed `~` are the older balanced-pair estimate. Today's row "
-        "uses settled-cash change less non-trading cash plus open basis.",
+        "is marked trading: closed P&L plus current open-position cashValue, "
+        "with proven non-trading cash excluded.",
     ])
-    if account_realized is not None and account_realized.value is None:
-        lines.append(f"Account realized unavailable: {account_realized.reason}.")
+    if account_realized is not None and _current_mark(account_realized) is None:
+        lines.append(f"Account mark unavailable: {account_realized.reason}.")
     return "\n".join(lines)
 
 
@@ -611,8 +666,11 @@ def build_discord_payload(
     embed = {
         "title": "Liquidity Bot · Last 7 ET Days",
         "description": (
-            f"**Account realized today (ET):** "
-            f"{_money(account_realized.value) if account_realized is not None else '—'}\n"
+            f"**Account marked trading today (ET):** "
+            f"{_money(_current_mark(account_realized))}\n"
+            f"**Closed / open mark today:** "
+            f"{_money(account_realized.value) if account_realized is not None else '—'} / "
+            f"{_money(account_realized.open_unrealized) if account_realized is not None else '—'}\n"
             f"**Displayed trading total (7d):** ${float(trade_total):+,.2f}\n"
             f"**Balanced-pair estimate (7d):** ${float(pair_total):+,.2f}\n"
             f"**Paid rewards:** ${float(paid_total):,.2f}\n"
@@ -624,11 +682,11 @@ def build_discord_payload(
             f"Generated {stamp} · * current ET day is partial · "
             "-- reward not posted · Pending excluded from net · "
             "Account ET boundaries used where proven · ~ means pair estimate · "
-            "Today uses account cash - transfers + open basis · "
+            "Today uses closed trading + current open cashValue · "
             f"{unbalanced_markets} unbalanced market(s) and settled exits may "
             "be missing")},
     }
-    if account_realized is not None and account_realized.value is None:
+    if account_realized is not None and _current_mark(account_realized) is None:
         embed["footer"]["text"] += (
             f" · Account figure unavailable: {account_realized.reason}")
     total_chars = (
@@ -717,8 +775,10 @@ async def main() -> int:
         print()
         print("Trading is balanced-leg ledger P&L and excludes "
               f"{unbalanced} unbalanced market(s); settled exits can be missing.")
-        if account_realized.value is None:
-            print(f"Account realized today is unavailable: "
+        if _displayed_trading(
+                today, today=today, pnl={},
+                account_realized=account_realized) is None:
+            print(f"Account marked trading today is unavailable: "
                   f"{account_realized.reason}.")
         print("Resting side-hours merge overlap per market/side and may exceed 24 "
               "when several sides rest simultaneously.")

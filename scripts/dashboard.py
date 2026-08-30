@@ -46,8 +46,7 @@ from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
-from liquidity_bot.reward_calendar import (  # noqa: E402
-    reward_day, reward_day_bounds)
+from reward_table import account_realized_today  # noqa: E402
 
 CONFIG = CommissioningConfig.diagnostic_defaults()
 MAX_MARKETS = CONFIG.max_markets
@@ -370,47 +369,6 @@ def _pnl_strip(today, total) -> str:
     return left + " " * max(2, W - 6 - 17 - 17) + right
 
 
-def _today_trading(now) -> float:
-    """Realised trading P&L for the current ET reward day.
-
-    One YES plus one NO settles at exactly 1.0000, so a completed pair
-    realises `1.00 - paid` with no direction or settlement data needed.
-    Returns a LOSS as a positive number, so the caller subtracts it.
-    """
-
-    total = 0.0
-    try:
-        conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-        books = collections.defaultdict(
-            lambda: {"lq": Decimal(0), "lc": Decimal(0),
-                     "sq": Decimal(0), "sc": Decimal(0)})
-        start, end = reward_day_bounds(reward_day(now))
-        active_fills = active_fills_predicate(conn)
-        for slug, intent, price, qty in conn.execute(
-                "SELECT market_slug,intent,price,qty FROM execution_fills "
-                f"WHERE {active_fills} AND event_at>=? AND event_at<?",
-                (start.isoformat(), end.isoformat())):
-            q, p_ = Decimal(str(qty)), Decimal(str(price))
-            book = books[slug]
-            if intent == "ORDER_INTENT_BUY_LONG":
-                book["lq"] += q
-                book["lc"] += q * economic_contract_cost(intent, p_)
-            elif intent == "ORDER_INTENT_BUY_SHORT":
-                book["sq"] += q
-                book["sc"] += q * economic_contract_cost(intent, p_)
-        conn.close()
-        for book in books.values():
-            pairs = min(book["lq"], book["sq"])
-            if pairs <= 0:
-                continue
-            lc = book["lc"] / book["lq"] * pairs if book["lq"] else Decimal(0)
-            sc = book["sc"] / book["sq"] * pairs if book["sq"] else Decimal(0)
-            total += -float(pairs - lc - sc)
-    except Exception:
-        return 0.0
-    return total
-
-
 FUNDING_CACHE = Path("data/funding_cache.json")
 
 
@@ -574,6 +532,7 @@ async def main() -> int:
     positions: int | None = None
     quoted: set[str] | None = None
     equity: Decimal | None = None
+    today_pnl: Decimal | None = None
     venue_ok = False
     try:
         from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway
@@ -582,31 +541,28 @@ async def main() -> int:
         gateway = AsyncReadOnlyGateway(client_from_environment())
         account = AsyncAccountSnapshotGateway(gateway)
         live = await account.fetch_open_orders(observed_at=now)
-        held = await account.fetch_positions(observed_at=now)
-        balance = await account.fetch_balance(observed_at=now)
+        account_today = await account_realized_today(DB, gateway, now=now)
+        if (account_today.marked_value is None
+                or account_today.account_equity is None
+                or account_today.position_count is None):
+            raise RuntimeError(account_today.reason)
         # Publish the snapshot atomically only after every account component
         # succeeds. A later-read failure must not leak a partial order count.
         orders = len(live)
         quoted = {o.market_slug for o in live}
-        positions = sum(1 for p in held
-                        if abs(float(getattr(p, "net_qty", 0) or 0)) > 1e-9)
-        equity = (_money(balance.current_balance)
-                  + _money(balance.asset_notional))
+        positions = account_today.position_count
+        equity = account_today.account_equity
+        today_pnl = account_today.marked_value
         venue_ok = True
     except Exception as exc:
         health.append(("warn", "venue", f"unreachable: {type(exc).__name__}"))
 
-    today_pnl = total_pnl = None
+    total_pnl = None
     if venue_ok:
         try:
-            reward_today = Decimal(0)
-            for row in await gateway.fetch_earnings():
-                if str(getattr(row, "date", ""))[:10] == reward_day(now):
-                    reward_today += Decimal(str(getattr(row, "reward", 0) or 0))
             funding, _cash, trusted = await _funding(gateway)
             if trusted:
                 total_pnl = equity - funding
-            today_pnl = reward_today - Decimal(str(_today_trading(now)))
         except Exception:
             pass
 

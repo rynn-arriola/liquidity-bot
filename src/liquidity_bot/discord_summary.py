@@ -95,12 +95,15 @@ class LiquiditySummary:
     # independently of the session one, so a meter for the session alone can
     # read comfortable while a market is one fill from stopping.
     worst_market_realized_pnl_usd: Decimal = Decimal("0")
-    # Raw marked equity against the ET risk day's OPENING equity. Negative is a
-    # loss. This is the honest account-wide answer to "how is today going" and
-    # picks up reward the moment it lands.
-    # Account-wide by nature: equity cannot be scoped to one bot (CLAUDE.md),
-    # so it must never be labelled as this bot's own result.
+    # Account-wide marked TRADING P&L against the ET opening equity, after
+    # proven rewards/deposits/withdrawals are removed. It includes the current
+    # cashValue of every open venue position; Retail assetNotional is not used.
     today_pnl_usd: Decimal = Decimal("0")
+    # Optional decomposition of the marked total. It is available only when
+    # the day began flat and every current open position reports cost.
+    today_realized_pnl_usd: Decimal | None = None
+    today_unrealized_pnl_usd: Decimal | None = None
+    today_pnl_as_of: datetime | None = None
     # The hard stop's adjusted marked-equity delta. Negative is a loss. Proven
     # non-trading cash is removed before the guard observes equity, so this can
     # intentionally differ from `today_pnl_usd`. None preserves compatibility
@@ -180,6 +183,24 @@ class LiquiditySummary:
                 self.session_realized_pnl_usd,
                 self.worst_market_realized_pnl_usd):
             _money(value)
+        for value in (
+                self.today_realized_pnl_usd,
+                self.today_unrealized_pnl_usd):
+            if value is not None:
+                _money(value)
+        if ((self.today_realized_pnl_usd is None)
+                != (self.today_unrealized_pnl_usd is None)):
+            raise ValueError(
+                "today realized and unrealized P&L must be supplied together")
+        if (self.today_realized_pnl_usd is not None
+                and (_money(self.today_realized_pnl_usd)
+                     + _money(self.today_unrealized_pnl_usd)
+                     != _money(self.today_pnl_usd))):
+            raise ValueError("today P&L breakdown does not reconcile")
+        if self.today_pnl_as_of is not None and (
+                self.today_pnl_as_of.tzinfo is None
+                or self.today_pnl_as_of.utcoffset() is None):
+            raise ValueError("today_pnl_as_of must be timezone-aware")
 
 
 def _mark(value: Decimal) -> str:
@@ -234,10 +255,11 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
 
     now = summary.observed_at
     uptime = max(0.0, (now - summary.session_started_at).total_seconds())
-    trading = _money(summary.trading_realized_usd)
     paid = _money(summary.attributable_paid_rewards_usd)
     pending = _money(summary.pending_rewards_usd)
-    today_pnl = _money(summary.today_pnl_usd)
+    # The headline is the account-wide trading mark: closed trading plus the
+    # current open-position mark, with proven non-trading cash removed.
+    trading_today = _money(summary.today_pnl_usd)
     bot_pnl = _money(summary.overall_pnl_usd)
     # The trading half, derived so the subtext always reconciles to the
     # headline rather than being sourced separately and drifting from it.
@@ -316,10 +338,15 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     else:
         headline = (
             f"## {icon} {state}\n"
-            f"# {_mark(today_pnl)} TODAY  ${today_pnl:+,.2f}\n"
+            f"# {_mark(trading_today)} TRADING TODAY  "
+            f"${trading_today:+,.2f}\n"
             f"**BOT OVERALL  ${bot_pnl:+,.2f}**\n"
             f"-# bot overall = this ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}\n"
-            f"-# today = marked account equity since 00:00 ET, ACCOUNT-WIDE · up {uptime / 3600:,.1f}h\n")
+            + (f"-# today = closed ${_money(summary.today_realized_pnl_usd):+,.2f} + open mark ${_money(summary.today_unrealized_pnl_usd):+,.2f}, ACCOUNT-WIDE since 00:00 ET\n"
+               if summary.today_realized_pnl_usd is not None
+               and summary.today_unrealized_pnl_usd is not None
+               else "-# today = marked account trading, ACCOUNT-WIDE since 00:00 ET; breakdown unavailable\n")
+            + f"-# rewards/deposits excluded · mark age {_age((now - summary.today_pnl_as_of).total_seconds()) if summary.today_pnl_as_of is not None else 'UNKNOWN'} · up {uptime / 3600:,.1f}h\n")
     # The embed's left strip, which is the first thing read on a phone. It
     # carried operational state alone, so "am I making money today" was not
     # answerable at a glance.
@@ -334,7 +361,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # So: red = losing today OR broken; orange = look at the slots; green =
     # healthy and up. The state icon in the title disambiguates red.
     if color == GREEN:
-        color = GREEN if today_pnl >= 0 else RED
+        color = GREEN if trading_today >= 0 else RED
 
     description = (
         warning + headline

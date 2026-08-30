@@ -476,36 +476,62 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("$0.00 / $40.00", risk)
 
     def test_reward_cannot_make_the_hard_meter_look_safer(self):
-        """Raw account profit and adjusted stop consumption are independent.
+        """Non-trading cash cannot inflate the headline or HARD meter.
 
-        A reward can leave the account up while trading has nearly consumed
-        the hard stop. The headline should report the former and the HARD bar
-        must report the latter.
+        A reward can leave raw cash up while trading has nearly consumed the
+        hard stop. Both trading displays exclude it; HARD reads its own input.
         """
         summary = self._stop_summary(
             session_realized_pnl_usd=Decimal("0"),
-            today_pnl_usd=Decimal("50"),
+            today_pnl_usd=Decimal("0"),
             hard_stop_pnl_usd=Decimal("-44"))
         embed = build_liquidity_summary(summary)["embeds"][0]
         risk = [f for f in embed["fields"]
                 if "stop loss" in f["name"]][0]["value"]
-        self.assertIn("TODAY  $+50.00", embed["description"])
+        self.assertIn("TRADING TODAY  $+0.00", embed["description"])
+        self.assertIn("rewards/deposits excluded", embed["description"])
         self.assertIn("$44.00 / $45.00", risk)
         self.assertIn("$0.00 / $40.00", risk)
+
+    def test_discord_headline_uses_closed_plus_open_mark(self):
+        """Reproduce the corrected live 2026-08-30 account mark exactly.
+
+        A later cash-stable snapshot and the independent ledger agreed closed
+        trading was about -$21.04. The one open position was down ten cents,
+        so the operator-facing result must be -$21.14, not either old +number.
+        """
+
+        summary = self._stop_summary(
+            session_realized_pnl_usd=Decimal("-21.0368"),
+            today_pnl_usd=Decimal("-21.1368"),
+            today_realized_pnl_usd=Decimal("-21.0368"),
+            today_unrealized_pnl_usd=Decimal("-0.1000"),
+            today_pnl_as_of=NOW - timedelta(seconds=7),
+        )
+        embed = build_liquidity_summary(summary)["embeds"][0]
+        description = embed["description"]
+        self.assertIn("TRADING TODAY  $-21.14", description)
+        self.assertIn("closed $-21.04 + open mark $-0.10", description)
+        self.assertIn("mark age 7.0s", description)
+        self.assertEqual(embed["color"], RED)
 
     def test_the_strip_is_red_on_a_losing_day_and_green_on_a_winning_one(self):
         """The strip is the first thing read on a phone, so it answers the
         first question. Operational state keeps the title icon."""
 
-        losing = self._stop_summary(today_pnl_usd=Decimal("-12.34"))
+        losing = self._stop_summary(
+            session_realized_pnl_usd=Decimal("-12.34"),
+            today_pnl_usd=Decimal("-12.34"))
         embed = build_liquidity_summary(losing)["embeds"][0]
         self.assertEqual(embed["color"], RED)
-        self.assertIn("TODAY  $-12.34", embed["description"])
+        self.assertIn("TRADING TODAY  $-12.34", embed["description"])
 
-        winning = self._stop_summary(today_pnl_usd=Decimal("8.90"))
+        winning = self._stop_summary(
+            session_realized_pnl_usd=Decimal("8.90"),
+            today_pnl_usd=Decimal("8.90"))
         embed = build_liquidity_summary(winning)["embeds"][0]
         self.assertEqual(embed["color"], GREEN)
-        self.assertIn("TODAY  $+8.90", embed["description"])
+        self.assertIn("TRADING TODAY  $+8.90", embed["description"])
 
     def test_a_profitable_day_never_paints_over_a_stuck_slot(self):
         """P&L may only take the strip when nothing operational wants
@@ -515,7 +541,9 @@ class DiscordTests(unittest.TestCase):
 
         stuck = self._stop_summary(
             active_markets=14, resting_markets=7, viable_markets=7,
-            spread_filtered_markets=12, today_pnl_usd=Decimal("50"),
+            spread_filtered_markets=12,
+            session_realized_pnl_usd=Decimal("50"),
+            today_pnl_usd=Decimal("50"),
             idle_market_reasons=(("book_stale", 5),))
         embed = build_liquidity_summary(stuck)["embeds"][0]
         self.assertEqual(embed["color"], ORANGE)
@@ -523,14 +551,19 @@ class DiscordTests(unittest.TestCase):
 
     def test_the_bot_overall_line_is_separate_from_today(self):
         """A good day inside a bad week must not read as success, so both are
-        shown. They are different scopes and the message says so: today is
-        account-wide marked equity, overall is this ledger's own trading."""
+        shown. Today's realized account trading, raw account mark and this
+        ledger's bot-overall result must keep their scopes explicit."""
 
         summary = self._stop_summary(
-            today_pnl_usd=Decimal("3.00"), overall_pnl_usd=Decimal("-91.20"))
+            session_realized_pnl_usd=Decimal("3.00"),
+            today_pnl_usd=Decimal("3.00"),
+            today_realized_pnl_usd=Decimal("2.00"),
+            today_unrealized_pnl_usd=Decimal("1.00"),
+            overall_pnl_usd=Decimal("-91.20"))
         description = build_liquidity_summary(summary)["embeds"][0]["description"]
-        self.assertIn("TODAY  $+3.00", description)
+        self.assertIn("TRADING TODAY  $+3.00", description)
         self.assertIn("BOT OVERALL  $-91.20", description)
+        self.assertIn("closed $+2.00 + open mark $+1.00", description)
         self.assertIn("ACCOUNT-WIDE", description)
         self.assertIn("since 00:00 ET", description)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -52,15 +51,9 @@ class DailyPnlRewardCalendarTests(unittest.TestCase):
         self.assertAlmostEqual(float(pnl["2026-08-21"]), 0.25)
         self.assertAlmostEqual(float(pnl["2026-08-22"]), 0.25)
 
-    def test_dashboard_et_day_excludes_the_previous_utc_evening(self):
-        original = dashboard.DB
-        dashboard.DB = str(self.database)
-        try:
-            result = dashboard._today_trading(
-                datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc))
-        finally:
-            dashboard.DB = original
-        self.assertAlmostEqual(result, -0.25)
+    def test_dashboard_does_not_relabel_balanced_pairs_as_today_account_pnl(self):
+        self.assertFalse(hasattr(dashboard, "_today_trading"))
+        self.assertIsNotNone(dashboard.account_realized_today)
 
     def test_dashboard_names_the_boundary_it_uses(self):
         self.assertIn("ET DAY", dashboard._pnl_strip(0, 0))

@@ -100,7 +100,7 @@ class RewardTableTests(unittest.TestCase):
             "| 2026-08-25* | $-30.98 | Not posted | Not posted | Pending",
             output)
         self.assertIn("Finalized net (complete reward days only): **$+5.00**", output)
-        self.assertIn("Account realized today (ET): **$-30.98**", output)
+        self.assertIn("Account marked trading today (ET): **$-30.98**", output)
         self.assertIn("Balanced-pair estimate (7d): **$-30.00**", output)
 
     def test_discord_embed_contains_two_aligned_visual_tables(self):
@@ -136,7 +136,7 @@ class RewardTableTests(unittest.TestCase):
         self.assertEqual({len(line) for line in resting_lines}, {34})
         self.assertIn("**Finalized net:** $+14.02", embed["description"])
         self.assertIn(
-            "**Account realized today (ET):** $-30.98",
+            "**Account marked trading today (ET):** $-30.98",
             embed["description"])
         self.assertIn(
             "**Balanced-pair estimate (7d):** $-70.00",
@@ -190,6 +190,9 @@ class RewardTableTests(unittest.TestCase):
 
         self.assertEqual(payload["headline"], {
             "today_pnl": "-44.52",
+            "today_realized": None,
+            "today_unrealized": None,
+            "today_as_of": None,
             "overall_pnl": "-115.65",
             "overall_trading": "-130.65",
             "overall_gain": "15",
@@ -371,6 +374,7 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
             {"market-one": {
                 "netPositionDecimal": "10",
                 "cost": {"value": "5", "currency": "USD"},
+                "cashValue": {"value": "4", "currency": "USD"},
                 "updateTime": "2026-08-25T16:00:00Z",
             }},
             [{"activities": [{
@@ -397,6 +401,8 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
                 now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
 
         self.assertEqual(result.value, Decimal("-25"))
+        self.assertEqual(result.open_unrealized, Decimal("-1"))
+        self.assertEqual(result.marked_value, Decimal("-26"))
         self.assertEqual(result.position_basis, Decimal("5"))
         self.assertEqual(result.nontrading_cash, Decimal("10"))
         params = gateway.client.portfolio.activity_params[0]
@@ -448,7 +454,7 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result.value)
         self.assertIn("cash changed", result.reason)
-        self.assertEqual(gateway.client.portfolio.activity_params, [])
+        self.assertEqual(len(gateway.client.portfolio.activity_params), 1)
 
     async def test_cash_scan_refuses_a_window_larger_than_its_page_bound(self):
         fresh = {

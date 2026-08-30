@@ -23,6 +23,7 @@ import sqlite3
 import subprocess
 from typing import Any, Iterable
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .commissioning import RUNTIME_SLOT_CAPACITY_PATH, configured_slot_capacity
 
@@ -30,6 +31,7 @@ from .commissioning import RUNTIME_SLOT_CAPACITY_PATH, configured_slot_capacity
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASSETS = PROJECT_ROOT / "web" / "tv-dashboard"
 DEFAULT_GAIN_CACHE = PROJECT_ROOT / "data" / "tv-gain-snapshot.json"
+DEFAULT_LIVE_PNL_CACHE = PROJECT_ROOT / "data" / "tv-live-pnl.json"
 ACTIVE_ORDER_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 UNRESOLVED_INTENT_STATES = ("PREPARED", "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN")
 MAX_ACTIVITY_LINES = 12
@@ -174,6 +176,10 @@ def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
         headline = {
             "today_pnl": _money_value(
                 source_headline.get("today_pnl"), "today pnl"),
+            "today_realized": _money_value(
+                source_headline.get("today_realized"), "today realized"),
+            "today_unrealized": _money_value(
+                source_headline.get("today_unrealized"), "today unrealized"),
             "overall_pnl": _money_value(
                 source_headline.get("overall_pnl"), "overall pnl"),
             "overall_trading": _money_value(
@@ -182,6 +188,18 @@ def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
                 source_headline.get("overall_gain"), "overall gain"),
             "overall_since_et": since,
         }
+        today_as_of = _parse_time(source_headline.get("today_as_of"))
+        headline["today_as_of"] = _iso(today_as_of)
+        headline["today_age_seconds"] = _age_seconds(today_as_of, now)
+        if ((headline["today_realized"] is None)
+                != (headline["today_unrealized"] is None)):
+            raise ValueError("today P&L breakdown is incomplete")
+        if headline["today_realized"] is not None:
+            breakdown = (Decimal(headline["today_realized"])
+                         + Decimal(headline["today_unrealized"]))
+            if (headline["today_pnl"] is None
+                    or breakdown != Decimal(headline["today_pnl"])):
+                raise ValueError("today P&L breakdown does not reconcile")
         return {
             "available": True,
             "error": None,
@@ -192,6 +210,68 @@ def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return _gain_unavailable(str(exc))
+
+
+def _read_live_pnl_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
+    """Validate the runner-written mark; this reader never calls the venue."""
+
+    unavailable = {
+        "available": False, "error": None, "observed_at": None,
+        "age_seconds": None, "marked_pnl": None, "realized_pnl": None,
+        "unrealized_pnl": None, "nontrading_cash": None,
+    }
+    if path is None:
+        return {**unavailable, "error": "live P&L cache is not configured"}
+    try:
+        if path.stat().st_size > 8_192:
+            raise ValueError("live P&L cache is unexpectedly large")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            raise ValueError("live P&L cache schema is unsupported")
+        if payload.get("scope") != "ACCOUNT_WIDE_TRADING":
+            raise ValueError("live P&L cache scope is invalid")
+        observed_at = _parse_time(payload.get("observed_at"))
+        if observed_at is None:
+            raise ValueError("live P&L cache time is invalid")
+        risk_date = str(payload.get("risk_date_et") or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", risk_date):
+            raise ValueError("live P&L cache date is invalid")
+        try:
+            new_york = ZoneInfo("America/New_York")
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("ET timezone data is unavailable") from exc
+        if observed_at.astimezone(new_york).date().isoformat() \
+                != risk_date:
+            raise ValueError("live P&L cache date does not match its mark")
+        if now.astimezone(new_york).date().isoformat() \
+                != risk_date:
+            raise ValueError("live P&L cache is from a previous ET day")
+        marked = _money_value(payload.get("marked_pnl"), "live marked pnl")
+        realized = _money_value(
+            payload.get("realized_pnl"), "live realized pnl")
+        unrealized = _money_value(
+            payload.get("unrealized_pnl"), "live unrealized pnl")
+        nontrading = _money_value(
+            payload.get("nontrading_cash"), "live nontrading cash")
+        if marked is None or nontrading is None:
+            raise ValueError("live P&L cache required money is missing")
+        if (realized is None) != (unrealized is None):
+            raise ValueError("live P&L cache breakdown is incomplete")
+        if (realized is not None
+                and Decimal(realized) + Decimal(unrealized) != Decimal(marked)):
+            raise ValueError("live P&L cache breakdown does not reconcile")
+        return {
+            "available": True,
+            "error": None,
+            "observed_at": _iso(observed_at),
+            "age_seconds": _age_seconds(observed_at, now),
+            "marked_pnl": marked,
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "nontrading_cash": nontrading,
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {**unavailable, "error": str(exc)}
 
 
 def _process_snapshot() -> list[dict[str, Any]]:
@@ -423,6 +503,7 @@ def collect_state(
     now: datetime | None = None,
     processes: Iterable[dict[str, Any]] | None = None,
     gain_cache: Path | None = None,
+    live_pnl_cache: Path | None = None,
     slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
 ) -> dict[str, Any]:
     """Build one local-only snapshot. Unknown data remains unknown, never zero."""
@@ -464,6 +545,7 @@ def collect_state(
             "error": log_error,
         },
         "gain_report": _read_gain_snapshot(gain_cache, observed_at),
+        "live_pnl": _read_live_pnl_snapshot(live_pnl_cache, observed_at),
         "activity": activity,
     }
 
@@ -481,12 +563,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def __init__(self, *args: Any, database: Path, log: Path, assets: Path,
                  gain_cache: Path | None = None,
+                 live_pnl_cache: Path | None = DEFAULT_LIVE_PNL_CACHE,
                  slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
                  **kwargs: Any) -> None:
         self.database = database
         self.log = log
         self.assets = assets.resolve()
         self.gain_cache = gain_cache
+        self.live_pnl_cache = live_pnl_cache
         self.slot_capacity_path = slot_capacity_path
         super().__init__(*args, **kwargs)
 
@@ -519,6 +603,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = json.dumps(
                 collect_state(
                     self.database, self.log, gain_cache=self.gain_cache,
+                    live_pnl_cache=self.live_pnl_cache,
                     slot_capacity_path=self.slot_capacity_path),
                 separators=(",", ":")).encode()
             self._write(HTTPStatus.OK, body, "application/json; charset=utf-8", head=head)
@@ -592,6 +677,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
     parser.add_argument("--gain-cache", type=Path, default=DEFAULT_GAIN_CACHE)
     parser.add_argument(
+        "--live-pnl-cache", type=Path, default=DEFAULT_LIVE_PNL_CACHE)
+    parser.add_argument(
         "--slot-capacity-file", type=Path,
         default=PROJECT_ROOT / RUNTIME_SLOT_CAPACITY_PATH)
     return parser
@@ -604,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
     handler = partial(
         DashboardHandler, database=args.database, log=args.log,
         assets=args.assets, gain_cache=args.gain_cache,
+        live_pnl_cache=args.live_pnl_cache,
         slot_capacity_path=args.slot_capacity_file)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Liquidity TV dashboard: http://{args.host}:{args.port}", flush=True)

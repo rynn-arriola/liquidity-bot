@@ -128,18 +128,24 @@ function appendMoneyCell(row, value, { signed = false, missing = "—", estimate
   row.append(cell);
 }
 
-function renderGainReport(report) {
+function renderGainReport(report, livePnl) {
   const todayPnl = byId("today-pnl");
   const overallPnl = byId("overall-pnl");
   const body = byId("gain-table-body");
   body.replaceChildren();
 
   if (!report || !report.available || !report.headline) {
-    todayPnl.textContent = "—";
+    const hasLive = livePnl && livePnl.available;
+    todayPnl.textContent = hasLive
+      ? money(livePnl.marked_pnl, { signed: true }) : "—";
     overallPnl.textContent = "—";
-    applyMoneyTone(todayPnl, null);
+    applyMoneyTone(todayPnl, hasLive ? livePnl.marked_pnl : null);
     applyMoneyTone(overallPnl, null);
-    byId("today-pnl-detail").textContent = "Waiting for hourly snapshot";
+    byId("today-pnl-detail").textContent = hasLive
+      ? (livePnl.realized_pnl == null || livePnl.unrealized_pnl == null
+        ? `Marked account trading · ${readableAge(livePnl.age_seconds)}`
+        : `Closed ${money(livePnl.realized_pnl, { signed: true })} · open ${money(livePnl.unrealized_pnl, { signed: true })} · ${readableAge(livePnl.age_seconds)}`)
+      : "Waiting for a proven mark";
     byId("overall-pnl-detail").textContent = "Trading + finalized gain";
     byId("gain-report-age").textContent = "Unavailable";
     byId("gain-report-state").textContent = "LOCAL SNAPSHOT NOT YET AVAILABLE";
@@ -154,11 +160,24 @@ function renderGainReport(report) {
   }
 
   const headline = report.headline;
-  todayPnl.textContent = money(headline.today_pnl, { signed: true });
+  const currentMark = livePnl && livePnl.available
+    ? livePnl.marked_pnl : headline.today_pnl;
+  todayPnl.textContent = money(currentMark, { signed: true });
   overallPnl.textContent = money(headline.overall_pnl, { signed: true });
-  applyMoneyTone(todayPnl, headline.today_pnl);
+  applyMoneyTone(todayPnl, currentMark);
   applyMoneyTone(overallPnl, headline.overall_pnl);
-  byId("today-pnl-detail").textContent = "Account trading · current ET day";
+  const closedValue = livePnl && livePnl.available
+    ? livePnl.realized_pnl : headline.today_realized;
+  const openValue = livePnl && livePnl.available
+    ? livePnl.unrealized_pnl : headline.today_unrealized;
+  const closed = money(closedValue, { signed: true });
+  const open = money(openValue, { signed: true });
+  const markAge = readableAge(livePnl && livePnl.available
+    ? livePnl.age_seconds : headline.today_age_seconds);
+  byId("today-pnl-detail").textContent =
+    closedValue == null || openValue == null
+      ? `Marked account trading · ${markAge}`
+      : `Closed ${closed} · open ${open} · ${markAge}`;
   byId("overall-pnl-detail").textContent = `Since ${headline.overall_since_et} ET`;
   byId("gain-report-age").textContent = readableAge(report.age_seconds);
   const stale = Number(report.age_seconds) > 7200;
@@ -172,7 +191,9 @@ function renderGainReport(report) {
     dateCell.scope = "row";
     dateCell.textContent = `${item.date_et}${item.current_day ? " · TODAY" : ""}`;
     row.append(dateCell);
-    appendMoneyCell(row, item.trading, { signed: true, missing: "Unavailable", estimate: item.trading_estimate });
+    const rowTrading = item.current_day && livePnl && livePnl.available
+      ? livePnl.marked_pnl : item.trading;
+    appendMoneyCell(row, rowTrading, { signed: true, missing: "Unavailable", estimate: item.trading_estimate });
     appendMoneyCell(row, item.gain, { missing: "Not posted" });
     appendMoneyCell(row, item.pending, { missing: "Not posted" });
     const hours = document.createElement("td");
@@ -231,7 +252,7 @@ function render(data) {
   byId("slot-capacity").textContent = Number.isInteger(capacity) ? String(capacity) : "—";
   renderSlots(ledger.slots, capacity);
   renderActivity(data.activity);
-  renderGainReport(data.gain_report);
+  renderGainReport(data.gain_report, data.live_pnl);
   byId("footer-source").textContent = data.source || "LOCAL READ-ONLY";
   updateObservationAge();
 }

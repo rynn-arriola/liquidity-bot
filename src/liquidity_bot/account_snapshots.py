@@ -30,6 +30,90 @@ class ExecutionHistoryBatch:
         return len(self.executions)
 
 
+@dataclass(frozen=True)
+class AccountEquitySnapshot:
+    """One cash-stable account mark built from documented Retail fields.
+
+    Authenticated production evidence on 2026-08-30 showed
+    ``assetNotional == 0`` while `/v1/portfolio/positions` simultaneously
+    returned nonzero positions with nonzero ``cashValue``.  Therefore the
+    account mark is fiat cash plus the sum of each open position's cash value,
+    not ``currentBalance + assetNotional``.
+
+    ``position_basis`` is optional because marked equity does not need basis.
+    Realised/open-unrealised decomposition does, so those consumers fail
+    closed when any open position omits cost.
+    """
+
+    balance: AccountBalance
+    positions: tuple[PositionState, ...]
+    position_value: Decimal
+    position_basis: Decimal | None
+    observed_at: datetime
+
+    @property
+    def marked_equity(self) -> Decimal:
+        return self.balance.current_balance + self.position_value
+
+    def marked_trading_pnl(
+        self, *, opening_equity: Decimal, nontrading_cash: Decimal,
+    ) -> Decimal:
+        return (self.marked_equity - opening_equity - nontrading_cash)
+
+    def realized_trading_pnl(
+        self, *, opening_cash: Decimal, nontrading_cash: Decimal,
+    ) -> Decimal | None:
+        if self.position_basis is None:
+            return None
+        return (self.balance.current_balance - opening_cash
+                - nontrading_cash + self.position_basis)
+
+    def open_unrealized_pnl(self) -> Decimal | None:
+        if self.position_basis is None:
+            return None
+        return self.position_value - self.position_basis
+
+
+def account_equity_snapshot(
+    balance: AccountBalance,
+    positions: tuple[PositionState, ...],
+    *,
+    observed_at: datetime,
+) -> AccountEquitySnapshot:
+    """Validate and compose one already cash-bracketed account snapshot."""
+
+    value = Decimal("0")
+    basis = Decimal("0")
+    basis_known = True
+    for position in positions:
+        if position.net_qty == 0:
+            continue
+        if position.cash_value is None:
+            raise AdapterError(
+                "open position has no venue cashValue: "
+                f"{position.market_slug}")
+        if position.cash_value < 0:
+            raise AdapterError(
+                "open position cashValue is negative: "
+                f"{position.market_slug}")
+        value += position.cash_value
+        if position.cost is None:
+            basis_known = False
+        elif position.cost < 0:
+            raise AdapterError(
+                "open position basis is negative: "
+                f"{position.market_slug}")
+        else:
+            basis += position.cost
+    return AccountEquitySnapshot(
+        balance=balance,
+        positions=positions,
+        position_value=value,
+        position_basis=basis if basis_known else None,
+        observed_at=observed_at,
+    )
+
+
 def _activity_time(value: Any, *, fallback: datetime) -> datetime:
     if value in (None, ""):
         return fallback
@@ -259,3 +343,25 @@ class AsyncAccountSnapshotGateway:
             buying_power=amount("buyingPower"),
             observed_at=observed_at,
         )
+
+    async def fetch_equity_snapshot(
+        self, *, observed_at: datetime,
+    ) -> AccountEquitySnapshot:
+        """Bracket a complete position mark with equal fiat-cash reads.
+
+        A fill between the three reads changes fiat cash.  Mixing the older
+        position page with the newer balance would manufacture P&L, so the
+        snapshot is rejected.  Market-price movement may legitimately change
+        ``cashValue`` after the position response; ``observed_at`` states the
+        mark's age and normal risk freshness bounds it.
+        """
+
+        first = await self.fetch_balance(observed_at=observed_at)
+        positions = await self.fetch_positions(observed_at=observed_at)
+        second = await self.fetch_balance(observed_at=observed_at)
+        if first.current_balance != second.current_balance:
+            raise AdapterError(
+                "settled cash changed during account equity snapshot")
+
+        return account_equity_snapshot(
+            second, positions, observed_at=observed_at)

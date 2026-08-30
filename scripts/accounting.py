@@ -240,8 +240,8 @@ async def main() -> int:
 
     gateway = AsyncReadOnlyGateway(client_from_environment())
     account = AsyncAccountSnapshotGateway(gateway)
-    balance = await account.fetch_balance(observed_at=now)
-    equity = _money(getattr(balance, "marked_equity", 0))
+    account_snapshot = await account.fetch_equity_snapshot(observed_at=now)
+    equity = _money(account_snapshot.marked_equity)
     earnings = await gateway.fetch_earnings()
     paid_reward = sum(Decimal(str(getattr(r, "reward", 0) or 0))
                       for r in earnings

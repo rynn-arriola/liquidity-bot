@@ -411,6 +411,15 @@ class PositionState:
     # 2026-08-15 on demciva-hryole and ff-ep. The venue already knows the cost,
     # so stop rebuilding it -- the same move that fixed the loss stop.
     cost: Decimal | None = None
+    # Retail `cashValue` is the current marked value of this position.  It is
+    # deliberately kept separate from cost: their difference is open
+    # unrealised P&L.  Private position updates may omit both amounts, so they
+    # remain optional and only a complete REST snapshot may be used for
+    # account-equity reporting or the emergency marked-equity guard.
+    cash_value: Decimal | None = None
+    # Venue-reported realised P&L is retained as evidence, not used as the
+    # account-wide day total (it is position/lifecycle scoped).
+    realized: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug:
@@ -419,6 +428,10 @@ class PositionState:
         _time(self.event_at, "event_at")
         if self.cost is not None:
             _decimal(self.cost, "cost")
+        if self.cash_value is not None:
+            _decimal(self.cash_value, "cash_value")
+        if self.realized is not None:
+            _decimal(self.realized, "realized")
 
 
 @dataclass(frozen=True)

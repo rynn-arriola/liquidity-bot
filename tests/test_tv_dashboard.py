@@ -125,11 +125,15 @@ class TvDashboardTests(unittest.TestCase):
 
     def test_snapshot_uses_local_ledger_and_maps_all_twenty_slots(self):
         with TemporaryDirectory() as directory:
-            database, log = self._fixture(Path(directory))
+            root = Path(directory)
+            database, log = self._fixture(root)
+            capacity = root / "slot_capacity"
+            capacity.write_text("20\n", encoding="utf-8")
             state = collect_state(
                 database,
                 log,
                 now=NOW,
+                slot_capacity_path=capacity,
                 processes=[
                     {"pid": 100, "age_seconds": 120, "args": "python -m liquidity_bot.live_commissioning"},
                     {"pid": 99, "age_seconds": 125, "args": "bash ./scripts/supervise_commissioning.sh"},

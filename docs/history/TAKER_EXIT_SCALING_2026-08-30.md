@@ -79,5 +79,20 @@ passed in 76.927 seconds. The documentation audit covered 56 Markdown files
 and 983 mandatory lines with zero broken/rule issues, including a repeat after
 this evidence was recorded.
 
-Deployment and restart remain gated on a clean final diff review, an exact
-deployed-checkout full-suite pass and fresh authenticated ownership checks.
+Deliberately replacing the computed property with the old fixed value made the
+size-13 configuration and live-runner regressions both fail `20 != 52`.
+Restoring the computation made both pass and left the pushed tree clean.
+
+WSL fast-forwarded to pushed commit `821f5c85`; WSL HEAD, `origin/main` and
+`DEPLOYED_COMMIT` matched. The exact deployed checkout passed all 886 tests in
+59.186 seconds. Immediately before restart, authenticated venue truth was zero
+open orders and zero nonzero positions; the three old ledger working rows were
+owned, with zero unresolved intents, absent rows or foreign ownership.
+
+One authorized restart at size 13 and 22 slots created supervisor PID 290240
+and runner PID 290252; the existing isolated dashboard stayed PID 116618. At
+12:15:22Z authenticated acceptance found 38 venue orders, zero positions and
+exactly 38 owned ledger working rows, with zero unresolved/absent/foreign
+state. The first 138.4-second API window covered 357 attempts and 38 creates at
+2.579 requests/second, maximum queue depth one, zero failures and zero rate
+limits. The bot was left live on the reviewed commit.

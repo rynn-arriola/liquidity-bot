@@ -49,7 +49,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 - **Open marked loss is provisional.** New entries block immediately, but an
   open-position mark does not become a terminal hard stop until the documented
   close/newer-balance evidence arrives.
-- **Resting side-hours are the gain-facing time metric.** The TV table reuses the hourly ET snapshot; its dashboard refresh adds no venue call. [Evidence](docs/history/TV_GAIN_DASHBOARD_2026-08-28.md).
+- **The TV dashboard is a viewport-bound local instrument panel.** Its gain table reuses the hourly ET snapshot with zero venue calls, and the deployed responsive layout fits every panel without page/panel overflow at five measured landscape sizes from 800×600 through 1920×1080. [Gain evidence](docs/history/TV_GAIN_DASHBOARD_2026-08-28.md) · [Layout evidence](docs/history/TV_DASHBOARD_VIEWPORT_FIT_2026-08-29.md).
 - **Later cash activity erased proven historical account truth.** The historical
   scan now ignores only post-window completions while still reaching EOF; live
   snapshots remain strict. Deployed acceptance resolved August 26 to

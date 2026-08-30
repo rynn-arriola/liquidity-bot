@@ -2,7 +2,7 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Verified:** 2026-08-29 21:14 ET / 2026-08-30 01:14 UTC
+- **Verified:** 2026-08-29 21:59 ET / 2026-08-30 01:59 UTC
 - **Liquidity bot:** LIVE on the laptop; supervisor PID 14497 and runner PID
   14504 are active, with the isolated TV dashboard PID 1681
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
@@ -10,9 +10,9 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   `operator_sigterm` and `flat=true`; the post-stop authenticated snapshot
   proved zero orders and positions before the deployment started
 - **Loaded source:** marker `2aa9fec`; source commit `599fb5f` is staged in WSL and activates only on the next restart
-- **Verification:** all 830 loaded-source tests and all 842 staged WSL/PC tests pass.
-  At 01:14Z the zero-API dashboard found the original runner/supervisor alive,
-  20 scoped markets, 23 orders, zero ledger positions and no unknown/unresolved
+- **Verification:** all 830 loaded-source tests and all 842 current WSL/PC tests pass.
+  At 01:59Z the responsive zero-API dashboard found the original runner alive,
+  20 scoped markets, 16 orders, two ledger positions, one unresolved and zero unknown
   rows; this local view made no venue call and is not venue exposure proof
 - **API capacity measurement:** startup made 373 attempts/146.9s clean; the next
   64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered

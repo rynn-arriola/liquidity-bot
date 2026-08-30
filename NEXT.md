@@ -34,11 +34,11 @@ Continue natural live observation of fills, exits, stream freshness, 20-slot
 ownership and access errors. The local TV dashboard is active but remains
 local evidence rather than venue flat proof.
 
-The additive Gain/P&L dashboard update requires no bot restart. After this
-commit reaches the laptop, restart only the optional TV service; its table will
-populate after the hourly report atomically writes the first local snapshot.
-Confirm the two top P&L cards, all six ordered columns and snapshot age while
-the existing slot, health and activity information remains unchanged.
+The responsive dashboard assets are active at `c8a7a45` without a process or
+bot restart. Browser verification covered 800×600 through 1920×1080 with no
+page/panel overflow while preserving the two P&L cards, six-column gain table,
+20-slot map, health and newest fitting activity rows. Continue treating it as
+local evidence rather than authenticated venue state.
 
 Never use GitHub or a general file-sync service for the live SQLite database or
 credentials. Any later desktop failover is manual and repeats the stopped-

@@ -68,6 +68,13 @@ The browser opens at `http://localhost:8787`. Press `F11` for a full-screen TV
 view. The dashboard remains running after the bot stops so it can visibly show
 `OFFLINE`; starting the bot again reuses the service and opens the page again.
 
+The page is bound to the browser viewport and does not require vertical
+scrolling on a landscape laptop or TV. It automatically compacts spacing,
+cards, slot layout and the seven-day table as screen height decreases. Recent
+activity always keeps the newest rows that fit; resizing the window recomputes
+that visible tail. The layout has been verified without page or panel overflow
+at 800×600, 1024×768, 1280×720, 1366×768 and 1920×1080.
+
 Manual lifecycle commands are:
 
 ```bash

@@ -113,12 +113,9 @@ SSH private key. Keep the recovery key outside repositories and every cloud-
 synchronized folder. The weekly task is manual, not scheduled, and cannot
 stop, start, restart or hand off the bot.
 
-The unqualified instruction **"run the bot"** always means the laptop. The
-desktop may be selected only when the operator explicitly says **"run it on
-the computer"**, **"run it on the PC"** or equivalent. That explicit target
-does not bypass the single-owner handoff: prove the other runner absent, verify
-account state, transfer a current stopped-runtime ledger snapshot and complete
-normal preflight before starting the desktop.
+The unqualified instruction **"run the bot"** always means the laptop; only explicit **"run it on the computer/PC"** selects the desktop, still requiring the single-owner handoff, absent old runner, known account state, current stopped-runtime ledger snapshot and normal preflight.
+
+**"Stop bot now," "stop it now,"** and **"just stop it"** mean immediately stop the supervisor and gracefully signal the current runner through `scripts/stop_commissioning.sh` before parity, diagnostics or authenticated reads so it cannot replace orders; never force-kill, then verify the final record and authenticated venue orders/positions, reporting unknown and leaving it stopped if proof fails. **"Restart now while flat"** means that same stop first, followed by positive post-stop flat/order-free, ownership, parity, deployment and startup gates; the operator's flat statement speeds sequencing but does not replace proof, and any failed gate leaves the bot stopped.
 
 ## How to work with the operator
 

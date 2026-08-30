@@ -392,6 +392,11 @@ class CommissioningRunner:
         # it on one immediate incremental top-up attempt; a failed attempt then
         # uses the ordinary bounded backoff instead of retrying every pass.
         self._reward_end_top_up_requested = False
+        # A bound pregame market reaching its positively observed kickoff is a
+        # normal lifecycle transition, not a recoverable transport failure.
+        # Request one incremental top-up as soon as ownership is flat and clear;
+        # the existing near-deadline guard still keeps discovery behind exits.
+        self._lifecycle_top_up_requested_at: datetime | None = None
         # A near-deadline position can correctly defer discovery while several
         # finished owners hold slots. Once the final such position becomes
         # flat, waiting behind another serial twenty-market service pass adds
@@ -860,6 +865,7 @@ class CommissioningRunner:
     async def _refresh_contracts(
         self, now: datetime, slug: str | None = None, *,
         for_exit: bool = False,
+        accept_bound_lifecycle_end: bool = False,
     ) -> None:
         """Load metadata and incentive for one market.
 
@@ -881,6 +887,7 @@ class CommissioningRunner:
             incentive=incentives.get(slug),
             now=now,
             for_exit=for_exit,
+            accept_bound_lifecycle_end=accept_bound_lifecycle_end,
         )
 
     def _apply_contracts(
@@ -891,6 +898,7 @@ class CommissioningRunner:
         incentive: MarketIncentive | None,
         now: datetime,
         for_exit: bool,
+        accept_bound_lifecycle_end: bool = False,
     ) -> None:
         """Apply already-fetched rows with the original per-market gates."""
 
@@ -912,6 +920,18 @@ class CommissioningRunner:
             raise CommissioningUnavailable(
                 f"{slug} start clock is unavailable")
         if state.market.game_start <= now:
+            if accept_bound_lifecycle_end:
+                state.incentive = None
+                state.reward_eligible = frozenset()
+                state.clear_economics()
+                if self._lifecycle_top_up_requested_at is None:
+                    self._lifecycle_top_up_requested_at = now
+                    print(
+                        f"[top-up-request] at={now.isoformat()} "
+                        "reason=lifecycle",
+                        flush=True,
+                    )
+                return
             raise CommissioningUnavailable(f"{slug} is no longer pregame")
         try:
             period = select_applicable_period(
@@ -1006,6 +1026,7 @@ class CommissioningRunner:
                         incentive=incentives.get(slug),
                         now=completed_at,
                         for_exit=self._is_barred_from_quoting(slug),
+                        accept_bound_lifecycle_end=True,
                     )
                     self._runtime_error_counts.pop(
                         f"market_incentive_refresh:{slug}", None)
@@ -4314,7 +4335,11 @@ class CommissioningRunner:
                 # whose game has started raises `no longer pregame` on every
                 # refresh and never gets a fresh book to price against.
                 await self._refresh_contracts(
-                    now, slug, for_exit=self._is_barred_from_quoting(slug))
+                    now,
+                    slug,
+                    for_exit=self._is_barred_from_quoting(slug),
+                    accept_bound_lifecycle_end=True,
+                )
                 self._runtime_error_counts.pop(
                     f"market_incentive_refresh:{slug}", None)
             except Exception as exc:
@@ -5125,6 +5150,7 @@ class CommissioningRunner:
         self, consumed_post_flat_at: datetime | None,
     ) -> None:
         self._reward_end_top_up_requested = False
+        self._lifecycle_top_up_requested_at = None
         # The socket handoff performs another complete position snapshot. If
         # that discovers a different final urgent position becoming flat, it
         # creates a new request during this top-up. Clear only the request this
@@ -5174,8 +5200,10 @@ class CommissioningRunner:
             self.config.auto_select_reward_markets
             and (now >= next_selection
                  or self._reward_end_top_up_requested
+                 or self._lifecycle_top_up_requested_at is not None
                  or self._post_flat_top_up_requested_at is not None)
             and (self._reward_end_top_up_requested
+                 or self._lifecycle_top_up_requested_at is not None
                  or self._post_flat_top_up_requested_at is not None
                  or not self._safe_to_scan())
             and not self._position_near_its_flatten_deadline(now)
@@ -5268,10 +5296,16 @@ class CommissioningRunner:
             triggers.append("post_flat")
         if self._reward_end_top_up_requested:
             triggers.append("reward_end")
+        if self._lifecycle_top_up_requested_at is not None:
+            triggers.append("lifecycle")
         trigger = "+".join(triggers) if triggers else "scheduled"
         fields = f"trigger={trigger} selection_source={selection_source}"
         if cache_age is not None:
             fields += f" cache_age_seconds={cache_age:.1f}"
+        if self._lifecycle_top_up_requested_at is not None:
+            wait = max(0.0, (
+                now - self._lifecycle_top_up_requested_at).total_seconds())
+            fields += f" lifecycle_wait_seconds={wait:.1f}"
         if self._post_flat_top_up_requested_at is not None:
             wait = max(0.0, (
                 now - self._post_flat_top_up_requested_at).total_seconds())

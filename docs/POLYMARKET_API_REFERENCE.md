@@ -155,6 +155,17 @@ completed with zero failures and zero 429s. This bounds the observed incident
 to a transient restart/rolling window; it does not erase the failed window or
 prove that another restart will be clean.
 
+The 2026-08-30 02:00Z synchronized lifecycle window separated slot churn from
+API capacity. Eight bound markets reached kickoff while two positions were
+being exited; working orders fell to 16/17 across 11 markets, but the relevant
+transport windows contained zero failures and zero 429s and the selector still
+had 81 viable candidates. The ordinary 02:12:52Z selection replaced eight
+expired owners plus one economic-idle owner and restored 20 markets/33 orders
+with zero positions, unresolved intents or unknown orders. This is evidence of
+avoidable lifecycle scheduling delay, not a venue limit. The source repair
+uses the existing bounded selection and validation calls; it adds no endpoint,
+polling cadence or diagnostic request.
+
 A natural router outage on 2026-08-29 supplied the first deployed network-loss
 window. DNS failures and timeouts disconnected public/private streams from
 about 17:48Z; the runner quarantined new risk and reconciled/canceled until an

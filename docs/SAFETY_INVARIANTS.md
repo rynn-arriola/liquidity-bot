@@ -554,3 +554,12 @@ These are implementation requirements, not suggestions.
     intent only when its durable error contains the exact reviewed response
     proof; near-matches remain unresolved. Shutdown keeps its independent
     risk-reduction and positive-flatness contract.
+85. A bound market reaching its positively observed kickoff is an expected
+    lifecycle transition, not a retryable runtime failure. It may request one
+    incremental top-up, but startup must still reject already-started
+    candidates and no request may bypass near-deadline inventory priority,
+    flat/order/ambiguity proof, complete account reconciliation, fresh
+    replacement viability, release revalidation, stream handoff or the 20-slot
+    ceiling. Retained orders are never cancelled for discovery. A failed refill
+    uses the ordinary bounded retry cadence, and lifecycle timing telemetry is
+    evidence only rather than entry authorization.

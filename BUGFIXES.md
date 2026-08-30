@@ -1,11 +1,11 @@
 # Production defect index
 
-History through 2026-08-27: [archive](docs/history/BUGFIXES_THROUGH_2026-08-27.md).
-Search it before designing a repair:
+History through 2026-08-27: [archive](docs/history/BUGFIXES_THROUGH_2026-08-27.md). Search it before designing a repair:
 
 ```powershell
 rg -n -i "<symptom, component, or error>" BUGFIXES.md docs/history/BUGFIXES_*.md
 ```
+- **Source repair complete; deployment/restart pending:** eight bound markets reached kickoff together, but each expected `no longer pregame` refresh was treated as a recurring runtime error and refill waited for the ordinary 15-minute selector. A bound, positively observed kickoff now requests one immediate incremental top-up; startup still rejects already-started candidates, urgent inventory still has priority, and the existing flat, ownership, reconciliation, viability and pre-commit gates remain unchanged. The focused 48-test class, all 844 Windows tests and a deliberate reversal passed. [Evidence](docs/history/BOUND_LIFECYCLE_REFILL_2026-08-29.md).
 - **Deployed `c8a7a45` without a process restart:** the TV page was 1,542px tall in a 720px viewport, hiding lower information behind scrolling. A viewport-height grid, landscape slot map, height breakpoints and fit-aware activity tail now keep all panels on one screen from 800×600 through 1920×1080. Reversal failed and all 842 tests pass. [Evidence](docs/history/TV_DASHBOARD_VIEWPORT_FIT_2026-08-29.md).
 - **Staged in laptop WSL; next restart pending:** non-trading cash could make Discord's HARD bar under-report the unchanged stop's adjusted-equity consumption. The headline stays raw account P&L; HARD now reads the guard input. Reversal failed and all 842 staged-checkout tests pass. [Evidence](docs/history/HARD_METER_NONTRADING_CASH_2026-08-29.md).
 - **Deployed `2aa9fec`; capacity ceiling remains open:** steady contract/reward refresh had scaled as two REST reads per market per minute. The repair bulk-reads bounded groups (8/8/4 at 20), retains exact validation/exit gates and adds secret-free limiter telemetry. All 830 deployed tests pass. The first exact restart measurement found 10 Cloudflare `1015`/429s on execution-history backfill in 64 seconds despite 1.813 aggregate attempts/s; the next 66.2-second window was clean, but 20 remains the ceiling pending endpoint isolation and a clean restart. [Capacity evidence](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).

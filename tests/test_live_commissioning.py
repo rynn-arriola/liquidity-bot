@@ -8652,6 +8652,88 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_bound_kickoff_requests_one_immediate_top_up_without_error(self):
+        """A live lifecycle transition is expected; startup still rejects it."""
+
+        runner = await self.armed()
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        incentive = state.incentive
+        kicked_off = replace(
+            self.metadata(slug, now),
+            game_start=now - timedelta(seconds=1),
+        )
+        runner.gateway.fetch_market = AsyncMock(return_value=kicked_off)
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(
+            return_value={slug: kicked_off})
+        runner.gateway.fetch_incentives = AsyncMock(
+            return_value={slug: incentive})
+
+        with self.assertRaisesRegex(
+                CommissioningUnavailable, "no longer pregame"):
+            await runner._refresh_contracts(now, slug)
+        self.assertIsNone(runner._lifecycle_top_up_requested_at)
+
+        state.next_contract_refresh = None
+        with patch("sys.stdout", new=io.StringIO()) as output:
+            await runner._refresh_due_contract_batches(now, (slug,))
+            state.next_contract_refresh = None
+            await runner._refresh_due_contract_batches(now, (slug,))
+
+        self.assertEqual(output.getvalue().count("reason=lifecycle"), 1)
+        self.assertIsNotNone(runner._lifecycle_top_up_requested_at)
+        self.assertGreaterEqual(runner._lifecycle_top_up_requested_at, now)
+        self.assertIsNone(state.incentive)
+        self.assertEqual(state.reward_eligible, frozenset())
+        self.assertNotIn(
+            f"market_incentive_refresh:{slug}", runner._runtime_error_counts)
+        self.assertTrue(runner._incremental_top_up_due(
+            now, now + timedelta(hours=1)))
+        timing = runner._top_up_timing_fields(
+            runner._lifecycle_top_up_requested_at + timedelta(seconds=7),
+            "fresh_scan",
+            None,
+        )
+        self.assertIn("trigger=lifecycle", timing)
+        self.assertIn("lifecycle_wait_seconds=7.0", timing)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_lifecycle_request_cannot_bypass_urgent_position_guard(self):
+        runner = await self.armed()
+        runner.config = replace(runner.config, max_markets=2)
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        now = runner._now()
+        runner.state_for(held).market = replace(
+            self.metadata(held, now),
+            game_start=now + timedelta(seconds=120),
+        )
+        runner.state_for(dead).market = replace(
+            self.metadata(dead, now),
+            game_start=now - timedelta(minutes=1),
+        )
+        runner.ledger.apply_position_event(
+            "ws", "lifecycle-urgent-position",
+            PositionState(held, Decimal("5"), now),
+            received_at=now,
+        )
+        runner._lifecycle_top_up_requested_at = now
+        next_selection = now + timedelta(hours=1)
+
+        self.assertFalse(runner._incremental_top_up_due(
+            now, next_selection))
+        runner.ledger.apply_position_event(
+            "ws", "lifecycle-position-flat",
+            PositionState(held, Decimal("0"), runner._now()),
+            received_at=runner._now(),
+        )
+        self.assertTrue(runner._incremental_top_up_due(
+            runner._now(), next_selection))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_final_urgent_position_flat_requests_immediate_top_up(self):
         """The request is driven by positive position state, not a timer."""
 
@@ -8756,11 +8838,13 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         newer = consumed + timedelta(seconds=1)
         runner._post_flat_top_up_requested_at = newer
         runner._post_flat_underfilled_slots = 2
+        runner._lifecycle_top_up_requested_at = consumed
 
         runner._clear_incremental_top_up_requests(consumed)
 
         self.assertEqual(runner._post_flat_top_up_requested_at, newer)
         self.assertEqual(runner._post_flat_underfilled_slots, 2)
+        self.assertIsNone(runner._lifecycle_top_up_requested_at)
         runner._clear_incremental_top_up_requests(newer)
         self.assertIsNone(runner._post_flat_top_up_requested_at)
         self.assertEqual(runner._post_flat_underfilled_slots, 0)

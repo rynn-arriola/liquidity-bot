@@ -229,6 +229,8 @@ class TvDashboardTests(unittest.TestCase):
             connection.commit()
             connection.close()
             cache = self._active_scope_cache(root, current)
+            capacity_path = root / "max-market-slots.txt"
+            capacity_path.write_text("20\n", encoding="utf-8")
 
             state = collect_state(
                 database, log, now=NOW, processes=[{
@@ -236,7 +238,8 @@ class TvDashboardTests(unittest.TestCase):
                     "age_seconds": 60,
                     "args": "python -m liquidity_bot.live_commissioning",
                 }],
-                active_scope_cache=cache)
+                active_scope_cache=cache,
+                slot_capacity_path=capacity_path)
 
             scope = state["ledger"]["scope"]
             self.assertEqual(scope["status"], "RUNNING")

@@ -43,6 +43,8 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
@@ -536,9 +538,12 @@ async def main() -> int:
     venue_ok = False
     try:
         from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway
-        from liquidity_bot.adapters import AsyncReadOnlyGateway
         from liquidity_bot.probe import client_from_environment
-        gateway = AsyncReadOnlyGateway(client_from_environment())
+        gateway = AsyncReadOnlyGateway(
+            client_from_environment(),
+            limiter=shared_api_limiter(),
+            default_traffic_class="background",
+        )
         account = AsyncAccountSnapshotGateway(gateway)
         live = await account.fetch_open_orders(observed_at=now)
         account_today = await account_realized_today(DB, gateway, now=now)

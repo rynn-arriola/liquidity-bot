@@ -33,7 +33,8 @@ from datetime import datetime, timedelta
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK  # noqa: E402
 
@@ -59,7 +60,9 @@ async def main() -> int:
         help="include pre-bot maker-lab reward (default: this bot only)")
     args = parser.parse_args()
 
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(),
+        default_traffic_class="background")
     rows = await gateway.fetch_earnings()
     if not rows:
         print("no earnings rows returned -- check credentials")

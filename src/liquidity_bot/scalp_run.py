@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .adapters import AsyncReadOnlyGateway, shared_api_limiter
 from .errors import AdapterError
 from .models import BookSnapshot, MarketMetadata, TradePrint
 from .probe import client_from_environment
@@ -116,7 +116,8 @@ class ScalpRunner:
         self.config = config
         self.gateway = AsyncReadOnlyGateway(
             client,
-            limiter=AsyncIntervalLimiter.from_rate(config.rest_requests_per_second),
+            limiter=shared_api_limiter(config.rest_requests_per_second),
+            default_traffic_class="background",
         )
         self.store = ScalpStore(config.database)
         unfinished = self.store.latest_unfinished_run()

@@ -52,7 +52,8 @@ sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.pnl import (  # noqa: E402
     economic_contract_cost,
     economic_sale_proceeds,
@@ -142,7 +143,7 @@ def _residual(book):
     return qty, paid, held
 
 
-async def _price_settlements(client, per_market, cache_path: Path):
+async def _price_settlements(gateway, per_market, cache_path: Path):
     """Price each unmatched position against its market's published resolution.
 
     A resolution is final, so it is cached on disk: only markets we have never
@@ -172,7 +173,10 @@ async def _price_settlements(client, per_market, cache_path: Path):
         lookup = cache.get(slug)
         if lookup is None:
             try:
-                raw = await client.markets.retrieve_by_slug(slug)
+                raw = await gateway._call(
+                    f"markets.retrieve_by_slug({slug})",
+                    lambda: gateway.client.markets.retrieve_by_slug(slug),
+                )
                 market = raw.get("market", raw) if isinstance(raw, dict) else raw
                 fetched += 1
                 if str(market.get("status")) != "MARKET_STATUS_RESOLVED":
@@ -238,7 +242,9 @@ async def main() -> int:
             open_ += 1
             open_cost += found[1]
 
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(),
+        default_traffic_class="background")
     account = AsyncAccountSnapshotGateway(gateway)
     account_snapshot = await account.fetch_equity_snapshot(observed_at=now)
     equity = _money(account_snapshot.marked_equity)
@@ -269,7 +275,7 @@ async def main() -> int:
         print("")
         print("pricing settled positions against each market's resolution...")
         priced, unknown, fetched = await _price_settlements(
-            gateway.client, per_market, Path(args.resolutions))
+            gateway, per_market, Path(args.resolutions))
         print(f"  ({fetched} venue calls; the rest came from the cache)")
         if priced:
             won = [r for r in priced if r[4] > 0]

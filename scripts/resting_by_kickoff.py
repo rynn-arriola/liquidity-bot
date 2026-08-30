@@ -37,7 +37,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 
 BUCKETS = [(0, 15), (15, 30), (30, 60), (60, 120), (120, 240), (240, 10**6)]
@@ -98,7 +99,9 @@ async def main() -> int:
         print("no resting intervals -- is the ledger populated?")
         return 1
 
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(),
+        default_traffic_class="background")
     kickoff: dict[str, datetime | None] = {}
     for slug in sorted({s for s, _, _ in spans}):
         try:

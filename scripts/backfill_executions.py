@@ -57,7 +57,8 @@ sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.execution_ledger import ExecutionLedger, LedgerConflict  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 
@@ -121,7 +122,9 @@ async def main() -> int:
 
     now = datetime.now(timezone.utc)
     ledger = ExecutionLedger(db)
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(),
+        default_traffic_class="background")
     account = AsyncAccountSnapshotGateway(
         gateway, resolve_client_id=ledger.resolve_client_order_id)
 

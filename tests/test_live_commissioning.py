@@ -9111,6 +9111,22 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_every_urgent_refill_can_revalidate_recent_selection(self):
+        runner = await self.armed()
+        now = runner._now()
+
+        self.assertFalse(runner._urgent_top_up_can_use_cache(False))
+        runner._lifecycle_top_up_requested_at = now
+        self.assertTrue(runner._urgent_top_up_can_use_cache(False))
+        runner._lifecycle_top_up_requested_at = None
+        runner._reward_end_top_up_requested = True
+        self.assertTrue(runner._urgent_top_up_can_use_cache(False))
+        runner._reward_end_top_up_requested = False
+        self.assertTrue(runner._urgent_top_up_can_use_cache(True))
+
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_one_remaining_urgent_position_keeps_refill_deferred(self):
         runner = await self.armed()
         runner.config = replace(runner.config, max_markets=3)

@@ -176,12 +176,15 @@ class AsyncTradingGateway:
         self.gateway = gateway
         self.client = gateway.client
 
-    async def _mutation(self, operation: str, call: Any) -> Any:
+    async def _mutation(
+        self, operation: str, call: Any, *, traffic_class: str = "safety",
+    ) -> Any:
         # Never use AsyncReadOnlyGateway._call here: its confirmed-429 retry is
         # correct for reads but can duplicate an order after an ambiguous POST.
         if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
             await self.gateway.limiter.wait(
-                operation=operation, request_kind="mutation")
+                operation=operation, request_kind="mutation",
+                traffic_class=traffic_class)
         else:
             # Preserve the long-standing zero-argument protocol for injected
             # deterministic gates used by tests and dry-run composition.
@@ -199,6 +202,10 @@ class AsyncTradingGateway:
                     duration_seconds=time.monotonic() - started_at,
                     status_code=self.gateway._status_code(exc),
                     failed=True,
+                    retry_after_seconds=(
+                        getattr(exc, "retry_after_seconds", None)
+                        if isinstance(exc, AdapterError)
+                        else self.gateway._retry_after_seconds(exc)),
                 )
             # Preserve structured metadata if the SDK boundary has already
             # normalized the exception. Re-normalizing an AdapterError would
@@ -228,9 +235,14 @@ class AsyncTradingGateway:
             ) from exc
 
     async def create(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        traffic_class = (
+            "safety"
+            if payload.get("tif") == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"
+            else "entry")
         response = await self._mutation(
             "POST /v1/orders",
-            lambda: self.client.orders.create(dict(payload)))
+            lambda: self.client.orders.create(dict(payload)),
+            traffic_class=traffic_class)
         if not isinstance(response, Mapping):
             raise AdapterError("create-order response is not an object")
         return response

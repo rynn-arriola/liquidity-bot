@@ -19,7 +19,8 @@ from typing import Any
 from polymarket_us import AsyncPolymarketUS
 
 from .adapters import (
-    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
+    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS,
+    shared_api_limiter)
 from .errors import AdapterError
 from .rewards import evaluate_order_score, select_applicable_period
 from .runtime_secrets import RuntimeSecretError, load_runtime_secrets
@@ -55,11 +56,17 @@ async def inspect_markets(
     *,
     size: float = 2.0,
     include_earnings: bool = False,
+    shared_rate_limit: bool = False,
 ) -> dict[str, Any]:
     """Compose Phase 0 rules with Phase 1 adapters for named markets."""
 
+    limiter = (
+        shared_api_limiter(4)
+        if shared_rate_limit
+        else AsyncIntervalLimiter.from_rate(4)
+    )
     gateway = AsyncReadOnlyGateway(
-        client, limiter=AsyncIntervalLimiter.from_rate(4))
+        client, limiter=limiter, default_traffic_class="background")
     incentives = await gateway.fetch_incentives(slugs)
     now = datetime.now(timezone.utc)
     rows: list[dict[str, Any]] = []
@@ -193,7 +200,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     client = client_from_environment()
     try:
         result = await inspect_markets(
-            client, args.slug, size=args.size, include_earnings=args.earnings)
+            client, args.slug, size=args.size, include_earnings=args.earnings,
+            shared_rate_limit=True)
         if args.stream_seconds:
             result["stream_observation"] = await observe_streams(
                 client, args.slug, seconds=args.stream_seconds)

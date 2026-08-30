@@ -35,7 +35,7 @@ from typing import Any, Iterable
 from polymarket_us import AsyncPolymarketUS
 
 from .adapters import (
-    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
+    AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS, shared_api_limiter)
 from .errors import AdapterError
 from .fill_hazard import league_from_slug
 from .market_selector import (
@@ -305,7 +305,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     gateway = AsyncReadOnlyGateway(
         client,
-        limiter=AsyncIntervalLimiter.from_rate(args.requests_per_second))
+        limiter=shared_api_limiter(args.requests_per_second),
+        default_traffic_class="background")
     selector = RewardMarketSelector(
         gateway,
         RewardSelectionPolicy(

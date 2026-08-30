@@ -113,10 +113,13 @@ async def reward_by_day(gateway=None) -> tuple[dict, dict]:
     # Keep the venue SDK dependency out of module import so the pure ledger
     # bucketing path remains testable without live-client packages installed.
     if gateway is None:
-        from liquidity_bot.adapters import AsyncReadOnlyGateway
+        from liquidity_bot.adapters import (
+            AsyncReadOnlyGateway, shared_api_limiter)
         from liquidity_bot.probe import client_from_environment
 
-        gateway = AsyncReadOnlyGateway(client_from_environment())
+        gateway = AsyncReadOnlyGateway(
+            client_from_environment(), limiter=shared_api_limiter(),
+            default_traffic_class="background")
     rows = await gateway.fetch_earnings(program_type="liquidityProgram")
     paid: dict = defaultdict(Decimal)
     pending: dict = defaultdict(Decimal)

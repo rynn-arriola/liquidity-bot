@@ -130,6 +130,22 @@ and enter cancel/flatten shutdown; they are not downgraded to warnings. A
 first- or second-consecutive ET loss-stop day pauses new risk in-process while
 exits remain active; the third consecutive day is terminal.
 
+Every cooperating WSL API client uses `data/api-rate-limiter.state`, so the
+runner, dashboard and scheduled reports cannot each spend an independent REST
+allowance on the same laptop. The configured 4/second rate is reserved for
+account safety reads, cancellations and IOC exits. Catalog discovery, earnings
+and post-only maker creation are paced at no more than 2/second. Selection runs
+inside an explicit background request context, so its book reads do not become
+safety traffic merely because live exit pricing uses the same endpoint. Every
+manual/reporting entrypoint is background-class and an architecture test
+refuses a new executable gateway that omits an explicit limiter. Any confirmed
+HTTP 429 publishes a shared bounded exponential cooldown before another local
+client can claim a request slot. The cooldown never authorizes a mutation
+retry. Event-driven lifecycle, reward-end and post-flat top-ups first attempt
+bounded revalidation of a complete selection no older than 120 seconds, which
+avoids repeating catalog discovery immediately before the stream-handoff
+positions proof.
+
 Structured entry rejections are also scoped rather than terminal: expected
 post-only races wait one second in that market, balance/risk failures wait 15
 seconds and unknown validation failures wait 60 seconds. These delays apply

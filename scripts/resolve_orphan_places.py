@@ -110,11 +110,14 @@ async def venue_state(attempts: int = 10, pause: float = 6.0):
     """
 
     from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway
-    from liquidity_bot.adapters import AsyncReadOnlyGateway
+    from liquidity_bot.adapters import (
+        AsyncReadOnlyGateway, shared_api_limiter)
     from liquidity_bot.probe import client_from_environment
 
     account = AsyncAccountSnapshotGateway(
-        AsyncReadOnlyGateway(client_from_environment()))
+        AsyncReadOnlyGateway(
+            client_from_environment(), limiter=shared_api_limiter(),
+            default_traffic_class="background"))
     last: Exception | None = None
     for attempt in range(attempts):
         try:

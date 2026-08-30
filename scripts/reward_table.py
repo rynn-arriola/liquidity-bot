@@ -35,7 +35,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa: E402
 from liquidity_bot.account_snapshots import (  # noqa: E402
     AsyncAccountSnapshotGateway, account_equity_snapshot)
-from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.cash_activity import (  # noqa: E402
     CashActivityUnavailable,
     NontradingCashChange,
@@ -732,7 +733,8 @@ async def main() -> int:
         ledger.close()
     gateway = AsyncReadOnlyGateway(
         client_from_environment(),
-        limiter=AsyncIntervalLimiter.from_rate(ACCOUNT_REPORT_RATE_PER_SECOND),
+        limiter=shared_api_limiter(ACCOUNT_REPORT_RATE_PER_SECOND),
+        default_traffic_class="background",
         max_pages=ACCOUNT_ACTIVITY_MAX_PAGES)
     paid, pending = await reward_by_day(gateway)
     history: dict[str, Decimal] = {}

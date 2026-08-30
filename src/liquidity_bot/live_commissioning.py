@@ -32,7 +32,8 @@ from .account_snapshots import (
     account_equity_snapshot)
 from .bot_era import bot_era_rewards_by_status
 from .adapters import (
-    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS)
+    AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS,
+    shared_api_limiter)
 from .cash_activity import corrected_opening_cash, fetch_nontrading_cash
 from .commissioning import (
     AUTO_REWARD_MARKET,
@@ -355,6 +356,7 @@ class CommissioningRunner:
         private_stream_factory: Callable[[Any], Any] = PrivateStreamPool,
         reward_selector: RewardMarketSelector | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
+        limiter: AsyncIntervalLimiter | None = None,
     ):
         self.client = client
         self.config = config
@@ -362,7 +364,7 @@ class CommissioningRunner:
         self.notifier = notifier
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep
-        limiter = AsyncIntervalLimiter.from_rate(
+        limiter = limiter or AsyncIntervalLimiter.from_rate(
             float(config.rest_requests_per_second))
         self.gateway = AsyncReadOnlyGateway(client, limiter=limiter)
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
@@ -3518,6 +3520,8 @@ class CommissioningRunner:
             f"response_max={evidence.max_response_seconds:.3f} "
             f"waiting={evidence.waiting_now} "
             f"max_waiting={evidence.max_waiting} "
+            f"cooldown={evidence.cooldown_remaining_seconds:.1f} "
+            f"shared={int(evidence.shared_across_processes)} "
             f"categories={categories}",
             flush=True,
         )
@@ -5057,6 +5061,15 @@ class CommissioningRunner:
         if self._post_flat_top_up_requested_at == consumed_post_flat_at:
             self._post_flat_top_up_requested_at = None
             self._post_flat_underfilled_slots = 0
+
+    def _urgent_top_up_can_use_cache(self, post_flat_requested: bool) -> bool:
+        """Whether an event-driven refill may revalidate recent candidates."""
+
+        return (
+            post_flat_requested
+            or self._lifecycle_top_up_requested_at is not None
+            or self._reward_end_top_up_requested
+        )
 
     def _active_set_needs_top_up(self, now: datetime) -> bool:
         """True when safe, incremental discovery has useful work to do.
@@ -7156,7 +7169,14 @@ class CommissioningRunner:
                     try:
                         await self._top_up_active_markets(
                             now,
-                            allow_cached_selection=post_flat_requested,
+                            # Every urgent refill may reuse a recent complete
+                            # scan after bounded live revalidation. At 17:00Z
+                            # on 2026-08-30 a lifecycle refill ignored a scan
+                            # only 40 seconds old, repeated discovery, then its
+                            # critical positions proof hit Cloudflare 1015.
+                            allow_cached_selection=(
+                                self._urgent_top_up_can_use_cache(
+                                    post_flat_requested)),
                             # Optional economic-idle eviction remains on the
                             # operator-approved 900-second cadence. An urgent
                             # lifecycle refill may fill mandatory holes early,
@@ -7392,7 +7412,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     ledger = ExecutionLedger(args.database)
     runner = CommissioningRunner(
-        client, config, ledger, DiscordNotifier(secrets))
+        client, config, ledger, DiscordNotifier(secrets),
+        limiter=shared_api_limiter(float(config.rest_requests_per_second)))
     loop = asyncio.get_running_loop()
     installed_signals: list[signal.Signals] = []
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from liquidity_bot.adapters import (
     AdapterError,
@@ -286,6 +289,147 @@ class GatewayTests(unittest.TestCase):
         self.assertAlmostEqual(limiter.minimum_interval_seconds, 0.25)
         with self.assertRaises(ValueError):
             AsyncIntervalLimiter.from_rate(21)
+
+    def test_background_and_entry_work_yield_to_safety_rate(self):
+        limiter = AsyncIntervalLimiter.from_rate(4)
+
+        async def exercise():
+            with patch(
+                    "liquidity_bot.adapters.asyncio.sleep",
+                    new=AsyncMock()) as sleep:
+                await limiter.wait(
+                    operation="markets.list(page)", request_kind="read")
+                await limiter.wait(
+                    operation="markets.list(page)", request_kind="read")
+                self.assertGreaterEqual(sleep.await_args.args[0], 0.49)
+
+        self.run_async(exercise())
+
+    def test_confirmed_429_opens_adaptive_gate_cooldown(self):
+        limiter = AsyncIntervalLimiter()
+        limiter.record_result(
+            duration_seconds=0.1, status_code=429, failed=True,
+            retry_after_seconds=7.0)
+
+        async def exercise():
+            with patch(
+                    "liquidity_bot.adapters.asyncio.sleep",
+                    new=AsyncMock()) as sleep:
+                await limiter.wait(
+                    operation="GET /v1/portfolio/positions",
+                    request_kind="read")
+                self.assertGreaterEqual(sleep.await_args.args[0], 6.9)
+
+        self.run_async(exercise())
+        evidence = limiter.telemetry()
+        self.assertEqual(evidence.rate_limited_responses, 1)
+        self.assertGreater(evidence.cooldown_remaining_seconds, 6.9)
+
+    def test_gateway_context_classifies_composed_background_work(self):
+        class RecordingLimiter(AsyncIntervalLimiter):
+            def __init__(self):
+                super().__init__()
+                self.classes = []
+
+            async def wait(self, **kwargs):
+                self.classes.append(kwargs.get("traffic_class"))
+
+        limiter = RecordingLimiter()
+        gateway = AsyncReadOnlyGateway(
+            FakeClient(), limiter=limiter,
+            default_traffic_class="background")
+
+        async def exercise():
+            await gateway._call("background", lambda: asyncio.sleep(0))
+            with gateway.traffic_class("safety"):
+                await gateway._call("safety", lambda: asyncio.sleep(0))
+            await gateway._call("background-again", lambda: asyncio.sleep(0))
+
+        self.run_async(exercise())
+        self.assertEqual(
+            limiter.classes, ["background", "safety", "background"])
+
+    def test_shared_gate_serializes_independent_process_limiters(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            first = AsyncIntervalLimiter.from_rate(
+                4, shared_state_path=state)
+            second = AsyncIntervalLimiter.from_rate(
+                4, shared_state_path=state)
+            first._claim_shared_slot(0.02, "safety")
+            started = time.monotonic()
+            second._claim_shared_slot(0.02, "safety")
+            self.assertGreaterEqual(time.monotonic() - started, 0.015)
+
+    def test_429_cooldown_is_visible_to_an_independent_limiter(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            first = AsyncIntervalLimiter(
+                shared_state_path=state)
+            second = AsyncIntervalLimiter(
+                shared_state_path=state)
+            with patch.object(
+                    AsyncIntervalLimiter,
+                    "RATE_LIMIT_BASE_COOLDOWN_SECONDS", 0.02):
+                first.record_result(
+                    duration_seconds=0.1, status_code=429, failed=True,
+                    retry_after_seconds=0.02)
+            started = time.monotonic()
+            second._claim_shared_slot(0.0, "safety")
+            self.assertGreaterEqual(time.monotonic() - started, 0.015)
+
+    def test_shared_gate_repairs_corrupt_or_stale_deadlines(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            state.write_text(json.dumps({
+                "next_request_at": "not-a-number",
+                "cooldown_until": time.time() + 3600,
+                "rate_limit_streak": "also-invalid",
+            }), encoding="utf-8")
+            limiter = AsyncIntervalLimiter(shared_state_path=state)
+
+            started = time.monotonic()
+            limiter._claim_shared_slot(0.0, "safety")
+            self.assertLess(time.monotonic() - started, 0.1)
+            limiter.record_result(
+                duration_seconds=0.1, status_code=429, failed=True,
+                retry_after_seconds=float("nan"))
+
+            repaired = json.loads(state.read_text(encoding="utf-8"))
+            self.assertLessEqual(
+                repaired["cooldown_until"] - time.time(), 2.1)
+
+    def test_slow_background_clock_does_not_throttle_shared_safety_lane(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            background = adapters.shared_api_limiter(
+                1, state_path=state)
+            safety = adapters.shared_api_limiter(
+                4, state_path=state)
+            background._claim_shared_slot(1.0, "background")
+
+            started = time.monotonic()
+            safety._claim_shared_slot(0.25, "safety")
+            elapsed = time.monotonic() - started
+
+            self.assertGreaterEqual(elapsed, 0.20)
+            self.assertLess(elapsed, 0.70)
 
     def test_limiter_telemetry_classifies_reads_without_variable_identity(self):
         client = FakeClient()

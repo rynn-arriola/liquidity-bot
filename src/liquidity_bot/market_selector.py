@@ -8,6 +8,7 @@ selected slug only after it has proved the account flat and order-free.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable
@@ -437,6 +438,11 @@ class RewardMarketSelector:
         self._last_selected_slug: str | None = None
 
     async def select(self, *, now: datetime) -> RewardMarketSelection:
+        scope = getattr(self.gateway, "traffic_class", None)
+        with scope("background") if callable(scope) else nullcontext():
+            return await self._select(now=now)
+
+    async def _select(self, *, now: datetime) -> RewardMarketSelection:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("selection clock must be timezone-aware")
         # Market list rows carry every immutable field needed for selection.
@@ -529,6 +535,13 @@ class RewardMarketSelector:
         return result
 
     async def revalidate_viable(
+        self, slugs: Iterable[str], *, now: datetime,
+    ) -> tuple[RewardMarketOpportunity, ...]:
+        scope = getattr(self.gateway, "traffic_class", None)
+        with scope("background") if callable(scope) else nullcontext():
+            return await self._revalidate_viable(slugs, now=now)
+
+    async def _revalidate_viable(
         self, slugs: Iterable[str], *, now: datetime,
     ) -> tuple[RewardMarketOpportunity, ...]:
         """Freshly re-prove a small cached replacement set.

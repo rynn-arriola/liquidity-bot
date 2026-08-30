@@ -85,7 +85,7 @@ Last reviewed: **2026-08-30**.
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
 | Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. The isolated hourly RSS monitor establishes a baseline without history spam, alerts only unseen items and retains unseen state after notification failure. | Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. The monitor remains diagnostic and cannot change trading behavior. |
-| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | One shared process-wide async gate defaults to 4 REST requests/second; confirmed 429 reads use bounded numeric or HTTP-date `Retry-After` when present and exponential fallback otherwise; mutations never auto-retry. Local request telemetry is categorized and redacted; it adds no diagnostic request. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. Institutional firm/endpoint limits do not replace them. The project's 4/second governor is a conservative internal ceiling, not venue capacity. It is process-local, so another process on the same key or public IP still contributes venue load. |
+| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | Cooperating WSL tools share one file-locked laptop-wide gate. Safety reads, cancels and IOC exits retain the configured 4/second peak; catalog discovery, earnings and maker entry use at most 2/second. A confirmed 429 opens the same bounded `Retry-After` cooldown for every cooperating process, never shorter than the 2/4/8/.../30-second adaptive fallback; mutations never auto-retry. Local telemetry is categorized and redacted and adds no request. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. The project's lower class-aware rates are internal admission policy, not a discovered venue limit. An uncooperative external process or another machine on the same key/public IP can still contribute venue load, so software cannot promise that Cloudflare will never emit a first 429. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. A response-backed 403 fails only its exact intent and opens a one-minute new-entry circuit. Cancels/reducers bypass entry denial; their own rejection gets a 10-second safety circuit. Successful mutations prove recovery only for their scope. Safe status, structured error code and trace/request ID survive adapter boundaries. | Generic advice to retry POST must never override mutation ambiguity safety. Retail code 7 location/VPN denial was observed on 2026-08-28 while public status was operational; it is account-specific evidence, not cancellation, flatness, a permanent ban or permission to restart. Trace IDs are retained on raised errors and logs, not stored as a new durable ledger relation. |
 | Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus retained Retail `/v1/portfolio/activities` backfill recent executions; exactly one account leg is selected with `isAggressor`; execution and trade IDs deduplicate independently; trade state is durable; a linked `TRADE_STATE_BUSTED` fill is reversed exactly once and excluded from P&L/basis/counts. | Venue history can be reset and is never negative evidence. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
@@ -156,6 +156,59 @@ process change: 105 reads (`1.585/s`), including six execution-history calls,
 completed with zero failures and zero 429s. This bounds the observed incident
 to a transient restart/rolling window; it does not erase the failed window or
 prove that another restart will be clean.
+
+The 22-slot 2026-08-30 17:00Z lifecycle event proved why a fixed per-process
+interval was insufficient. Six owners became non-incentivized/live together.
+Although a complete selection only about 40 seconds old had already found 40
+viable markets, the lifecycle path did not authorize its existing bounded
+revalidation cache and repeated a fresh discovery scan before the mandatory
+stream-handoff account proof. The 166.4-second transport window then recorded
+269 attempts (240 reads, 29 mutations), nine confirmed Cloudflare 1015/HTTP
+429 responses, and the failing operation was a positions read. Recovery
+quarantined and rebuilt owned orders; the next 112.1-second window completed
+232 attempts with zero failures/429s, committed 22 active markets, and the
+ledger reached 32 working orders across all 22 markets while remaining flat.
+
+This is not a 22-slot-only failure: the earlier 20-slot sample also produced
+1015 at a low aggregate average. The source response is therefore admission
+control rather than a smaller hard slot ceiling. Event-driven lifecycle,
+reward-end and post-flat refills may revalidate a complete selection no older
+than 120 seconds; background discovery and ordinary maker entry yield to the
+safety rate; and every audited executable API client cooperates through
+`data/api-rate-limiter.state`. This includes the live runner, dashboard,
+scheduled and manual reports, probes, census, shadow/scalp measurements,
+accounting, history backfill and repair tools. A source-level architecture test
+rejects any new executable `AsyncReadOnlyGateway` without an explicit limiter.
+A confirmed 429 publishes an adaptive cooldown into the same state before any
+next cooperating request can claim a slot. Cancel and IOC mutations remain
+non-retrying, and all account/risk proof remains fail-closed.
+
+The complete local admission architecture is intentionally layered:
+
+1. WebSocket market/private streams carry normal live state; REST is proof,
+   recovery and bounded refresh rather than the primary event transport.
+2. One POSIX-file-locked host gate serializes every cooperating WSL process,
+   so adding a dashboard or manual report cannot add an independent budget.
+3. Request context, not endpoint name alone, assigns pace. Bot account proofs,
+   cancels and IOC exits retain the 4/second safety pace. Whole-universe
+   selection—including its per-candidate book reads—maker entry and every
+   observer/report process use the 2/second background pace.
+4. Bulk catalog/incentive/account endpoints, bounded candidate fan-out and the
+   120-second revalidation cache remove calls before they reach the queue.
+5. Confirmed 429 evidence applies a shared bounded exponential cooldown;
+   telemetry records queue wait, response latency, category, failure and 429
+   counts without making another diagnostic request.
+
+This architecture makes market count create queue latency instead of an API
+burst; it does not turn an arbitrary slot count into free capacity. In
+particular, a complete REST-only refresh of 22 books cannot fit inside a
+five-second freshness target at a strict 4/second ceiling. Stream health,
+risk-bearing-market priority and queue-latency evidence therefore remain
+separate capacity constraints. The shared file is host-local: a second machine
+or an uncooperative external process using the same key/public IP is outside
+this coordinator. No local implementation can guarantee that Cloudflare will
+never emit the first 429, but cooperating laptop workloads now stop multiplying
+the request budget and all observe the same response.
 
 The flat-gated 2026-08-30 `859b891` restart supplied that second clean restart
 sample. Its first 152.0 seconds made 416 attempts (`370` reads, `46` mutations,

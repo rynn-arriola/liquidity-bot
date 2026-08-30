@@ -8,14 +8,24 @@ path replaceable with deterministic fixtures.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
+import os
 import time
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
+
+try:  # Production runs in WSL; tests/imports remain portable on Windows.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only by native Windows
+    fcntl = None
 
 from .errors import AdapterError
 from .models import (
@@ -36,6 +46,7 @@ __all__ = [
     "parse_book_response",
     "parse_trade_response",
     "REST_REQUEST_TIMEOUT_SECONDS",
+    "shared_api_limiter",
 ]
 
 
@@ -332,6 +343,8 @@ class LimiterTelemetry:
     max_response_seconds: float
     waiting_now: int
     max_waiting: int
+    cooldown_remaining_seconds: float
+    shared_across_processes: bool
 
 
 def _percentile(values: tuple[float, ...], fraction: float) -> float:
@@ -385,12 +398,46 @@ def _request_category(operation: str, request_kind: str) -> str:
 
 
 class AsyncIntervalLimiter:
-    """One non-blocking request gate shared by a gateway instance."""
+    """A paced request gate with optional host-wide coordination.
 
-    def __init__(self, minimum_interval_seconds: float = 0.0):
+    The original gate serialized only one Python process.  A dashboard or
+    report could therefore add another independent four requests/second on the
+    same API key and public IP.  ``shared_state_path`` turns the final claim
+    into a small POSIX-file-locked lease, so every cooperating WSL process
+    shares one next-request clock and one confirmed-429 cooldown.
+
+    Background catalog discovery and ordinary maker-entry creation deliberately
+    use half the configured peak rate.  Safety reads, cancels and IOC exits keep
+    the configured rate; protecting them is the reason not to solve Cloudflare
+    pressure by globally slowing every request.
+    """
+
+    RATE_LIMIT_STREAK_RESET_SECONDS = 60.0
+    RATE_LIMIT_BASE_COOLDOWN_SECONDS = 2.0
+    RATE_LIMIT_MAX_ADAPTIVE_COOLDOWN_SECONDS = 30.0
+    RATE_LIMIT_MAX_COOLDOWN_SECONDS = 60.0
+    BACKGROUND_MINIMUM_INTERVAL_SECONDS = 0.5
+    SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
+
+    def __init__(
+        self,
+        minimum_interval_seconds: float = 0.0,
+        *,
+        shared_state_path: str | os.PathLike[str] | None = None,
+        shared_global_interval_seconds: float | None = None,
+    ):
         if minimum_interval_seconds < 0:
             raise ValueError("minimum interval cannot be negative")
+        if (shared_global_interval_seconds is not None
+                and shared_global_interval_seconds < 0):
+            raise ValueError("shared global interval cannot be negative")
         self.minimum_interval_seconds = float(minimum_interval_seconds)
+        self.shared_global_interval_seconds = float(
+            minimum_interval_seconds
+            if shared_global_interval_seconds is None
+            else shared_global_interval_seconds)
+        self.shared_state_path = (
+            Path(shared_state_path) if shared_state_path is not None else None)
         self._lock = asyncio.Lock()
         self._next_at = 0.0
         self._telemetry_started_at = time.monotonic()
@@ -405,31 +452,239 @@ class AsyncIntervalLimiter:
         self._response_samples: deque[float] = deque(maxlen=4096)
         self._waiting = 0
         self._max_waiting = 0
+        self._cooldown_until = 0.0
+        self._rate_limit_streak = 0
+        self._last_rate_limit_at = 0.0
 
     @classmethod
-    def from_rate(cls, requests_per_second: float) -> "AsyncIntervalLimiter":
+    def from_rate(
+        cls,
+        requests_per_second: float,
+        *,
+        shared_state_path: str | os.PathLike[str] | None = None,
+        shared_global_interval_seconds: float | None = None,
+    ) -> "AsyncIntervalLimiter":
         rate = float(requests_per_second)
         # The current documented retail ceiling is 20/s. Reject a higher
         # configured rate here instead of relying on the venue to police us.
         if not 0 < rate <= 20:
             raise ValueError("requests_per_second must be in (0, 20]")
-        return cls(1.0 / rate)
+        return cls(
+            1.0 / rate,
+            shared_state_path=shared_state_path,
+            shared_global_interval_seconds=shared_global_interval_seconds,
+        )
+
+    @staticmethod
+    def _traffic_class(operation: str, request_kind: str) -> str:
+        category = _request_category(operation, request_kind)
+        if category in {
+            "market_discovery", "incentive_discovery", "earnings",
+        }:
+            return "background"
+        if category == "mutation_create":
+            return "entry"
+        return "safety"
+
+    def _request_interval(
+        self, operation: str, request_kind: str, traffic_class: str | None,
+    ) -> float:
+        chosen = traffic_class or self._traffic_class(operation, request_kind)
+        if chosen not in {"background", "entry", "safety"}:
+            raise ValueError("traffic_class must be background, entry, or safety")
+        if chosen in {"background", "entry"}:
+            return max(
+                self.minimum_interval_seconds,
+                self.BACKGROUND_MINIMUM_INTERVAL_SECONDS,
+            )
+        return self.minimum_interval_seconds
+
+    @staticmethod
+    def _read_shared_state(handle: Any) -> dict[str, float | int]:
+        handle.seek(0)
+        try:
+            raw = json.load(handle)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    @staticmethod
+    def _write_shared_state(
+        handle: Any, state: Mapping[str, float | int],
+    ) -> None:
+        handle.seek(0)
+        json.dump(dict(state), handle, separators=(",", ":"), sort_keys=True)
+        handle.truncate()
+        handle.flush()
+
+    @staticmethod
+    def _open_shared_state(path: Path) -> Any:
+        """Open a private, seekable state file without append semantics."""
+
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            return os.fdopen(descriptor, "r+", encoding="utf-8")
+        except Exception:
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def _shared_timestamp(
+        cls,
+        value: Any,
+        now: float,
+        *,
+        maximum_future_seconds: float | None = None,
+    ) -> float:
+        """Return a bounded shared deadline or treat it as stale/corrupt."""
+
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if not math.isfinite(timestamp):
+            return 0.0
+        # The longest deadline this class writes is 30 seconds. A larger
+        # future value can only be stale state after a wall-clock correction
+        # or manual/corrupt data; never let it wedge account-safety traffic.
+        maximum = (
+            cls.RATE_LIMIT_MAX_COOLDOWN_SECONDS
+            if maximum_future_seconds is None
+            else max(0.0, float(maximum_future_seconds)))
+        if timestamp > (
+            now + maximum
+            + cls.SHARED_CLOCK_SKEW_TOLERANCE_SECONDS
+        ):
+            return 0.0
+        return timestamp
+
+    @classmethod
+    def _cooldown_delay(
+        cls, retry_after_seconds: float | None, streak: int,
+    ) -> float:
+        fallback = min(
+            cls.RATE_LIMIT_MAX_ADAPTIVE_COOLDOWN_SECONDS,
+            cls.RATE_LIMIT_BASE_COOLDOWN_SECONDS
+            * (2 ** min(max(0, streak - 1), 4)),
+        )
+        if retry_after_seconds is None:
+            return fallback
+        try:
+            requested = float(retry_after_seconds)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        if not math.isfinite(requested):
+            return fallback
+        return min(
+            cls.RATE_LIMIT_MAX_COOLDOWN_SECONDS,
+            max(fallback, max(0.0, requested)),
+        )
+
+    def _claim_shared_slot(self, interval: float, traffic_class: str) -> None:
+        path = self.shared_state_path
+        if path is None or fcntl is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            delay = 0.0
+            with self._open_shared_state(path) as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    state = self._read_shared_state(handle)
+                    now = time.time()
+                    due = max(
+                        now,
+                        self._shared_timestamp(
+                            state.get("next_request_at", 0.0), now,
+                            maximum_future_seconds=(
+                                self.shared_global_interval_seconds)),
+                        self._shared_timestamp(
+                            state.get("cooldown_until", 0.0), now),
+                    )
+                    if traffic_class in {"background", "entry"}:
+                        due = max(
+                            due,
+                            self._shared_timestamp(
+                                state.get("next_background_at", 0.0), now,
+                                maximum_future_seconds=interval),
+                        )
+                    delay = max(0.0, due - now)
+                    if delay == 0.0:
+                        state["next_request_at"] = (
+                            now + self.shared_global_interval_seconds)
+                        if traffic_class in {"background", "entry"}:
+                            state["next_background_at"] = now + interval
+                        self._write_shared_state(handle, state)
+                        return
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            # Never hold the cross-process lock while waiting. In particular,
+            # a 30-second cooldown must not block another process from
+            # publishing a longer Retry-After or let synchronous result
+            # recording freeze the live event loop on flock acquisition.
+            time.sleep(delay)
+
+    def _register_shared_rate_limit(self, retry_after_seconds: float | None) -> None:
+        path = self.shared_state_path
+        if path is None or fcntl is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._open_shared_state(path) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self._read_shared_state(handle)
+                now = time.time()
+                last = self._shared_timestamp(
+                    state.get("last_rate_limit_at", 0.0), now)
+                try:
+                    streak = min(
+                        5, max(0, int(state.get("rate_limit_streak", 0))))
+                except (TypeError, ValueError, OverflowError):
+                    streak = 0
+                if (
+                    last <= 0.0
+                    or now - last > self.RATE_LIMIT_STREAK_RESET_SECONDS
+                ):
+                    streak = 0
+                streak += 1
+                delay = self._cooldown_delay(retry_after_seconds, streak)
+                state["last_rate_limit_at"] = now
+                state["rate_limit_streak"] = streak
+                state["cooldown_until"] = max(
+                    self._shared_timestamp(
+                        state.get("cooldown_until", 0.0), now),
+                    now + delay,
+                )
+                self._write_shared_state(handle, state)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     async def wait(
         self, *, operation: str = "", request_kind: str = "read",
+        traffic_class: str | None = None,
     ) -> None:
         if request_kind not in {"read", "mutation"}:
             raise ValueError("request_kind must be read or mutation")
         queued_at = time.monotonic()
         self._waiting += 1
         self._max_waiting = max(self._max_waiting, self._waiting)
+        interval = self._request_interval(
+            operation, request_kind, traffic_class)
+        chosen_class = traffic_class or self._traffic_class(
+            operation, request_kind)
         try:
             async with self._lock:
-                now = time.monotonic()
-                if now < self._next_at:
-                    await asyncio.sleep(self._next_at - now)
+                if self.shared_state_path is not None and fcntl is not None:
+                    await asyncio.to_thread(
+                        self._claim_shared_slot, interval, chosen_class)
+                else:
                     now = time.monotonic()
-                self._next_at = now + self.minimum_interval_seconds
+                    due = max(self._next_at, self._cooldown_until)
+                    if now < due:
+                        await asyncio.sleep(due - now)
+                        now = time.monotonic()
+                    self._next_at = now + interval
         finally:
             self._waiting -= 1
         waited = max(0.0, time.monotonic() - queued_at)
@@ -445,7 +700,7 @@ class AsyncIntervalLimiter:
 
     def record_result(
         self, *, duration_seconds: float, status_code: int | None = None,
-        failed: bool = False,
+        failed: bool = False, retry_after_seconds: float | None = None,
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
@@ -457,6 +712,15 @@ class AsyncIntervalLimiter:
             self._successful_responses += 1
         if status_code == 429:
             self._rate_limited_responses += 1
+            now = time.monotonic()
+            if now - self._last_rate_limit_at > self.RATE_LIMIT_STREAK_RESET_SECONDS:
+                self._rate_limit_streak = 0
+            self._rate_limit_streak += 1
+            self._last_rate_limit_at = now
+            delay = self._cooldown_delay(
+                retry_after_seconds, self._rate_limit_streak)
+            self._cooldown_until = max(self._cooldown_until, now + delay)
+            self._register_shared_rate_limit(retry_after_seconds)
 
     def telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
         """Return local limiter evidence without making an API request."""
@@ -487,6 +751,10 @@ class AsyncIntervalLimiter:
             max_response_seconds=max(responses, default=0.0),
             waiting_now=self._waiting,
             max_waiting=self._max_waiting,
+            cooldown_remaining_seconds=max(
+                0.0, self._cooldown_until - time.monotonic()),
+            shared_across_processes=(
+                self.shared_state_path is not None and fcntl is not None),
         )
         if reset:
             self._telemetry_started_at = now
@@ -501,6 +769,32 @@ class AsyncIntervalLimiter:
             self._response_samples.clear()
             self._max_waiting = self._waiting
         return result
+
+
+def shared_api_limiter(
+    requests_per_second: float = 4.0,
+    *,
+    state_path: str | os.PathLike[str] | None = None,
+) -> AsyncIntervalLimiter:
+    """Build the one host-wide limiter used by production API entrypoints.
+
+    Tests and composed library callers may still inject an isolated limiter.
+    Executable tools must come through this factory so adding a new report
+    cannot silently add another independent request budget beside the bot.
+    """
+
+    if state_path is None:
+        configured = os.environ.get("LIQUIDITY_BOT_API_LIMITER_STATE", "").strip()
+        state_path = configured or (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "api-rate-limiter.state"
+        )
+    return AsyncIntervalLimiter.from_rate(
+        requests_per_second,
+        shared_state_path=state_path,
+        shared_global_interval_seconds=0.25,
+    )
 
 
 class AsyncReadOnlyGateway:
@@ -518,6 +812,7 @@ class AsyncReadOnlyGateway:
         retry_attempts: int = 3,
         retry_base_seconds: float = 1.0,
         max_retry_after_seconds: float = 60.0,
+        default_traffic_class: str | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     ):
         if not 1 <= incentive_batch_size <= 100:
@@ -531,6 +826,11 @@ class AsyncReadOnlyGateway:
         if (retry_attempts <= 0 or retry_base_seconds < 0
                 or max_retry_after_seconds < 0):
             raise ValueError("retry settings are invalid")
+        if default_traffic_class not in {
+            None, "background", "entry", "safety",
+        }:
+            raise ValueError(
+                "default_traffic_class must be background, entry, safety, or None")
         self.client = client
         self.limiter = limiter or AsyncIntervalLimiter()
         self.incentive_batch_size = incentive_batch_size
@@ -540,7 +840,22 @@ class AsyncReadOnlyGateway:
         self.retry_attempts = retry_attempts
         self.retry_base_seconds = retry_base_seconds
         self.max_retry_after_seconds = max_retry_after_seconds
+        self.default_traffic_class = default_traffic_class
+        self._traffic_class_override: ContextVar[str | None] = ContextVar(
+            f"api_traffic_class_{id(self)}", default=None)
         self._sleep = sleep
+
+    @contextmanager
+    def traffic_class(self, value: str):
+        """Classify a composed operation without leaking across async tasks."""
+
+        if value not in {"background", "entry", "safety"}:
+            raise ValueError("traffic class must be background, entry, or safety")
+        token = self._traffic_class_override.set(value)
+        try:
+            yield
+        finally:
+            self._traffic_class_override.reset(token)
 
     @staticmethod
     def _status_code(exc: Exception) -> int | None:
@@ -624,7 +939,13 @@ class AsyncReadOnlyGateway:
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
             if isinstance(self.limiter, AsyncIntervalLimiter):
-                await self.limiter.wait(operation=operation, request_kind="read")
+                await self.limiter.wait(
+                    operation=operation,
+                    request_kind="read",
+                    traffic_class=(
+                        self._traffic_class_override.get()
+                        or self.default_traffic_class),
+                )
             else:
                 # Test doubles and externally supplied compatible gates retain
                 # the original zero-argument protocol.
@@ -642,6 +963,8 @@ class AsyncReadOnlyGateway:
                         duration_seconds=time.monotonic() - started_at,
                         status_code=self._status_code(exc),
                         failed=True,
+                        retry_after_seconds=getattr(
+                            exc, "retry_after_seconds", None),
                     )
                 raise
             except Exception as exc:
@@ -650,6 +973,7 @@ class AsyncReadOnlyGateway:
                         duration_seconds=time.monotonic() - started_at,
                         status_code=self._status_code(exc),
                         failed=True,
+                        retry_after_seconds=self._retry_after_seconds(exc),
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text

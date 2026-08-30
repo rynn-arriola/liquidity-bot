@@ -33,7 +33,8 @@ sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
-from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.adapters import (  # noqa: E402
+    AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.market_selector import (  # noqa: E402
     SUPPORTED_EVENT_PERIODS, RewardMarketSelector, RewardSelectionPolicy)
@@ -51,7 +52,9 @@ async def main() -> int:
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
-    gateway = AsyncReadOnlyGateway(client_from_environment())
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(),
+        default_traffic_class="background")
     policy = CONFIG.reward_selection_policy()
     selection = await RewardMarketSelector(gateway, policy=policy).select(now=now)
 

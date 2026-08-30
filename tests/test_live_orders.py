@@ -268,6 +268,34 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(
             evidence.attempts_by_category, (("mutation_create", 1),))
 
+    def test_ioc_exit_keeps_safety_priority_while_maker_entry_yields(self):
+        class RecordingLimiter(AsyncIntervalLimiter):
+            def __init__(self):
+                super().__init__()
+                self.classes = []
+
+            async def wait(self, **kwargs):
+                self.classes.append(kwargs.get("traffic_class"))
+
+        limiter = RecordingLimiter()
+        gateway = AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter))
+        self.client.orders.create_results = [
+            {"id": "entry", "executions": []},
+            {"id": "exit", "executions": []},
+        ]
+
+        self.run_async(gateway.create({
+            "marketSlug": "market-one",
+            "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+        }))
+        self.run_async(gateway.create({
+            "marketSlug": "market-one",
+            "tif": "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL",
+        }))
+
+        self.assertEqual(limiter.classes, ["entry", "safety"])
+
     def test_same_market_pending_place_reports_wait_without_network(self):
         """The specific wait path must be reachable before the state gate."""
 

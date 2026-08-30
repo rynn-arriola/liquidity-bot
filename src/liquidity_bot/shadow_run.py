@@ -19,7 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
-from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .adapters import AsyncReadOnlyGateway, shared_api_limiter
 from .errors import AdapterError
 from .models import BookSnapshot, MarketIncentive, MarketMetadata, TradePrint
 from .discord_summary import LiquiditySummary, build_liquidity_summary
@@ -92,8 +92,8 @@ class ShadowRunner:
         self.config = config
         self.gateway = AsyncReadOnlyGateway(
             client,
-            limiter=AsyncIntervalLimiter.from_rate(
-                config.rest_requests_per_second))
+            limiter=shared_api_limiter(config.rest_requests_per_second),
+            default_traffic_class="background")
         self.store = ShadowStore(config.database)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = f"shadow-{timestamp}-{uuid.uuid4().hex[:8]}"

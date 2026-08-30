@@ -107,6 +107,12 @@ function renderActivity(activity) {
     row.append(dot, text, time);
     list.append(row);
   }
+  // The dashboard is a one-screen instrument panel. Keep the newest events
+  // that physically fit instead of making the whole page scroll or clipping a
+  // partial final row when the browser/TV viewport changes.
+  while (list.scrollHeight > list.clientHeight + 1 && list.children.length > 1) {
+    list.lastElementChild.remove();
+  }
 }
 
 function appendMoneyCell(row, value, { signed = false, missing = "—", estimate = false } = {}) {
@@ -249,3 +255,6 @@ updateClock();
 refresh();
 setInterval(updateClock, 1000);
 setInterval(refresh, 1000);
+window.addEventListener("resize", () => {
+  if (lastSnapshot) renderActivity(lastSnapshot.activity);
+});

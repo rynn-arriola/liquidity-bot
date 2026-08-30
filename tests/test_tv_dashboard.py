@@ -257,6 +257,7 @@ class TvDashboardTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1] / "web" / "tv-dashboard"
         html = (root / "index.html").read_text(encoding="utf-8")
         javascript = (root / "app.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
         self.assertIn("20 Market Slots", html)
         self.assertIn("TODAY P&amp;L", html)
         self.assertIn("OVERALL P&amp;L", html)
@@ -269,6 +270,14 @@ class TvDashboardTests(unittest.TestCase):
         self.assertNotIn("polymarket.us", javascript.lower())
         self.assertNotIn("reward", html.lower())
         self.assertNotIn("reward", javascript.lower())
+        # The TV view is a single-screen instrument panel. All major sections
+        # must participate in a viewport-height grid instead of growing the
+        # document and requiring an operator to scroll past live information.
+        self.assertIn("\n  height: 100dvh;", styles)
+        self.assertIn("grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto", styles)
+        self.assertIn("grid-template-columns: repeat(10, minmax(0, 1fr))", styles)
+        self.assertIn("@media (max-height: 850px)", styles)
+        self.assertIn("list.scrollHeight > list.clientHeight + 1", javascript)
 
 
 if __name__ == "__main__":

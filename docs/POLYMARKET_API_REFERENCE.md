@@ -197,9 +197,9 @@ than that action-line rate and preserves 25% of the internal 4/s governor:
 
 | Scenario | Explicit assumptions | Result after bounded contract batching |
 |---|---|---|
-| Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier. | At 24 slots: `1.76/s` (44% of the gate), zero five-minute replay misses/backlog. API/public-only modeled ceiling: 56 slots. |
-| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Modeled REST ceiling with 25% headroom: 19 slots. At 20 slots the estimate is `3.01/s`, just beyond the 3/s comfort budget. |
-| Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages. | API-only modeled ceiling: 6 slots. At 20 slots demand is `7.50/s`, proving this is a degraded-feed design limit, not a viable scaling mode. New risk still fails closed on stale books; the correct scale design is bounded fallback plus stream recovery, not whole-slate REST polling. |
+| Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier. | At 22 slots: `1.70/s`; at 24: `1.76/s` (44% of the gate), with zero five-minute replay misses/backlog. API/public-only modeled ceiling: 56 slots. |
+| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Modeled REST ceiling with 25% headroom: 19 slots. The estimate is `3.01/s` at 20 and `3.19/s` at 22, so a 22 canary must measure bursts rather than infer safety from ordinary windows. |
+| Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages. | API-only modeled ceiling: 6 slots. Demand is `7.50/s` at 20 and `8.17/s` at 22, proving this is a degraded-feed design limit, not a viable scaling mode. Each owner receives a fresh service-time sample and new risk still fails closed on stale books; the correct scale design is bounded fallback plus stream recovery, not whole-slate REST polling. |
 
 These results do **not** select 19, 24 or 56 as the final production width.
 They prove that 24 is not a documented venue slot limit and that average normal
@@ -219,10 +219,20 @@ wait p95/p99/max, live/max queue depth, failures and confirmed 429s. It does not
 make a diagnostic request and never records slugs, order IDs, credentials or
 payloads. It was deployed at `2aa9fec` on 2026-08-29.
 
-After an independently authorized flat-gated deployment, keep production at 20
-slots long enough to capture ordinary, selection-burst, busy and recovery
-windows. Feed those measured distributions into the offline scheduler, then
-raise width only in bounded canaries. The durable maximum is the highest width
+The 20-slot restart loaded at `859b891` later supplied 46 clean telemetry
+windows through 03:40Z: 6,064 attempts, zero failures/429s, request rates from
+`1.459/s` to `2.736/s`, maximum wait p99 `0.223s`, response p99 `1.007s` and
+maximum limiter queue depth one. This satisfies the no-429 baseline observation
+but does not explain the earlier endpoint-local execution-history `1015`s.
+
+On 2026-08-29 the operator authorized one flat-gated 22-slot measurement
+canary. Twenty remains the launcher default and durable baseline. The canary
+must run at least 30 continuous minutes covering startup and selection bursts,
+with zero failures/confirmed 429s, no queue above one in two consecutive
+60-second windows, no safety
+deadline or stream-coverage loss, stable ownership and zero unresolved/unknown
+state. A breach requires graceful stop, positive flat proof and restart at 20.
+The durable maximum is the highest width
 that preserves the chosen request headroom with zero safety-deadline misses,
 zero sustained backlog/429s, acceptable response/wait tails, proven stream
 coverage, CPU/thermal headroom and the separately authorized portfolio cushion.

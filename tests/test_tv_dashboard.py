@@ -144,6 +144,21 @@ class TvDashboardTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_slot_map_uses_the_validated_restart_capacity(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            capacity = root / "slot_capacity"
+            capacity.write_text("22\n", encoding="utf-8")
+
+            state = collect_state(
+                database, log, now=NOW, processes=[],
+                slot_capacity_path=capacity)
+
+            self.assertEqual(state["capacity"], 22)
+            self.assertEqual(len(state["ledger"]["slots"]), 22)
+            self.assertEqual(state["ledger"]["slots"][-1]["number"], 22)
+
     def test_gain_snapshot_is_local_validated_and_exposed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -253,12 +268,13 @@ class TvDashboardTests(unittest.TestCase):
         self.assertGreater(launcher.index(hook), launcher.index(proof))
         self.assertIn("WARNING: bot is running", launcher)
 
-    def test_frontend_is_a_twenty_slot_local_view(self):
+    def test_frontend_uses_the_runtime_slot_capacity(self):
         root = Path(__file__).resolve().parents[1] / "web" / "tv-dashboard"
         html = (root / "index.html").read_text(encoding="utf-8")
         javascript = (root / "app.js").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
-        self.assertIn("20 Market Slots", html)
+        self.assertIn('id="slot-capacity"', html)
+        self.assertIn('id="scope-capacity"', html)
         self.assertIn("TODAY P&amp;L", html)
         self.assertIn("OVERALL P&amp;L", html)
         headers = ["Date ET", "Trading", "Gain", "Pending", "Side Hours", "Net"]
@@ -266,7 +282,8 @@ class TvDashboardTests(unittest.TestCase):
             html.index(f">{header}<") for header in headers))
         self.assertIn("This screen never contacts Polymarket", html)
         self.assertIn('fetch("/api/state"', javascript)
-        self.assertIn("index < 20", javascript)
+        self.assertIn("index < safeCapacity", javascript)
+        self.assertIn("renderSlots(ledger.slots, capacity)", javascript)
         self.assertNotIn("polymarket.us", javascript.lower())
         self.assertNotIn("reward", html.lower())
         self.assertNotIn("reward", javascript.lower())
@@ -276,6 +293,7 @@ class TvDashboardTests(unittest.TestCase):
         self.assertIn("\n  height: 100dvh;", styles)
         self.assertIn("grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto", styles)
         self.assertIn("grid-template-columns: repeat(10, minmax(0, 1fr))", styles)
+        self.assertIn("safeCapacity > 20 ? 11 : 10", javascript)
         self.assertIn("@media (max-height: 850px)", styles)
         self.assertIn("list.scrollHeight > list.clientHeight + 1", javascript)
 

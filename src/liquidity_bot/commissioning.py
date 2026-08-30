@@ -15,10 +15,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .quote_size import (
     DEFAULT_QUOTE_SIZE, MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, parse_quote_size)
+from .slot_capacity import DEFAULT_SLOT_CAPACITY, parse_slot_capacity
 
 NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
 RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
+RUNTIME_SLOT_CAPACITY_PATH = Path("data/commissioning_slot_capacity")
 
 
 class CommissioningRefused(RuntimeError):
@@ -120,9 +122,11 @@ class CommissioningConfig:
     # riding toward settlement -- how maker-lab lost $443.88.
     #
     # Worst case exposure: both sides of a market risk quote_size x p +
-    # quote_size x (1 - p) = quote_size. Twenty markets consume 20x size; the
-    # portfolio control adds a proportional 10x cushion for 30x total.
-    max_markets: int = 20
+    # quote_size x (1 - p) = quote_size. The 20-slot baseline consumes 20x
+    # size; the portfolio control adds a 10x cushion for 30x total. The bounded
+    # 22-slot measurement canary keeps the same 30x cap, leaving an 8x (36%)
+    # cushion rather than silently increasing account exposure.
+    max_markets: int = DEFAULT_SLOT_CAPACITY
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -315,6 +319,7 @@ class CommissioningConfig:
         *,
         quote_size: Decimal | None = None,
         runtime_quote_size_path: Path = RUNTIME_QUOTE_SIZE_PATH,
+        runtime_slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
     ) -> CommissioningConfig:
         """Return current defaults for read-only operator diagnostics.
 
@@ -325,12 +330,14 @@ class CommissioningConfig:
 
         if quote_size is None:
             quote_size = configured_quote_size(runtime_quote_size_path)
+        max_markets = configured_slot_capacity(runtime_slot_capacity_path)
         return cls(
             market_slug=AUTO_REWARD_MARKET,
             economic_risk_accepted=False,
             exclusive_api_key_confirmed=False,
             maker_lab_stopped_confirmed=False,
             quote_size=quote_size,
+            max_markets=max_markets,
         )
 
     def reward_selection_policy(self):
@@ -380,9 +387,10 @@ class CommissioningConfig:
             parse_quote_size(self.quote_size)
         except ValueError as exc:
             problems.append(f"commissioning {exc}")
-        if self.max_markets != 20:
-            problems.append(
-                "commissioning is hard-locked to at most twenty markets")
+        try:
+            parse_slot_capacity(self.max_markets)
+        except ValueError as exc:
+            problems.append(f"commissioning {exc}")
         if self.max_portfolio_exposure_usd < self.max_market_exposure_usd:
             problems.append(
                 "the portfolio exposure budget must cover a single market")
@@ -460,5 +468,19 @@ def configured_quote_size(
     raw = path.read_text(encoding="utf-8").strip()
     try:
         return parse_quote_size(raw)
+    except ValueError as exc:
+        raise CommissioningRefused(f"runtime {exc}") from exc
+
+
+def configured_slot_capacity(
+    path: Path = RUNTIME_SLOT_CAPACITY_PATH,
+) -> int:
+    """Read the last validated restart-scoped capacity for diagnostics."""
+
+    if not path.exists():
+        return DEFAULT_SLOT_CAPACITY
+    raw = path.read_text(encoding="utf-8").strip()
+    try:
+        return parse_slot_capacity(raw)
     except ValueError as exc:
         raise CommissioningRefused(f"runtime {exc}") from exc

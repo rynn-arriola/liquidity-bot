@@ -5,9 +5,9 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
 ```
 ## Current high-value findings
 - **The 02:00Z low-order state was lifecycle scheduler delay, not API pressure.** Eight bound markets reached kickoff together; working orders fell to 16/17 across 11 markets while two positions exited. The relevant windows had zero API failures/429s and selection still found 81 viable candidates. The ordinary 02:12:52Z top-up replaced eight expired owners plus one economic-idle owner, restored 20 markets and 33 orders, and left zero position, unresolved or unknown rows. The immediate-refill repair is deployed in `859b891`; natural kickoff acceptance remains. [Evidence](docs/history/BOUND_LIFECYCLE_REFILL_2026-08-29.md).
-- **Parity needs two truths, not one sync bucket.** GitHub owns tracked files;
-  the bounded live-safe ledger backup is verified private recovery evidence only.
+- **Parity needs two truths, not one sync bucket.** GitHub owns tracked files; the bounded live-safe ledger backup is verified private recovery evidence only.
 - **Twenty-four slots are not a Polymarket API limit.** The 2026-08-29 full business-load audit separates documented limits, measured stream behavior and modeled REST/CPU/exposure ceilings; exact telemetry and bounded canaries remain required. [API capacity evidence](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence).
+- **Twenty-two is suitable for a bounded measurement, not yet a permanent limit.** Normal-load modeling estimates 1.70 REST requests/second at 22, but busy input estimates 3.19/s and a silent full public feed 8.17/s. The latter remains fail-closed because each owner gets a fresh service clock and stale books cannot authorize new risk. Size 13 keeps the $390 portfolio cap, leaving a 36% width cushion. The operator authorized one flat-gated 30-minute canary with immediate rollback criteria. [Canary evidence](docs/history/SLOT_CAPACITY_CANARY_2026-08-29.md).
 - **Application silence was mistaken for private-transport failure.** In about eight hours the old runner detected roughly 123 silences and recorded 120 recoveries covering 133 shards, all `cancels=0`, without associated 403/429, risk stop, unknown absence or quarantine. The SDK transport answered Ping/Pong while exposing only JSON to the old clock. Deployed `a1ba212` records awaited Pongs and fails closed on probe loss; 810 WSL tests and reversal passed, while natural timeout acceptance is pending. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
 - **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting. The deployed high-water repair naturally contained another backward sample at 04:19:49Z, then reached 20/20 with no retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Laptop commissioning is live at size 13.** After 807 WSL tests and a
@@ -80,7 +80,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   own last-message clock. A complete REST snapshot can bridge a brief gap but
   cannot hide 180 seconds of stream silence.
 - **Buying power is an entry constraint, not an equity value or exit gate.** A
-  successful entry must reserve cached buying power within the same 20-slot
+  successful entry must reserve cached buying power within the same configured-capacity
   sweep. Insufficient-power and validation rejections should pause only that
   market's new entries; reducers, cancels and IOC exits remain available.
 - **Official HTTP guidance is compatible with mutation safety.** Confirmed 429

@@ -53,11 +53,16 @@ function setIndicator(id, state) {
   element.className = state;
 }
 
-function renderSlots(slots) {
+function renderSlots(slots, capacity) {
   const grid = byId("slot-grid");
   grid.replaceChildren();
   const safeSlots = Array.isArray(slots) ? slots : [];
-  for (let index = 0; index < 20; index += 1) {
+  const safeCapacity = Number.isInteger(capacity) && capacity >= 20 && capacity <= 22
+    ? capacity
+    : (safeSlots.length || 20);
+  const columns = safeCapacity > 20 ? 11 : 10;
+  grid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+  for (let index = 0; index < safeCapacity; index += 1) {
     const source = safeSlots[index] || { number: index + 1, market: null, status: "empty" };
     const slot = document.createElement("article");
     slot.className = `slot ${source.status || "empty"}`;
@@ -221,7 +226,10 @@ function render(data) {
   setIndicator("ledger-indicator", ledger.available ? (ledger.age_seconds > 120 ? "warn" : "good") : "bad");
   setIndicator("log-indicator", log.available ? (log.age_seconds > 120 ? "warn" : "good") : "bad");
 
-  renderSlots(ledger.slots);
+  const capacity = Number(data.capacity);
+  byId("scope-capacity").textContent = Number.isInteger(capacity) ? String(capacity) : "—";
+  byId("slot-capacity").textContent = Number.isInteger(capacity) ? String(capacity) : "—";
+  renderSlots(ledger.slots, capacity);
   renderActivity(data.activity);
   renderGainReport(data.gain_report);
   byId("footer-source").textContent = data.source || "LOCAL READ-ONLY";

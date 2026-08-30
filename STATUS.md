@@ -9,13 +9,12 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 - **Stop proof:** the runner received `operator_sigterm` and exited gracefully.
   The 02:34:46Z post-stop authenticated snapshot proved zero open orders and
   zero nonzero positions; the ledger had zero unresolved/unknown rows
-- **Loaded source:** marker `859b891`; WSL HEAD `626d47d` differs only by the later stopped-state documentation commit. The HARD-meter and lifecycle-refill repairs are active
+- **Loaded source:** marker `859b891`; WSL HEAD `626d47d` differs only by a later documentation commit. The HARD-meter and lifecycle-refill repairs are active
 - **Verification:** all 844 true WSL tests passed in 59.440s before startup. The 02:43:47Z authenticated acceptance found 34 orders across 18 markets and one position; the runner is managing that live fill
 - **Lifecycle refill:** eight synchronized 02:00Z kickoffs reduced the working slate to 16/17 orders across 11 markets while two positions exited. There were zero API failures/429s and 81 viable candidates. The ordinary 02:12:52Z selection restored 20 markets and 33 orders with zero positions/unresolved/unknown rows, proving safe recovery but an avoidable scheduler gap
-- **API capacity measurement:** startup made 373 attempts/146.9s clean; the next
-  64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
+- **API capacity measurement:** startup made 373 attempts/146.9s clean; the next 64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
   with 105 clean reads. This restart made 416 attempts/152.0s at 2.736/s with
-  zero failures/429s. Twenty remains the ceiling pending full replay review
+  zero failures/429s. At 03:58Z local state showed the 20-slot runner flat with zero unresolved rows; one bounded 22-slot canary is authorized but is not yet deployed or started
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data
@@ -30,7 +29,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   copy matches the laptop SHA-256 and passes SQLite
   integrity `ok`. It is not activated; no credential path, trading process,
   service, timer or API check exists there
-- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; slots, horizon and REST rate stay fixed
+- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; the live runner remains at 20 slots pending its flat-gated 22-slot measurement
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
@@ -39,7 +38,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
 | Quote size | 13 contracts live |
-| Concurrent capacity | 20 market slots |
+| Concurrent capacity | 20 market slots live; one bounded restart-scoped 22-slot measurement is authorized after flat proof |
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2 cents; 1.5-cent retention hysteresis |

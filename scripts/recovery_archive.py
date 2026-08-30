@@ -37,6 +37,7 @@ DEFAULT_SQLITE = (
 DEFAULT_FILES = (
     ("runtime/DEPLOYED_COMMIT", "DEPLOYED_COMMIT"),
     ("runtime/commissioning_quote_size", "data/commissioning_quote_size"),
+    ("runtime/commissioning_slot_capacity", "data/commissioning_slot_capacity"),
     ("runtime/accounting_snapshots.json", "data/accounting_snapshots.json"),
     ("runtime/funding_cache.json", "data/funding_cache.json"),
     ("runtime/polymarket-changelog-state.json",

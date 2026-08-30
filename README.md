@@ -54,7 +54,8 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a bounded commissioning process. It joins the active sports
-catalog to reward programs and binds one executor across at most 20 selected
+catalog to reward programs and binds one executor across a validated 20-slot
+baseline or an explicitly authorized restart-scoped canary of at most 22 selected
 markets. The operative authorized limits are below. Quote size is read from the
 restart-scoped runtime setting; quantity-linked limits are derived and
 hard-locked by `CommissioningConfig`:
@@ -207,7 +208,7 @@ building post-only PLACE: exact price-time queue and current model queue,
 Target Size/cutoff, BBO-change velocity, reward projection, stressed exit and
 expected net. It is linked to the durable intent and later fill by the exact
 client order ID. It is not sent to the venue and is not read by selection,
-the reconciler, risk policy or the 20-slot scheduler. Reducers and IOC exits do
+the reconciler, risk policy or the configured-capacity scheduler. Reducers and IOC exits do
 not record entry observations. There is deliberately no league filter.
 
 Inspect collection coverage and fill/no-fill labels from the local ledger only
@@ -344,7 +345,7 @@ stops and session fee cap derive automatically from it. Portfolio exposure is
 On WSL, a successful bot start also launches and opens the read-only Liquidity
 TV dashboard at `http://localhost:8787`. It reads only the local ledger, log and
 process table, makes zero venue API calls and cannot block a successful trading
-startup. Its 20-slot map is age-labelled local stream-scope evidence, not venue
+startup. Its configured-capacity map is age-labelled local stream-scope evidence, not venue
 flatness proof. See [Liquidity TV dashboard](docs/TV_DASHBOARD.md) for the
 display, LAN and manual lifecycle commands.
 

@@ -11,17 +11,19 @@ strategy is profitable and not permission to scale.
 ## Fixed execution envelope
 
 - join every executable active sports market to its liquidity rewards and
-  expose the account to at most 20 selected rewarded markets at a time;
+  expose the account to the validated restart capacity: 20 by default and at
+  most 22 only for an explicitly authorized measurement canary;
 - refresh selection every 15 minutes, deeply evaluate at most 100 books per
   pass through the shared governor, and round-robin deferred lower-ranked
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 5 contracts per quote by default across at most 20 concurrently bound
-  markets (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 30; the live operator setting
-  returned to 10 on 2026-08-24 without changing the 20-slot breadth.
-  `quote_size.py` is the single quantity authority;
+- 5 contracts per quote by default across 20-22 concurrently bound markets
+  (one bid and one offer may rest per market while flat). Size is a
+  restart-scoped whole number from 5 through 30; the live operator setting is
+  13. `quote_size.py` is the single quantity authority; `slot_capacity.py`
+  independently validates breadth, and a bare launcher invocation always
+  restores the 20-slot baseline rather than inheriting a prior canary;
 - require at least a 2-cent full-book spread before a new building quote;
   retain an already-resting quote down to 1.5 cents and pull it below that
   hysteresis boundary, while never spread-gating inventory reduction;
@@ -62,7 +64,7 @@ strategy is profitable and not permission to scale.
 The runner measures marked account equity as the API's USD `currentBalance`
 plus `assetNotional`. It never substitutes `buyingPower` for equity. Buying
 power gates only a flat market's new post-only entry and is reserved locally
-after successful submissions so the 20-slot sweep cannot reuse stale capacity;
+after successful submissions so a multi-slot sweep cannot reuse stale capacity;
 it never delays a reducer, cancel or IOC exit.
 
 ## Startup gates
@@ -154,7 +156,7 @@ transition and include the positively closed release count.
 
 When the final position inside the pre-kickoff safety margin becomes positively
 flat and mandatory capacity is reclaimable, the runner requests top-up before
-the next ordinary 20-market service sweep. A bound market's positively observed
+the next ordinary configured-capacity service sweep. A bound market's positively observed
 kickoff also requests one immediate top-up instead of recurring as an expected
 `no longer pregame` runtime error; startup selection still rejects an already-
 started candidate. Neither trigger scans while urgent inventory remains. A full
@@ -246,7 +248,7 @@ bash scripts/post_polymarket_changelog.sh
 A Retail HTTP 403 is a positive rejection of that request, not proof about any
 other venue state. The exact PLACE or CANCEL intent becomes `FAILED`; timeouts,
 connection loss, 5xx and malformed success remain `UNCERTAIN`. The ordinary
-20-slot action loop then opens one account-wide 60-second new-entry circuit so
+configured-capacity action loop then opens one account-wide 60-second new-entry circuit so
 a location or permission failure cannot retire every market. Existing orders
 and positions stay tracked. Cancels and reducers bypass an entry denial; if a
 safety mutation itself is rejected, it receives a short 10-second retry

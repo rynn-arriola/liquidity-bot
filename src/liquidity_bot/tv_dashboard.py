@@ -24,13 +24,14 @@ import subprocess
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
+from .commissioning import RUNTIME_SLOT_CAPACITY_PATH, configured_slot_capacity
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASSETS = PROJECT_ROOT / "web" / "tv-dashboard"
 DEFAULT_GAIN_CACHE = PROJECT_ROOT / "data" / "tv-gain-snapshot.json"
 ACTIVE_ORDER_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 UNRESOLVED_INTENT_STATES = ("PREPARED", "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN")
-SLOT_CAPACITY = 20
 MAX_ACTIVITY_LINES = 12
 MAX_REJECTED_REQUEST_BODY_BYTES = 64 * 1024
 
@@ -281,7 +282,9 @@ def _read_activity(path: Path) -> tuple[list[dict[str, Any]], datetime | None, s
     return activity, datetime.fromtimestamp(stat.st_mtime, timezone.utc), None
 
 
-def _latest_scope(connection: sqlite3.Connection) -> dict[str, Any] | None:
+def _latest_scope(
+    connection: sqlite3.Connection, capacity: int,
+) -> dict[str, Any] | None:
     if not _table_exists(connection, "execution_queue_stream_sessions"):
         return None
     row = connection.execute(
@@ -298,7 +301,7 @@ def _latest_scope(connection: sqlite3.Connection) -> dict[str, Any] | None:
         markets = []
     if not isinstance(markets, list):
         markets = []
-    return {**dict(row), "markets": [str(value) for value in markets[:SLOT_CAPACITY]]}
+    return {**dict(row), "markets": [str(value) for value in markets[:capacity]]}
 
 
 def _grouped_markets(
@@ -315,7 +318,7 @@ def _grouped_markets(
     }
 
 
-def _ledger_state(path: Path, now: datetime) -> dict[str, Any]:
+def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
     unavailable = {
         "available": False,
         "error": "ledger unavailable",
@@ -333,7 +336,7 @@ def _ledger_state(path: Path, now: datetime) -> dict[str, Any]:
         stat = path.stat()
         connection = _open_read_only(path)
         try:
-            scope = _latest_scope(connection)
+            scope = _latest_scope(connection, capacity)
             working = _grouped_markets(
                 connection,
                 "execution_orders",
@@ -360,9 +363,9 @@ def _ledger_state(path: Path, now: datetime) -> dict[str, Any]:
 
             scope_markets = list(scope["markets"]) if scope else []
             fallback = sorted(working | positions | unresolved | unknown)
-            markets = (scope_markets + [market for market in fallback if market not in scope_markets])[:SLOT_CAPACITY]
+            markets = (scope_markets + [market for market in fallback if market not in scope_markets])[:capacity]
             slots = []
-            for index in range(SLOT_CAPACITY):
+            for index in range(capacity):
                 market = markets[index] if index < len(markets) else None
                 status = "empty"
                 if market:
@@ -420,12 +423,14 @@ def collect_state(
     now: datetime | None = None,
     processes: Iterable[dict[str, Any]] | None = None,
     gain_cache: Path | None = None,
+    slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
 ) -> dict[str, Any]:
     """Build one local-only snapshot. Unknown data remains unknown, never zero."""
 
     observed_at = now or _utc_now()
+    capacity = configured_slot_capacity(slot_capacity_path)
     process = _process_state(processes if processes is not None else _process_snapshot())
-    ledger = _ledger_state(database, observed_at)
+    ledger = _ledger_state(database, observed_at, capacity)
     activity, log_updated, log_error = _read_activity(log)
     log_age = _age_seconds(log_updated, observed_at)
 
@@ -448,7 +453,7 @@ def collect_state(
         "schema_version": 1,
         "observed_at": _iso(observed_at),
         "mode": mode,
-        "capacity": SLOT_CAPACITY,
+        "capacity": capacity,
         "source": "LOCAL READ-ONLY · ZERO VENUE API CALLS",
         "process": process,
         "ledger": ledger,
@@ -475,11 +480,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "LiquidityTV/1"
 
     def __init__(self, *args: Any, database: Path, log: Path, assets: Path,
-                 gain_cache: Path | None = None, **kwargs: Any) -> None:
+                 gain_cache: Path | None = None,
+                 slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
+                 **kwargs: Any) -> None:
         self.database = database
         self.log = log
         self.assets = assets.resolve()
         self.gain_cache = gain_cache
+        self.slot_capacity_path = slot_capacity_path
         super().__init__(*args, **kwargs)
 
     def _headers(self, content_type: str, length: int, *, cache: str = "no-store") -> None:
@@ -510,7 +518,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/state":
             body = json.dumps(
                 collect_state(
-                    self.database, self.log, gain_cache=self.gain_cache),
+                    self.database, self.log, gain_cache=self.gain_cache,
+                    slot_capacity_path=self.slot_capacity_path),
                 separators=(",", ":")).encode()
             self._write(HTTPStatus.OK, body, "application/json; charset=utf-8", head=head)
             return
@@ -582,6 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log", type=Path, default=PROJECT_ROOT / "logs" / "commissioning.log")
     parser.add_argument("--assets", type=Path, default=DEFAULT_ASSETS)
     parser.add_argument("--gain-cache", type=Path, default=DEFAULT_GAIN_CACHE)
+    parser.add_argument(
+        "--slot-capacity-file", type=Path,
+        default=PROJECT_ROOT / RUNTIME_SLOT_CAPACITY_PATH)
     return parser
 
 
@@ -591,7 +603,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"dashboard assets unavailable: {args.assets}")
     handler = partial(
         DashboardHandler, database=args.database, log=args.log,
-        assets=args.assets, gain_cache=args.gain_cache)
+        assets=args.assets, gain_cache=args.gain_cache,
+        slot_capacity_path=args.slot_capacity_file)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Liquidity TV dashboard: http://{args.host}:{args.port}", flush=True)
     print("Source: local read-only ledger/log; zero venue API calls", flush=True)

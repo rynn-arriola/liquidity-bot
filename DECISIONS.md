@@ -21,13 +21,13 @@ show the operator the discrepancy.
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
 | Quote size | 13 contracts live; whole values 5-30 are supported and restart-scoped |
-| Concurrent market capacity | 20 slots |
+| Concurrent market capacity | 20 slots is the permanent baseline and launcher default. The operator authorized one flat-gated, restart-scoped 22-slot measurement canary on 2026-08-29; this does not authorize a permanent 22-slot setting |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
-| Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary 20-market service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
-| Portfolio / market exposure | `30 × / 9 × quote size`; $390 / $117 at size 13. Portfolio is 20 slot-notionals plus a proportional 10-notional cushion |
+| Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary configured-capacity service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
+| Portfolio / market exposure | `30 × / 9 × quote size`; $390 / $117 at size 13. The cap is unchanged by the 22-slot canary: 20 slots leave a 10-notional cushion and 22 leave an 8-notional (36%) cushion |
 | Market loss stop | `4 × quote size`; $52 at size 13 |
 | Account loss threshold | `8 × quote size`; $104 at size 13 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |
@@ -36,13 +36,9 @@ show the operator the discrepancy.
 | Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, plus a bounded pure-volume fixed-GTC-to-settlement cohort; no orders or strategy gate |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
 
-The two account sensors protect against different evidence and responses; they
-share one size-scaled threshold, not permission to remove either sensor.
-The marked sensor blocks new entries immediately. When inventory is open, it
-must not force a loss-realizing shutdown from paper movement alone: it waits
-for a breach-time position to close and a later adjusted balance. A confirmed
-result may stop even while another position remains open. The
-realized sensor independently pauses new risk at the same scaled threshold.
+The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
+
+The 22-slot authorization is a measurement, not a durable limit. It starts only after natural flatness and the normal stop/flat/push/hash/test/start gates. Acceptance requires 30 continuous minutes covering startup and selection bursts, zero failures/429s, no queue above one in two consecutive 60-second windows, no safety deadline or stream loss, stable ownership and zero unresolved/unknown state. Any breach triggers graceful stop, positive flat proof and restart at the 20-slot default.
 
 ## Reporting and data choices
 

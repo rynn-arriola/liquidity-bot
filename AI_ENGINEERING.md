@@ -61,7 +61,7 @@ market selection. At minimum, preserve these rules:
    performance claim and state its scope.
 4. This bot's ledger and live history outrank maker-lab. Maker-lab may be a
    labeled provisional prior only when this bot has no applicable evidence.
-5. Raw working-order count is not 20-slot health. Use queue scope, active owner
+5. Raw working-order count is not configured-capacity health. Use queue scope, active owner
    state, eligibility, unresolved ownership and resting-time evidence.
 6. `book_stale` event count is not severity. Use escalation depth, retirement,
    recovery progress and effect on useful work.
@@ -71,7 +71,7 @@ market selection. At minimum, preserve these rules:
 
 ## Change and verification rules
 
-- Before every fix is pushed or deployed, perform a dedicated final review and edge-case audit across success, failure, empty/full and boundary values, timing/races, partial/unknown state, ownership, API/load effects, recovery, shutdown, restart, rollback and 20-slot interaction. No passing test suite or urgency waives this review.
+- Before every fix is pushed or deployed, perform a dedicated final review and edge-case audit across success, failure, empty/full and boundary values, timing/races, partial/unknown state, ownership, API/load effects, recovery, shutdown, restart, rollback and configured-capacity interaction. No passing test suite or urgency waives this review.
 - Add focused regression coverage for every fix.
 - Deliberately reverse the important repair and prove the test fails; restore
   it before the final suite.
@@ -118,7 +118,7 @@ market selection. At minimum, preserve these rules:
 - A watchlist measurement is not permission to change live behavior.
 - Operator displays should prefer local read-only telemetry. They must expose
   source and age, preserve unknown values, redact secrets, provide no mutation
-  route and fail independently of trading startup. A local 20-slot scope is not
+  route and fail independently of trading startup. A local slot scope is not
   authenticated current order or position proof.
 
 ## Historical routing

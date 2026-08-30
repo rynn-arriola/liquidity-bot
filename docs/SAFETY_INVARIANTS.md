@@ -20,15 +20,17 @@ These are implementation requirements, not suggestions.
 11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
-    maker-lab stopped. Size and breadth are **the persisted operator quantity
-    across at most 20 concurrently bound markets**. Quote size is a whole,
-    restart-scoped value bounded to 5-30; the persisted live setting is 10 and
-    5 is only the missing-file fallback.
-    Breadth and the six-hour selection horizon do not change. Early-exit loss
+    maker-lab stopped. Size and breadth are restart-scoped operator inputs.
+    Quote size is a whole value bounded to 5-30; the persisted live setting is
+    13 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
+    be explicitly set only from 20 through the authorized canary ceiling of 22;
+    a bare restart must return to 20. The six-hour selection horizon does not
+    change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
     (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`)
     and the session fee cap (`0.30 × size`) are computed properties. Portfolio
-    exposure funds 20 slot-notionals plus a proportional ten-notional cushion.
+    exposure funds 20 baseline slot-notionals plus a ten-notional cushion; at
+    22 it remains fixed and leaves an eight-notional (36%) cushion.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
     invariant 57 but was **disproved** -- 29 subscriptions were later sustained
@@ -209,8 +211,9 @@ These are implementation requirements, not suggestions.
     residue reached settlement for -$88.20, 86% of that session's loss.
     Waiting for a free exit is never permission to settle.
 57. **Superseded 2026-08-16 — kept because it was used as grounds not to
-    investigate.** The live limits are 20 markets and currently 10 contracts per quote
-    (invariant 13). The per-connection reasoning below is still correct; what
+    investigate.** The durable breadth baseline is 20 markets, with one
+    restart-scoped 22-slot canary authorized, and live size is 13 contracts per
+    quote (invariant 13). The per-connection reasoning below is still correct; what
     was wrong is treating one connection's cap as the account's. Connections
     are independent and each carries its own quota, and 29 subscriptions were
     later sustained (FINDINGS section 9).
@@ -348,7 +351,8 @@ These are implementation requirements, not suggestions.
     has no mutation path. The older decision-time queue cannot cap orders that
     joined during PLACE latency. A shadow signal also requires positive OPEN
     or PARTIAL order state and no unresolved CANCEL for that client order.
-    Reducers and exits are excluded, and slot capacity remains 20.
+    Reducers and exits are excluded, and observation cannot change the
+    restart-configured slot capacity.
 69. Venue maintenance may pause a runner but may not relax execution truth.
     Only a positively classified transport failure, WebSocket disconnect or
     HTTP 5xx may enter the maintenance coordinator; NotFound, HTTP 429,
@@ -362,7 +366,7 @@ These are implementation requirements, not suggestions.
     reconciliation, fresh-stream and private-state gates. Startup uses the
     same in-process pause rather than spending the supervisor's fast-crash
     budget. Operator stop remains prompt, no pause proves flatness, and the
-    active market tuple and authorized 20-slot capacity must remain unchanged.
+    active market tuple and restart-configured capacity must remain unchanged.
 70. Reward authorization loss may reclaim a slot only from positive,
     owner-specific proof. The runner must remember the exact program ID that
     authorized entry. A later successful incentive response must still contain
@@ -373,7 +377,8 @@ These are implementation requirements, not suggestions.
     position, working order, `UNKNOWN_ABSENT` order or unresolved intent retains
     the market in the active ownership scope. Incremental replacement preserves
     every healthy venue order, rechecks release safety at the commit boundary,
-    obeys the near-flatten-deadline guard and cannot exceed the configured 20 slots.
+    obeys the near-flatten-deadline guard and cannot exceed the validated
+    restart-configured capacity.
     Reward projection must intersect the nominal day-of clock with explicit
     program bounds so selection and runtime authorization value the same
     interval.
@@ -421,7 +426,8 @@ These are implementation requirements, not suggestions.
     score may still be persisted as additive increments, but it is not a
     substitute for resting duration. A duration/score read, write, conversion
     or reporting failure may not authorize, select, cancel, replace, delay or
-    resize an order, change the 20-slot capacity, alter a reward/economics gate
+    resize an order, change the restart-configured capacity, alter a
+    reward/economics gate
     or modify any risk baseline. It adds no venue REST request or WebSocket
     subscription. Resting side-hours and score-hours both sum concurrent sides
     and may exceed 24. A backward wall-clock sample must add zero score, retain
@@ -459,7 +465,8 @@ These are implementation requirements, not suggestions.
     tuple/stream commit. Missing status, failed read or a reopened market is no
     proof. Nonzero position, working or `UNKNOWN_ABSENT` order, or unresolved
     intent retains the owner. Retained orders are not cancelled, the near-exit
-    deadline guard remains, and the active tuple cannot exceed 20.
+    deadline guard remains, and the active tuple cannot exceed the validated
+    restart capacity.
 77. Venue execution history is positive retained evidence only. It may be
     reset or pruned, so an empty activity result can never prove no execution,
     cancellation or flatness. Execution ID and trade ID are separate durable
@@ -470,7 +477,8 @@ These are implementation requirements, not suggestions.
     contains the reversal and must not be arithmetically reversed again.
 78. Buying power may constrain only a flat market's new post-only entry. The
     required notional is `price * quantity`, and a successful submission must
-    reserve cached capacity for the remainder of that 20-slot decision sweep.
+    reserve cached capacity for the remainder of that configured-capacity
+    decision sweep.
     Rejection backoff is structured, bounded and market-local. A reducer,
     cancel or IOC exit may never be blocked or delayed by buying power or a
     prior entry rejection. Buying power is never equity, P&L or flat proof.
@@ -503,7 +511,7 @@ These are implementation requirements, not suggestions.
     conservative public-trade/queue evidence. Partial/one-side/no-fill states,
     decode failures, drops, reconnects and stale exit books remain explicit.
     None may select, delay, cancel, replace, resize or otherwise affect the
-    20-slot runner. A measurement restart restores durable unfinished first-
+    liquidity runner at any configured capacity. A measurement restart restores durable unfinished first-
     leg episodes; it never turns them into venue positions.
     An exact fixed-GTC trial is a separately labeled pure-volume cohort capped
     at 20 markets inside the same 100-market public scope. It receives five
@@ -525,7 +533,7 @@ These are implementation requirements, not suggestions.
     releases oldest-first, and must have one distinct viable replacement per
     optional owner before release. It may not cancel retained orders, lower the
     active count when replacement supply is short, bypass complete pre-commit
-    account reconciliation or exceed 20 slots.
+    account reconciliation or exceed the validated restart capacity.
 83. Post-flat refill priority may shorten only avoidable scheduler delay. It
     requires a transition from positively held near-deadline inventory to no
     remaining near-deadline position, observed through the normal private
@@ -559,7 +567,7 @@ These are implementation requirements, not suggestions.
     incremental top-up, but startup must still reject already-started
     candidates and no request may bypass near-deadline inventory priority,
     flat/order/ambiguity proof, complete account reconciliation, fresh
-    replacement viability, release revalidation, stream handoff or the 20-slot
-    ceiling. Retained orders are never cancelled for discovery. A failed refill
+    replacement viability, release revalidation, stream handoff or the
+    validated restart ceiling. Retained orders are never cancelled for discovery. A failed refill
     uses the ordinary bounded retry cadence, and lifecycle timing telemetry is
     evidence only rather than entry authorization.

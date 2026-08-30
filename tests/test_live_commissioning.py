@@ -445,14 +445,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.markets.book_calls, 0)
         self.assertIn("[api-budget]", output.getvalue())
+        self.assertIn("slots=20", output.getvalue())
         self.assertIn("categories=market_book:1", output.getvalue())
         self.assertNotIn("secret-market-slug", output.getvalue())
         self.assertEqual(limiter.telemetry().attempts, 0)
 
     async def test_due_contract_refresh_uses_bounded_bulk_requests(self):
         runner, _, _ = self.build_runner()
-        runner.config = replace(runner.config, max_markets=20)
-        slugs = tuple(f"market-{index}" for index in range(20))
+        runner.config = replace(runner.config, max_markets=22)
+        slugs = tuple(f"market-{index}" for index in range(22))
         runner._bind_markets(slugs)
 
         async def markets_for(batch):
@@ -482,7 +483,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             call.args[0]
             for call in runner.gateway.fetch_incentives.await_args_list
         ]
-        self.assertEqual([len(batch) for batch in market_batches], [8, 8, 4])
+        self.assertEqual([len(batch) for batch in market_batches], [8, 8, 6])
         self.assertEqual(incentive_batches, market_batches)
         self.assertTrue(all(
             runner.state_for(slug).market is not None
@@ -2120,6 +2121,29 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("market-two", serviced)
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_twenty_two_slot_service_takes_a_fresh_clock_per_owner(self):
+        runner, _, _ = self.build_runner(
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-0")), clock=TickingClock())
+        runner.config = replace(runner.config, max_markets=22)
+        slugs = tuple(f"market-{index}" for index in range(22))
+        runner._bind_markets(slugs)
+        observed = []
+
+        async def observe(slug, now):
+            observed.append((slug, now))
+
+        runner._service_market_state = observe
+
+        self.assertEqual(await runner._service_bound_markets(), "")
+        self.assertEqual([slug for slug, _ in observed], list(runner.managed_slugs()))
+        self.assertEqual({slug for slug, _ in observed}, set(slugs))
+        self.assertEqual(len({now for _, now in observed}), 22)
+        self.assertEqual(
+            [now for _, now in observed],
+            sorted(now for _, now in observed),
+        )
 
     async def test_a_runtime_invariant_still_stops_the_session(self):
         """Absorbing a local defect must not absorb a safety violation."""
@@ -8155,6 +8179,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "live_commissioning",
             "--auto-select-rewards",
             "--quote-size", "30",
+            "--max-markets", "22",
             "--arm-live",
             "--accept-one-contract-risk",
             "--exclusive-api-key",
@@ -8171,12 +8196,23 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(args.auto_select_rewards)
         self.assertIsNone(args.market_slug)
         self.assertEqual(args.quote_size, 30)
+        self.assertEqual(args.max_markets, 22)
 
     def test_cli_rejects_quote_size_outside_the_reviewed_range(self):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
             "--quote-size", "31",
+        ]
+        with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 2)
+
+    def test_cli_rejects_slot_capacity_outside_the_canary_range(self):
+        argv = [
+            "live_commissioning",
+            "--auto-select-rewards",
+            "--max-markets", "23",
         ]
         with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
             main()
@@ -8237,6 +8273,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             maker_lab_stopped=True,
             arm_live=False,
             quote_size=5,
+            max_markets=20,
             lock_file=Path("unused.lock"),
             database=Path("unused.db"),
         )

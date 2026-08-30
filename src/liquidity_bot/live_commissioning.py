@@ -66,6 +66,7 @@ from .market_selector import (
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
+from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
 from .reward_calendar import (
     NEW_YORK, reward_day, risk_day, split_reward_day_interval)
@@ -3621,6 +3622,7 @@ class CommissioningRunner:
         ) or "none"
         print(
             f"[api-budget] at={now.isoformat()} "
+            f"slots={self.config.max_markets} "
             f"seconds={evidence.elapsed_seconds:.1f} "
             f"attempts={evidence.attempts} "
             f"rps={evidence.attempted_requests_per_second:.3f} "
@@ -7484,6 +7486,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         arm_live=args.arm_live,
         auto_select_reward_markets=auto_select,
         quote_size=Decimal(args.quote_size),
+        max_markets=args.max_markets,
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
@@ -7541,6 +7544,12 @@ def main() -> int:
         choices=range(int(MIN_QUOTE_SIZE), int(MAX_QUOTE_SIZE) + 1),
         default=int(MIN_QUOTE_SIZE),
         help="whole contracts per quote; size-coupled risk limits derive automatically",
+    )
+    parser.add_argument(
+        "--max-markets", type=int,
+        choices=range(MIN_SLOT_CAPACITY, MAX_SLOT_CAPACITY + 1),
+        default=MIN_SLOT_CAPACITY,
+        help="restart-scoped market capacity; 21-22 are measurement canaries",
     )
     args = parser.parse_args()
     try:

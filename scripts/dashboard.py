@@ -334,7 +334,7 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
     fields = [
         {"name": "\U0001f6e0\ufe0f Health",
          "value": fence + health_text + "```", "inline": True},
-        {"name": "\U0001f4ca Slots (of 20)",
+        {"name": f"\U0001f4ca Slots (of {MAX_MARKETS})",
          "value": fence + slots_text + "```", "inline": True},
         {"name": "\u26a0\ufe0f Position & stop loss",
          "value": fence + risk_text + "```", "inline": False},

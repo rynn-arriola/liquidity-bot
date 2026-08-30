@@ -6,8 +6,9 @@ cd "$(dirname "$0")/.." || exit 1
 
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-}
-if [ "$#" -gt 2 ]; then
-    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE]"
+SLOT_CAPACITY=${3:-20}
+if [ "$#" -gt 3 ]; then
+    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE] [SLOT-CAPACITY]"
     exit 2
 fi
 
@@ -47,6 +48,9 @@ fi
 if ! QUOTE_SIZE=$(.venv/bin/python -B -m liquidity_bot.quote_size "$QUOTE_SIZE"); then
     exit 2
 fi
+if ! SLOT_CAPACITY=$(.venv/bin/python -B -m liquidity_bot.slot_capacity "$SLOT_CAPACITY"); then
+    exit 2
+fi
 if [ ! -f ../maker-lab/credentials.py ] \
         && [ -z "${POLYMARKET_US_KEY_ID:-}" ]; then
     echo "REFUSED: shared credentials are unavailable"
@@ -54,10 +58,11 @@ if [ ! -f ../maker-lab/credentials.py ] \
 fi
 
 printf '%s\n' "$QUOTE_SIZE" > data/commissioning_quote_size
-setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" \
+printf '%s\n' "$SLOT_CAPACITY" > data/commissioning_slot_capacity
+setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY" \
     >> logs/supervisor.log 2>&1 < /dev/null &
 
-echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE"
+echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY"
 for _ in $(seq 1 20); do
     sleep 1
     [ -n "$(runner_pids)" ] && break

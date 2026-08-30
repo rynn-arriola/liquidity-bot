@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-5}
+SLOT_CAPACITY=${3:-20}
 PY=.venv/bin/python
 if [ ! -x "$PY" ]; then
     echo "[supervisor] refused: $PY is missing"
@@ -14,6 +15,10 @@ if [ ! -x "$PY" ]; then
 fi
 if ! QUOTE_SIZE=$("$PY" -B -m liquidity_bot.quote_size "$QUOTE_SIZE"); then
     echo "[supervisor] refused invalid quote size"
+    exit 2
+fi
+if ! SLOT_CAPACITY=$("$PY" -B -m liquidity_bot.slot_capacity "$SLOT_CAPACITY"); then
+    echo "[supervisor] refused invalid slot capacity"
     exit 2
 fi
 MAX_FAST_CRASHES=3
@@ -31,8 +36,8 @@ else
     MARKET_ARGS=(--market-slug "$TARGET")
 fi
 
-echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE"
-alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote."
+echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY"
+alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote across up to $SLOT_CAPACITY markets."
 
 while true; do
     STARTED=$(date -u +%s)
@@ -48,7 +53,8 @@ while true; do
         --accept-one-contract-risk \
         --exclusive-api-key \
         --maker-lab-stopped \
-        --quote-size "$QUOTE_SIZE" >> logs/commissioning.log 2>&1
+        --quote-size "$QUOTE_SIZE" \
+        --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1
     CODE=$?
     RAN=$(( $(date -u +%s) - STARTED ))
 

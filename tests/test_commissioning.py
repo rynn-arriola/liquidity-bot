@@ -12,9 +12,11 @@ from liquidity_bot.commissioning import (
     CommissioningConfig,
     CommissioningRefused,
     configured_quote_size,
+    configured_slot_capacity,
     next_six_am_new_york,
 )
 from liquidity_bot.quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, main
+from liquidity_bot.slot_capacity import main as slot_capacity_main
 
 
 class CommissioningTests(unittest.TestCase):
@@ -139,10 +141,11 @@ class CommissioningTests(unittest.TestCase):
         # 25 left a blind spot for no reason. 100 covers the whole pool.
         self.assertEqual(config.max_selection_book_candidates, 100)
 
-    def test_more_markets_than_the_subscription_ceiling_is_refused(self):
+    def test_twenty_two_slot_canary_is_authorized_but_more_is_refused(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-        with self.assertRaisesRegex(CommissioningRefused, "twenty markets"):
-            self.authorized(max_markets=21).assert_authorized(now=now)
+        self.authorized(max_markets=22).assert_authorized(now=now)
+        with self.assertRaisesRegex(CommissioningRefused, "20 to 22"):
+            self.authorized(max_markets=23).assert_authorized(now=now)
 
     def test_auto_selection_constants_and_reserved_slug_are_locked(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -229,13 +232,41 @@ class CommissioningTests(unittest.TestCase):
                     CommissioningRefused, "whole number from 5 to 30"):
                 configured_quote_size(path)
 
+    def test_runtime_slot_file_drives_diagnostics_and_rejects_bad_values(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "slot_capacity"
+            path.write_text("22\n", encoding="utf-8")
+            self.assertEqual(configured_slot_capacity(path), 22)
+            self.assertEqual(
+                CommissioningConfig.diagnostic_defaults(
+                    runtime_slot_capacity_path=path).max_markets,
+                22,
+            )
+            path.write_text("23\n", encoding="utf-8")
+            with self.assertRaisesRegex(CommissioningRefused, "20 to 22"):
+                configured_slot_capacity(path)
+
     def test_shell_launchers_use_the_single_quote_size_authority(self):
         root = Path(__file__).resolve().parents[1]
         for name in ("start_commissioning.sh", "supervise_commissioning.sh"):
             with self.subTest(name=name):
                 contents = (root / "scripts" / name).read_text(encoding="utf-8")
                 self.assertIn("-m liquidity_bot.quote_size", contents)
+                self.assertIn("-m liquidity_bot.slot_capacity", contents)
                 self.assertNotIn("5|6|7|8|9|10", contents)
+        start = (root / "scripts" / "start_commissioning.sh").read_text(
+            encoding="utf-8")
+        supervisor = (
+            root / "scripts" / "supervise_commissioning.sh").read_text(
+            encoding="utf-8")
+        self.assertIn("SLOT_CAPACITY=${3:-20}", start)
+        self.assertIn("SLOT_CAPACITY=${3:-20}", supervisor)
+        self.assertIn('"$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY"', start)
+        self.assertIn('--max-markets "$SLOT_CAPACITY"', supervisor)
+        status = (root / "scripts" / "status_commissioning.sh").read_text(
+            encoding="utf-8")
+        self.assertIn("-m liquidity_bot.slot_capacity", status)
+        self.assertIn("configured slot capacity: INVALID", status)
 
     def test_quote_size_shell_authority_normalizes_authorized_integers(self):
         for raw in ("5", "13", "29", "30", "13.0"):
@@ -247,6 +278,16 @@ class CommissioningTests(unittest.TestCase):
         for raw in ("4", "30.5", "31", "nan", "not-a-number"):
             with self.subTest(raw=raw), patch("builtins.print") as output:
                 self.assertEqual(main([raw]), 2)
+                self.assertIn("REFUSED", output.call_args.args[0])
+
+    def test_slot_capacity_shell_authority_accepts_only_canary_range(self):
+        for raw in ("20", "21", "22", "22.0"):
+            with self.subTest(raw=raw), patch("builtins.print") as output:
+                self.assertEqual(slot_capacity_main([raw]), 0)
+                output.assert_called_once_with(int(Decimal(raw)))
+        for raw in ("19", "22.5", "23", "nan", "bad"):
+            with self.subTest(raw=raw), patch("builtins.print") as output:
+                self.assertEqual(slot_capacity_main([raw]), 2)
                 self.assertIn("REFUSED", output.call_args.args[0])
 
 

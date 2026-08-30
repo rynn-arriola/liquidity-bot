@@ -20,6 +20,16 @@ if [ -f data/commissioning_quote_size ]; then
 else
     echo "configured quote size: 5 (default)"
 fi
+if [ -f data/commissioning_slot_capacity ]; then
+    SLOT_CAPACITY=$(tr -d '[:space:]' < data/commissioning_slot_capacity)
+    if NORMALIZED_CAPACITY=$(.venv/bin/python -B -m liquidity_bot.slot_capacity "$SLOT_CAPACITY" 2>/dev/null); then
+        echo "configured slot capacity: $NORMALIZED_CAPACITY"
+    else
+        echo "configured slot capacity: INVALID"
+    fi
+else
+    echo "configured slot capacity: 20 (default)"
+fi
 
 echo
 echo "--- commissioning log ---"

@@ -68,7 +68,7 @@ realized sensor independently pauses new risk at the same scaled threshold.
   synchronization point between them; neither workstation is independently
   authoritative.
 - Unqualified “run the bot” targets the laptop. Only explicit “run on the
-  computer/PC” selects the desktop, still with the single-owner handoff/preflight. “Stop bot now,” “stop it now,” or “just stop it” means immediate graceful stop before checks so manually cancelled orders cannot be replaced; never force-kill and verify venue state afterward. “Restart now while flat” uses the same stop-first sequence, then positive post-stop proof and normal startup gates; failure leaves it stopped.
+  computer/PC” selects the desktop, still with the single-owner handoff/preflight. “Stop bot now,” “stop it now,” or “just stop it” means immediate graceful stop before checks so manually cancelled orders cannot be replaced; never force-kill and verify venue state afterward. “Restart now while flat” uses the same stop-first sequence, then positive post-stop proof and normal startup gates; failure leaves it stopped. “Command 1” is the complete immediate stop → post-stop proof → finish only missing review/test/push/parity/deploy verification for already in-scope AI changes → fresh gate → persisted-setting restart → live acceptance workflow; valid completed work is reused, and any uncertain gate leaves the bot stopped.
 - The laptop is the primary live runtime. The desktop is prepared for development,
   offline verification and manual cold backup only. Exactly one machine may use the
   live API credentials and active ledger at a time; there is no automatic

@@ -117,6 +117,8 @@ The unqualified instruction **"run the bot"** always means the laptop; only expl
 
 **"Stop bot now," "stop it now,"** and **"just stop it"** mean immediately stop the supervisor and gracefully signal the current runner through `scripts/stop_commissioning.sh` before parity, diagnostics or authenticated reads so it cannot replace orders; never force-kill, then verify the final record and authenticated venue orders/positions, reporting unknown and leaving it stopped if proof fails. **"Restart now while flat"** means that same stop first, followed by positive post-stop flat/order-free, ownership, parity, deployment and startup gates; the operator's flat statement speeds sequencing but does not replace proof, and any failed gate leaves the bot stopped.
 
+**"Command 1"** authorizes one complete stop-review-deploy-restart workflow on the current live owner: immediately perform the same graceful stop; prove post-stop zero venue orders/positions and zero unresolved/unknown ownership; inspect the tracked checkout, GitHub, WSL and `DEPLOYED_COMMIT`; finish only missing review, regression/reversal/full-suite, documentation, push, parity, reviewed deployment, hash and runtime-test steps for the already in-scope AI changes; reuse valid completed evidence instead of repeating work; then repeat the fresh start gate, restart with persisted settings and verify live acceptance. It never authorizes unrelated dirty-file changes, a force-kill, a risk-setting change or bypassing proof; any failed or uncertain gate leaves the bot stopped.
+
 ## How to work with the operator
 
 - Lead with the result and current bot state.

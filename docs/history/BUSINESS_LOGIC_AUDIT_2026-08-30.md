@@ -2,10 +2,11 @@
 
 ## Scope and safety
 
-The audit and all validation were read-only with respect to Polymarket. The
-live commissioning process was not stopped, restarted, deployed, or sent any
-venue mutation. Local source changes apply only after a later reviewed deploy
-and bot restart.
+The audit and all validation were read-only with respect to Polymarket. Commit
+`0755a30` was pushed and deployed to the WSL checkout without stopping or
+restarting the live runner and without any venue mutation. The existing runner
+kept its prior code loaded; these repairs change behavior only after a later
+authorized restart.
 
 ## 1. Automated taker-exit evidence budget
 
@@ -97,4 +98,12 @@ reward-opportunity-cost attribution.
 - Each substantive repair received a deliberate reversal that failed the
   intended regression before the repair was restored.
 - Documentation audit passed with the current `FINDINGS.md` index at 99/100
-  lines; the final repository-wide WSL suite passed 872/872 in 73.976 seconds.
+  lines. The exact deployed commit passed 872/872 in 58.520 seconds using the
+  production WSL virtual environment from an isolated clean worktree.
+
+The first run directly inside the live checkout found one environment-coupled
+dashboard test: live data persisted the separately authorized 22-slot canary,
+while the test expected its default empty-data value of 20. The live capacity
+file was not modified. Isolating the exact same commit from live data removed
+that unrelated fixture input and the complete suite passed. Deployment left
+runner PID 74548 and supervisor PID 74539 unchanged.

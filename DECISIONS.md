@@ -38,7 +38,7 @@ show the operator the discrepancy.
 
 The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
 
-The 22-slot authorization is a measurement, not a durable limit. It starts only after natural flatness and the normal stop/flat/push/hash/test/start gates. Acceptance requires 30 continuous minutes covering startup and selection bursts, zero failures/429s, no queue above one in two consecutive 60-second windows, no safety deadline or stream loss, stable ownership and zero unresolved/unknown state. Any breach triggers graceful stop, positive flat proof and restart at the 20-slot default.
+The 22-slot authorization is a measurement, not a durable limit. It passed 30 continuous minutes of startup and selection bursts with zero failures/429s, sustained queue, safety deadline, stream loss or persistent account ambiguity. The accepted canary may continue without interrupting open inventory; 20 remains the bare launcher default and permanent baseline. Any later breach triggers graceful stop, positive flat proof and restart at 20.
 
 ## Reporting and data choices
 

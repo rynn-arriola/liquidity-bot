@@ -233,6 +233,17 @@ with zero failures/confirmed 429s, no queue above one in two consecutive
 60-second windows, no safety
 deadline or stream-coverage loss, stable ownership and zero unresolved/unknown
 state. A breach requires graceful stop, positive flat proof and restart at 20.
+The canary started at 04:12:20Z on 2026-08-30 and passed its continuous
+30-minute gate across startup and repeated selection bursts. Twenty telemetry
+windows recorded 3,392 attempts, zero failures and zero confirmed 429s;
+request rates ranged from `1.263/s` to `2.643/s`, maximum wait p99 was `0.226s`,
+maximum response p99 was `0.919s` and maximum queue depth was one. The first
+startup burst carried 453 attempts and 49 mutations; a later selection burst
+carried 43 discovery and 124 book reads. Execution-history reads continued
+without the prior `1015` recurrence. One brief acknowledged cancel was normal
+in-flight churn and cleared; there was no persistent unresolved/unknown state,
+stream drop, decode failure, recovery or safety deadline. This accepts the
+bounded canary, not a permanent 22-slot policy.
 The durable maximum is the highest width
 that preserves the chosen request headroom with zero safety-deadline misses,
 zero sustained backlog/429s, acceptable response/wait tails, proven stream

@@ -73,3 +73,34 @@ supervisor/runner ownership, and zero unresolved/unknown account state. Any
 breach requires the ordinary graceful stop and authenticated flat proof, then
 `start_commissioning.sh auto 13 20`. Live results and final deployment evidence
 must be appended here; until then 22 remains unaccepted.
+
+## Live result
+
+Commit `fdc426e` was pushed before deployment. After natural flatness, the old
+runner stopped gracefully and the 04:08:50Z final record plus authenticated
+dashboard proved zero resting orders, positions, unresolved intents and unknown
+orders. The exact canary commit then passed 850/850 tests in the production WSL
+virtual environment. `start_commissioning.sh auto 13 22` started supervisor
+74539 and runner 74548 at 04:12:20Z; fresh 22-owner scope completed at 04:13:25Z.
+
+The continuous acceptance interval covered 20 telemetry windows and 3,392 REST
+attempts with zero failures and zero confirmed 429s. Window rates ranged from
+`1.263/s` to `2.643/s`; maximum governor wait p99 was `0.226s`, maximum response
+p99 was `0.919s` and maximum queue depth was one. The first startup burst made
+453 attempts over 171.4 seconds with 49 mutations. A later selection burst made
+195 attempts over 77.6 seconds, including 43 discovery and 124 book reads.
+Repeated scans found 99, 99 and 97 viable candidates, and execution-history
+reads continued without the earlier Cloudflare `1015` recurrence.
+
+At 04:48Z the same runner remained healthy with 22 owners, 27 resting orders
+across 20 markets, seven positions and zero unresolved/unknown rows. Its fresh
+scope had received 27 trades with zero drops, decode failures or scope error.
+A brief acknowledged cancel observed earlier cleared normally; there was no
+persistent ambiguity, recovery event, safety deadline or stream-coverage loss.
+The canary therefore passed. It remains a bounded measurement while 20 stays
+the launcher default and permanent baseline.
+
+Concurrent accounting/fill-role work advanced the checkout and deployment
+marker to `6ae1335` without restarting these PIDs. The running process still has
+`fdc426e` loaded; the staged business-logic repair is intentionally deferred to
+a later authorized flat restart.

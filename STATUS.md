@@ -2,19 +2,16 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Verified:** 2026-08-29 22:43 ET / 2026-08-30 02:43 UTC
-- **Liquidity bot:** LIVE on the laptop; supervisor PID 61500, runner PID 61507
-  and isolated dashboard PID 1681 are active
+- **Verified:** 2026-08-30 00:48 ET / 2026-08-30 04:48 UTC
+- **Liquidity bot:** LIVE at 22 slots on the laptop; supervisor PID 74539, runner PID 74548 and isolated dashboard PID 74573 are active
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Stop proof:** the runner received `operator_sigterm` and exited gracefully.
   The 02:34:46Z post-stop authenticated snapshot proved zero open orders and
   zero nonzero positions; the ledger had zero unresolved/unknown rows
-- **Deployed checkout:** WSL HEAD and `DEPLOYED_COMMIT` are `0755a30`; the exact deployed commit passed all 872 tests in the production WSL virtual environment. Runner PID 74548 and supervisor PID 74539 were deliberately not restarted and still have prior `fdc426e` code loaded; the business-logic repairs take effect only after a later authorized restart
+- **Deployed checkout:** WSL HEAD and `DEPLOYED_COMMIT` are `6ae1335`. Runner PID 74548 was started from `fdc426e` and deliberately not restarted; staged business-logic repairs take effect only after a later authorized restart
 - **Business-logic repair staged:** canonical LONG/YES-frame accounting exactly replays the 2026-08-29 settled-cash change at `-$79.4465`; owned taker-exit budgets and entry/exit summaries now use durable order roles. Three reversals passed. The 900-second timeout remains unchanged because the available replay favored 900 seconds and had only 29.2% stream coverage. [Evidence](docs/history/BUSINESS_LOGIC_AUDIT_2026-08-30.md)
 - **Lifecycle refill:** eight synchronized 02:00Z kickoffs reduced the working slate to 16/17 orders across 11 markets while two positions exited. There were zero API failures/429s and 81 viable candidates. The ordinary 02:12:52Z selection restored 20 markets and 33 orders with zero positions/unresolved/unknown rows, proving safe recovery but an avoidable scheduler gap
-- **API capacity measurement:** startup made 373 attempts/146.9s clean; the next 64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
-  with 105 clean reads. This restart made 416 attempts/152.0s at 2.736/s with
-  zero failures/429s. At 03:58Z local state showed the 20-slot runner flat with zero unresolved rows; one bounded 22-slot canary is authorized but is not yet deployed or started
+- **API capacity measurement:** the 22-slot canary passed its 30-minute startup/selection-burst gate: 20 windows, 3,392 attempts, zero failures/429s, `1.263-2.643/s`, wait p99 at most `0.226s`, response p99 at most `0.919s` and queue depth at most one. It remains bounded; 20 is still the default and permanent baseline
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data
@@ -29,7 +26,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   copy matches the laptop SHA-256 and passes SQLite
   integrity `ok`. It is not activated; no credential path, trading process,
   service, timer or API check exists there
-- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps; the live runner remains at 20 slots pending its flat-gated 22-slot measurement
+- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps. At 04:48Z the ledger had 27 orders across 20/22 markets, seven positions, zero unresolved/unknown rows, 27 scoped trades and zero drops/decode failures
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
@@ -38,7 +35,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
 | Quote size | 13 contracts live |
-| Concurrent capacity | 20 market slots live; one bounded restart-scoped 22-slot measurement is authorized after flat proof |
+| Concurrent capacity | 22-slot bounded canary live and accepted; 20 remains the launcher default and permanent baseline |
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2 cents; 1.5-cent retention hysteresis |

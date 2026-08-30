@@ -65,6 +65,7 @@ from .market_selector import (
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
+from .pnl import open_inventory_cost
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
@@ -2925,9 +2926,16 @@ class CommissioningRunner:
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=observed_at)
         self.risk_guard.observe_realized(self._session_realized())
-        self.risk_guard.observe_market_realized({
-            slug: value - self._realized_baseline_by_market.get(slug, Decimal("0"))
-            for slug, value in self.ledger.realized_by_market().items()})
+        if self._cash_activity_boundary is not None:
+            market_realized = self.ledger.realized_by_market(
+                since=self._cash_activity_boundary)
+        else:
+            market_realized = {
+                slug: value - self._realized_baseline_by_market.get(
+                    slug, Decimal("0"))
+                for slug, value in self.ledger.realized_by_market().items()
+            }
+        self.risk_guard.observe_market_realized(market_realized)
 
     async def _refresh_equity_for_decision(self, now: datetime) -> None:
         """Keep the account-risk observation fresh across a long slot sweep."""
@@ -2975,7 +2983,7 @@ class CommissioningRunner:
     def _session_realized(self) -> Decimal:
         """Session P&L from settled cash, falling back to the fill ledger.
 
-            realised = (cash now - cash at session start) + position x basis
+            realised = cash delta + economic cost of open inventory
 
         Open inventory has already spent cash, so it is added back at its own
         basis -- the same shape realized_pnl uses, but with cash taken from the
@@ -2985,7 +2993,11 @@ class CommissioningRunner:
         stop that raises is worse than one computed the old way.
         """
 
-        ledger_value = self.ledger.realized_pnl() - self._realized_baseline
+        ledger_value = (
+            self.ledger.realized_pnl(since=self._cash_activity_boundary)
+            if self._cash_activity_boundary is not None
+            else self.ledger.realized_pnl() - self._realized_baseline
+        )
         if self.balance is None or self._cash_baseline is None:
             return ledger_value
         if (self._nontrading_cash is None
@@ -3005,7 +3017,8 @@ class CommissioningRunner:
                     # Cannot value what we hold, so cash alone would read the
                     # entry cost as a loss. Use the old path.
                     return ledger_value
-                realised += position * basis.average_entry_price
+                realised += open_inventory_cost(
+                    position, basis.average_entry_price)
             return realised
         except Exception:
             return ledger_value
@@ -3192,11 +3205,19 @@ class CommissioningRunner:
                     flush=True,
                 )
         if self.started_at is not None:
+            # Live venue intents do not distinguish building from reducing:
+            # both directions use BUY_* because SELL_* inverts the price
+            # frame (live_orders._intent). Liquidity and ownership are the
+            # durable exit evidence instead. Every bot-generated IOC is
+            # risk-reducing; entries are post-only. Count one exit per owned
+            # client order while still summing fees from every partial fill.
             rows = self.ledger.query(
-                "SELECT client_order_id,fee FROM execution_fills "
-                "WHERE received_at>=? AND reversed=0 "
-                "AND liquidity='TAKER' AND intent IN "
-                "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT')",
+                "SELECT f.client_order_id,f.fee FROM execution_fills f "
+                "WHERE f.received_at>=? AND f.reversed=0 "
+                "AND f.liquidity='TAKER' "
+                "AND EXISTS (SELECT 1 FROM execution_intents i "
+                "WHERE i.operation='PLACE' "
+                "AND i.client_order_id=f.client_order_id)",
                 (self.started_at.isoformat(),),
             )
             taker_exit_orders = {
@@ -4444,15 +4465,8 @@ class CommissioningRunner:
                 self.balance.marked_equity - self.risk_guard.starting_equity)
         place_count = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
-        session_start = (self.started_at or now).isoformat()
-        entry_fills = self.ledger.query(
-            "SELECT COUNT(*) n FROM execution_fills WHERE reversed=0 AND intent IN "
-            "('ORDER_INTENT_BUY_LONG','ORDER_INTENT_BUY_SHORT') "
-            "AND received_at>=?", (session_start,))[0]["n"]
-        exit_fills = self.ledger.query(
-            "SELECT COUNT(*) n FROM execution_fills WHERE reversed=0 AND intent IN "
-            "('ORDER_INTENT_SELL_LONG','ORDER_INTENT_SELL_SHORT') "
-            "AND received_at>=?", (session_start,))[0]["n"]
+        entry_fills, exit_fills = self.ledger.fill_role_counts(
+            since=self.started_at or now)
         observed = [self.state_for(slug).book_observed_at
                     for slug in self.active_slugs]
         oldest_book = min((at for at in observed if at is not None),

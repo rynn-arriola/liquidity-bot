@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
+from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 from liquidity_bot.reward_calendar import (  # noqa: E402
     reward_day, reward_day_bounds)
@@ -393,10 +394,10 @@ def _today_trading(now) -> float:
             book = books[slug]
             if intent == "ORDER_INTENT_BUY_LONG":
                 book["lq"] += q
-                book["lc"] += q * p_
+                book["lc"] += q * economic_contract_cost(intent, p_)
             elif intent == "ORDER_INTENT_BUY_SHORT":
                 book["sq"] += q
-                book["sc"] += q * p_
+                book["sc"] += q * economic_contract_cost(intent, p_)
         conn.close()
         for book in books.values():
             pairs = min(book["lq"], book["sq"])
@@ -723,10 +724,10 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
             book = books[slug]
             if intent == "ORDER_INTENT_BUY_LONG":
                 book["lq"] += q
-                book["lc"] += q * p_
+                book["lc"] += q * economic_contract_cost(intent, p_)
             elif intent == "ORDER_INTENT_BUY_SHORT":
                 book["sq"] += q
-                book["sc"] += q * p_
+                book["sc"] += q * economic_contract_cost(intent, p_)
         conn.close()
         # NET across every market, winners included. This summed only the
         # losing markets and discarded the winning ones, which is a gross

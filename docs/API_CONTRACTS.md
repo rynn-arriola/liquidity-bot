@@ -177,6 +177,23 @@ Official references:
 
 - Execution ID identifies one fill leg. Trade ID identifies the separate venue
   trade lifecycle; either can arrive before the other and both are durable.
+- Retail order and execution prices used by this strategy are in the
+  LONG/YES frame for both live intents. `BUY_LONG` at `p` costs `p` per
+  contract; `BUY_SHORT` at `p` acquires the opposite outcome and costs
+  `1 - p`. The wire `side` identifies the outcome being taken and is not a
+  cash-flow sign. A matched pair therefore realizes
+  `quantity * (short_price - long_price) - signed_fees`.
+- Authenticated Retail evidence on 2026-08-29 confirmed a ten-contract
+  `BUY_SHORT` at stored price `0.29` with venue trade cost `7.07` after a
+  three-cent maker rebate: `10 * (1 - 0.29) - 0.03`. A replay of 364 active
+  production fills through 2026-08-30T03:39:08Z produced `-79.4465`, exactly
+  matching the settled-cash change from the ET opening baseline. Reports and
+  safety attribution must use the same conversion; a symmetric `0.50` test
+  cannot distinguish the frames.
+- Position `cost` is an absolute economic basis. For a negative position the
+  strategy-frame entry price used to plan its reducing order is
+  `1 - abs(cost / position)`; for a positive position it is
+  `abs(cost / position)`.
 - Retained portfolio activity can report `TRADE_STATE_BUSTED`. Each linked
   unreversed fill is marked reversed exactly once and is thereafter excluded
   from inventory basis, known-fill totals, realized P&L, fee/fill telemetry and

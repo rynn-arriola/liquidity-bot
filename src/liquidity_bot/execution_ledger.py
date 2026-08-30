@@ -17,6 +17,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .pnl import (
+    MatchedInventory,
+    intent_direction,
+    strategy_price_from_position_cost,
+)
+
 
 class LedgerConflict(RuntimeError):
     """Persisted truth conflicts with a proposed transition."""
@@ -347,12 +353,9 @@ class Execution:
     exchange_order_id: str | None = None
     liquidity: str | None = None
     intent: str | None = None
-    # WHICH outcome this price was quoted against. The venue prices an
-    # execution on one specific outcome, and 0.67 on one side is 0.33 on the
-    # other -- so a price without its outcome cannot be interpreted. Dropping
-    # it made realized_pnl compute +$1.34 on a trade that lost $0.30
-    # (aec-valorant-ff-ep, 2026-08-15), and realized_pnl is what the $40 stop
-    # reads. Recorded now so the frame is recoverable; see task 24.
+    # WHICH outcome the fill acquired. Prices themselves are stored in the
+    # strategy's LONG/YES frame and economic cost comes from intent; outcome
+    # remains necessary to attribute settlement when a position never closes.
     outcome: str | None = None
     # Trade identity/state are separate from the execution-leg identity. The
     # private stream normally supplies trade_id but not a terminal trade state;
@@ -1199,9 +1202,16 @@ class ExecutionLedger:
             return None
         if not cost or seen.tzinfo is None or seen.utcoffset() is None:
             return None
-        # Cost is what the position cost in total; basis is per contract.
-        return InventoryBasis(
-            authoritative, abs(cost) / abs(authoritative), seen)
+        # The venue reports economic cost. The reconciler operates in the
+        # strategy's LONG/YES price frame, so a negative position must be
+        # converted back with one-minus before pricing its reducing order.
+        unit_cost = abs(cost) / abs(authoritative)
+        try:
+            strategy_price = strategy_price_from_position_cost(
+                authoritative, unit_cost)
+        except ValueError:
+            return None
+        return InventoryBasis(authoritative, strategy_price, seen)
 
     def _accept_event(
         self, source: str, event_id: str, received_at: str,
@@ -1386,12 +1396,7 @@ class ExecutionLedger:
 
     @staticmethod
     def _signed_qty(intent: str, qty: Decimal) -> Decimal:
-        normalized = intent.upper()
-        if normalized in {"ORDER_INTENT_BUY_LONG", "ORDER_INTENT_SELL_SHORT"}:
-            return qty
-        if normalized in {"ORDER_INTENT_BUY_SHORT", "ORDER_INTENT_SELL_LONG"}:
-            return -qty
-        raise ValueError("execution intent is required for economic direction")
+        return qty * intent_direction(intent)
 
     @staticmethod
     def _trade_state(value: str) -> str:
@@ -1775,89 +1780,42 @@ class ExecutionLedger:
 
     def realized_pnl(self, market_slug: str | None = None, *,
                      since: datetime | None = None) -> Decimal:
-        """Realised trading P&L: closed round trips only, net of fees.
+        """Realised matched-inventory P&L, net of observed fill fees.
 
-        Open inventory is excluded by valuing it at its own average entry, so
-        an unrealised mark never reaches a loss stop. That distinction matters
-        once size grows: 320 open contracts move $38 on a twelve-cent mark, and
-        a stop reading marked equity would fire on paper movement with nothing
-        traded.
+        Stored prices always use the LONG/YES frame. BUY_SHORT at ``p`` costs
+        ``1-p`` for the opposite outcome, and pairing opposite inventory
+        realizes the one-dollar settlement less both bases. Open inventory is
+        carried at cost and contributes no gross P&L. Fees are incurred when
+        their fill occurs, even if that fill remains open.
 
-            realised = cash from fills + position x average entry
-
-        A long has paid `q x basis` that is not yet a loss, so it is added
-        back; a short has received it, so it is subtracted. Both fall out of
-        the signed position.
+        A window still replays older fills to establish its opening basis, but
+        attributes only realizations and fees whose fill occurred in-window.
         """
 
-        # `since` bounds the window. Without it this is lifetime P&L, and the
-        # loss stop is a *session* limit -- every past loss would count against
-        # today's budget forever, so once the ledger had ever lost $40 the bot
-        # could never start again. Observed 2026-08-15: the stop fired on
-        # startup from several days of accumulated test losses.
         clauses: list[str] = ["reversed=0"]
         params: list[Any] = []
         if market_slug is not None:
             clauses.append("market_slug=?")
             params.append(market_slug)
-        if since is not None:
-            clauses.append("event_at>=?")
-            params.append(_time(since, "since").isoformat())
         where = " WHERE " + " AND ".join(clauses)
-        cash = Decimal("0")
-        long_qty = Decimal("0")
-        short_qty = Decimal("0")
+        cutoff = _time(since, "since") if since is not None else None
+        inventories: dict[str, MatchedInventory] = {}
+        realized = Decimal("0")
         for row in self.query(
-                "SELECT side,price,qty,fee,intent FROM execution_fills" + where,
+                "SELECT market_slug,price,qty,fee,intent,event_at "
+                "FROM execution_fills" + where
+                + " ORDER BY event_at,received_at,execution_id",
                 tuple(params)):
-            qty = _decimal(row["qty"], "fill qty")
-            price = _decimal(str(row["price"]), "fill price")
-            fee = _decimal(str(row["fee"] or 0), "fill fee")
-            intent = str(row["intent"] or "").upper()
-            if intent.endswith("BUY_SHORT"):
-                # A PURCHASE, despite the venue labelling it ORDER_SIDE_SELL.
-                # That label says which OUTCOME is taken, not which way our
-                # cash moves -- both intents we send are BUY intents with the
-                # price unchanged (live_orders._intent, validated by maker-lab
-                # over 201 fills). Taking the sign from the label booked cash
-                # IN on a purchase and turned a $0.30 loss into a $1.34 gain
-                # on aec-valorant-ff-ep.
-                #
-                # Buying the opposite outcome nets the position out, and the
-                # pair settles at exactly 1.00 -- credited below.
-                cash -= qty * price + fee
-                short_qty += qty
-            elif intent.endswith("BUY_LONG"):
-                cash -= qty * price + fee
-                long_qty += qty
-            else:
-                # Legacy SELL_LONG / SELL_SHORT fills, and any fill recorded
-                # before intent was captured. Those used the other mapping,
-                # where the venue read the price in the opposite frame, so the
-                # side label is the only signal available.
-                signed = qty if "SELL" in str(row["side"]).upper() else -qty
-                cash += signed * price - fee
-        # Each MATCHED pair of outcomes settles at exactly one dollar, so a
-        # completed round trip realises that dollar against what both legs
-        # cost. An unmatched leg is still open inventory and is valued at its
-        # own basis below instead.
-        cash += min(long_qty, short_qty)
-        slugs = ([market_slug] if market_slug is not None
-                 else [str(r["market_slug"]) for r in self.query(
-                     "SELECT DISTINCT market_slug FROM execution_fills")])
-        # Open inventory is added back at basis so an unrealised mark never
-        # reaches the stop. That is window-independent: a position held from
-        # before `since` is still open now, and excluding it would report its
-        # entry cost as a loss.
-        for slug in slugs:
-            position = self.position(slug)
-            if not position:
-                continue
-            basis = self.inventory_basis(slug)
-            if basis is None:
-                continue
-            cash += position * basis.average_entry_price
-        return cash
+            slug = str(row["market_slug"])
+            delta = inventories.setdefault(slug, MatchedInventory()).apply(
+                intent=str(row["intent"] or ""),
+                price=str(row["price"]),
+                quantity=str(row["qty"]),
+                fee=str(row["fee"] or 0),
+            )
+            if cutoff is None or str(row["event_at"]) >= cutoff:
+                realized += delta
+        return realized
 
     def realized_by_market(
         self, *, since: datetime | None = None,
@@ -1870,6 +1828,31 @@ class ExecutionLedger:
             for row in self.query(
                 "SELECT DISTINCT market_slug FROM execution_fills")
         }
+
+    def fill_role_counts(self, *, since: datetime) -> tuple[int, int]:
+        """Return owned (building fills, reducing fills) since a timestamp.
+
+        Live BUY intents serve both roles, so intent names cannot classify a
+        fill. The durable PLACE intent records the decision-time role:
+        building post-only orders require a quote observation; reducers do
+        not. Imported/manual ``venue:`` fills have no owned PLACE relation and
+        are deliberately excluded.
+        """
+
+        row = self.connection.execute(
+            "SELECT "
+            "COUNT(DISTINCT CASE WHEN i.quote_observation_required=1 "
+            "THEN f.execution_id END) building,"
+            "COUNT(DISTINCT CASE WHEN i.quote_observation_required=0 "
+            "THEN f.execution_id END) reducing "
+            "FROM execution_fills f JOIN execution_intents i "
+            "ON i.client_order_id=f.client_order_id "
+            "AND i.operation='PLACE' "
+            "WHERE f.reversed=0 AND f.event_at>=? "
+            "AND f.client_order_id NOT LIKE 'venue:%'",
+            (_time(since, "since"),),
+        ).fetchone()
+        return int(row["building"]), int(row["reducing"])
 
     def risk_state_known(self, market_slug: str | None = None) -> bool:
         """True when execution state is provable enough to build new risk.

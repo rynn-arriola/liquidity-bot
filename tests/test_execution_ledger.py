@@ -164,6 +164,63 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.query(
             "SELECT * FROM execution_quote_observations"), [])
 
+    def test_fill_roles_come_from_owned_place_role_not_buy_intent(self):
+        for role, required in (("entry", True), ("exit", False)):
+            self.ledger.prepare_intent(
+                f"intent-{role}", "PLACE", "market-one", f"client-{role}",
+                {"role": role}, created_at=T0,
+                quote_observation_required=required)
+        self.ledger.apply_execution(Execution(
+            "entry-fill", "market-one", "ORDER_SIDE_BUY", Decimal("0.40"),
+            Decimal("1"), Decimal("0"), T0,
+            client_order_id="client-entry", intent="ORDER_INTENT_BUY_LONG"),
+            received_at=T0)
+        self.ledger.apply_execution(Execution(
+            "exit-fill", "market-one", "ORDER_SIDE_SELL", Decimal("0.42"),
+            Decimal("1"), Decimal("0"), T0,
+            client_order_id="client-exit", intent="ORDER_INTENT_BUY_SHORT"),
+            received_at=T0)
+
+        self.assertEqual(
+            self.ledger.fill_role_counts(since=T0), (1, 1))
+
+    def test_fill_roles_exclude_manual_and_reversed_fills(self):
+        self.ledger.prepare_intent(
+            "intent-reversed", "PLACE", "market-one", "client-reversed", {},
+            created_at=T0, quote_observation_required=False)
+        self.ledger.apply_execution(Execution(
+            "reversed-fill", "market-one", "ORDER_SIDE_SELL", Decimal("0.42"),
+            Decimal("1"), Decimal("0"), T0,
+            client_order_id="client-reversed", intent="ORDER_INTENT_BUY_SHORT"),
+            received_at=T0)
+        self.ledger.connection.execute(
+            "UPDATE execution_fills SET reversed=1 WHERE execution_id=?",
+            ("reversed-fill",))
+        self.ledger.apply_execution(Execution(
+            "manual-fill", "market-one", "ORDER_SIDE_SELL", Decimal("0.42"),
+            Decimal("1"), Decimal("0"), T0,
+            client_order_id="venue:manual", intent="ORDER_INTENT_BUY_SHORT"),
+            received_at=T0)
+        self.ledger.connection.commit()
+
+        self.assertEqual(
+            self.ledger.fill_role_counts(since=T0), (0, 0))
+
+    def test_fill_roles_use_execution_time_not_late_receipt_time(self):
+        self.ledger.prepare_intent(
+            "intent-old", "PLACE", "market-one", "client-old", {},
+            created_at=T0, quote_observation_required=True)
+        self.ledger.apply_execution(Execution(
+            "old-fill", "market-one", "ORDER_SIDE_BUY", Decimal("0.40"),
+            Decimal("1"), Decimal("0"), T0,
+            client_order_id="client-old", intent="ORDER_INTENT_BUY_LONG"),
+            received_at=T0 + timedelta(hours=2))
+
+        self.assertEqual(
+            self.ledger.fill_role_counts(since=T0 + timedelta(hours=1)),
+            (0, 0),
+        )
+
     def test_existing_intent_table_gains_observation_required_column(self):
         import sqlite3
 
@@ -669,7 +726,7 @@ class RejectReasonTests(unittest.TestCase):
 
 
 class PairSettlementTests(unittest.TestCase):
-    """BUY_SHORT is a purchase, and a matched pair settles at one dollar."""
+    """Stored prices are LONG-frame, and a matched pair settles at one dollar."""
 
     def ledger(self):
         root = Path(tempfile.mkdtemp(prefix="pairs-"))
@@ -685,22 +742,30 @@ class PairSettlementTests(unittest.TestCase):
             received_at=datetime(2026, 8, 15, tzinfo=UTC))
 
     def test_a_round_trip_realises_the_pair_settlement(self):
-        """The trade that exposed this: bought 0.39, "sold" 0.67, LOST money.
+        """BUY_SHORT at 0.33 costs 0.67 in the opposite outcome.
 
-        BUY_SHORT at 0.67 buys the opposite outcome for 0.67; it does not sell
-        at 0.67. Paying 0.39 + 0.67 = 1.06 for a pair worth 1.00 is a six-cent
-        loss per contract. Reading the venue's ORDER_SIDE_SELL label as cash IN
-        reported +$1.34 on aec-valorant-ff-ep, which actually lost about $0.30.
+        Paying 0.39 + (1 - 0.33) = 1.06 for a pair worth 1.00 is a
+        six-cent loss per contract.
         """
         led = self.ledger()
         self.fill(led, "e1", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
                   "0.39", "5")
         self.fill(led, "e2", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
-                  "0.67", "5")
+                  "0.33", "5")
 
-        # 5 x 0.39 + 5 x 0.67 = 5.30 paid; 5 pairs settle at 5.00.
+        # 5 x 0.39 + 5 x (1 - 0.33) = 5.30; five pairs settle at 5.00.
         self.assertAlmostEqual(
             float(led.realized_pnl("market-one")), -0.30, places=2)
+
+    def test_live_asymmetric_prices_use_the_long_frame(self):
+        led = self.ledger()
+        self.fill(led, "e1", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.83", "5")
+        self.fill(led, "e2", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.85", "5")
+
+        # 5 x 0.83 + 5 x (1 - 0.85) = 4.90; payout is 5.00.
+        self.assertEqual(led.realized_pnl("market-one"), Decimal("0.10"))
 
     def test_a_profitable_pair_costs_less_than_a_dollar(self):
         led = self.ledger()
@@ -723,6 +788,29 @@ class PairSettlementTests(unittest.TestCase):
         # so nothing is realised. Buying and holding is not a loss.
         self.assertAlmostEqual(
             float(led.realized_pnl("market-one")), 0.0, places=2)
+
+    def test_an_unmatched_short_leg_realises_nothing(self):
+        led = self.ledger()
+        self.fill(led, "e1", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.85", "5")
+
+        self.assertEqual(led.realized_pnl("market-one"), Decimal("0"))
+
+    def test_since_replays_prior_basis_and_attributes_the_close(self):
+        led = self.ledger()
+        before = datetime(2026, 8, 15, tzinfo=UTC)
+        after = before + timedelta(hours=1)
+        led.apply_execution(Execution(
+            "open", "market-one", "ORDER_SIDE_BUY", Decimal("0.40"),
+            Decimal("5"), Decimal("0"), before,
+            intent="ORDER_INTENT_BUY_LONG"), received_at=before)
+        led.apply_execution(Execution(
+            "close", "market-one", "ORDER_SIDE_SELL", Decimal("0.50"),
+            Decimal("5"), Decimal("0.05"), after,
+            intent="ORDER_INTENT_BUY_SHORT"), received_at=after)
+
+        self.assertEqual(
+            led.realized_pnl("market-one", since=after), Decimal("0.45"))
 
 
 class VenueBasisFallbackTests(unittest.TestCase):
@@ -758,6 +846,16 @@ class VenueBasisFallbackTests(unittest.TestCase):
         self.assertIsNotNone(basis, "a costed position must be exitable")
         self.assertEqual(basis.net_qty, Decimal("5"))
         self.assertAlmostEqual(float(basis.average_entry_price), 0.596, places=3)
+
+    def test_short_venue_cost_converts_to_the_strategy_price_frame(self):
+        led = self.ledger()
+        at = datetime(2026, 8, 15, 22, tzinfo=UTC)
+
+        self.snapshot(led, "-10", "7.07", at)
+
+        basis = led.inventory_basis("market-one")
+        self.assertEqual(basis.net_qty, Decimal("-10"))
+        self.assertEqual(basis.average_entry_price, Decimal("0.293"))
 
     def test_the_clock_starts_when_the_position_was_first_seen(self):
         """No fill time exists, so the deadline runs from first observation.

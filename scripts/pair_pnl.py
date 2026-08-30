@@ -41,6 +41,7 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from liquidity_bot.reward_calendar import reward_day  # noqa: E402
+from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
 # Fills before this are unusable: see the module docstring.
@@ -74,12 +75,14 @@ def main() -> int:
             "ORDER BY received_at", (args.since,)):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         cell = markets[row["market_slug"]]
-        if "LONG" in row["intent"]:
+        if row["intent"] == "ORDER_INTENT_BUY_LONG":
             cell["lq"] += qty
-            cell["paid"] += qty * price
-        else:
+            cell["paid"] += qty * economic_contract_cost(row["intent"], price)
+        elif row["intent"] == "ORDER_INTENT_BUY_SHORT":
             cell["sq"] += qty
-            cell["paid"] += qty * (Decimal(1) - price)
+            cell["paid"] += qty * economic_contract_cost(row["intent"], price)
+        else:
+            continue
         if cell["first"] is None:
             cell["first"] = row["received_at"]
             cell["day"] = reward_day(row["received_at"])

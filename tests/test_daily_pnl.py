@@ -33,11 +33,11 @@ class DailyPnlRewardCalendarTests(unittest.TestCase):
             [
                 ("before-et-midnight", "ORDER_INTENT_BUY_LONG", "1", "0.40",
                  "2026-08-22T03:59:59+00:00", "2026-08-22T03:59:59+00:00"),
-                ("before-et-midnight", "ORDER_INTENT_BUY_SHORT", "1", "0.50",
+                ("before-et-midnight", "ORDER_INTENT_BUY_SHORT", "1", "0.65",
                  "2026-08-22T03:59:59+00:00", "2026-08-22T03:59:59+00:00"),
                 ("at-et-midnight", "ORDER_INTENT_BUY_LONG", "1", "0.40",
                  "2026-08-22T04:00:00+00:00", "2026-08-22T04:00:00+00:00"),
-                ("at-et-midnight", "ORDER_INTENT_BUY_SHORT", "1", "0.50",
+                ("at-et-midnight", "ORDER_INTENT_BUY_SHORT", "1", "0.65",
                  "2026-08-22T04:00:00+00:00", "2026-08-22T04:00:00+00:00"),
             ])
         connection.commit()
@@ -49,8 +49,8 @@ class DailyPnlRewardCalendarTests(unittest.TestCase):
         self.assertEqual(unbalanced, 0)
         self.assertEqual(float(pairs["2026-08-21"]), 1.0)
         self.assertEqual(float(pairs["2026-08-22"]), 1.0)
-        self.assertAlmostEqual(float(pnl["2026-08-21"]), 0.1)
-        self.assertAlmostEqual(float(pnl["2026-08-22"]), 0.1)
+        self.assertAlmostEqual(float(pnl["2026-08-21"]), 0.25)
+        self.assertAlmostEqual(float(pnl["2026-08-22"]), 0.25)
 
     def test_dashboard_et_day_excludes_the_previous_utc_evening(self):
         original = dashboard.DB
@@ -60,7 +60,7 @@ class DailyPnlRewardCalendarTests(unittest.TestCase):
                 datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc))
         finally:
             dashboard.DB = original
-        self.assertAlmostEqual(result, -0.1)
+        self.assertAlmostEqual(result, -0.25)
 
     def test_dashboard_names_the_boundary_it_uses(self):
         self.assertIn("ET DAY", dashboard._pnl_strip(0, 0))

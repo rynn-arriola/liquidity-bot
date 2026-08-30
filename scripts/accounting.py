@@ -53,6 +53,10 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.account_snapshots import AsyncAccountSnapshotGateway  # noqa: E402
 from liquidity_bot.adapters import AsyncReadOnlyGateway  # noqa: E402
+from liquidity_bot.pnl import (  # noqa: E402
+    economic_contract_cost,
+    economic_sale_proceeds,
+)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
@@ -86,9 +90,9 @@ def _from_ledger(db: str):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         fees += Decimal(str(row["fee"] or 0))
         book = per_market[row["market_slug"]]
-        # Quantities and costs are NET. The bot itself only ever sends the two
-        # buy intents (FINDINGS 6i), so for a long time every row here was a
-        # purchase and `spent += qty * price` was right for all of them.
+        # Quantities and costs are NET. Stored prices use the LONG/YES frame:
+        # BUY_LONG costs `price`, while BUY_SHORT costs `1 - price` for the
+        # opposite outcome.
         #
         # An operator closing a position by hand breaks that: it lands as a
         # SELL_* fill, and 2026-08-17 produced the first one this script ever
@@ -97,23 +101,27 @@ def _from_ledger(db: str):
         # the account was flat. Verified against the balance: 5 contracts sold
         # at 0.50 with an 0.08 fee moved the account +2.42, cash IN.
         if row["intent"] == BUY_LONG:
+            cost = qty * economic_contract_cost(row["intent"], price)
             book["L_q"] += qty
-            book["L_c"] += qty * price
+            book["L_c"] += cost
             book["L_out"] = book["L_out"] or row["outcome"]
-            spent += qty * price
+            spent += cost
         elif row["intent"] == BUY_SHORT:
+            cost = qty * economic_contract_cost(row["intent"], price)
             book["S_q"] += qty
-            book["S_c"] += qty * price
+            book["S_c"] += cost
             book["S_out"] = book["S_out"] or row["outcome"]
-            spent += qty * price
+            spent += cost
         elif row["intent"] == SELL_LONG:
+            proceeds = qty * economic_sale_proceeds(row["intent"], price)
             book["L_q"] -= qty
-            book["L_c"] -= qty * price
-            spent -= qty * price
+            book["L_c"] -= proceeds
+            spent -= proceeds
         elif row["intent"] == SELL_SHORT:
+            proceeds = qty * economic_sale_proceeds(row["intent"], price)
             book["S_q"] -= qty
-            book["S_c"] -= qty * price
-            spent -= qty * price
+            book["S_c"] -= proceeds
+            spent -= proceeds
         else:
             unknown_intent += 1
     conn.close()

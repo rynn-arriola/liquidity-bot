@@ -54,13 +54,7 @@ def raw_execution(**changes):
 
 class NormalizationTests(unittest.TestCase):
     def test_a_fill_records_which_outcome_it_was_priced_against(self):
-        """A price without its outcome cannot be interpreted.
-
-        The venue prices an execution on ONE outcome, and 0.67 on one side is
-        0.33 on the other. Dropping the outcome made realized_pnl compute
-        +$1.34 on a trade that lost $0.30 (aec-valorant-ff-ep, 2026-08-15) --
-        and realized_pnl is the number the $40 stop reads.
-        """
+        """Outcome identity remains necessary for settlement attribution."""
         raw = raw_execution()
         raw["order"]["marketMetadata"] = {
             "slug": "market-one", "outcome": "Enterprise Esports"}

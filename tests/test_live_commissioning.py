@@ -3939,7 +3939,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # And the bottom line takes PAID only. Folding the $35.73 pending in
         # would report an unsettled reward as income, which invariant 22
         # forbids -- pending may be shown as context and never counted.
-        runner.ledger.realized_pnl = lambda slug=None: Decimal("-31.96")
+        runner.ledger.realized_pnl = (
+            lambda slug=None, since=None: Decimal("-31.96"))
         self.assertEqual(runner._bot_overall_pnl(), Decimal("22.48"))
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -3962,13 +3963,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_taker_exits_are_allowed_up_to_the_evidence_budget(self):
+    async def test_live_buy_intent_taker_exits_reach_the_evidence_budget(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()
         budget = runner.config.max_taker_exit_orders
         at = NOW
         for index in range(budget):
             at = NOW + timedelta(seconds=index + 1)
+            runner.ledger.prepare_intent(
+                f"exit-intent-{index}", "PLACE", "market-one",
+                f"liquidity-exit-{index}", {}, created_at=at)
             runner.ledger.apply_execution(Execution(
                 f"maker-entry-{index}", "market-one", "ORDER_SIDE_BUY",
                 Decimal("0.49"), Decimal("1"), Decimal("0"), at,
@@ -3977,8 +3981,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner.ledger.apply_execution(Execution(
                 f"taker-exit-{index}", "market-one", "ORDER_SIDE_SELL",
                 Decimal("0.49"), Decimal("1"), Decimal("0.01"), at,
-                client_order_id=f"exit-{index}", liquidity="TAKER",
-                intent="ORDER_INTENT_SELL_LONG"), received_at=at)
+                client_order_id=f"liquidity-exit-{index}", liquidity="TAKER",
+                intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
             if index < budget - 1:
                 # One crossed exit used to end the session, which capped exit
                 # evidence at a single sample. SCALE_REVIEW asks for 100.
@@ -3989,6 +3993,85 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             runner._stop_reason(at), "commissioning_taker_exit_limit")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_taker_exit_budget_counts_orders_not_partial_fills(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        at = NOW + timedelta(seconds=1)
+        runner.ledger.prepare_intent(
+            "partial-exit-intent", "PLACE", "market-one",
+            "liquidity-partial-exit", {}, created_at=at)
+        for index in range(2):
+            runner.ledger.apply_execution(Execution(
+                f"partial-{index}", "market-one", "ORDER_SIDE_SELL",
+                Decimal("0.49"), Decimal("0.5"), Decimal("0.01"), at,
+                client_order_id="liquidity-partial-exit", liquidity="TAKER",
+                intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
+
+        self.assertIsNone(runner._stop_reason(at))
+
+        for index in range(runner.config.max_taker_exit_orders - 1):
+            runner.ledger.prepare_intent(
+                f"other-exit-intent-{index}", "PLACE", "market-one",
+                f"liquidity-other-exit-{index}", {}, created_at=at)
+            runner.ledger.apply_execution(Execution(
+                f"other-order-{index}", "market-one", "ORDER_SIDE_BUY",
+                Decimal("0.51"), Decimal("1"), Decimal("0"), at,
+                client_order_id=f"liquidity-other-exit-{index}",
+                liquidity="TAKER", intent="ORDER_INTENT_BUY_LONG"),
+                received_at=at)
+        self.assertEqual(
+            runner._stop_reason(at), "commissioning_taker_exit_limit")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_taker_exit_budget_excludes_maker_manual_and_reversed_fills(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        at = NOW + timedelta(seconds=1)
+        ignored = (
+            ("maker-reducer", "liquidity-maker-reducer", "MAKER"),
+            ("manual-taker", "manual-import-without-prefix", "TAKER"),
+            ("busted-taker", "liquidity-busted-taker", "TAKER"),
+        )
+        for execution_id, client_order_id, liquidity in ignored:
+            if execution_id != "manual-taker":
+                runner.ledger.prepare_intent(
+                    f"{execution_id}-intent", "PLACE", "market-one",
+                    client_order_id, {}, created_at=at)
+            runner.ledger.apply_execution(Execution(
+                execution_id, "market-one", "ORDER_SIDE_SELL",
+                Decimal("0.49"), Decimal("1"), Decimal("1"), at,
+                client_order_id=client_order_id, liquidity=liquidity,
+                intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
+        runner.ledger.connection.execute(
+            "UPDATE execution_fills SET reversed=1 WHERE execution_id=?",
+            ("busted-taker",),
+        )
+        runner.ledger.connection.commit()
+
+        self.assertIsNone(runner._stop_reason(at))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_taker_exit_fee_budget_sums_partial_fill_fees(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        at = NOW + timedelta(seconds=1)
+        runner.ledger.prepare_intent(
+            "fee-exit-intent", "PLACE", "market-one",
+            "liquidity-fee-exit", {}, created_at=at)
+        for index in range(2):
+            runner.ledger.apply_execution(Execution(
+                f"fee-partial-{index}", "market-one", "ORDER_SIDE_SELL",
+                Decimal("0.49"), Decimal("0.5"), Decimal("0.75"), at,
+                client_order_id="liquidity-fee-exit", liquidity="TAKER",
+                intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
+
+        self.assertEqual(
+            runner._stop_reason(at), "commissioning_execution_fee_limit")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -4091,6 +4174,22 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_startup_banner_reports_an_enabled_economics_gate(self):
+        """The uncommon enforced configuration must not be labelled advisory."""
+
+        runner, _client, notifier = self.build_runner()
+        runner.config = replace(
+            runner.config, enforce_reward_cost_gate=True)
+        await runner.preflight()
+
+        banner = next(
+            message for message, _critical in notifier.messages
+            if "commissioning started" in message)
+        self.assertIn("economics enforced", banner)
+        self.assertNotIn("economics advisory", banner)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_holding_a_position_is_not_a_loss(self):
         """Buying spends cash but is not a loss -- the value is in inventory.
 
@@ -4116,13 +4215,36 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_holding_a_short_position_is_not_a_loss(self):
+        """A short's stored LONG-frame price must be converted with one-minus."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        start = client.account.current_balance
+        await runner._refresh_balance(NOW)
+
+        # A short at LONG price 0.85 costs 0.15 per contract, or 0.75 total.
+        client.account.current_balance = start - Decimal("0.75")
+        client.portfolio.rows = {runner.config.market_slug: {
+            "netPosition": "-5", "netPositionDecimal": "-5.0000",
+            "updateTime": NOW.isoformat()}}
+        await runner._rest_reconcile(runner._now())
+        runner.ledger.inventory_basis = lambda slug: SimpleNamespace(
+            average_entry_price=Decimal("0.85"), opened_at=NOW)
+        await runner._refresh_balance(NOW)
+
+        self.assertEqual(runner._session_realized(), Decimal("0"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_the_session_stop_falls_back_when_cash_is_unavailable(self):
         """A stop that raises is worse than one computed the old way."""
         runner, _client, _ = self.build_runner()
         await runner.preflight()
         runner._cash_baseline = None
         runner._realized_baseline = Decimal("0")
-        runner.ledger.realized_pnl = lambda slug=None: Decimal("-7")
+        runner.ledger.realized_pnl = (
+            lambda slug=None, since=None: Decimal("-7"))
 
         self.assertEqual(runner._session_realized(), Decimal("-7"))
         await runner.private_stream.close()
@@ -4140,7 +4262,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, _client, _ = self.build_runner()
         await runner.preflight()
         # Far past the $40 limit, all of it from before today.
-        runner.ledger.realized_pnl = lambda slug=None: Decimal("-500")
+        runner.ledger.realized_pnl = (
+            lambda slug=None, since=None: Decimal("-500"))
         runner.ledger.realized_by_market = lambda: {"market-one": Decimal("-500")}
 
         # Tomorrow: a date with no stored row, so a new baseline is taken.
@@ -4316,14 +4439,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         """
         runner, _client, _ = self.build_runner()
         await runner.preflight()
-        runner.ledger.realized_pnl = lambda slug=None: Decimal("0")
+        runner.ledger.realized_pnl = (
+            lambda slug=None, since=None: Decimal("0"))
         runner.ledger.realized_by_market = lambda: {}
         runner._baseline_day = None
         runner._roll_realized_baseline()
 
         # Now lose the whole session budget, after the baseline was taken.
         loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
         runner.risk_guard.observe_realized(
             runner.ledger.realized_pnl() - runner._realized_baseline)
 
@@ -4346,7 +4470,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, _client, notifier = self.build_runner()
         await runner.preflight()
         loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
         runner.ledger.realized_by_market = lambda: {}
         runner.risk_guard.observe_realized(loss)
 
@@ -4380,7 +4504,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, _client, _ = self.build_runner()
         await runner.preflight()
         loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None: loss
+        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
         runner.ledger.realized_by_market = lambda: {}
         runner.risk_guard.observe_realized(loss)
 
@@ -4455,7 +4579,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # The ceiling is the one thing that still reads marked equity, because
         # its job is to catch what the ledger cannot explain.
-        runner.ledger.realized_pnl = lambda slug=None: Decimal("0")
+        runner.ledger.realized_pnl = (
+            lambda slug=None, since=None: Decimal("0"))
         client.account.current_balance = (
             start - runner.config.hard_stop_loss_usd - Decimal("1"))
         await runner._refresh_balance(NOW)
@@ -7737,17 +7862,15 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._rest_reconcile(runner._now())
 
-        # Both intents are PURCHASES: 5 x 0.65 + 5 x 0.96 = 8.05 paid for five
-        # pairs that settle at 5.00, so -3.05. The old expectation of -1.55
-        # came from reading BUY_SHORT as a sale, which is the defect -- the
-        # venue's ORDER_SIDE_SELL label says which outcome is taken, not which
-        # way our cash moves.
+        # Prices are stored in the LONG frame. BUY_SHORT at 0.65 costs 0.35
+        # for the opposite outcome: 5 x (1 - 0.65) + 5 x 0.96 = 6.55 paid
+        # for five pairs worth 5.00, so -1.55.
         self.assertAlmostEqual(
-            float(runner.ledger.realized_pnl(slug)), -3.05, places=2)
+            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
         # Replaying is idempotent -- dedupe is on execution_id.
         await runner._rest_reconcile(runner._now())
         self.assertAlmostEqual(
-            float(runner.ledger.realized_pnl(slug)), -3.05, places=2)
+            float(runner.ledger.realized_pnl(slug)), -1.55, places=2)
 
     async def test_replaying_a_fill_after_a_schema_change_is_not_a_conflict(self):
         """Adding a field to Execution must not break the back-fill.

@@ -47,6 +47,7 @@ sys.path.insert(0, "src")
 sys.path.insert(0, "/root/liquidity-bot/src")
 
 from liquidity_bot.bot_era import is_bot_era  # noqa: E402
+from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.reward_calendar import reward_day  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 
@@ -70,12 +71,16 @@ def trading_by_day(db: str, since: str) -> tuple[dict, dict, int]:
             "ORDER BY received_at", (since,)):
         qty, price = Decimal(str(row["qty"])), Decimal(str(row["price"]))
         cell = markets[row["market_slug"]]
-        if "LONG" in row["intent"]:
+        if row["intent"] == "ORDER_INTENT_BUY_LONG":
             cell["lq"] += qty
-            cell["paid"] += qty * price
-        else:
+            cell["paid"] += qty * economic_contract_cost(row["intent"], price)
+        elif row["intent"] == "ORDER_INTENT_BUY_SHORT":
             cell["sq"] += qty
-            cell["paid"] += qty * (Decimal(1) - price)
+            cell["paid"] += qty * economic_contract_cost(row["intent"], price)
+        else:
+            # This estimate is deliberately BUY-pair-only. Account-level
+            # accounting handles operator/legacy SELL intents exactly.
+            continue
         if cell["day"] is None:
             cell["day"] = reward_day(row["received_at"])
 

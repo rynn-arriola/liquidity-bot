@@ -155,6 +155,15 @@ completed with zero failures and zero 429s. This bounds the observed incident
 to a transient restart/rolling window; it does not erase the failed window or
 prove that another restart will be clean.
 
+The flat-gated 2026-08-30 `859b891` restart supplied that second clean restart
+sample. Its first 152.0 seconds made 416 attempts (`370` reads, `46` mutations,
+`2.736/s`) with zero failures and zero 429s; wait p99 was `0.223s`, response p99
+`0.706s` and maximum queue depth one. The burst included 44 discovery pages,
+232 book reads, 41 creates, five cancels and eight execution-history reads.
+This satisfies the requested no-429 restart observation at 20 slots, but one
+clean replay does not explain the earlier endpoint-specific `1015` window or
+authorize a width increase.
+
 The 2026-08-30 02:00Z synchronized lifecycle window separated slot churn from
 API capacity. Eight bound markets reached kickoff while two positions were
 being exited; working orders fell to 16/17 across 11 markets, but the relevant

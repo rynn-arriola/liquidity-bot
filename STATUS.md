@@ -2,19 +2,20 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Verified:** 2026-08-29 22:34 ET / 2026-08-30 02:34 UTC
-- **Liquidity bot:** STOPPED on the laptop by explicit operator request;
-  supervisor and runner are absent; isolated dashboard PID 1681 remains active
+- **Verified:** 2026-08-29 22:43 ET / 2026-08-30 02:43 UTC
+- **Liquidity bot:** LIVE on the laptop; supervisor PID 61500, runner PID 61507
+  and isolated dashboard PID 1681 are active
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Stop proof:** the runner received `operator_sigterm` and exited gracefully.
   The 02:34:46Z post-stop authenticated snapshot proved zero open orders and
   zero nonzero positions; the ledger had zero unresolved/unknown rows
-- **Loaded source:** marker `2aa9fec`; source commit `599fb5f` is staged in WSL and activates only on the next restart. The lifecycle-refill source repair is tracked for a later reviewed deployment and is not loaded by the live runner
-- **Verification:** all 830 loaded-source tests, all 842 staged-WSL tests and all 844 current Windows-source tests pass. No deployment or restart followed the stop
+- **Loaded source:** marker `859b891`; WSL HEAD `626d47d` differs only by the later stopped-state documentation commit. The HARD-meter and lifecycle-refill repairs are active
+- **Verification:** all 844 true WSL tests passed in 59.440s before startup. The 02:43:47Z authenticated acceptance found 34 orders across 18 markets and one position; the runner is managing that live fill
 - **Lifecycle refill:** eight synchronized 02:00Z kickoffs reduced the working slate to 16/17 orders across 11 markets while two positions exited. There were zero API failures/429s and 81 viable candidates. The ordinary 02:12:52Z selection restored 20 markets and 33 orders with zero positions/unresolved/unknown rows, proving safe recovery but an avoidable scheduler gap
 - **API capacity measurement:** startup made 373 attempts/146.9s clean; the next
   64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
-  with 105 clean reads. The bot stayed live/flat; no slot increase is authorized
+  with 105 clean reads. This restart made 416 attempts/152.0s at 2.736/s with
+  zero failures/429s. Twenty remains the ceiling pending full replay review
 - **Maker-lab:** stopped
 - **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
   dependency, size 13, restricted credentials and exact execution/scalp data

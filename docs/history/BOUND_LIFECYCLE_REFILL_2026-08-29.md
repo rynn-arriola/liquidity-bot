@@ -49,5 +49,8 @@ metadata/incentive/book viability, release revalidation and safe stream handoff.
 - Deliberate reversal: removing the live lifecycle acceptance reproduced the
   missing request and the regression failed exactly.
 - Full Windows suite: 844 passed in 57.538 seconds.
-- Deployment remains pending a separate operator-authorized review/restart;
-  the loaded runner marker remains `2aa9fec`.
+- Deployment completed after the operator-authorized flat stop. The 02:40:36Z
+  start gate proved zero orders, positions, unresolved intents and unknown
+  orders; all 844 WSL tests passed in 59.440 seconds. Marker `859b891` started
+  at size 13 and reached 20 markets without an API failure/429. Natural kickoff
+  acceptance of `reason=lifecycle` remains pending.

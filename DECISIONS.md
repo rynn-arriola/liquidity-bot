@@ -21,7 +21,7 @@ show the operator the discrepancy.
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
 | Quote size | 13 contracts live; whole values 5-30 are supported and restart-scoped |
-| Concurrent market capacity | 20 slots is the permanent baseline and launcher default. The operator authorized one flat-gated, restart-scoped 22-slot measurement canary on 2026-08-29; this does not authorize a permanent 22-slot setting |
+| Concurrent market capacity | 20 slots remains the bare-launcher default. The 22-slot measurement canary passed, and on 2026-08-30 the operator explicitly selected another flat-gated restart at 22 after ending the monitoring period; the live setting is therefore 22 until a later operator decision |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
@@ -38,7 +38,7 @@ show the operator the discrepancy.
 
 The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
 
-The 22-slot authorization is a measurement, not a durable limit. It passed 30 continuous minutes of startup and selection bursts with zero failures/429s, sustained queue, safety deadline, stream loss or persistent account ambiguity. The accepted canary may continue without interrupting open inventory; 20 remains the bare launcher default and permanent baseline. Any later breach triggers graceful stop, positive flat proof and restart at 20.
+Twenty-two passed 30 continuous minutes of startup and selection bursts with zero failures/429s, sustained queue, safety deadline, stream loss or persistent account ambiguity. After ending that monitoring period, the operator explicitly chose to restart at 22 again; 22 is the current live setting while 20 remains the bare-launcher default. Any later capacity-safety breach still requires a graceful stop and positive flat proof before another start.
 
 ## Reporting and data choices
 

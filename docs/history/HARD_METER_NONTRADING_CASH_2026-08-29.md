@@ -35,6 +35,7 @@ below its cap. Deliberately restoring the old input made both tests fail with a
 zero-dollar HARD reading. After restoring the repair, all 842 tests passed in
 the laptop WSL Python 3.12 environment.
 
-The code is pushed for review but is not loaded by the live runner. No stop,
-restart, deployment or venue mutation occurred in this repair task. A later
-flat-gated restart requires separate operator authorization.
+Commit `599fb5f` is pushed and staged in the laptop WSL checkout. Its complete
+WSL suite passed 842/842 after the fast-forward. The live runner PID and loaded
+marker `2aa9fec` remained unchanged, so the repair activates only on the next
+restart. No stop, restart or venue mutation occurred.

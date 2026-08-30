@@ -92,3 +92,30 @@ tests in 69.712 seconds. `DEPLOYED_COMMIT` was then advanced to that exact
 source commit. Supervisor PID 290240, live runner PID 290252 and dashboard PID
 116618 were not signaled or restarted; the runner therefore correctly retains
 its previously loaded source until a later operator-authorized restart.
+
+## Command 1 activation and initial live acceptance
+
+The first restart request stopped the old runner gracefully, but the final
+record and two authenticated snapshots proved four positions with four parked
+reducers, so the mandatory start gate correctly left production stopped. At
+19:30Z the operator invoked `Command 1`; the completed review, reversal, suite,
+push and deployment evidence was reused. A fresh authenticated venue snapshot
+then proved zero positions, zero resting orders, zero unresolved or
+`UNKNOWN_ABSENT` rows and unblocked rotation.
+
+Exactly one supervisor/runner pair started with size 13 and 22 slots. Runner
+PID 563490 emitted live quote actions and the first updated API window at
+19:33:57Z:
+
+```text
+attempts=429 rps=2.239 reads=382 mutations=47 failures=0 rate_limited=0
+wait_p99=0.465 wait_max=0.468 cooldown=0.0 cooldown_safety=0.0
+cooldown_entry=0.0 cooldown_background=0.0 shared=1
+```
+
+The 19:35Z authenticated acceptance showed supervisor attached, 20/22 slots
+quoting, 34 resting orders, two ordinary positions, zero absent/unresolved
+rows and no risk stop. No API backpressure, JSON-state, mutation-quarantine,
+traceback or runtime error appeared. Natural acceptance of a real shared
+cooldown remains open; it must prove the nonzero governing lane and bounded
+single-event behavior without inducing a venue fault.

@@ -5,7 +5,7 @@ This file contains unfinished work. Completed implementation history is in
 
 **Capacity ceiling remains open:** the bounded 22-slot canary passed its 30-minute startup/selection-burst gate with 3,392 attempts, zero failures/429s, request rates `1.263-2.643/s` and maximum queue depth one. The 2026-08-30 12:13Z restart loaded `821f5c85` with the size-13 taker-exit count raised from the stale fixed 20 to `4 × size = 52`; no slot-dependent capital, API or timeout budget increased. Its first accepted window reached 38 working orders across 22 markets, zero positions/unresolved/absent/foreign rows and `2.579/s` with zero failures/429s. Naturally verify which independent ceiling is reached first over a normal session: 52 exits or $3.90 fees. [Capacity criteria](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence) · [Taker-exit evidence](docs/history/TAKER_EXIT_SCALING_2026-08-30.md).
 
-**API admission correction deployed; flat/order-free activation and natural acceptance pending:** `0ff6e3c6` keeps one aggregate 4/second WSL gate while isolating background 2/second, entry 4/second and safety 4/second lanes; passive reducers are safety, 429 cooldown is class-scoped, long non-safety work defers before network IO, stop wakes old waits and native Windows fails closed. It also stops selection/revalidation at its first local cooldown, keeps designed pause out of Discord `Lost to errors` and runtime-error accounting, avoids cache-to-full-scan amplification, and merges peer-published lane cooldowns into `[api-budget]` without another request. All 926 local/exact-deployed tests pass and both deliberate reversals failed exactly. The 19:24Z restart attempt remained stopped because two authenticated snapshots proved four positions/four reducers. After positive flat proof and a separately authorized start, naturally require `shared=1`, zero JSON-state errors, bounded safety wait, no mutation retry/quarantine, one `[api-backpressure]` line without market-failure fan-out or immediate fallback, and a nonzero governing lane even if local `rate_limited=0`. A 22-book REST-only refresh still cannot fit inside five seconds at 4/second, so stream-loss capacity remains open. [Admission evidence](docs/history/HOST_API_ADMISSION_PRIORITY_2026-08-30.md) · [observability evidence](docs/history/API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md).
+**API admission correction active; natural backpressure acceptance pending:** `0ff6e3c6` keeps one aggregate 4/second WSL gate while isolating background 2/second, entry 4/second and safety 4/second lanes; passive reducers are safety, 429 cooldown is class-scoped, long non-safety work defers before network IO, stop wakes old waits and native Windows fails closed. It also stops selection/revalidation at its first local cooldown, keeps designed pause out of Discord `Lost to errors` and runtime-error accounting, avoids cache-to-full-scan amplification, and merges peer-published lane cooldowns into `[api-budget]` without another request. All 926 local/exact-deployed tests pass and both deliberate reversals failed exactly. `Command 1` loaded it after fresh zero-position/zero-order proof. The first live window reported `shared=1`, failures/429s `0`, all lane fields present and no JSON-state, quarantine or runtime error. When a real cooldown occurs, naturally require one `[api-backpressure]` line without market-failure fan-out or immediate fallback, bounded safety wait, no mutation retry/quarantine and a nonzero governing lane even if local `rate_limited=0`. A 22-book REST-only refresh still cannot fit inside five seconds at 4/second, so stream-loss capacity remains open. [Admission evidence](docs/history/HOST_API_ADMISSION_PRIORITY_2026-08-30.md) · [observability evidence](docs/history/API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md).
 ## 0a. Load and naturally accept private Ping/Pong liveness
 Commit `2aa9fec` includes the `a1ba212` repair and is deployed after a flat-gated restart and 830 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 
@@ -53,7 +53,7 @@ passed. Upload/readback and a restore drill remain because the operator deferred
 Drive. Never upload recovery/SSH keys, raw SQLite/WAL files or plaintext.
 
 ## 2. Remaining natural acceptance
-The latest stopped runner loaded `31f815c`. Continue accepting these paths
+The current live runner loaded `0ff6e3c6`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
@@ -94,7 +94,7 @@ global fallback.
 
 ## 5. Collect the retained-value refusal shadow
 
-After the next normal deployment/restart, collect the 60%, 70% and 80%
+From the active `0ff6e3c6` runner, collect the 60%, 70% and 80%
 `WOULD_REFUSE` labels under the current size-13/22-slot configuration. Require
 complete PLACE/fill linkage, recent-candidate versus stale/no-candidate counts, projected
 and paid reward opportunity cost, dark-slot time and canonical realized trading

@@ -57,3 +57,14 @@ ledger behavior and the existing HTTP security boundary. A deliberate reversal
 that again accepted a `STOPPED` legacy scope failed the regression exactly. All
 931 tests then passed in the production dependency environment in 88.447
 seconds.
+
+The implementation was pushed as `10d1e4c1`. The exact 22-slot WSL checkout
+then exposed and rejected one test fixture's accidental dependency on the live
+capacity file; `fda2bb37` isolated that fixture. All 931 exact-checkout tests
+passed in 67.168 seconds. Before the dashboard reload its API showed the
+historical `STOPPED` scope at age 6,144.6 seconds, five quoting and 17 observed
+cells. Dashboard PID 116618 stopped cleanly and PID 614753 loaded the repair;
+the bot supervisor/runner remained 563476/563490. The first repaired snapshot
+reported `CURRENT_LEDGER_EVIDENCE`, 21 quoting, zero observed, one empty, 38
+working orders and zero position/unresolved/unknown rows. The exact runner cache
+will replace fallback only after the next ordinary bot restart; none occurred.

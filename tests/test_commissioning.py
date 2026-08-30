@@ -101,7 +101,8 @@ class CommissioningTests(unittest.TestCase):
                 reward_projection_haircut=Decimal("0.75")).assert_authorized(
                     now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "loss learning"):
-            self.authorized(max_taker_exit_orders=2).assert_authorized(
+            self.authorized(
+                max_taker_exit_orders_per_contract=2).assert_authorized(
                 now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
             self.authorized(max_inventory_age_seconds=30).assert_authorized(
@@ -186,6 +187,7 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(
                     config.max_session_execution_fees_usd,
                     Decimal(size) * Decimal("0.30"))
+                self.assertEqual(config.max_taker_exit_orders, size * 4)
                 self.assertEqual(
                     config.reward_selection_policy().quote_size, float(size))
                 self.assertEqual(config.max_markets, 20)
@@ -198,6 +200,13 @@ class CommissioningTests(unittest.TestCase):
                     config.max_session_loss_usd, Decimal(size) * Decimal("8"))
                 self.assertEqual(
                     config.hard_stop_loss_usd, Decimal(size) * Decimal("8"))
+
+    def test_live_size_thirteen_allows_fifty_two_taker_exits(self):
+        config = self.authorized(quote_size=Decimal("13"))
+
+        self.assertEqual(config.max_taker_exit_orders, 52)
+        self.assertEqual(
+            config.max_session_execution_fees_usd, Decimal("3.90"))
 
     def test_size_ten_and_twenty_match_operator_risk_profiles(self):
         expected = {

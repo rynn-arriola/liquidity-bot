@@ -15,6 +15,7 @@ history, not current instructions or runtime truth.
 | [Desktop cold-backup setup — 2026-08-28](DESKTOP_COLD_BACKUP_SETUP_2026-08-28.md) | Inactive WSL runtime, recovery validation and manual-handoff boundary |
 | [TV Gain dashboard addition — 2026-08-28](TV_GAIN_DASHBOARD_2026-08-28.md) | P&L cards, seven-day Gain table, accounting semantics and zero-API activation boundary |
 | [Score-clock slot retirement — 2026-08-28](SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md) | Why score telemetry produced `OBSERVED` slots, containment and 20-slot reversal proof |
+| [Size-scaled taker-exit count — 2026-08-30](TAKER_EXIT_SCALING_2026-08-30.md) | Trigger evidence, `4 × size` decision, slot-control audit, edge cases and deployment proof |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

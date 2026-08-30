@@ -27,8 +27,9 @@ These are implementation requirements, not suggestions.
     a bare restart must return to 20. The six-hour selection horizon does not
     change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
-    (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`)
-    and the session fee cap (`0.30 × size`) are computed properties. Portfolio
+    (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`),
+    taker-exit count (`4 × size`) and the session fee cap (`0.30 × size`) are
+    computed properties. Portfolio
     exposure funds 20 baseline slot-notionals plus a ten-notional cushion; at
     22 it remains fixed and leaves an eight-notional (36%) cushion.
 
@@ -114,10 +115,12 @@ These are implementation requirements, not suggestions.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published
     pool size is never substituted for the bot's proportional share.
-35. A session stops maker quoting after 20 confirmed taker exits or
-    `0.30 × quote size` of session execution fees ($3 at the persisted live
-    size 10), whichever comes first, then cancels, reconciles and proves flat.
-    The budget exists to collect exit evidence; it is a ceiling, not a target.
+35. A session stops maker quoting after `4 × quote size` confirmed taker exits
+    (52 at the persisted live size 13) or `0.30 × quote size` of session
+    execution fees ($3.90 at size 13), whichever comes first, then cancels,
+    reconciles and proves flat. The count and dollar ceilings are independent:
+    an expensive-fee session may stop before exhausting the scaled count. The
+    budget exists to collect exit evidence; it is a ceiling, not a target.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.

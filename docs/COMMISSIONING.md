@@ -44,8 +44,9 @@ strategy is profitable and not permission to scale.
   and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
-- allow at most 20 taker exits, with a session fee cap of `0.30 × quote size`
-  ($3 at live size 10), so the cap continues to cover twenty peak-fee exits;
+- allow at most `4 × quote size` taker exits (52 at live size 13), with an
+  independent session fee cap of `0.30 × quote size` ($3.90 at size 13); the
+  fee ceiling may stop an expensive session before the count is exhausted;
 - $40 per-market realized-loss stop and one $80 account threshold measured by
   two sensors: realized session loss pauses new risk, while marked-account-
   equity loss is the emergency hard stop. The daily risk day resets at

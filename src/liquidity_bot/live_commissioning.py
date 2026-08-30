@@ -2135,6 +2135,8 @@ class CommissioningRunner:
             f"${self.config.max_session_loss_usd} session stop, "
             f"${self.config.max_market_loss_usd} per-market stop, "
             f"${self.config.hard_stop_loss_usd} hard stop, "
+            f"{self.config.max_taker_exit_orders} taker-exit count cap, "
+            f"${self.config.max_session_execution_fees_usd} execution-fee cap, "
             "operator-controlled stop; pregame and loss gates remain active."
             + selection_note)
         if not getattr(delivery, "sent", False):

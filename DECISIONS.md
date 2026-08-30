@@ -35,6 +35,7 @@ show the operator the discrepancy.
 | Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
 | Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, plus a bounded pure-volume fixed-GTC-to-settlement cohort; no orders or strategy gate |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
+| Taker-exit session count | `4 × quote size`; 52 at size 13. The independent `0.30 × quote size` execution-fee ceiling remains unchanged and may stop the session first |
 
 The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
 

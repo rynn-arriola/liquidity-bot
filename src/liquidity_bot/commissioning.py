@@ -244,16 +244,12 @@ class CommissioningConfig:
     # forces shutdown through equity and stream-freshness checks.
     unresolved_mutation_timeout_seconds: float = 60.0
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
-    # A single permitted taker exit ended the session on its first crossed
-    # fill, which made exit evidence impossible to collect: SCALE_REVIEW asks
-    # for 100 exit samples and this capped it at one. maker-lab crossed 40
-    # times in 24 hours, so 20 is a real sample at a bounded cost of about
-    # $0.20 in commission at one contract.
-    max_taker_exit_orders: int = 20
-    # Scaled to quote size. The taker fee is 0.06 x qty x p x (1-p), peaking
-    # at p = 0.5: $0.075 per exit at five contracts. $1.50 is the same twenty
-    # exits. The old $0.25 was calibrated for one contract and would have
-    # tripped before twenty exits could ever be collected.
+    # The size-5 evidence budget is 20 distinct taker exits. Keep the same
+    # four-exit allowance per configured contract so the order-count guard
+    # moves with every other quantity-linked commissioning control. The
+    # independent execution-fee ceiling below remains the dollar backstop and
+    # may stop a high-fee session before the count is exhausted.
+    max_taker_exit_orders_per_contract: int = 4
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -276,6 +272,13 @@ class CommissioningConfig:
         """Scale the size-5 $4 early-cross calibration with quantity."""
 
         return self.quote_size * Decimal("0.8")
+
+    @property
+    def max_taker_exit_orders(self) -> int:
+        """Scale the size-5 twenty-exit budget with quote quantity."""
+
+        return int(
+            self.quote_size * Decimal(self.max_taker_exit_orders_per_contract))
 
     @property
     def max_market_loss_usd(self) -> Decimal:
@@ -309,7 +312,7 @@ class CommissioningConfig:
 
     @property
     def max_session_execution_fees_usd(self) -> Decimal:
-        """Fund twenty peak-fee taker exits at the configured quantity."""
+        """Retain the size-5 twenty-exit peak-fee dollar calibration."""
 
         return self.quote_size * Decimal("0.30")
 
@@ -424,11 +427,11 @@ class CommissioningConfig:
                 "commissioning reward economics must remain a 30-second "
                 "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
-        if (self.max_taker_exit_orders != 20
+        if (self.max_taker_exit_orders_per_contract != 4
                 or self.earnings_refresh_seconds != 900):
             problems.append(
-                "commissioning loss learning must stop after 20 taker exits, "
-                "and refresh earnings every 900 seconds")
+                "commissioning loss learning must allow four taker exits per "
+                "configured contract and refresh earnings every 900 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300):
             problems.append(

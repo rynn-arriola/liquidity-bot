@@ -4003,8 +4003,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_buy_intent_taker_exits_reach_the_evidence_budget(self):
         runner, _, _ = self.build_runner()
+        runner.config = replace(
+            runner.config, quote_size=Decimal("13"))
         await runner.preflight()
         budget = runner.config.max_taker_exit_orders
+        self.assertEqual(budget, 52)
         at = NOW
         for index in range(budget):
             at = NOW + timedelta(seconds=index + 1)
@@ -4204,6 +4207,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"{runner.config.quote_size} contracts", banner)
         self.assertIn(f"${runner.config.max_session_loss_usd} session", banner)
         self.assertIn(f"${runner.config.hard_stop_loss_usd} hard", banner)
+        self.assertIn(
+            f"{runner.config.max_taker_exit_orders} taker-exit", banner)
+        self.assertIn(
+            f"${runner.config.max_session_execution_fees_usd} execution-fee",
+            banner)
         # The gate has been advisory since 2026-08-14; saying "enforced" was
         # one of the four wrong facts.
         self.assertIn(

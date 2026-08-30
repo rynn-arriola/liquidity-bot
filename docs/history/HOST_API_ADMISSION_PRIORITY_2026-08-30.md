@@ -95,3 +95,12 @@ was used in this review.
 
 Deployment and live acceptance are separate. This document does not authorize
 or claim a process restart.
+
+## Deployment
+
+Commit `ecfc662a` was pushed before deployment, fast-forwarded into the clean
+WSL checkout and recorded in `DEPLOYED_COMMIT`. The exact deployed checkout
+passed all **918 tests in 69.541 seconds**. Supervisor PID 290240, runner PID
+290252 and dashboard PID 116618 remained unchanged; the runner therefore still
+has `821f5c85` loaded. No process was signaled or restarted, and no venue API
+request was made for deployment acceptance.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -415,11 +416,18 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._cache_directory.cleanup)
         self._live_pnl_cache = (
             Path(self._cache_directory.name) / "tv-live-pnl.json")
+        self._active_scope_cache = (
+            Path(self._cache_directory.name) / "tv-active-scope.json")
         cache_patch = patch(
             "liquidity_bot.live_commissioning.LIVE_PNL_CACHE_PATH",
             self._live_pnl_cache)
         cache_patch.start()
         self.addCleanup(cache_patch.stop)
+        scope_patch = patch(
+            "liquidity_bot.live_commissioning.ACTIVE_SCOPE_CACHE_PATH",
+            self._active_scope_cache)
+        scope_patch.start()
+        self.addCleanup(scope_patch.stop)
 
     def build_runner(
         self,
@@ -509,8 +517,18 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, _, _ = self.build_runner()
 
         await runner.preflight()
+        runner._publish_active_scope_snapshot()
 
         self.assertTrue(self._live_pnl_cache.is_file())
+        self.assertTrue(self._active_scope_cache.is_file())
+        scope = json.loads(self._active_scope_cache.read_text(encoding="utf-8"))
+        self.assertEqual(scope["scope"], "RUNNER_ACTIVE_MARKETS")
+        self.assertEqual(scope["status"], "RUNNING")
+        self.assertEqual(scope["markets"], ["market-one"])
+        runner._publish_active_scope_snapshot(status="STOPPED")
+        stopped = json.loads(
+            self._active_scope_cache.read_text(encoding="utf-8"))
+        self.assertEqual(stopped["status"], "STOPPED")
 
     async def test_due_contract_refresh_uses_bounded_bulk_requests(self):
         runner, _, _ = self.build_runner()

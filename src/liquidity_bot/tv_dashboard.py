@@ -8,7 +8,7 @@ or participate in trading decisions.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import partial
 from http import HTTPStatus
@@ -25,6 +25,8 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .active_scope_cache import (
+    ACTIVE_SCOPE_NAME, ACTIVE_SCOPE_SCHEMA_VERSION)
 from .commissioning import RUNTIME_SLOT_CAPACITY_PATH, configured_slot_capacity
 
 
@@ -32,6 +34,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASSETS = PROJECT_ROOT / "web" / "tv-dashboard"
 DEFAULT_GAIN_CACHE = PROJECT_ROOT / "data" / "tv-gain-snapshot.json"
 DEFAULT_LIVE_PNL_CACHE = PROJECT_ROOT / "data" / "tv-live-pnl.json"
+DEFAULT_ACTIVE_SCOPE_CACHE = PROJECT_ROOT / "data" / "tv-active-scope.json"
+LEGACY_SCOPE_MAX_AGE_SECONDS = 120
 ACTIVE_ORDER_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 UNRESOLVED_INTENT_STATES = ("PREPARED", "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN")
 MAX_ACTIVITY_LINES = 12
@@ -274,6 +278,88 @@ def _read_live_pnl_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
         return {**unavailable, "error": str(exc)}
 
 
+def _read_active_scope_snapshot(
+    path: Path | None,
+    now: datetime,
+    capacity: int,
+    runner_pids: set[int],
+) -> dict[str, Any]:
+    unavailable = {
+        "available": False,
+        "usable": False,
+        "error": None,
+        "observed_at": None,
+        "age_seconds": None,
+        "status": None,
+        "publisher_pid": None,
+        "capacity": None,
+        "markets": [],
+    }
+    if path is None:
+        return unavailable
+    try:
+        if path.stat().st_size > 65_536:
+            raise ValueError("active-scope snapshot is unexpectedly large")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("active-scope snapshot must be an object")
+        if payload.get("schema_version") != ACTIVE_SCOPE_SCHEMA_VERSION:
+            raise ValueError("active-scope schema version is unsupported")
+        if payload.get("scope") != ACTIVE_SCOPE_NAME:
+            raise ValueError("active-scope snapshot has the wrong scope")
+        observed_at = _parse_time(payload.get("observed_at"))
+        if observed_at is None:
+            raise ValueError("active-scope observed_at is invalid")
+        if observed_at > now + timedelta(seconds=5):
+            raise ValueError("active-scope observed_at is in the future")
+        status = payload.get("status")
+        if status not in {"RUNNING", "STOPPED"}:
+            raise ValueError("active-scope status is invalid")
+        publisher_pid = payload.get("publisher_pid")
+        if (isinstance(publisher_pid, bool)
+                or not isinstance(publisher_pid, int)
+                or publisher_pid < 1):
+            raise ValueError("active-scope publisher PID is invalid")
+        snapshot_capacity = payload.get("capacity")
+        if (isinstance(snapshot_capacity, bool)
+                or not isinstance(snapshot_capacity, int)
+                or snapshot_capacity < 1):
+            raise ValueError("active-scope capacity is invalid")
+        markets = payload.get("markets")
+        if (not isinstance(markets, list)
+                or any(not isinstance(value, str)
+                       or not value.strip()
+                       or len(value.strip()) > 512
+                       for value in markets)):
+            raise ValueError("active-scope markets are invalid")
+        clean = [value.strip() for value in markets]
+        if len(clean) != len(set(clean)):
+            raise ValueError("active-scope markets are not unique")
+        if len(clean) > snapshot_capacity:
+            raise ValueError("active-scope market count exceeds capacity")
+        age = _age_seconds(observed_at, now)
+        usable = (
+            status == "RUNNING"
+            and snapshot_capacity == capacity
+            and publisher_pid in runner_pids
+        )
+        return {
+            "available": True,
+            "usable": usable,
+            "error": None,
+            "observed_at": _iso(observed_at),
+            "age_seconds": age,
+            "status": status,
+            "publisher_pid": publisher_pid,
+            "capacity": snapshot_capacity,
+            "markets": clean,
+        }
+    except FileNotFoundError:
+        return unavailable
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {**unavailable, "error": str(exc)}
+
+
 def _process_snapshot() -> list[dict[str, Any]]:
     try:
         result = subprocess.run(
@@ -384,6 +470,18 @@ def _latest_scope(
     return {**dict(row), "markets": [str(value) for value in markets[:capacity]]}
 
 
+def _legacy_scope_is_usable(scope: dict[str, Any] | None, now: datetime) -> bool:
+    if (
+        scope is None
+        or scope.get("status") != "COLLECTING"
+        or scope.get("ended_at") is not None
+    ):
+        return False
+    updated_at = _parse_time(scope.get("last_updated_at"))
+    age = _age_seconds(updated_at, now)
+    return age is not None and age <= LEGACY_SCOPE_MAX_AGE_SECONDS
+
+
 def _grouped_markets(
     connection: sqlite3.Connection, table: str, where: str, params: tuple[Any, ...]
 ) -> set[str]:
@@ -398,7 +496,13 @@ def _grouped_markets(
     }
 
 
-def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
+def _ledger_state(
+    path: Path,
+    now: datetime,
+    capacity: int,
+    active_scope_cache: Path | None,
+    runner_pids: set[int],
+) -> dict[str, Any]:
     unavailable = {
         "available": False,
         "error": "ledger unavailable",
@@ -416,7 +520,9 @@ def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
         stat = path.stat()
         connection = _open_read_only(path)
         try:
-            scope = _latest_scope(connection, capacity)
+            legacy_scope = _latest_scope(connection, capacity)
+            active_scope = _read_active_scope_snapshot(
+                active_scope_cache, now, capacity, runner_pids)
             working = _grouped_markets(
                 connection,
                 "execution_orders",
@@ -441,8 +547,54 @@ def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
                     return None
                 return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0])
 
-            scope_markets = list(scope["markets"]) if scope else []
             fallback = sorted(working | positions | unresolved | unknown)
+            if active_scope["usable"]:
+                scope_markets = list(active_scope["markets"])
+                scope = {
+                    "size": len(scope_markets),
+                    "status": "RUNNING",
+                    "source": "RUNNER_ACTIVE_SCOPE",
+                    "updated_at": active_scope["observed_at"],
+                    "age_seconds": active_scope["age_seconds"],
+                    "trades_received": None,
+                    "dropped_trades": None,
+                    "decode_failures": None,
+                    "error": None,
+                }
+            elif (not active_scope["available"]
+                  and active_scope["error"] is None
+                  and _legacy_scope_is_usable(legacy_scope, now)):
+                scope_markets = list(legacy_scope["markets"])
+                scope_time = _parse_time(legacy_scope.get("last_updated_at"))
+                scope = {
+                    "size": len(scope_markets),
+                    "status": legacy_scope.get("status"),
+                    "source": "LEGACY_QUEUE_STREAM",
+                    "updated_at": _iso(scope_time),
+                    "age_seconds": _age_seconds(scope_time, now),
+                    "trades_received": legacy_scope.get("trades_received"),
+                    "dropped_trades": legacy_scope.get("dropped_trades"),
+                    "decode_failures": legacy_scope.get("decode_failures"),
+                    "error": legacy_scope.get("error"),
+                }
+            else:
+                # The retired queue collector's final STOPPED row is history,
+                # not the live runner's bound scope. Use only account evidence
+                # that was read from the ledger now. This cannot identify a
+                # bound-but-idle owner, so unused cells stay EMPTY rather than
+                # falsely labelling old markets OBSERVED.
+                scope_markets = fallback[:capacity]
+                scope = {
+                    "size": len(scope_markets),
+                    "status": "LEDGER_FALLBACK",
+                    "source": "CURRENT_LEDGER_EVIDENCE",
+                    "updated_at": _iso(now),
+                    "age_seconds": 0.0,
+                    "trades_received": None,
+                    "dropped_trades": None,
+                    "decode_failures": None,
+                    "error": active_scope.get("error"),
+                }
             markets = (scope_markets + [market for market in fallback if market not in scope_markets])[:capacity]
             slots = []
             for index in range(capacity):
@@ -458,7 +610,6 @@ def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
                         status = "position"
                 slots.append({"number": index + 1, "market": market, "status": status})
 
-            scope_time = _parse_time(scope.get("last_updated_at")) if scope else None
             result = {
                 "available": True,
                 "error": None,
@@ -477,16 +628,7 @@ def _ledger_state(path: Path, now: datetime, capacity: int) -> dict[str, Any]:
                     UNRESOLVED_INTENT_STATES,
                 ),
                 "unknown_orders": count("execution_orders", "status=?", ("UNKNOWN_ABSENT",)),
-                "scope": {
-                    "size": len(scope_markets),
-                    "status": scope.get("status"),
-                    "updated_at": _iso(scope_time),
-                    "age_seconds": _age_seconds(scope_time, now),
-                    "trades_received": scope.get("trades_received"),
-                    "dropped_trades": scope.get("dropped_trades"),
-                    "decode_failures": scope.get("decode_failures"),
-                    "error": scope.get("error"),
-                } if scope else None,
+                "scope": scope,
                 "slots": slots,
             }
         finally:
@@ -504,6 +646,7 @@ def collect_state(
     processes: Iterable[dict[str, Any]] | None = None,
     gain_cache: Path | None = None,
     live_pnl_cache: Path | None = None,
+    active_scope_cache: Path | None = None,
     slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
 ) -> dict[str, Any]:
     """Build one local-only snapshot. Unknown data remains unknown, never zero."""
@@ -511,7 +654,9 @@ def collect_state(
     observed_at = now or _utc_now()
     capacity = configured_slot_capacity(slot_capacity_path)
     process = _process_state(processes if processes is not None else _process_snapshot())
-    ledger = _ledger_state(database, observed_at, capacity)
+    ledger = _ledger_state(
+        database, observed_at, capacity, active_scope_cache,
+        set(process["runner_pids"]))
     activity, log_updated, log_error = _read_activity(log)
     log_age = _age_seconds(log_updated, observed_at)
 
@@ -564,6 +709,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def __init__(self, *args: Any, database: Path, log: Path, assets: Path,
                  gain_cache: Path | None = None,
                  live_pnl_cache: Path | None = DEFAULT_LIVE_PNL_CACHE,
+                 active_scope_cache: Path | None = DEFAULT_ACTIVE_SCOPE_CACHE,
                  slot_capacity_path: Path = RUNTIME_SLOT_CAPACITY_PATH,
                  **kwargs: Any) -> None:
         self.database = database
@@ -571,6 +717,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.assets = assets.resolve()
         self.gain_cache = gain_cache
         self.live_pnl_cache = live_pnl_cache
+        self.active_scope_cache = active_scope_cache
         self.slot_capacity_path = slot_capacity_path
         super().__init__(*args, **kwargs)
 
@@ -604,6 +751,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 collect_state(
                     self.database, self.log, gain_cache=self.gain_cache,
                     live_pnl_cache=self.live_pnl_cache,
+                    active_scope_cache=self.active_scope_cache,
                     slot_capacity_path=self.slot_capacity_path),
                 separators=(",", ":")).encode()
             self._write(HTTPStatus.OK, body, "application/json; charset=utf-8", head=head)
@@ -679,6 +827,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-pnl-cache", type=Path, default=DEFAULT_LIVE_PNL_CACHE)
     parser.add_argument(
+        "--active-scope-cache", type=Path,
+        default=DEFAULT_ACTIVE_SCOPE_CACHE)
+    parser.add_argument(
         "--slot-capacity-file", type=Path,
         default=PROJECT_ROOT / RUNTIME_SLOT_CAPACITY_PATH)
     return parser
@@ -692,6 +843,7 @@ def main(argv: list[str] | None = None) -> int:
         DashboardHandler, database=args.database, log=args.log,
         assets=args.assets, gain_cache=args.gain_cache,
         live_pnl_cache=args.live_pnl_cache,
+        active_scope_cache=args.active_scope_cache,
         slot_capacity_path=args.slot_capacity_file)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Liquidity TV dashboard: http://{args.host}:{args.port}", flush=True)

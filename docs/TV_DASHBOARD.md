@@ -44,12 +44,25 @@ one day. `~` identifies a historical trading estimate; `Not posted`, `Pending`
 and `Unavailable` remain distinct. The visible dashboard says Gain rather than
 reward while preserving the underlying accounting meaning.
 
-The 20-slot map is the latest locally recorded queue-stream scope. It is the
-right local diagnostic for which markets were bound, but it is not a current
-venue order snapshot. The screen always shows scope age and distinguishes:
+The slot map prefers an atomic runner-owned snapshot of the currently bound
+markets. The runner refreshes it after every binding change and after successful
+preflight, marks it `STOPPED` on orderly exit, and never reads it
+back into trading logic. A `RUNNING` snapshot is usable only when its publisher
+PID is the exact currently detected runner and its capacity matches the
+validated launcher capacity. Binding age can grow while that same process
+legitimately retains its scope; no periodic cache fsync is added to the runner.
+
+If that snapshot is missing, stopped, stale, malformed or from a different
+capacity, the dashboard uses only current working-order, position and ambiguity
+evidence from its read-only ledger connection. Slots without such evidence are
+shown `EMPTY`; a stopped historical queue-collector scope is never presented as
+current. The retired queue scope is accepted only for compatibility when it is
+still explicitly `COLLECTING`, unended and no more than 120 seconds old. This
+map remains a local diagnostic rather than a current venue order snapshot. The
+screen distinguishes:
 
 - `RESTING`: the ledger has a working order for the scoped market;
-- `OBSERVED`: the market is in the latest scope without a local working order;
+- `OBSERVED`: a fresh runner scope binds the market without a local working order;
 - `POSITION`: the ledger has nonzero inventory;
 - `ATTENTION`: unresolved intent or `UNKNOWN_ABSENT` evidence exists; and
 - `EMPTY`: no market appeared in that slot.

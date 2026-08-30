@@ -28,6 +28,7 @@ from typing import Any, Callable
 
 from polymarket_us import AsyncPolymarketUS
 
+from .active_scope_cache import write_active_scope_snapshot
 from .account_snapshots import (
     AccountEquitySnapshot, AsyncAccountSnapshotGateway,
     account_equity_snapshot)
@@ -108,6 +109,7 @@ from .venue_state import PrivateLedgerProjector
 
 Clock = Callable[[], datetime]
 LIVE_PNL_CACHE_PATH = Path("data/tv-live-pnl.json")
+ACTIVE_SCOPE_CACHE_PATH = Path("data/tv-active-scope.json")
 
 # Generous: with backoff capped at 60s this is roughly an hour of retrying
 # before a transient startup condition is finally treated as a refusal.
@@ -471,6 +473,7 @@ class CommissioningRunner:
         # balance row alone.
         self._equity_snapshot: AccountEquitySnapshot | None = None
         self._live_pnl_cache_error = False
+        self._active_scope_cache_error = False
         self.started_at: datetime | None = None
         # Realised P&L already on the ledger when this session began. The loss
         # stop measures the change since then, never the lifetime total: it is
@@ -659,6 +662,7 @@ class CommissioningRunner:
             slug: value for slug, value in self._next_decision_at.items()
             if slug in self._markets}
         self._priority_replan_slugs.intersection_update(self._markets)
+        self._publish_active_scope_snapshot()
 
     @property
     def _primary(self) -> MarketState:
@@ -2785,6 +2789,35 @@ class CommissioningRunner:
             }
         self.risk_guard.observe_market_realized(market_realized)
         self._publish_live_pnl_snapshot()
+
+    def _publish_active_scope_snapshot(self, *, status: str = "RUNNING") -> None:
+        """Refresh the TV slot scope without giving the dashboard bot access."""
+
+        try:
+            write_active_scope_snapshot(
+                ACTIVE_SCOPE_CACHE_PATH,
+                observed_at=self._now(),
+                markets=self.active_slugs,
+                capacity=self.config.max_markets,
+                status=status,
+            )
+            if self._active_scope_cache_error:
+                print(
+                    f"[active-scope-cache] at={self._now().isoformat()} "
+                    "state=recovered",
+                    flush=True,
+                )
+            self._active_scope_cache_error = False
+        except (OSError, TypeError, ValueError) as exc:
+            # Display state cannot authorize, cancel or place an order. Keep a
+            # cache fault local and rate-limit its log to state transitions.
+            if not self._active_scope_cache_error:
+                print(
+                    f"[active-scope-cache] at={self._now().isoformat()} "
+                    f"state=failed reason={type(exc).__name__}:{exc}",
+                    flush=True,
+                )
+            self._active_scope_cache_error = True
 
     def _publish_live_pnl_snapshot(self) -> None:
         """Refresh the dashboard mark without giving it venue access."""
@@ -7042,6 +7075,7 @@ class CommissioningRunner:
         try:
             startup_mode = await self.preflight_until_ready()
             preflight_complete = True
+            self._publish_active_scope_snapshot()
             if startup_mode == "RECOVERY_ONLY":
                 self.request_stop("startup_recovery_only")
                 # Not critical. This is the healthy recovery path, and it
@@ -7453,6 +7487,7 @@ class CommissioningRunner:
                 await asyncio.gather(*stream_tasks, return_exceptions=True)
             if preflight_complete:
                 await self._shutdown(stop_reason)
+            self._publish_active_scope_snapshot(status="STOPPED")
             await self.private_stream.close()
             await self.market_stream.close()
         if preflight_error is not None:

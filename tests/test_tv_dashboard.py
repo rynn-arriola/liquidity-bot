@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import ThreadingHTTPServer
 import json
@@ -17,10 +17,12 @@ from liquidity_bot.tv_dashboard import (
     DashboardHandler,
     _client_is_local,
     _open_read_only,
+    _read_active_scope_snapshot,
     _read_gain_snapshot,
     _read_live_pnl_snapshot,
     collect_state,
 )
+from liquidity_bot.active_scope_cache import write_active_scope_snapshot
 from liquidity_bot.live_pnl_cache import write_live_pnl_snapshot
 
 
@@ -28,6 +30,22 @@ NOW = datetime(2026, 8, 28, 23, 0, tzinfo=timezone.utc)
 
 
 class TvDashboardTests(unittest.TestCase):
+    def _active_scope_cache(
+        self, root: Path, markets: list[str], *,
+        observed_at: datetime = NOW, capacity: int = 20,
+        status: str = "RUNNING", publisher_pid: int = 100,
+    ) -> Path:
+        path = root / "tv-active-scope.json"
+        write_active_scope_snapshot(
+            path,
+            observed_at=observed_at,
+            markets=markets,
+            capacity=capacity,
+            status=status,
+            publisher_pid=publisher_pid,
+        )
+        return path
+
     def _live_pnl_cache(
         self, root: Path, *, risk_date: str = "2026-08-28",
         realized: str | None = "-21.0368",
@@ -169,6 +187,134 @@ class TvDashboardTests(unittest.TestCase):
                     connection.execute("INSERT INTO execution_orders VALUES ('x', 'OPEN')")
             finally:
                 connection.close()
+
+    def test_stopped_legacy_scope_falls_back_to_current_ledger_evidence(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "UPDATE execution_queue_stream_sessions SET "
+                "status='STOPPED', ended_at=?",
+                ("2026-08-28T22:59:59+00:00",),
+            )
+            connection.commit()
+            connection.close()
+
+            state = collect_state(database, log, now=NOW, processes=[])
+
+            scope = state["ledger"]["scope"]
+            self.assertEqual(scope["status"], "LEDGER_FALLBACK")
+            self.assertEqual(scope["source"], "CURRENT_LEDGER_EVIDENCE")
+            statuses = [row["status"] for row in state["ledger"]["slots"]]
+            self.assertNotIn("observed", statuses)
+            self.assertEqual(statuses[:4], [
+                "quoting", "position", "attention", "attention"])
+
+    def test_fresh_runner_scope_replaces_retired_queue_scope(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            current = ["current-one", "current-two", "current-three"]
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "UPDATE execution_queue_stream_sessions SET "
+                "status='STOPPED', ended_at=?",
+                ("2026-08-28T22:59:59+00:00",),
+            )
+            connection.execute(
+                "INSERT INTO execution_orders VALUES (?, 'OPEN')",
+                (current[0],),
+            )
+            connection.commit()
+            connection.close()
+            cache = self._active_scope_cache(root, current)
+
+            state = collect_state(
+                database, log, now=NOW, processes=[{
+                    "pid": 100,
+                    "age_seconds": 60,
+                    "args": "python -m liquidity_bot.live_commissioning",
+                }],
+                active_scope_cache=cache)
+
+            scope = state["ledger"]["scope"]
+            self.assertEqual(scope["status"], "RUNNING")
+            self.assertEqual(scope["source"], "RUNNER_ACTIVE_SCOPE")
+            self.assertEqual(scope["size"], 3)
+            self.assertEqual(
+                [row["market"] for row in state["ledger"]["slots"][:3]],
+                current,
+            )
+            self.assertEqual(
+                [row["status"] for row in state["ledger"]["slots"][:3]],
+                ["quoting", "observed", "observed"],
+            )
+
+    def test_dead_or_stopped_runner_scope_fails_to_ledger_evidence(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, log = self._fixture(root)
+            stale = datetime(2026, 8, 28, 22, 57, tzinfo=timezone.utc)
+            cache = self._active_scope_cache(
+                root, ["stale-market"], observed_at=stale)
+            report = _read_active_scope_snapshot(cache, NOW, 20, set())
+            self.assertTrue(report["available"])
+            self.assertFalse(report["usable"])
+
+            state = collect_state(
+                database, log, now=NOW, processes=[],
+                active_scope_cache=cache)
+            self.assertEqual(
+                state["ledger"]["scope"]["source"],
+                "CURRENT_LEDGER_EVIDENCE",
+            )
+            self.assertNotIn(
+                "stale-market",
+                [row["market"] for row in state["ledger"]["slots"]],
+            )
+
+            stopped = self._active_scope_cache(
+                root, ["stopped-market"], status="STOPPED")
+            report = _read_active_scope_snapshot(stopped, NOW, 20, {100})
+            self.assertTrue(report["available"])
+            self.assertFalse(report["usable"])
+
+    def test_active_scope_writer_rejects_ambiguous_payloads(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "scope.json"
+            with self.assertRaisesRegex(ValueError, "unique"):
+                write_active_scope_snapshot(
+                    path,
+                    observed_at=NOW,
+                    markets=["same", "same"],
+                    capacity=20,
+                )
+            with self.assertRaisesRegex(ValueError, "exceeds"):
+                write_active_scope_snapshot(
+                    path,
+                    observed_at=NOW,
+                    markets=["one", "two"],
+                    capacity=1,
+                )
+
+    def test_future_or_wrong_capacity_active_scope_is_not_usable(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            future = self._active_scope_cache(
+                root,
+                ["future-market"],
+                observed_at=NOW + timedelta(minutes=1),
+            )
+            report = _read_active_scope_snapshot(future, NOW, 20, {100})
+            self.assertFalse(report["available"])
+            self.assertIn("future", report["error"])
+
+            mismatched = self._active_scope_cache(
+                root, ["old-capacity-market"], capacity=21)
+            report = _read_active_scope_snapshot(mismatched, NOW, 20, {100})
+            self.assertTrue(report["available"])
+            self.assertFalse(report["usable"])
 
     def test_slot_map_uses_the_validated_restart_capacity(self):
         with TemporaryDirectory() as directory:

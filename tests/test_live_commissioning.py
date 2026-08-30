@@ -407,6 +407,20 @@ class TickingClock:
 
 
 class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        """Keep runner observation files out of the checkout under test."""
+
+        self._cache_directory = tempfile.TemporaryDirectory(
+            prefix="liquidity-live-cache-")
+        self.addCleanup(self._cache_directory.cleanup)
+        self._live_pnl_cache = (
+            Path(self._cache_directory.name) / "tv-live-pnl.json")
+        cache_patch = patch(
+            "liquidity_bot.live_commissioning.LIVE_PNL_CACHE_PATH",
+            self._live_pnl_cache)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+
     def build_runner(
         self,
         *,
@@ -466,6 +480,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("categories=market_book:1", output.getvalue())
         self.assertNotIn("secret-market-slug", output.getvalue())
         self.assertEqual(limiter.telemetry().attempts, 0)
+
+    async def test_runner_pnl_cache_is_written_only_to_the_test_sandbox(self):
+        runner, _, _ = self.build_runner()
+
+        await runner.preflight()
+
+        self.assertTrue(self._live_pnl_cache.is_file())
 
     async def test_due_contract_refresh_uses_bounded_bulk_requests(self):
         runner, _, _ = self.build_runner()

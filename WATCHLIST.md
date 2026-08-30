@@ -1,117 +1,60 @@
 # Active measurement watchlist
 
-These are measurements, not authorized trading behavior. Historical and closed
-items are preserved in
-[docs/history/WATCHLIST_THROUGH_2026-08-27.md](docs/history/WATCHLIST_THROUGH_2026-08-27.md).
+These are measurements, not authorized trading behavior. Historical and
+closed items are preserved in
+[docs/history/WATCHLIST_THROUGH_2026-08-27.md](docs/history/WATCHLIST_THROUGH_2026-08-27.md)
+and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md).
 
-## Server collection map
+## Active collection map
 
-This is the operator's quick inventory for **Polymarket liquidity-bot**
-measurements. Verify processes/cron live before relying on the status words.
-The separate Kalshi `record_books.py` process is not part of this project and
-does not use the Polymarket API budget.
-
-| Measurement | How it collects on the server | Venue/API cost | Trading effect |
+| Measurement | Collection path | Venue/API cost | Trading effect |
 |---|---|---|---|
-| Adverse-fill / liquidity cliff | Normal live runner writes decision-time quote observations and links later fills | No extra call or socket | None |
-| Queue depletion / almost-front | Normal live runner uses one bounded public-trade socket and durable queue intervals | WebSocket only; no REST | None; `WOULD_QUEUE_RESET` is a label |
-| Loss by market, side, ET hour and kickoff | Read-only analysis of the execution ledger and quote observations | None when analyzed | None |
-| Size-20 counterfactual | Read-only reuse of size-10 score, reward, fill and exit observations | None when analyzed | None; live size remains 10 |
-| Daily selection/period probe | Cron at 14:00 UTC runs one bounded snapshot | About 50 read-only calls once/day | None |
-| Strict spread-scalp study | Active separate `scalp_run` process, database and combined book/trade socket | Catalog normally uses 1-2 reads per 15 minutes; retained terminal checks can add up to 10 reads per 15 minutes, all locally capped at 1 req/s; at most 100 subscriptions | None; code has no order path |
+| Retained executable value | Normal building PLACE observation plus the most recent already-fetched selector snapshot | No extra call or socket | None; 60/70/80 are `WOULD_REFUSE` labels only |
+| Ledger growth slope | Existing SQLite file sizes and read-only diagnostics | None | None |
 
-The hourly seven-day reward post is operational reporting, not a strategy
-experiment. The hourly changelog poll is venue diagnostics. Nightly SQLite
-backup is data protection. Ledger growth below is a health watch, not a
-separate collector.
+Hourly seven-day reward reporting, public changelog monitoring and nightly
+SQLite backup are operational controls rather than strategy experiments. They
+remain active. The queue-depletion socket, daily selection probe and separate
+spread-scalp collector are no longer active measurements.
 
-## 1. Adverse-fill and immediate liquidity-cliff study
+## 1. Retained-value refusal shadow
 
-Determine whether decision-time stressed exit value predicts the operator's
-observed fill cliff, where a roughly $5 resting order becomes worth about $3
-immediately after filling.
+Determine whether refusing entries below 60%, 70% or 80% stressed executable
+value would improve paid net after accounting for everything the refusal costs.
 
-- Use complete captured cohorts and actual post-fill outcomes.
-- Compare avoided realized loss with projected/paid reward surrendered.
-- Keep league as diagnostic context only.
-- Do not enforce a retained-value threshold until held-out evidence is
-  positive and the operator authorizes it.
+For every prospective sample:
 
-## 2. Queue-depletion measurement
+- preserve the exact PLACE/fill linkage and current stressed exit;
+- distinguish a recent selector candidate, stale/unknown evidence and no candidate;
+- measure projected reward on the refused side, replacement projected reward
+  and capacity that would remain dark;
+- attribute actual later trading outcome using canonical owned entry/reducer
+  roles;
+- compare projected reward with paid reward over complete ET reward days;
+- keep current size 13 and 22-slot configuration explicit in the cohort.
 
-The deployed tracker estimates lower/upper queue-ahead bounds and emits a
-measurement-only `WOULD_QUEUE_RESET` signal. It does not know exact rank.
+Do not enforce a threshold from the historical association. Freeze a training
+interval and a later held-out interval. A candidate must reduce realized loss
+by more than reward surrendered and must not create material dark-slot cost.
+Any live proposal requires a separate review and explicit operator decision.
 
-- Measure whether almost-front state predicts adverse fills.
-- Include cancel-confirmation/replacement dark time and reward loss.
-- Never automatically cancel/repost, never reset a reducer, and never act with
-  unresolved ownership.
-- Automatic same-price queue reset remains explicitly unauthorized.
-
-## 3. Fill-loss concentration by market, side and hour
-
-Use existing quote observations and execution history to identify whether
-losses concentrate by ET hour, time to kickoff, market structure, side, depth
-or touch velocity. Observe all hours first; do not preselect only suspected
-windows. Any proposed no-trade window must compare avoided trading loss against
-reward surrendered during the same hours.
-
-## 4. Size-20 counterfactual
-
-Live size 20 is not selected. Continue the measurement-only comparison using
-complete ET reward days, resting side-hours, projected share multiplier,
-maker-fill rate and stressed-exit sensitivity.
-
-Before any staged live proposal, review capital against the `30 × size`
-portfolio cap, scaled market/account stops, exit depth and whether reward gain
-remains materially below 2x. Adding capital alone does not authorize size 20.
-
-## 5. Ledger growth slope
+## 2. Ledger growth slope
 
 Disk size alone is not a concern. Watch for a sudden increase in daily growth,
 which can reveal retry storms or duplicate event writes. Use SQLite online
 backup and read-only diagnostics; never copy the live WAL database directly.
 
-## 6. Strict two-sided spread-scalp study
+## Retired measurements
 
-Measure two separately labeled cohorts without changing the 20-slot strategy:
-
-- `PURE_VOLUME`: upcoming full-game moneylines ranked by contemporaneous
-  full-book `sharesTraded`; discovery rotates without a league filter.
-- `REWARD_SLOTS`: the exact current commissioning queue read from the live
-  ledger in SQLite read-only mode.
-- `PURE_VOLUME_GTC`: up to 20 pure-volume markets observed for five minutes
-  before one hypothetical placement, then retained in the same bounded socket
-  through settlement so the replay can end at both original fills or settlement
-  without a rotation gap. It has no league filter.
-
-One episode posts hypothetical fixed touch orders on both sides at the back of
-the displayed queue. Success requires the entire requested quantity to fill on
-**both original sides**. Partial fills, one-side fills and no-fills remain
-separate outcomes. Store every full book and public trade, queue-ahead changes,
-selection/rank history, fees/rebates, stream coverage and settlement so any
-early-exit horizon can be replayed later without recollection.
-
-Primary review metrics are strict both-side fill rate, time to second leg,
-one-side exposure rate, pair net, forced-exit completion/loss by horizon,
-settlement result, and outcomes by initial spread/volume/depth/stability. A
-coverage gap cannot count as success. Collection does not authorize a live
-scalping order, change reward selection, consume a slot, or change any exit.
-Active reconnect/decode/drop counters are persisted when they change so a
-read-only report cannot mistake an unfinished run's known gap for clean data.
-Strict exclusion is market- and time-scoped to overlapping stream intervals;
-a cumulative run counter cannot poison pairs begun after a clean reconnect.
-
-For the leave-it question, compare three non-overlapping strategy definitions:
-
-1. Existing five-minute no-fill renewal with an exit one hour after first fill.
-2. One fixed original pair with that same one-hour inventory exit.
-3. One fixed original pair held until both fills or settlement.
-
-The pre-placement two-sided score is the smaller of recent bid- and offer-
-consuming volume divided by that side's displayed queue plus requested size.
-Also report initial spread, contemporaneous `sharesTraded`, two-way balance,
-mid-price range/reversals, capital-hours, peak committed capital, fees/rebates,
-one-sided settlement loss and worst loss. Optimize expected net, not the both-
-fill rate alone. Require three complete days and a prospective held-out day
-before proposing any live rule.
+- **Queue depletion / almost-front:** 12,227 orders over 5.90 days produced
+  2,061 clean reset signals but only 197 signals preceding a later fill. The
+  extra public-trade socket and interval writes stop with the next runner
+  restart. Historical tables/report remain read-only evidence.
+- **Daily selection probe:** disabled on the laptop. Its August 29 and 30 runs
+  failed before collection because the migrated wrapper still targeted
+  `/root/liquidity-bot`.
+- **Strict spread scalp / fixed GTC:** collector was already stopped. The
+  isolated database and reports are retained, but no socket or REST loop runs.
+- **Kickoff/hour and size-20 studies:** analysis is closed. Actual inventory
+  entry time did not reproduce the claimed 30–60 minute sweet spot; current
+  size is 13, so the stale size-20 counterfactual is not an active decision.

@@ -31,9 +31,9 @@ show the operator the discrepancy.
 | Market loss stop | `4 × quote size`; $52 at size 13 |
 | Account loss threshold | `8 × quote size`; $104 at size 13 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |
-| Queue position study | Measurement only; never cancel/repost automatically |
-| Adverse-fill/cliff study | Measurement/watchlist only pending sufficient data |
-| Spread-scalp study | Authorized as isolated measurement only: strict full fills on both fixed-price sides, separate pure-volume and reward-slot cohorts, plus a bounded pure-volume fixed-GTC-to-settlement cohort; no orders or strategy gate |
+| Queue position study | Closed and retired; preserve its historical rows/report, never cancel/repost automatically, and do not restart its public-trade collector without a new operator decision |
+| Adverse-fill/cliff study | Collect 60%, 70% and 80% retained-value `WOULD_REFUSE` labels plus recent-selector/reward/no-candidate/unknown cost with zero extra venue calls; no live refusal gate is authorized |
+| Spread-scalp study | Closed and stopped; preserve its isolated database/report and do not restart the collector without a new operator decision |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
 | Taker-exit session count | `4 × quote size`; 52 at size 13. The independent `0.30 × quote size` execution-fee ceiling remains unchanged and may stop the session first |
 

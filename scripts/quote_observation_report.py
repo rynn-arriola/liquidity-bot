@@ -33,6 +33,13 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     ).fetchone() is not None
 
 
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+
+
 def _rows(
     connection: sqlite3.Connection, *, recent_hours: float | None,
 ) -> list[sqlite3.Row]:
@@ -186,9 +193,82 @@ def render_report(
         ),
     )
 
+    shadow_columns = {
+        "retained_value_ratio",
+        "would_refuse_retained_60",
+        "would_refuse_retained_70",
+        "would_refuse_retained_80",
+        "replacement_market_slug",
+        "replacement_projected_reward",
+        "replacement_selection_age_seconds",
+        "slot_would_go_dark",
+    }
+    print("\nRetained-value refusal shadow (measurement only)")
+    shadow_ready = False
+    if not shadow_columns.issubset(
+            _columns(connection, "execution_quote_observations")):
+        print("  not installed in this deployed ledger yet")
+    else:
+        shadow_rows = [
+            row for row in rows if row["retained_value_ratio"] is not None]
+        print(f"  eligible observations            : {len(shadow_rows)}")
+        if shadow_rows:
+            shadow_first = datetime.fromisoformat(
+                shadow_rows[0]["observed_at"])
+            shadow_last = datetime.fromisoformat(
+                shadow_rows[-1]["observed_at"])
+            shadow_span_days = max(
+                0.0, (shadow_last - shadow_first).total_seconds() / 86400.0)
+            shadow_maker_fills = sum(
+                _label(row) == "maker_filled" for row in shadow_rows)
+            print(
+                "  median retained executable value : "
+                f"{100 * median(float(row['retained_value_ratio']) for row in shadow_rows):.2f}%"
+            )
+            print(
+                f"  observed span / maker fills      : "
+                f"{shadow_span_days:.2f} days / {shadow_maker_fills}"
+            )
+            shadow_ready = (
+                shadow_span_days >= 3.0 and shadow_maker_fills >= 300)
+        for threshold in (60, 70, 80):
+            field = f"would_refuse_retained_{threshold}"
+            flagged = [row for row in shadow_rows if int(row[field] or 0)]
+            resolved = [
+                row for row in flagged
+                if _label(row) != "open_or_unresolved"]
+            filled = [
+                row for row in resolved
+                if _label(row) in {
+                    "maker_filled", "filled_unknown",
+                    "filled_state_missing_execution"}]
+            reward = sum(float(row["projected_reward"] or 0) for row in flagged)
+            spare = sum(row["replacement_market_slug"] is not None
+                        for row in flagged)
+            dark = sum(int(row["slot_would_go_dark"] or 0)
+                       for row in flagged)
+            unknown = sum(row["slot_would_go_dark"] is None
+                          for row in flagged)
+            fill_rate = 100 * len(filled) / len(resolved) if resolved else 0.0
+            print(
+                f"  below {threshold}%: flagged={len(flagged):5d} "
+                f"resolved={len(resolved):5d} filled={len(filled):5d} "
+                f"fill_rate={fill_rate:6.2f}% "
+                f"projected_reward_at_risk={reward:.6f} "
+                f"selector_spare={spare:5d} no_spare={dark:5d} "
+                f"unknown={unknown:5d}"
+            )
+        ages = [
+            float(row["replacement_selection_age_seconds"])
+            for row in shadow_rows
+            if row["replacement_selection_age_seconds"] is not None]
+        if ages:
+            print(f"  median selector snapshot age     : {median(ages):.1f}s")
+        print("  live orders refused              : 0 (shadow cannot veto)")
+
     verdict = (
         "READY_FOR_HELD_OUT_SPLIT"
-        if missing == 0 and span_days >= 3.0 and maker_filled >= 300
+        if missing == 0 and shadow_ready
         else "COLLECTING"
     )
     print(f"\nverdict: {verdict}")

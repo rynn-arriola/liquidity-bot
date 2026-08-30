@@ -68,8 +68,7 @@ only when they occur naturally; do not induce a live failure:
   hidden by operator reporting.
 
 Private-only silence has natural acceptance with unchanged PID and `cancels=0`.
-Simultaneous market/private silence still uses global quarantine; investigate
-only if recurrence proves a local defect rather than venue/network loss.
+Simultaneous silence still uses global quarantine; investigate only a proven local defect.
 
 ## 3. Accept the deployed post-flat mandatory refill
 
@@ -94,17 +93,18 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 5. Collect fixed-GTC evidence
+## 5. Collect the retained-value refusal shadow
 
-Commit `de1478b` repaired the cumulative-gap defect and is deployed. The live
-report proves 20 GTC starts, 20/20 feature rows, 20 clean paths and zero false
-exclusions. The combined public scope is 98/100, no post-start 429 or collector
-exit occurred, and bot PID 21791 was unchanged through 17-minute acceptance.
+After the next normal deployment/restart, collect the 60%, 70% and 80%
+`WOULD_REFUSE` labels under the current size-13/22-slot configuration. Require
+complete PLACE/fill linkage, recent-candidate versus stale/no-candidate counts, projected
+and paid reward opportunity cost, dark-slot time and canonical realized trading
+outcome. Freeze a later held-out interval before proposing any threshold. The
+shadow remains incapable of changing live orders.
 
-The collector began before `de1478b`; do not invalidate its 20 clean trials just
-to load forward decode/drop interval closure. It loads on the next natural
-supervisor restart. Collect three complete days plus one held-out day before
-any strategy proposal, and never add overlapping cohorts as separate profit.
+The queue-reset, daily selection-probe and fixed-GTC collectors are closed.
+Their databases and reports remain evidence; do not restart them merely to add
+sample volume.
 
 ## 6. One unresolved mutation can have account-wide availability cost
 

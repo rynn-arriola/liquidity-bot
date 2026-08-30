@@ -212,17 +212,19 @@ Start, inspect, and stop:
 ./scripts/stop_commissioning.sh
 ```
 
-After the queue-measurement build is deliberately deployed and the runner is
-restarted, verify its isolated public-trade coverage locally on the server:
+After the retained-value shadow build is deliberately deployed and the runner
+is restarted, verify its order-linked coverage locally on the laptop:
 
 ```bash
-PYTHONPATH=src python -B scripts/queue_measurement_report.py \
+PYTHONPATH=src python -B scripts/quote_observation_report.py \
   --database data/commissioning.db
 ```
 
-This report is SQLite read-only. The collector never cancels or re-places an
-order; `WOULD_QUEUE_RESET` is a shadow label only. Any drops, decode failures
-or stream errors invalidate affected order coverage but do not stop quoting.
+This report is SQLite read-only. The 60%, 70% and 80% labels never refuse,
+cancel, replace, reorder or resize an order. Replacement evidence comes only
+from an already-fetched selector snapshot, so collection adds no venue call or
+socket. The retired queue collector's tables and report remain historical
+evidence but the runner no longer appends them.
 
 The optional second argument is quote size. It must be a whole number from 5
 through 30 and is persisted in `data/commissioning_quote_size`. Omitting it

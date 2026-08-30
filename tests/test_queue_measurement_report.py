@@ -10,11 +10,11 @@ from scripts.queue_measurement_report import render_report
 
 
 class QueueMeasurementReportTests(unittest.TestCase):
-    def test_empty_installed_ledger_collects_without_venue_access(self):
+    def test_empty_installed_ledger_is_retired_without_venue_access(self):
         path = Path(tempfile.mkdtemp(prefix="queue-report-")) / "ledger.db"
         ledger = ExecutionLedger(path)
         try:
-            self.assertEqual(render_report(ledger.connection), "COLLECTING")
+            self.assertEqual(render_report(ledger.connection), "RETIRED")
         finally:
             ledger.close()
 

@@ -347,19 +347,12 @@ These are implementation requirements, not suggestions.
     cutover must inherit the exact baseline already being enforced rather than
     stamp current equity and forgive the day's drawdown; only the following ET
     midnight may establish a fresh baseline.
-68. Queue-depletion measurement is observation only. Public trades use a
-    separate bounded socket and may never share the book/private recovery path
-    or the REST limiter. A drop, decode error, reconnect or persistence error
-    creates a coverage gap and suppresses that order's shadow signal; it may
-    not cancel, replace, delay, duplicate or veto an order. Books and trades
-    have no shared delivery order, so a trade already reflected by a full book
-    must not be subtracted twice. `WOULD_QUEUE_RESET` is evaluated only from a
-    fresh full-book boundary after the first post-acknowledgement baseline and
-    has no mutation path. The older decision-time queue cannot cap orders that
-    joined during PLACE latency. A shadow signal also requires positive OPEN
-    or PARTIAL order state and no unresolved CANCEL for that client order.
-    Reducers and exits are excluded, and observation cannot change the
-    restart-configured slot capacity.
+68. The retired queue-depletion dataset remains observation only. Historical
+    `WOULD_QUEUE_RESET` rows, stream sessions and reports cannot be read by the
+    planner, reconciler, scheduler, risk policy or mutation gateway. The live
+    runner no longer opens its separate public-trade socket or appends tracker
+    rows. Preserved collector code and data are audit evidence only and may not
+    be reactivated without a new reviewed measurement decision.
 69. Venue maintenance may pause a runner but may not relax execution truth.
     Only a positively classified transport failure, WebSocket disconnect or
     HTTP 5xx may enter the maintenance coordinator; NotFound, HTTP 429,
@@ -523,7 +516,7 @@ These are implementation requirements, not suggestions.
     notification preserves unseen state for retry, and a nonblocking lock plus
     timeout prevents overlap. Its failure cannot stop, restart, delay or alter
     trading.
-81. Spread-scalp measurement is a separate observation process with its own
+81. Spread-scalp measurement is a stopped, separate observation process with its own
     SQLite database and no order, portfolio, balance or incentive-mutation
     path. It may open the commissioning ledger only with SQLite `mode=ro` to
     copy the current queue labels. Its combined public book/trade scope cannot
@@ -593,3 +586,16 @@ These are implementation requirements, not suggestions.
     validated restart ceiling. Retained orders are never cancelled for discovery. A failed refill
     uses the ordinary bounded retry cadence, and lifecycle timing telemetry is
     evidence only rather than entry authorization.
+86. Retained executable value is a prospective shadow, never an entry gate.
+    The 60%, 70% and 80% labels are written only on a building post-only PLACE
+    observation in the same pre-mutation intent transaction. They may not
+    refuse, delay, reorder, cancel, resize or select an order. Replacement and
+    reward-opportunity fields reuse only the most recent already-fetched
+    selector snapshot and therefore add no venue read or socket; evidence
+    older than the normal selection interval must be labeled stale and cannot
+    be claimed as a spare. A missing/malformed observation still follows
+    invariant 66. No retained-value policy may be proposed until the current
+    size/capacity cohort compares avoided realized trading loss against
+    projected and paid reward surrendered, recent-candidate availability,
+    unknown replacement evidence and no-candidate capacity on a frozen
+    held-out interval, followed by explicit operator authorization.

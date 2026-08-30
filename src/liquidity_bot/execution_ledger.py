@@ -188,6 +188,18 @@ CREATE TABLE IF NOT EXISTS execution_quote_observations (
     stressed_exit_pnl REAL,
     trade_volume_30s REAL,
     trade_volume_120s REAL,
+    retained_value_ratio REAL,
+    stressed_exit_value REAL,
+    would_refuse_retained_60 INTEGER,
+    would_refuse_retained_70 INTEGER,
+    would_refuse_retained_80 INTEGER,
+    replacement_market_slug TEXT,
+    replacement_projected_reward REAL,
+    replacement_expected_net REAL,
+    replacement_reward_delta REAL,
+    replacement_selection_age_seconds REAL,
+    replacement_reason TEXT,
+    slot_would_go_dark INTEGER,
     observation_json TEXT NOT NULL,
     observation_hash TEXT NOT NULL,
     FOREIGN KEY(intent_id) REFERENCES execution_intents(intent_id)
@@ -503,6 +515,23 @@ class QuoteObservation:
     # from our own fills; a future trade subscription can populate them.
     trade_volume_30s: float | None = None
     trade_volume_120s: float | None = None
+    # Prospective retained-value gate. These fields are evidence only: no
+    # execution component reads them. ``replacement_*`` comes from the most
+    # recent already-fetched selector snapshot, so collection adds no venue
+    # call and its age remains explicit rather than being mistaken for a live
+    # quote.
+    retained_value_ratio: float | None = None
+    stressed_exit_value: float | None = None
+    would_refuse_retained_60: bool | None = None
+    would_refuse_retained_70: bool | None = None
+    would_refuse_retained_80: bool | None = None
+    replacement_market_slug: str | None = None
+    replacement_projected_reward: float | None = None
+    replacement_expected_net: float | None = None
+    replacement_reward_delta: float | None = None
+    replacement_selection_age_seconds: float | None = None
+    replacement_reason: str | None = None
+    slot_would_go_dark: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug or self.side not in {"bid", "offer"}:
@@ -565,6 +594,18 @@ class ExecutionLedger:
         ("execution_fills", "reversed_at", "TEXT"),
         ("execution_positions", "cost", "TEXT"),
         ("execution_positions", "first_seen_at", "TEXT"),
+        ("execution_quote_observations", "retained_value_ratio", "REAL"),
+        ("execution_quote_observations", "stressed_exit_value", "REAL"),
+        ("execution_quote_observations", "would_refuse_retained_60", "INTEGER"),
+        ("execution_quote_observations", "would_refuse_retained_70", "INTEGER"),
+        ("execution_quote_observations", "would_refuse_retained_80", "INTEGER"),
+        ("execution_quote_observations", "replacement_market_slug", "TEXT"),
+        ("execution_quote_observations", "replacement_projected_reward", "REAL"),
+        ("execution_quote_observations", "replacement_expected_net", "REAL"),
+        ("execution_quote_observations", "replacement_reward_delta", "REAL"),
+        ("execution_quote_observations", "replacement_selection_age_seconds", "REAL"),
+        ("execution_quote_observations", "replacement_reason", "TEXT"),
+        ("execution_quote_observations", "slot_would_go_dark", "INTEGER"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -858,8 +899,15 @@ class ExecutionLedger:
             "cutoff_price,touch_changes_30s,touch_changes_120s,"
             "seconds_since_touch_change,projected_reward,expected_net,"
             "stressed_exit_pnl,trade_volume_30s,trade_volume_120s,"
+            "retained_value_ratio,stressed_exit_value,"
+            "would_refuse_retained_60,would_refuse_retained_70,"
+            "would_refuse_retained_80,replacement_market_slug,"
+            "replacement_projected_reward,replacement_expected_net,"
+            "replacement_reward_delta,replacement_selection_age_seconds,"
+            "replacement_reason,slot_would_go_dark,"
             "observation_json,observation_hash) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 intent_id,
                 client_order_id,
@@ -885,6 +933,22 @@ class ExecutionLedger:
                 observation.stressed_exit_pnl,
                 observation.trade_volume_30s,
                 observation.trade_volume_120s,
+                observation.retained_value_ratio,
+                observation.stressed_exit_value,
+                (int(observation.would_refuse_retained_60)
+                 if observation.would_refuse_retained_60 is not None else None),
+                (int(observation.would_refuse_retained_70)
+                 if observation.would_refuse_retained_70 is not None else None),
+                (int(observation.would_refuse_retained_80)
+                 if observation.would_refuse_retained_80 is not None else None),
+                observation.replacement_market_slug,
+                observation.replacement_projected_reward,
+                observation.replacement_expected_net,
+                observation.replacement_reward_delta,
+                observation.replacement_selection_age_seconds,
+                observation.replacement_reason,
+                (int(observation.slot_would_go_dark)
+                 if observation.slot_would_go_dark is not None else None),
                 body,
                 digest,
             ),

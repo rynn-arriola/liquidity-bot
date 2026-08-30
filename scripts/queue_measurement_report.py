@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only report for the live almost-front queue measurement.
+"""Read-only report for the retired almost-front queue measurement.
 
 No venue calls are made. The report does not cancel, replace, rank, or filter
-orders and never groups by league. A ``READY_FOR_REVIEW`` verdict authorizes
-analysis only; it does not enable automatic queue resets.
+orders and never groups by league. Historical rows remain available for audit;
+the runner no longer collects them and no verdict enables queue resets.
 """
 
 from __future__ import annotations
@@ -63,13 +63,13 @@ def render_report(
         ORDER BY qm.started_at
         """, params).fetchall())
 
-    print("Liquidity queue measurement")
-    print("  mode                            : measurement only; no cancel/repost")
+    print("Retired liquidity queue measurement")
+    print("  mode                            : historical; collector disabled")
     print("  shadow trigger                  : upper bound <= 1.0x order quantity after 60s")
     if not rows:
         print("  measured orders                 : 0")
-        print("\nverdict: COLLECTING")
-        return "COLLECTING"
+        print("\nverdict: RETIRED")
+        return "RETIRED"
 
     first = datetime.fromisoformat(str(rows[0]["started_at"]))
     last_candidates = [
@@ -138,22 +138,9 @@ def render_report(
     if sessions:
         print(f"  latest health update            : {sessions[-1]['last_updated_at']}")
 
-    complete = (
-        span_days >= 3
-        and maker_filled >= 300
-        and gap_orders == 0
-        and bool(sessions)
-        and trades_received > 0
-        and dropped == 0
-        and decoded == 0
-    )
-    verdict = "READY_FOR_REVIEW" if complete else "COLLECTING"
-    print(f"\nverdict: {verdict}")
-    if complete:
-        print("Review held-out avoided-fill value versus estimated reward dark time; do not enable automatically.")
-    else:
-        print("Keep measuring. Target is 3 full days, ~300 maker fills, and zero coverage gaps.")
-    return verdict
+    print("\nverdict: RETIRED")
+    print("Historical evidence only; do not restart or enable queue resets.")
+    return "RETIRED"
 
 
 def main() -> int:

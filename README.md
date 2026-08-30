@@ -271,22 +271,20 @@ Do not run this with another process using the same API key. A future controlled
 trial requires an exclusive handoff: maker-lab stopped, one local process lease,
 and a whole-account flat/open-order reconciliation before any new risk.
 
-## Strict spread-scalp measurement
+## Retired strict spread-scalp measurement
 
-This is a separate observation process. It cannot place orders and does not
+This was a separate observation process and is now stopped. It cannot place orders and does not
 change the liquidity bot's selection, 20 slots, quote size or exits. It tracks
 pure high-volume moneylines and the exact current reward-slot markets in
 separate cohorts; a success requires the full requested quantity on both fixed
 maker sides.
 
 ```bash
-./scripts/start_scalp_measurement.sh
 ./scripts/status_scalp_measurement.sh
 PYTHONPATH=src .venv/bin/python -B scripts/scalp_measurement_report.py \
   --database data/scalp.db --horizons 30,60,300,900,3600
 PYTHONPATH=src .venv/bin/python -B scripts/scalp_gtc_report.py \
   --database data/scalp.db --size 10
-./scripts/stop_scalp_measurement.sh
 ```
 
 The collector keeps compressed full books, public trades, queue-ahead/fill
@@ -349,20 +347,19 @@ startup. Its configured-capacity map is age-labelled local stream-scope evidence
 flatness proof. See [Liquidity TV dashboard](docs/TV_DASHBOARD.md) for the
 display, LAN and manual lifecycle commands.
 
-The optional almost-front queue study is measurement-only and starts with the
-normal runner once its reviewed code is deployed. It uses a separate bounded
-public-trade socket and has no cancel/repost path. Inspect its coverage without
-venue calls:
+The active retained-value study is measurement-only. Every building PLACE
+records 60%, 70% and 80% `WOULD_REFUSE` labels plus the best recent candidate from
+the already-fetched selector snapshot. It adds no venue call or socket and has
+no refusal path. Inspect it locally without venue calls:
 
 ```bash
-PYTHONPATH=src python -B scripts/queue_measurement_report.py \
+PYTHONPATH=src python -B scripts/quote_observation_report.py \
   --database data/commissioning.db
 ```
 
-`COLLECTING` is the expected result until three full days, roughly 300 maker
-fills with post-ACK baselines and zero coverage gaps exist. Even
-`READY_FOR_REVIEW` does not enable an
-automatic queue reset.
+`COLLECTING` is expected until a current-size prospective cohort and a frozen
+held-out interval compare avoided realized loss with projected/paid reward and
+dark-slot cost. No report verdict enables a live refusal rule.
 
 Automatic rotation first cancels owned quotes and requires whole-account REST
 proof of zero working orders, zero positions, known ownership, and zero

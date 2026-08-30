@@ -52,7 +52,6 @@ from liquidity_bot.market_selector import (
 from liquidity_bot.market_state import MarketState
 from liquidity_bot.models import (
     AccountBalance, BookLevel, BookSnapshot, MarketIncentive, MarketMetadata,
-    TradePrint,
 )
 from liquidity_bot.notifications import NotificationResult
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
@@ -615,6 +614,89 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observation.touch_changes_120s, 1)
         self.assertIsNone(observation.trade_volume_30s)
 
+    async def test_retained_value_shadow_uses_fresh_spare_without_api_reads(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+        runner._market_selection = multi_selection(
+            "market-one", "market-spare")
+        runner._market_selection_observed_at = NOW - timedelta(seconds=30)
+        state = runner.state_for("market-one")
+        exit_result = state.stressed_exit_by_side["bid"]
+        shadow_loss = -.35 * exit_result.entry_cost
+        state.stressed_exit_by_side["bid"] = replace(
+            exit_result, pnl=shadow_loss)
+        prior_book_reads = client.markets.book_calls
+
+        observation = runner._quote_observation_for_action(
+            state,
+            PlanAction(
+                ActionKind.PLACE_POST_ONLY, "market-one",
+                "reward_positive_candidate", side="bid", price=.49,
+                qty=runner.config.quote_size),
+            NOW,
+            Decimal("0"),
+        )
+
+        self.assertIsNotNone(observation)
+        self.assertAlmostEqual(
+            observation.retained_value_ratio,
+            .65,
+        )
+        self.assertFalse(observation.would_refuse_retained_60)
+        self.assertTrue(observation.would_refuse_retained_70)
+        self.assertTrue(observation.would_refuse_retained_80)
+        self.assertEqual(
+            observation.replacement_market_slug, "market-spare")
+        self.assertEqual(
+            observation.replacement_reason, "recent_selector_spare")
+        self.assertEqual(observation.replacement_selection_age_seconds, 30)
+        self.assertFalse(observation.slot_would_go_dark)
+        self.assertEqual(client.markets.book_calls, prior_book_reads)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stale_shadow_selection_is_not_claimed_as_replacement(self):
+        runner, _, _ = self.build_runner()
+        runner._market_selection = multi_selection(
+            "market-one", "market-spare")
+        runner._market_selection_observed_at = (
+            NOW - timedelta(
+                seconds=runner.config.market_selection_refresh_seconds + 1))
+
+        snapshot = runner._retained_value_replacement_snapshot(
+            NOW, current_projected_reward=.01)
+
+        self.assertIsNone(snapshot[0])
+        self.assertEqual(snapshot[5], "selection_stale")
+        self.assertIsNone(snapshot[6])
+
+    async def test_incomplete_stressed_exit_has_no_retained_value_label(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+        state = runner.state_for("market-one")
+        state.stressed_exit_by_side["bid"] = replace(
+            state.stressed_exit_by_side["bid"], complete=False)
+
+        observation = runner._quote_observation_for_action(
+            state,
+            PlanAction(
+                ActionKind.PLACE_POST_ONLY, "market-one",
+                "measurement_edge", side="bid", price=.49,
+                qty=runner.config.quote_size),
+            NOW,
+            Decimal("0"),
+        )
+
+        self.assertIsNotNone(observation)
+        self.assertIsNone(observation.retained_value_ratio)
+        self.assertIsNone(observation.would_refuse_retained_60)
+        self.assertIsNone(observation.would_refuse_retained_70)
+        self.assertIsNone(observation.would_refuse_retained_80)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_successful_live_building_action_persists_exact_observation(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()
@@ -635,16 +717,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             observation[0]["client_order_id"], intent["client_order_id"])
         self.assertEqual(intent["quote_observation_required"], 1)
         self.assertIsNone(observation[0]["trade_volume_30s"])
-        queue_rows = runner.ledger.query(
-            "SELECT client_order_id,status,coverage_gaps "
-            "FROM execution_queue_measurements")
-        self.assertEqual(len(queue_rows), 1)
-        self.assertEqual(queue_rows[0]["client_order_id"], intent["client_order_id"])
-        self.assertEqual(queue_rows[0]["status"], "ACTIVE")
-        # This unit path does not start the isolated trade collector. The
-        # order still places, but the sample is visibly invalid rather than
-        # silently pretending it had public-trade coverage.
-        self.assertEqual(queue_rows[0]["coverage_gaps"], 1)
+        self.assertIsNotNone(observation[0]["retained_value_ratio"])
+        # The concluded queue-reset collector no longer opens a separate
+        # public-trade socket or creates per-order tracker rows.
+        self.assertEqual(runner.ledger.query(
+            "SELECT * FROM execution_queue_measurements"), [])
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -703,87 +780,39 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_queue_measurement_failure_cannot_suppress_or_duplicate_an_order(self):
+    async def test_retained_value_shadow_label_cannot_suppress_live_order(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         runner._evaluate_rewards(NOW, "market-one")
 
-        class BrokenMeasurement:
-            def sync_orders(self, **_kwargs):
-                raise RuntimeError("optional queue telemetry failed")
+        original = runner._quote_observation_for_action
 
-            def on_book(self, *_args, **_kwargs):
-                raise RuntimeError("optional queue telemetry failed")
+        def flagged(*args, **kwargs):
+            observation = original(*args, **kwargs)
+            self.assertIsNotNone(observation)
+            return replace(
+                observation,
+                retained_value_ratio=.50,
+                would_refuse_retained_60=True,
+                would_refuse_retained_70=True,
+                would_refuse_retained_80=True,
+            )
 
-        runner._queue_measurement = BrokenMeasurement()
-        outcome, delay = await runner._decide_for_market("market-one", NOW)
+        with patch.object(
+                runner, "_quote_observation_for_action",
+                side_effect=flagged):
+            outcome, delay = await runner._decide_for_market(
+                "market-one", NOW)
 
         self.assertIsNone(outcome)
         self.assertEqual(delay, 0)
         self.assertEqual(len(client.orders.create_calls), 1)
-        self.assertEqual(len(runner.ledger.query(
-            "SELECT * FROM execution_intents WHERE operation='PLACE'")), 1)
-        self.assertEqual(runner.config.max_markets, 20)
+        row = runner.ledger.query(
+            "SELECT would_refuse_retained_70 "
+            "FROM execution_quote_observations")[0]
+        self.assertEqual(row["would_refuse_retained_70"], 1)
         await runner.private_stream.close()
         await runner.market_stream.close()
-
-    async def test_queue_trade_collector_is_isolated_and_records_its_own_health(self):
-        runner, client, _ = self.build_runner()
-
-        class OneTradeStream:
-            def __init__(self):
-                self.started = None
-                self.closed = False
-                self.sent = False
-                self.timeouts = 0
-                self.dropped_trades = 0
-                self.decode_failures = 0
-
-            async def start(self, slugs):
-                self.started = tuple(slugs)
-
-            async def next_trade(self, *, timeout=None):
-                if not self.sent:
-                    self.sent = True
-                    return TradePrint(
-                        "market-one", .49, 2, "ORDER_SIDE_BUY", NOW,
-                        request_id="public-one")
-                self.timeouts += 1
-                if self.timeouts <= 3:
-                    await asyncio.sleep(0)
-                    raise asyncio.TimeoutError
-                await asyncio.Future()
-
-            async def close(self):
-                self.closed = True
-
-        stream = OneTradeStream()
-        runner.trade_stream_factory = lambda _client: stream
-        health_updates = 0
-        original_update = runner._queue_measurement.update_stream_session
-
-        def counted_update(*args, **kwargs):
-            nonlocal health_updates
-            health_updates += 1
-            return original_update(*args, **kwargs)
-
-        runner._queue_measurement.update_stream_session = counted_update
-        task = asyncio.create_task(runner._queue_measurement_loop())
-        for _ in range(12):
-            await asyncio.sleep(0)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-        self.assertEqual(stream.started, ("market-one",))
-        self.assertTrue(stream.closed)
-        sessions = runner.ledger.query(
-            "SELECT status,trades_received,scope_size "
-            "FROM execution_queue_stream_sessions")
-        self.assertEqual([tuple(row) for row in sessions], [("STOPPED", 1, 1)])
-        self.assertEqual(health_updates, 1)
-        # The collector has no path to either the trading gateway or REST.
-        self.assertEqual(client.orders.create_calls, [])
-        self.assertEqual(runner.gateway.limiter.calls, 0)
 
     async def test_decision_sweep_skips_only_the_market_with_an_unresolved_intent(self):
         runner, _, _ = self.build_runner()

@@ -127,7 +127,20 @@ class ExecutionLedgerTests(unittest.TestCase):
                 {"price": "0.51", "qty": "2.00"}, created_at=T0)
 
     def test_quote_observation_is_immutable_and_linked_to_exact_intent(self):
-        observation = quote_observation()
+        observation = quote_observation(
+            retained_value_ratio=.65,
+            stressed_exit_value=3.25,
+            would_refuse_retained_60=False,
+            would_refuse_retained_70=True,
+            would_refuse_retained_80=True,
+            replacement_market_slug="market-spare",
+            replacement_projected_reward=.004,
+            replacement_expected_net=.001,
+            replacement_reward_delta=.002,
+            replacement_selection_age_seconds=30,
+            replacement_reason="recent_selector_spare",
+            slot_would_go_dark=False,
+        )
         created = self.ledger.prepare_intent(
             "intent-observed", "PLACE", "market-one", "client-observed",
             {"price": "0.48", "qty": "10"}, created_at=T0,
@@ -140,6 +153,9 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(row["client_order_id"], "client-observed")
         self.assertEqual(row["observed_queue_ahead"], 250)
         self.assertEqual(row["model_queue_ahead"], 100)
+        self.assertEqual(row["would_refuse_retained_70"], 1)
+        self.assertEqual(row["replacement_market_slug"], "market-spare")
+        self.assertEqual(row["slot_would_go_dark"], 0)
         self.assertIsNone(row["trade_volume_30s"])
         self.assertFalse(self.ledger.prepare_intent(
             "intent-observed", "PLACE", "market-one", "client-observed",
@@ -241,6 +257,35 @@ class ExecutionLedgerTests(unittest.TestCase):
         columns = {row["name"] for row in self.ledger.connection.execute(
             "PRAGMA table_info(execution_intents)")}
         self.assertIn("quote_observation_required", columns)
+
+    def test_existing_observation_table_gains_retained_value_columns(self):
+        shadow_columns = {
+            "retained_value_ratio",
+            "stressed_exit_value",
+            "would_refuse_retained_60",
+            "would_refuse_retained_70",
+            "would_refuse_retained_80",
+            "replacement_market_slug",
+            "replacement_projected_reward",
+            "replacement_expected_net",
+            "replacement_reward_delta",
+            "replacement_selection_age_seconds",
+            "replacement_reason",
+            "slot_would_go_dark",
+        }
+        self.ledger.close()
+        legacy = sqlite3.connect(self.path)
+        for column in shadow_columns:
+            legacy.execute(
+                f"ALTER TABLE execution_quote_observations DROP COLUMN {column}")
+        legacy.commit()
+        legacy.close()
+
+        self.ledger = ExecutionLedger(self.path)
+        columns = {
+            row["name"] for row in self.ledger.connection.execute(
+                "PRAGMA table_info(execution_quote_observations)")}
+        self.assertTrue(shadow_columns.issubset(columns))
 
     def test_venue_cancel_resolves_an_order_marked_absent_first(self):
         # Reproduces the live failure of 2026-08-14T04:21:56Z exactly. The

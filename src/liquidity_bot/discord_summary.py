@@ -95,13 +95,17 @@ class LiquiditySummary:
     # independently of the session one, so a meter for the session alone can
     # read comfortable while a market is one fill from stopping.
     worst_market_realized_pnl_usd: Decimal = Decimal("0")
-    # Marked equity against the ET risk day's OPENING equity. Negative is a loss.
-    # This is the quantity `hard_stop_reached` fires on, so it is the only one
-    # the HARD meter may be drawn from, and it is also the honest answer to
-    # "how is today going" -- it picks up reward the moment it lands.
+    # Raw marked equity against the ET risk day's OPENING equity. Negative is a
+    # loss. This is the honest account-wide answer to "how is today going" and
+    # picks up reward the moment it lands.
     # Account-wide by nature: equity cannot be scoped to one bot (CLAUDE.md),
     # so it must never be labelled as this bot's own result.
     today_pnl_usd: Decimal = Decimal("0")
+    # The hard stop's adjusted marked-equity delta. Negative is a loss. Proven
+    # non-trading cash is removed before the guard observes equity, so this can
+    # intentionally differ from `today_pnl_usd`. None preserves compatibility
+    # for offline/legacy callers that do not run the live equity guard.
+    hard_stop_pnl_usd: Decimal | None = None
     # Lifetime result for THIS bot: ledger trading, which is bot-scoped by
     # construction because the ledger holds only this bot's fills. Settled
     # positions are invisible to it, so it understates losses -- see FINDINGS.
@@ -392,14 +396,14 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     hard_cap = _money(summary.hard_stop_loss_usd)
     session_loss = max(Decimal("0"), -_money(summary.session_realized_pnl_usd))
     worst_loss = max(Decimal("0"), -_money(summary.worst_market_realized_pnl_usd))
-    # The HARD meter must read what its own stop fires on. `hard_stop_reached`
-    # compares marked equity against the day's opening equity; the session stop
-    # trips on `-realized_pnl`, which is matched-pair only. They diverge in the
-    # DANGEROUS direction: a position that settles worthless moves equity and
-    # is invisible to realized_pnl, so this bar read near zero while the stop
-    # it is labelled for was about to fire. Same defect the dashboard carried
-    # on 2026-08-18 -- two numbers for one quantity on one screen.
-    hard_loss = max(Decimal("0"), -_money(summary.today_pnl_usd))
+    # The HARD meter must read exactly what its own stop fires on. Live callers
+    # provide the adjusted equity delta; the fallback keeps historical/offline
+    # summaries compatible without changing their display.
+    hard_stop_pnl = (
+        summary.today_pnl_usd
+        if summary.hard_stop_pnl_usd is None
+        else summary.hard_stop_pnl_usd)
+    hard_loss = max(Decimal("0"), -_money(hard_stop_pnl))
     risk_text = (
         _row(position_label, summary.open_positions)
         + _row("Working orders", summary.working_orders)

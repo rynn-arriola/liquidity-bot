@@ -6642,6 +6642,40 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_live_summary_separates_account_pnl_from_hard_stop_input(self):
+        """The live payload must preserve both conflicting truths.
+
+        Rewards can make raw account equity positive while the adjusted equity
+        guard is near its hard stop. Reporting the raw number in the HARD bar
+        would make the stop look unused immediately before it fires.
+        """
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        now = runner._now()
+        runner._day_opening_equity = Decimal("100")
+        runner.balance = AccountBalance(
+            current_balance=Decimal("150"),
+            asset_notional=Decimal("0"),
+            buying_power=Decimal("150"),
+            observed_at=now)
+        runner.risk_guard.adopt_day_baseline(Decimal("100"))
+        adjusted_loss = runner.config.hard_stop_loss_usd - Decimal("1")
+        runner.risk_guard.observe_equity(
+            Decimal("100") - adjusted_loss, observed_at=now)
+
+        await runner._send_summary(now)
+
+        embed = notifier.payloads[-1][0]["embeds"][0]
+        risk = next(
+            field["value"] for field in embed["fields"]
+            if "stop loss" in field["name"])
+        self.assertIn("TODAY  $+50.00", embed["description"])
+        self.assertIn(
+            f"${adjusted_loss:.2f} / ${runner.config.hard_stop_loss_usd:.2f}",
+            risk)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_shutdown_drains_buffered_terminal_cancel_proof(self):
         """A stopped consumer must still apply proof already on its socket."""
 

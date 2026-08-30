@@ -475,6 +475,24 @@ class DiscordTests(unittest.TestCase):
         # ...and the session bar still reads its own, unchanged, number.
         self.assertIn("$0.00 / $40.00", risk)
 
+    def test_reward_cannot_make_the_hard_meter_look_safer(self):
+        """Raw account profit and adjusted stop consumption are independent.
+
+        A reward can leave the account up while trading has nearly consumed
+        the hard stop. The headline should report the former and the HARD bar
+        must report the latter.
+        """
+        summary = self._stop_summary(
+            session_realized_pnl_usd=Decimal("0"),
+            today_pnl_usd=Decimal("50"),
+            hard_stop_pnl_usd=Decimal("-44"))
+        embed = build_liquidity_summary(summary)["embeds"][0]
+        risk = [f for f in embed["fields"]
+                if "stop loss" in f["name"]][0]["value"]
+        self.assertIn("TODAY  $+50.00", embed["description"])
+        self.assertIn("$44.00 / $45.00", risk)
+        self.assertIn("$0.00 / $40.00", risk)
+
     def test_the_strip_is_red_on_a_losing_day_and_green_on_a_winning_one(self):
         """The strip is the first thing read on a phone, so it answers the
         first question. Operational state keeps the title icon."""

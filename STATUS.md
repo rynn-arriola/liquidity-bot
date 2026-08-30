@@ -1,19 +1,19 @@
 # Current operator status
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
-
 ## Verified state
-- **Verified:** 2026-08-29 18:43 ET / 2026-08-29 22:43 UTC
+- **Verified:** 2026-08-29 19:59 ET / 2026-08-29 23:59 UTC
 - **Liquidity bot:** LIVE on the laptop; supervisor PID 14497 and runner PID
   14504 are active, with the isolated TV dashboard PID 1681
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Restart proof:** the old runner stopped at 14:20:23Z with
   `operator_sigterm` and `flat=true`; the post-stop authenticated snapshot
   proved zero orders and positions before the deployment started
-- **Loaded source:** WSL HEAD `dba96ba`, loaded marker `2aa9fec`; newer files are docs/tests/parity only, not runner source
-- **Verification:** all 830 deployed-source tests and all 840 final PC tests pass.
-  At 22:43Z the zero-API dashboard confirmed the original runner/supervisor
-  alive, 20 scoped markets, 32 orders, three managed positions and no unknowns
+- **Loaded source:** WSL HEAD `dba96ba`, loaded marker `2aa9fec`; the pushed HARD-meter source repair remains unloaded
+- **Verification:** all 830 deployed-source tests and all 842 final PC tests pass.
+  At 23:59Z the zero-API dashboard found the original runner/supervisor alive,
+  20 scoped markets, 26 orders, two ledger positions and no unknown/unresolved
+  rows; this local view made no venue call and is not venue exposure proof
 - **API capacity measurement:** startup made 373 attempts/146.9s clean; the next
   64s received 10 execution-history `1015`/429s at 1.813/s, then 66.2s recovered
   with 105 clean reads. The bot stayed live/flat; no slot increase is authorized

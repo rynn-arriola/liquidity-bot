@@ -4504,15 +4504,24 @@ class CommissioningRunner:
             selection_failures=(
                 len(self._market_selection.failures)
                 if self._market_selection is not None else 0),
-            # Marked equity against the DAY's opening equity, from the
-            # ledger so a restart cannot reset it. This is what
-            # `hard_stop_reached` fires on, so the HARD meter and the headline
-            # now read the same number the stop does. Account-wide by nature:
-            # equity carries no per-system attribution (CLAUDE.md).
+            # Raw marked equity against the DAY's opening equity, from the
+            # ledger so a restart cannot reset it. Account-wide by nature:
+            # equity carries no per-system attribution (CLAUDE.md). This is
+            # the headline; rewards and other cash movements remain visible.
             today_pnl_usd=(
                 self.balance.marked_equity - self._day_opening_equity
                 if self.balance is not None
                 and self._day_opening_equity is not None else Decimal("0")),
+            # Exact delta observed by `hard_stop_reached`. `_refresh_balance`
+            # removes proven non-trading cash before updating the guard, so
+            # this meter can intentionally show more stop consumption than
+            # the raw account headline after a reward or deposit lands.
+            hard_stop_pnl_usd=(
+                self.risk_guard.current_equity
+                - self.risk_guard.starting_equity
+                if self.risk_guard is not None
+                and self.risk_guard.current_equity is not None
+                else None),
             # Lifetime, and genuinely this bot's: the ledger holds only this
             # bot's fills, so no date filter is needed. Understates losses,
             # because a settled position has its entry recorded and its exit

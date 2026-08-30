@@ -36,7 +36,7 @@ rg -n -i "<market, error, metric, or theory>" FINDINGS.md docs/history/FINDINGS_
   Response-backed 403 means that exact request failed; timeout, connection loss,
   5xx, malformed success and absence remain ambiguous. Only later mutation
   success proves account mutation access recovered.
-- **Risk now has one quantity authority.** The live size 13 maps to portfolio/market exposure/market loss/account limits `$390/$117/$52/$104`; the launcher, selector and reconciler share it while 20 slots and six hours stay fixed.
+- **Risk now has one quantity authority.** Live size 13 maps to portfolio/market exposure/market loss/account limits `$390/$117/$52/$104`; launcher, selector and reconciler share it while 20 slots and six hours stay fixed. The stop intentionally removes proven non-trading cash, while a pushed reporting repair separates raw account Today P&L from its exact adjusted HARD input. [Evidence](docs/history/HARD_METER_NONTRADING_CASH_2026-08-29.md).
 - **Closed owners parked capacity.** The repair requires fresh closed/not-open
   metadata plus flat/order-free proof; natural replacement remains uninduced.
 - **Bound capacity can remain economically idle.** Lifecycle repairs do not

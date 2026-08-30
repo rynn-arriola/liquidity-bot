@@ -163,9 +163,7 @@ are evidence the operator asked to see.
    restart and 20-slot interactions.
 4. Explain the diagnosis and recommendation clearly. Preserve the operator's
    decision point when the change affects business behavior or risk.
-5. For a fix: add focused regressions, deliberately reverse the fix to prove a
-   test fails, restore it, run the appropriate complete suite, and review edge
-   cases and the final diff.
+5. For every fix, before push or deployment: add focused regressions, deliberately reverse the fix to prove a test fails, restore it, run the appropriate complete suite, perform the permanent dedicated edge-case audit in `AI_ENGINEERING.md`, and review the final diff. Tests passing or operational urgency never substitutes for this review.
 6. Push before deployment. Deploy only reviewed files, verify hashes and tests
    on the server, and restart only when authorized and safe.
 7. Verify the actual live outcome rather than equating a successful command

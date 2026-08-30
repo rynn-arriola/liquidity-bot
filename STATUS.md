@@ -73,7 +73,7 @@ Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects
 the desktop with full handoff. Parity covers PC/laptop/GitHub, laptop WSL and a
 verified private execution-ledger recovery copy; no secret/database enters git
 and no copy is activated. `dba96ba` passed end-to-end; Drive remains weekly-only.
-`Command 1` now means the tracked immediate stop-review-deploy-restart workflow; this definition did not control the current runner.
+`Command 1` means the tracked immediate stop-review-deploy-restart workflow; every fix now has a permanent pre-push/pre-deploy review and edge-case-audit rule. These definitions did not control the current runner.
 
 ## Current records
 

@@ -10,7 +10,7 @@ show the operator the discrepancy.
 - The human operator chooses strategy behavior, risk limits, capital, quote
   size, slot count, deployment timing and stop/restart timing.
 - AI agents investigate, explain, implement, test, review, document and carry
-  out authorized operations. They should not assume the operator writes code.
+  out authorized operations. Every fix requires a dedicated final review and relevant edge-case audit before both push and deployment; passing tests do not waive it. Agents should not assume the operator writes code.
 - Explain proposed changes in plain language, including expected benefit,
   downside, effect on rewards/orders/losses and whether a restart is required.
 - A measurement or watchlist idea is not permission to alter live trading.

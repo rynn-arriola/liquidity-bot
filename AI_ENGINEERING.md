@@ -71,14 +71,12 @@ market selection. At minimum, preserve these rules:
 
 ## Change and verification rules
 
-- Inspect the whole affected flow: success, failure, timeout, recovery,
-  shutdown, restart and 20-slot interaction.
+- Before every fix is pushed or deployed, perform a dedicated final review and edge-case audit across success, failure, empty/full and boundary values, timing/races, partial/unknown state, ownership, API/load effects, recovery, shutdown, restart, rollback and 20-slot interaction. No passing test suite or urgency waives this review.
 - Add focused regression coverage for every fix.
 - Deliberately reverse the important repair and prove the test fails; restore
   it before the final suite.
 - Run focused tests while iterating, then the complete local suite.
-- Review the final diff for business-policy drift, ownership weakening,
-  unexpected API calls, credential exposure and stale documentation.
+- Record or test the relevant edge cases, then review the final diff for business-policy drift, ownership weakening, unexpected API/load changes, credential exposure, rollback hazards and stale documentation before push and again before deployment if the deployed set differs.
 - Push before deployment. Deploy only reviewed files, verify local/server
   hashes and run the complete suite in the server virtual environment.
 - A successful deploy command is not live acceptance. Verify the process and

@@ -55,3 +55,28 @@ balance-row shortcut and failed both incident tests (`944.4802` versus
 `950.9802` equity and `-$30.6268` versus `-$21.1368` marked trading). After
 restoring the repair, all 884 WSL tests passed in 81.354 seconds. Deployment,
 commit and live acceptance evidence are added after the flat-gated restart.
+
+## Deployment and live acceptance
+
+Business commit `49b56b2` was pushed before deployment. Graceful shutdown
+parked one size-13 reducing order and truthfully ended `flat=false`; the order
+then filled, after which a fresh authenticated stopped read proved zero open
+orders and zero nonzero positions. Ledger ownership checks showed zero
+unresolved intents, absent orders and foreign working orders before startup.
+
+The exact stopped WSL checkout passed 884 tests in 59.374 seconds. That run
+also exposed two test-isolation defects: a dashboard fixture inherited the
+machine's persisted 22-slot setting, and runner tests wrote their fake 2026-08-13
+P&L cache to the checkout. Both were isolated to temporary files, deliberately
+reversed to reproduce their failures, and the resulting 885-test suite passed
+in the WSL production virtual environment in 96.464 seconds. No trading logic
+changed in those follow-ups.
+
+The size-13/22-slot runner and read-only dashboard then started from the
+reviewed source. The dashboard accepted the runner's current ET cache and
+displayed `-$24.2568` marked trading = `-$24.2568` closed + `$0` open, with
+non-trading cash `$0`. It showed 41 working orders across 21 markets, zero
+positions, unresolved intents and unknown orders. The startup/API-selection
+burst ran at `2.806/s`; the next two normal windows ran at `1.440-1.482/s`.
+All three reported zero failures and rate limits, wait p99 no higher than
+`0.223s`, and queue depth no higher than one.

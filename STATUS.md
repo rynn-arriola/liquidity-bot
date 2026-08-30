@@ -2,32 +2,21 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Verified:** 2026-08-30 01:01 ET / 2026-08-30 05:01 UTC
-- **Liquidity bot:** LIVE at size 13 and 22 slots on the laptop; supervisor PID 87424, runner PID 87434 and the isolated dashboard are active
+- **Verified:** 2026-08-30 02:23 ET / 2026-08-30 06:23 UTC
+- **Liquidity bot:** LIVE at size 13 and 22 slots on the laptop; supervisor PID 116585, runner PID 116593 and isolated dashboard PID 116618 are active
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
-- **Stop proof:** the runner received `operator_sigterm` and exited gracefully.
-  Its 04:56:30Z final record said `flat=true`; the post-stop authenticated
-  snapshot proved zero open orders and zero nonzero positions, with zero
-  unresolved or unknown ownership rows
-- **Deployed checkout:** WSL/GitHub HEAD is docs commit `13d3104`; `DEPLOYED_COMMIT` is `6ae1335`. Runner PID 87434 was started after flat/order-free proof and now loads the reviewed deployed business-logic repairs
+- **Stop proof:** the old runner received `operator_sigterm` and exited gracefully at 06:06:29Z. Its final record correctly said `flat=false` because one size-13 reducing order was parked; that exit then filled. A fresh authenticated stopped snapshot proved zero open orders/positions, and the ledger proved zero unresolved, absent or foreign working ownership before startup
+- **Deployed checkout:** WSL/GitHub HEAD and `DEPLOYED_COMMIT` are `bf4005c`. Runner PID 116593 started only after flat/order-free, ownership, hash and stopped-runtime 884-test gates passed; its business source is the reviewed marked-account-P&L repair in `49b56b2`
+- **Account P&L repair active:** Discord, dashboard and the HARD guard now use cash plus every open position's `cashValue`, less proven non-trading cash. The accepted live cache reported marked trading `-$24.2568` = closed `-$24.2568` + open mark `$0`, with no reward/deposit included. [Evidence](docs/history/ACCOUNT_MARKED_PNL_2026-08-30.md)
 - **Business-logic repair active:** canonical LONG/YES-frame accounting exactly replays the 2026-08-29 settled-cash change at `-$79.4465`; owned taker-exit budgets and entry/exit summaries use durable order roles. Three reversals passed. The 900-second timeout remains unchanged because the available replay favored 900 seconds and had only 29.2% stream coverage. [Evidence](docs/history/BUSINESS_LOGIC_AUDIT_2026-08-30.md)
 - **Lifecycle refill:** eight synchronized 02:00Z kickoffs reduced the working slate to 16/17 orders across 11 markets while two positions exited. There were zero API failures/429s and 81 viable candidates. The ordinary 02:12:52Z selection restored 20 markets and 33 orders with zero positions/unresolved/unknown rows, proving safe recovery but an avoidable scheduler gap
-- **API capacity measurement:** the 22-slot canary passed its 30-minute startup/selection-burst gate: 20 windows, 3,392 attempts, zero failures/429s, `1.263-2.643/s`, wait p99 at most `0.226s`, response p99 at most `0.919s` and queue depth at most one. After ending the monitoring period, the operator explicitly selected another 22-slot restart; 20 remains the bare-launcher default
+- **API capacity measurement:** with the accurate balance/positions/balance mark active, the accepted 22-slot startup burst was `2.806/s` and the next two normal windows were `1.440-1.482/s`; all had zero failures/429s, wait p99 at most `0.223s` and queue depth at most one. The operator selected 22; 20 remains the bare-launcher default
 - **Maker-lab:** stopped
-- **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption
-  dependency, size 13, restricted credentials and exact execution/scalp data
-  are active; the ledger stayed authoritative through the stopped deployment
-- **Laptop access/power:** Windows and WSL use the same US residential Comcast
-  egress with no active VPN adapter observed; Retail health returned 200/OK;
-  AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum
-  performance
-- **Laptop schedules:** four read-only backup/report systemd timers are active;
-  a stopped-safe ledger backup passed; no trading service is installed/enabled
-- **Desktop cold backup:** inactive; its latest parity execution-ledger recovery
-  copy matches the laptop SHA-256 and passes SQLite
-  integrity `ok`. It is not activated; no credential path, trading process,
-  service, timer or API check exists there
-- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps. The 05:00Z restart reached 43 working orders across 22/22 markets with zero positions and zero unresolved intents; the prior runner's final record and an authenticated stopped snapshot both proved flat/order-free before startup
+- **Laptop runtime:** Ubuntu 24.04 WSL2, Python 3.12, pinned SDK/encryption dependency, size 13, restricted credentials and exact execution/scalp data are active; the ledger stayed authoritative through the stopped deployment
+- **Laptop access/power:** Windows and WSL use the same US residential Comcast egress with no active VPN adapter observed; Retail health returned 200/OK; AC sleep is disabled, AC lid-close does nothing and AC Wi-Fi uses maximum performance
+- **Laptop schedules:** four read-only backup/report systemd timers are active; a stopped-safe ledger backup passed; no trading service is installed/enabled
+- **Desktop cold backup:** inactive; its latest parity execution-ledger recovery copy matches the laptop SHA-256 and passes SQLite integrity `ok`. It is not activated and has no credential path, trading process, service, timer or API check
+- **Active quantity:** size 13 = $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross and $3.90 fee caps. The accepted restart reached 41 working orders across 21/22 markets with zero positions, unresolved intents and unknown orders; queue capture had zero drops/decode failures
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 

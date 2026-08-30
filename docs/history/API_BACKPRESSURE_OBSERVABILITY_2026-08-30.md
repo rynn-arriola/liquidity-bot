@@ -80,8 +80,15 @@ second path is cached `revalidate_viable`, where book reads do occur.
 ## Verification
 
 Focused selector, limiter and top-up tests passed before the full suite. The
-two important mechanisms are deliberately reversed before deployment: allowing
-selector deferral to fall into the generic market-error catch must fail the
-single-pass regression, and ignoring the worker-read shared map must fail the
-peer-cooldown telemetry regression. Final suite, exact deployed-checkout and
-commit/hash evidence are added to the current handoff after completion.
+two important mechanisms were deliberately reversed before deployment:
+allowing selector deferral to fall into the generic market-error catch failed
+the single-pass regression exactly, and ignoring the worker-read shared map
+failed the peer-cooldown telemetry regression exactly. Both were restored.
+
+The production-matching Windows-tree suite passed 926 tests in 89.490 seconds.
+Source commit `0ff6e3c6a259c89287399bf3b0a27d5099493f99` was pushed before deployment,
+fast-forwarded into the clean WSL checkout and passed the exact-checkout 926
+tests in 69.712 seconds. `DEPLOYED_COMMIT` was then advanced to that exact
+source commit. Supervisor PID 290240, live runner PID 290252 and dashboard PID
+116618 were not signaled or restarted; the runner therefore correctly retains
+its previously loaded source until a later operator-authorized restart.

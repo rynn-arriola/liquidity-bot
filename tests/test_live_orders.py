@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
-from liquidity_bot.errors import AdapterError
+from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
 from liquidity_bot.execution_ledger import ExecutionLedger, OrderState
 from liquidity_bot.live_orders import (
     AsyncTradingGateway,
@@ -268,7 +268,7 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(
             evidence.attempts_by_category, (("mutation_create", 1),))
 
-    def test_ioc_exit_keeps_safety_priority_while_maker_entry_yields(self):
+    def test_reducers_and_ioc_exits_keep_safety_priority(self):
         class RecordingLimiter(AsyncIntervalLimiter):
             def __init__(self):
                 super().__init__()
@@ -282,7 +282,8 @@ class LiveOrderExecutorTests(unittest.TestCase):
             self.client, limiter=limiter))
         self.client.orders.create_results = [
             {"id": "entry", "executions": []},
-            {"id": "exit", "executions": []},
+            {"id": "reducer", "executions": []},
+            {"id": "ioc", "executions": []},
         ]
 
         self.run_async(gateway.create({
@@ -291,10 +292,91 @@ class LiveOrderExecutorTests(unittest.TestCase):
         }))
         self.run_async(gateway.create({
             "marketSlug": "market-one",
+            "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+        }, reducing=True))
+        self.run_async(gateway.create({
+            "marketSlug": "market-one",
             "tif": "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL",
         }))
 
-        self.assertEqual(limiter.classes, ["entry", "safety"])
+        self.assertEqual(limiter.classes, ["entry", "safety", "safety"])
+
+    def test_executor_carries_reducing_priority_outside_wire_payload(self):
+        class RecordingLimiter(AsyncIntervalLimiter):
+            def __init__(self):
+                super().__init__()
+                self.classes = []
+
+            async def wait(self, **kwargs):
+                self.classes.append(kwargs.get("traffic_class"))
+
+        limiter = RecordingLimiter()
+        executor = LiveOrderExecutor(AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter)), self.ledger)
+        self.client.orders.create_results = [
+            {"id": "passive-reducer", "executions": []}]
+        request = OrderRequest(
+            "market-one", "offer", Decimal("0.495"), Decimal("1.00"),
+            reducing=True)
+
+        self.run_async(executor.place(
+            request, market(), now=NOW,
+            intent_id="intent-reducer", client_order_id="client-reducer"))
+
+        self.assertEqual(limiter.classes, ["safety"])
+        self.assertNotIn("reducing", self.client.orders.create_calls[0])
+
+    def test_entry_cooldown_fails_intent_without_claiming_remote_uncertainty(self):
+        limiter = AsyncIntervalLimiter()
+        executor = LiveOrderExecutor(AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter)), self.ledger)
+        self.run_async(limiter.record_result(
+            duration_seconds=0.1, status_code=429, failed=True,
+            retry_after_seconds=30.0, traffic_class="entry"))
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            self.run_async(executor.place(
+                self.request(), market(), now=NOW,
+                intent_id="intent-deferred", client_order_id="client-deferred"))
+
+        self.assertEqual(self.client.orders.create_calls, [])
+        self.assertEqual(self.ledger.unresolved_intents(), [])
+        row = self.ledger.query(
+            "SELECT state,error FROM execution_intents WHERE intent_id=?",
+            ("intent-deferred",))[0]
+        self.assertEqual(row["state"], "FAILED")
+        self.assertIn("ApiAdmissionDeferred", row["error"])
+
+    def test_stop_interrupt_fails_waiting_cancel_without_network_or_ambiguity(self):
+        limiter = AsyncIntervalLimiter()
+        executor = LiveOrderExecutor(AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter)), self.ledger)
+        self.run_async(limiter.record_result(
+            duration_seconds=0.1, status_code=429, failed=True,
+            retry_after_seconds=60.0, traffic_class="safety"))
+
+        async def exercise():
+            cancelling = asyncio.create_task(executor.cancel(
+                client_order_id="client-one",
+                exchange_order_id="exchange-one",
+                market_slug="market-one",
+                now=NOW,
+                intent_id="cancel-interrupted"))
+            await asyncio.sleep(0.01)
+            limiter.interrupt_waits()
+            with self.assertRaises(ApiAdmissionDeferred) as raised:
+                await cancelling
+            self.assertEqual(
+                raised.exception.error_code, "LOCAL_API_INTERRUPTED")
+
+        self.run_async(exercise())
+        self.assertEqual(self.client.orders.cancel_calls, [])
+        self.assertEqual(self.ledger.unresolved_intents(), [])
+        row = self.ledger.query(
+            "SELECT state,error FROM execution_intents WHERE intent_id=?",
+            ("cancel-interrupted",))[0]
+        self.assertEqual(row["state"], "FAILED")
+        self.assertIn("request not sent", row["error"])
 
     def test_same_market_pending_place_reports_wait_without_network(self):
         """The specific wait path must be reachable before the state gate."""

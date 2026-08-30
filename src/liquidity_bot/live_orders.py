@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
-from .errors import AdapterError
+from .errors import AdapterError, ApiAdmissionDeferred
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
 from .venue_state import normalize_execution, normalize_order
@@ -182,9 +182,20 @@ class AsyncTradingGateway:
         # Never use AsyncReadOnlyGateway._call here: its confirmed-429 retry is
         # correct for reads but can duplicate an order after an ambiguous POST.
         if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
-            await self.gateway.limiter.wait(
-                operation=operation, request_kind="mutation",
-                traffic_class=traffic_class)
+            try:
+                await self.gateway.limiter.wait(
+                    operation=operation, request_kind="mutation",
+                    traffic_class=traffic_class)
+            except asyncio.CancelledError:
+                # Operator stop interrupted admission before `call()` began.
+                # Convert that local fact into an exact failure so the durable
+                # SUBMITTING intent cannot survive shutdown as false ambiguity.
+                raise ApiAdmissionDeferred(
+                    f"{operation} admission interrupted; request not sent",
+                    operation=operation,
+                    error_code="LOCAL_API_INTERRUPTED",
+                    retry_after_seconds=0.0,
+                ) from None
         else:
             # Preserve the long-standing zero-argument protocol for injected
             # deterministic gates used by tests and dry-run composition.
@@ -193,12 +204,13 @@ class AsyncTradingGateway:
         try:
             result = await call()
             if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
-                self.gateway.limiter.record_result(
-                    duration_seconds=time.monotonic() - started_at)
+                await self.gateway.limiter.record_result(
+                    duration_seconds=time.monotonic() - started_at,
+                    traffic_class=traffic_class)
             return result
         except Exception as exc:
             if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
-                self.gateway.limiter.record_result(
+                await self.gateway.limiter.record_result(
                     duration_seconds=time.monotonic() - started_at,
                     status_code=self.gateway._status_code(exc),
                     failed=True,
@@ -206,6 +218,7 @@ class AsyncTradingGateway:
                         getattr(exc, "retry_after_seconds", None)
                         if isinstance(exc, AdapterError)
                         else self.gateway._retry_after_seconds(exc)),
+                    traffic_class=traffic_class,
                 )
             # Preserve structured metadata if the SDK boundary has already
             # normalized the exception. Re-normalizing an AdapterError would
@@ -234,10 +247,13 @@ class AsyncTradingGateway:
                 retry_after_seconds=detail.retry_after_seconds,
             ) from exc
 
-    async def create(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    async def create(
+        self, payload: Mapping[str, Any], *, reducing: bool = False,
+    ) -> Mapping[str, Any]:
         traffic_class = (
             "safety"
-            if payload.get("tif") == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"
+            if (reducing
+                or payload.get("tif") == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL")
             else "entry")
         response = await self._mutation(
             "POST /v1/orders",
@@ -348,10 +364,20 @@ class LiveOrderExecutor:
                 request.post_only and not request.reducing))
         self.ledger.transition_intent(intent_id, "SUBMITTING", updated_at=now)
         try:
-            response = await self.gateway.create(payload)
+            response = await self.gateway.create(
+                payload, reducing=request.reducing)
             exchange_id = str(response.get("id") or "").strip()
             if not exchange_id:
                 raise AdapterError("create-order response has no exchange order id")
+        except ApiAdmissionDeferred as exc:
+            # The limiter declined this entry before gateway.create performed
+            # any network IO.  FAILED is exact; UNCERTAIN would falsely claim
+            # that an order might exist and unnecessarily quarantine market
+            # state during a background/entry cooldown.
+            self.ledger.transition_intent(
+                intent_id, "FAILED", updated_at=now,
+                error=f"{type(exc).__name__}: {exc}")
+            raise
         except OrderMutationRejected as exc:
             self.ledger.transition_intent(
                 intent_id, "FAILED", updated_at=now,
@@ -398,6 +424,12 @@ class LiveOrderExecutor:
             intent_id, "SUBMITTING", updated_at=now)
         try:
             await self.gateway.cancel(exchange_order_id, market_slug)
+        except ApiAdmissionDeferred as exc:
+            self.ledger.transition_intent(
+                intent_id, "FAILED", updated_at=now,
+                exchange_order_id=exchange_order_id,
+                error=f"{type(exc).__name__}: {exc}")
+            raise
         except OrderMutationRejected as exc:
             self.ledger.transition_intent(
                 intent_id, "FAILED", updated_at=now,

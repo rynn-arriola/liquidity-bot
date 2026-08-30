@@ -27,7 +27,7 @@ try:  # Production runs in WSL; tests/imports remain portable on Windows.
 except ImportError:  # pragma: no cover - exercised only by native Windows
     fcntl = None
 
-from .errors import AdapterError
+from .errors import AdapterError, ApiAdmissionDeferred
 from .models import (
     BookLevel,
     BookSnapshot,
@@ -40,6 +40,7 @@ from .rewards import IncentivePeriod
 
 __all__ = [
     "AdapterError",
+    "ApiAdmissionDeferred",
     "AsyncIntervalLimiter",
     "AsyncReadOnlyGateway",
     "LimiterTelemetry",
@@ -344,6 +345,9 @@ class LimiterTelemetry:
     waiting_now: int
     max_waiting: int
     cooldown_remaining_seconds: float
+    safety_cooldown_remaining_seconds: float
+    entry_cooldown_remaining_seconds: float
+    background_cooldown_remaining_seconds: float
     shared_across_processes: bool
 
 
@@ -404,18 +408,22 @@ class AsyncIntervalLimiter:
     report could therefore add another independent four requests/second on the
     same API key and public IP.  ``shared_state_path`` turns the final claim
     into a small POSIX-file-locked lease, so every cooperating WSL process
-    shares one next-request clock and one confirmed-429 cooldown.
+    shares one next-request clock. Confirmed-429 cooldowns remain scoped to the
+    traffic class that received the response, so discovery pressure cannot
+    suspend a cancel or time-critical exit.
 
-    Background catalog discovery and ordinary maker-entry creation deliberately
-    use half the configured peak rate.  Safety reads, cancels and IOC exits keep
-    the configured rate; protecting them is the reason not to solve Cloudflare
-    pressure by globally slowing every request.
+    Background catalog discovery deliberately uses half the configured peak
+    rate. Maker entry has an independent configured-rate lane, while safety
+    reads, cancels, passive reducers and IOC exits use the safety lane. All
+    classes still consume the same global clock, so their aggregate cannot
+    exceed the configured host rate.
     """
 
     RATE_LIMIT_STREAK_RESET_SECONDS = 60.0
     RATE_LIMIT_BASE_COOLDOWN_SECONDS = 2.0
     RATE_LIMIT_MAX_ADAPTIVE_COOLDOWN_SECONDS = 30.0
     RATE_LIMIT_MAX_COOLDOWN_SECONDS = 60.0
+    RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS = 1.0
     BACKGROUND_MINIMUM_INTERVAL_SECONDS = 0.5
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
 
@@ -438,8 +446,14 @@ class AsyncIntervalLimiter:
             else shared_global_interval_seconds)
         self.shared_state_path = (
             Path(shared_state_path) if shared_state_path is not None else None)
+        if self.shared_state_path is not None and fcntl is None:
+            raise RuntimeError(
+                "shared_state_path requires POSIX flock; authenticated executable "
+                "clients must run inside WSL")
         self._lock = asyncio.Lock()
         self._next_at = 0.0
+        self._next_entry_at = 0.0
+        self._next_background_at = 0.0
         self._telemetry_started_at = time.monotonic()
         self._attempts = 0
         self._read_attempts = 0
@@ -452,9 +466,19 @@ class AsyncIntervalLimiter:
         self._response_samples: deque[float] = deque(maxlen=4096)
         self._waiting = 0
         self._max_waiting = 0
-        self._cooldown_until = 0.0
-        self._rate_limit_streak = 0
-        self._last_rate_limit_at = 0.0
+        self._cooldown_until_by_class = {
+            "safety": 0.0,
+            "entry": 0.0,
+            "background": 0.0,
+        }
+        self._rate_limit_streak_by_class = Counter()
+        self._last_rate_limit_at_by_class = {
+            "safety": 0.0,
+            "entry": 0.0,
+            "background": 0.0,
+        }
+        self._interrupt_generation = 0
+        self._interrupt_event = asyncio.Event()
 
     @classmethod
     def from_rate(
@@ -492,12 +516,23 @@ class AsyncIntervalLimiter:
         chosen = traffic_class or self._traffic_class(operation, request_kind)
         if chosen not in {"background", "entry", "safety"}:
             raise ValueError("traffic_class must be background, entry, or safety")
-        if chosen in {"background", "entry"}:
+        if chosen == "background":
             return max(
                 self.minimum_interval_seconds,
                 self.BACKGROUND_MINIMUM_INTERVAL_SECONDS,
             )
         return self.minimum_interval_seconds
+
+    def traffic_class_for(
+        self, operation: str, request_kind: str,
+        traffic_class: str | None = None,
+    ) -> str:
+        """Return the validated class used by both admission and its result."""
+
+        chosen = traffic_class or self._traffic_class(operation, request_kind)
+        if chosen not in {"background", "entry", "safety"}:
+            raise ValueError("traffic_class must be background, entry, or safety")
+        return chosen
 
     @staticmethod
     def _read_shared_state(handle: Any) -> dict[str, float | int]:
@@ -545,7 +580,8 @@ class AsyncIntervalLimiter:
             return 0.0
         if not math.isfinite(timestamp):
             return 0.0
-        # The longest deadline this class writes is 30 seconds. A larger
+        # The longest background/entry deadline this class writes is 60 seconds.
+        # Safety deadlines are independently bounded to one second. A larger
         # future value can only be stale state after a wall-clock correction
         # or manual/corrupt data; never let it wedge account-safety traffic.
         maximum = (
@@ -561,13 +597,18 @@ class AsyncIntervalLimiter:
 
     @classmethod
     def _cooldown_delay(
-        cls, retry_after_seconds: float | None, streak: int,
+        cls, retry_after_seconds: float | None, streak: int, *,
+        maximum_seconds: float | None = None,
     ) -> float:
+        maximum = (
+            cls.RATE_LIMIT_MAX_COOLDOWN_SECONDS
+            if maximum_seconds is None else max(0.0, float(maximum_seconds)))
         fallback = min(
             cls.RATE_LIMIT_MAX_ADAPTIVE_COOLDOWN_SECONDS,
             cls.RATE_LIMIT_BASE_COOLDOWN_SECONDS
             * (2 ** min(max(0, streak - 1), 4)),
         )
+        fallback = min(maximum, fallback)
         if retry_after_seconds is None:
             return fallback
         try:
@@ -577,55 +618,71 @@ class AsyncIntervalLimiter:
         if not math.isfinite(requested):
             return fallback
         return min(
-            cls.RATE_LIMIT_MAX_COOLDOWN_SECONDS,
+            maximum,
             max(fallback, max(0.0, requested)),
         )
 
-    def _claim_shared_slot(self, interval: float, traffic_class: str) -> None:
+    @staticmethod
+    def _lane_clock_name(traffic_class: str) -> str | None:
+        if traffic_class == "entry":
+            return "next_entry_at"
+        if traffic_class == "background":
+            return "next_background_at"
+        return None
+
+    @staticmethod
+    def _lane_cooldown_name(traffic_class: str) -> str:
+        return f"cooldown_until_{traffic_class}"
+
+    def _claim_shared_slot(
+        self, interval: float, traffic_class: str,
+    ) -> tuple[float, float]:
+        """Try one host claim; return total delay and its cooldown portion."""
+
         path = self.shared_state_path
         if path is None or fcntl is None:
-            return
+            return 0.0, 0.0
         path.parent.mkdir(parents=True, exist_ok=True)
-        while True:
-            delay = 0.0
-            with self._open_shared_state(path) as handle:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    state = self._read_shared_state(handle)
-                    now = time.time()
+        with self._open_shared_state(path) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self._read_shared_state(handle)
+                now = time.time()
+                aggregate_due = self._shared_timestamp(
+                    state.get("next_request_at", 0.0), now,
+                    maximum_future_seconds=(
+                        self.shared_global_interval_seconds))
+                cooldown_due = self._shared_timestamp(
+                    state.get(self._lane_cooldown_name(traffic_class), 0.0),
+                    now,
+                    maximum_future_seconds=(
+                        self.RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS
+                        if traffic_class == "safety" else
+                        self.RATE_LIMIT_MAX_COOLDOWN_SECONDS))
+                due = max(now, aggregate_due, cooldown_due)
+                lane_clock = self._lane_clock_name(traffic_class)
+                if lane_clock is not None:
                     due = max(
-                        now,
+                        due,
                         self._shared_timestamp(
-                            state.get("next_request_at", 0.0), now,
-                            maximum_future_seconds=(
-                                self.shared_global_interval_seconds)),
-                        self._shared_timestamp(
-                            state.get("cooldown_until", 0.0), now),
+                            state.get(lane_clock, 0.0), now,
+                            maximum_future_seconds=interval),
                     )
-                    if traffic_class in {"background", "entry"}:
-                        due = max(
-                            due,
-                            self._shared_timestamp(
-                                state.get("next_background_at", 0.0), now,
-                                maximum_future_seconds=interval),
-                        )
-                    delay = max(0.0, due - now)
-                    if delay == 0.0:
-                        state["next_request_at"] = (
-                            now + self.shared_global_interval_seconds)
-                        if traffic_class in {"background", "entry"}:
-                            state["next_background_at"] = now + interval
-                        self._write_shared_state(handle, state)
-                        return
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            # Never hold the cross-process lock while waiting. In particular,
-            # a 30-second cooldown must not block another process from
-            # publishing a longer Retry-After or let synchronous result
-            # recording freeze the live event loop on flock acquisition.
-            time.sleep(delay)
+                delay = max(0.0, due - now)
+                if delay > 0.0:
+                    return delay, max(0.0, cooldown_due - now)
+                state["next_request_at"] = (
+                    now + self.shared_global_interval_seconds)
+                if lane_clock is not None:
+                    state[lane_clock] = now + interval
+                self._write_shared_state(handle, state)
+                return 0.0, 0.0
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def _register_shared_rate_limit(self, retry_after_seconds: float | None) -> None:
+    def _register_shared_rate_limit(
+        self, retry_after_seconds: float | None, traffic_class: str,
+    ) -> None:
         path = self.shared_state_path
         if path is None or fcntl is None:
             return
@@ -635,11 +692,13 @@ class AsyncIntervalLimiter:
             try:
                 state = self._read_shared_state(handle)
                 now = time.time()
+                last_name = f"last_rate_limit_at_{traffic_class}"
+                streak_name = f"rate_limit_streak_{traffic_class}"
                 last = self._shared_timestamp(
-                    state.get("last_rate_limit_at", 0.0), now)
+                    state.get(last_name, 0.0), now)
                 try:
                     streak = min(
-                        5, max(0, int(state.get("rate_limit_streak", 0))))
+                        5, max(0, int(state.get(streak_name, 0))))
                 except (TypeError, ValueError, OverflowError):
                     streak = 0
                 if (
@@ -648,12 +707,19 @@ class AsyncIntervalLimiter:
                 ):
                     streak = 0
                 streak += 1
-                delay = self._cooldown_delay(retry_after_seconds, streak)
-                state["last_rate_limit_at"] = now
-                state["rate_limit_streak"] = streak
-                state["cooldown_until"] = max(
+                maximum = (
+                    self.RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS
+                    if traffic_class == "safety"
+                    else self.RATE_LIMIT_MAX_COOLDOWN_SECONDS)
+                delay = self._cooldown_delay(
+                    retry_after_seconds, streak, maximum_seconds=maximum)
+                state[last_name] = now
+                state[streak_name] = streak
+                cooldown_name = self._lane_cooldown_name(traffic_class)
+                state[cooldown_name] = max(
                     self._shared_timestamp(
-                        state.get("cooldown_until", 0.0), now),
+                        state.get(cooldown_name, 0.0), now,
+                        maximum_future_seconds=maximum),
                     now + delay,
                 )
                 self._write_shared_state(handle, state)
@@ -669,22 +735,69 @@ class AsyncIntervalLimiter:
         queued_at = time.monotonic()
         self._waiting += 1
         self._max_waiting = max(self._max_waiting, self._waiting)
-        interval = self._request_interval(
+        chosen_class = self.traffic_class_for(
             operation, request_kind, traffic_class)
-        chosen_class = traffic_class or self._traffic_class(
-            operation, request_kind)
+        interval = self._request_interval(
+            operation, request_kind, chosen_class)
+        interrupt_generation = self._interrupt_generation
+        interrupt_event = self._interrupt_event
         try:
-            async with self._lock:
-                if self.shared_state_path is not None and fcntl is not None:
-                    await asyncio.to_thread(
+            while True:
+                if self.shared_state_path is not None:
+                    # The POSIX transaction is already the atomic claim across
+                    # both processes and coroutines. Do not hold the local
+                    # asyncio lock while a worker waits for that file lock.
+                    delay, cooldown_delay = await asyncio.to_thread(
                         self._claim_shared_slot, interval, chosen_class)
                 else:
-                    now = time.monotonic()
-                    due = max(self._next_at, self._cooldown_until)
-                    if now < due:
-                        await asyncio.sleep(due - now)
+                    async with self._lock:
                         now = time.monotonic()
-                    self._next_at = now + interval
+                        lane_due = 0.0
+                        if chosen_class == "entry":
+                            lane_due = self._next_entry_at
+                        elif chosen_class == "background":
+                            lane_due = self._next_background_at
+                        cooldown_due = self._cooldown_until_by_class[chosen_class]
+                        due = max(
+                            now,
+                            self._next_at,
+                            lane_due,
+                            cooldown_due,
+                        )
+                        delay = max(0.0, due - now)
+                        cooldown_delay = max(0.0, cooldown_due - now)
+                        if delay == 0.0:
+                            self._next_at = now + self.shared_global_interval_seconds
+                            if chosen_class == "entry":
+                                self._next_entry_at = now + interval
+                            elif chosen_class == "background":
+                                self._next_background_at = now + interval
+                if self._interrupt_generation != interrupt_generation:
+                    raise asyncio.CancelledError
+                if delay <= 0.0:
+                    break
+                # This runner is intentionally serial.  Sleeping here for a
+                # background/entry 429 cooldown would prevent it from reaching
+                # an unrelated cancel or exit even though safety has its own
+                # healthy lane. Fail before the network call so the caller can
+                # defer this
+                # optional work without inventing an uncertain mutation. Use
+                # the explicit cooldown component rather than total delay:
+                # a deliberately configured sub-1-RPS lane may have ordinary
+                # pacing over one second and must still make progress.
+                if chosen_class != "safety" and cooldown_delay > 1.0:
+                    raise ApiAdmissionDeferred(
+                        f"{chosen_class} API cooldown active; request not sent",
+                        operation=operation,
+                        error_code="LOCAL_API_COOLDOWN",
+                        retry_after_seconds=cooldown_delay,
+                    )
+                try:
+                    await asyncio.wait_for(
+                        interrupt_event.wait(), timeout=delay)
+                except TimeoutError:
+                    continue
+                raise asyncio.CancelledError
         finally:
             self._waiting -= 1
         waited = max(0.0, time.monotonic() - queued_at)
@@ -698,12 +811,51 @@ class AsyncIntervalLimiter:
         ] += 1
         self._wait_samples.append(waited)
 
-    def record_result(
+    def interrupt_waits(self) -> None:
+        """Wake waits that began before an operator stop boundary.
+
+        Future shutdown safety calls capture a fresh event and remain usable.
+        """
+
+        waiting = self._interrupt_event
+        self._interrupt_generation += 1
+        self._interrupt_event = asyncio.Event()
+        waiting.set()
+
+    async def sleep_interruptibly(
+        self, seconds: float,
+        *,
+        sleeper: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    ) -> None:
+        """Wait for read retry backoff while preserving the stop boundary."""
+
+        delay = max(0.0, float(seconds))
+        if delay == 0.0:
+            return
+        generation = self._interrupt_generation
+        interrupt = asyncio.create_task(self._interrupt_event.wait())
+        sleeping = asyncio.ensure_future(sleeper(delay))
+        try:
+            done, _ = await asyncio.wait(
+                (interrupt, sleeping), return_when=asyncio.FIRST_COMPLETED)
+            if (interrupt in done
+                    or self._interrupt_generation != generation):
+                raise asyncio.CancelledError
+            await sleeping
+        finally:
+            for task in (interrupt, sleeping):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(interrupt, sleeping, return_exceptions=True)
+
+    async def record_result(
         self, *, duration_seconds: float, status_code: int | None = None,
         failed: bool = False, retry_after_seconds: float | None = None,
+        traffic_class: str = "safety",
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
+        chosen_class = self.traffic_class_for("", "read", traffic_class)
         duration = max(0.0, float(duration_seconds))
         self._response_samples.append(duration)
         if failed:
@@ -713,14 +865,27 @@ class AsyncIntervalLimiter:
         if status_code == 429:
             self._rate_limited_responses += 1
             now = time.monotonic()
-            if now - self._last_rate_limit_at > self.RATE_LIMIT_STREAK_RESET_SECONDS:
-                self._rate_limit_streak = 0
-            self._rate_limit_streak += 1
-            self._last_rate_limit_at = now
+            if (now - self._last_rate_limit_at_by_class[chosen_class]
+                    > self.RATE_LIMIT_STREAK_RESET_SECONDS):
+                self._rate_limit_streak_by_class[chosen_class] = 0
+            self._rate_limit_streak_by_class[chosen_class] += 1
+            self._last_rate_limit_at_by_class[chosen_class] = now
+            maximum = (
+                self.RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS
+                if chosen_class == "safety"
+                else self.RATE_LIMIT_MAX_COOLDOWN_SECONDS)
             delay = self._cooldown_delay(
-                retry_after_seconds, self._rate_limit_streak)
-            self._cooldown_until = max(self._cooldown_until, now + delay)
-            self._register_shared_rate_limit(retry_after_seconds)
+                retry_after_seconds,
+                self._rate_limit_streak_by_class[chosen_class],
+                maximum_seconds=maximum)
+            self._cooldown_until_by_class[chosen_class] = max(
+                self._cooldown_until_by_class[chosen_class], now + delay)
+            if self.shared_state_path is not None:
+                await asyncio.to_thread(
+                    self._register_shared_rate_limit,
+                    retry_after_seconds,
+                    chosen_class,
+                )
 
     def telemetry(self, *, reset: bool = False) -> LimiterTelemetry:
         """Return local limiter evidence without making an API request."""
@@ -729,6 +894,11 @@ class AsyncIntervalLimiter:
         elapsed = max(0.0, now - self._telemetry_started_at)
         samples = tuple(self._wait_samples)
         responses = tuple(self._response_samples)
+        class_cooldowns = {
+            traffic_class: max(
+                0.0, deadline - now)
+            for traffic_class, deadline in self._cooldown_until_by_class.items()
+        }
         result = LimiterTelemetry(
             elapsed_seconds=elapsed,
             attempts=self._attempts,
@@ -751,8 +921,10 @@ class AsyncIntervalLimiter:
             max_response_seconds=max(responses, default=0.0),
             waiting_now=self._waiting,
             max_waiting=self._max_waiting,
-            cooldown_remaining_seconds=max(
-                0.0, self._cooldown_until - time.monotonic()),
+            cooldown_remaining_seconds=max(class_cooldowns.values(), default=0.0),
+            safety_cooldown_remaining_seconds=class_cooldowns["safety"],
+            entry_cooldown_remaining_seconds=class_cooldowns["entry"],
+            background_cooldown_remaining_seconds=class_cooldowns["background"],
             shared_across_processes=(
                 self.shared_state_path is not None and fcntl is not None),
         )
@@ -783,6 +955,10 @@ def shared_api_limiter(
     cannot silently add another independent request budget beside the bot.
     """
 
+    if fcntl is None:
+        raise RuntimeError(
+            "host-wide API coordination requires POSIX flock; run authenticated "
+            "executable clients inside WSL")
     if state_path is None:
         configured = os.environ.get("LIQUIDITY_BOT_API_LIMITER_STATE", "").strip()
         state_path = configured or (
@@ -938,13 +1114,16 @@ class AsyncReadOnlyGateway:
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
+            traffic_class = (
+                self._traffic_class_override.get()
+                or self.default_traffic_class)
             if isinstance(self.limiter, AsyncIntervalLimiter):
+                traffic_class = self.limiter.traffic_class_for(
+                    operation, "read", traffic_class)
                 await self.limiter.wait(
                     operation=operation,
                     request_kind="read",
-                    traffic_class=(
-                        self._traffic_class_override.get()
-                        or self.default_traffic_class),
+                    traffic_class=traffic_class,
                 )
             else:
                 # Test doubles and externally supplied compatible gates retain
@@ -954,26 +1133,29 @@ class AsyncReadOnlyGateway:
             try:
                 result = await call()
                 if isinstance(self.limiter, AsyncIntervalLimiter):
-                    self.limiter.record_result(
-                        duration_seconds=time.monotonic() - started_at)
+                    await self.limiter.record_result(
+                        duration_seconds=time.monotonic() - started_at,
+                        traffic_class=traffic_class)
                 return result
             except AdapterError as exc:
                 if isinstance(self.limiter, AsyncIntervalLimiter):
-                    self.limiter.record_result(
+                    await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
                         status_code=self._status_code(exc),
                         failed=True,
                         retry_after_seconds=getattr(
                             exc, "retry_after_seconds", None),
+                        traffic_class=traffic_class,
                     )
                 raise
             except Exception as exc:
                 if isinstance(self.limiter, AsyncIntervalLimiter):
-                    self.limiter.record_result(
+                    await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
                         status_code=self._status_code(exc),
                         failed=True,
                         retry_after_seconds=self._retry_after_seconds(exc),
+                        traffic_class=traffic_class,
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text
@@ -981,11 +1163,27 @@ class AsyncReadOnlyGateway:
                 # limit; slowing down in response makes that failure worse.
                 if self._status_code(exc) != 429 or attempt + 1 >= self.retry_attempts:
                     raise self._adapter_error(operation, exc) from exc
+                # A selection/report retry is awaited by its caller and can
+                # therefore serialize the live runner even though its limiter
+                # lock is free. Publish the lane cooldown, then fail promptly;
+                # the caller's normal later cadence is the retry. Safety proof
+                # may retry inline, but never sleeps longer than its own short
+                # lane bound.
+                if (isinstance(self.limiter, AsyncIntervalLimiter)
+                        and traffic_class != "safety"):
+                    raise self._adapter_error(operation, exc) from exc
                 retry_after = self._retry_after_seconds(exc)
                 delay = (self.retry_base_seconds * (2 ** attempt)
                          if retry_after is None else min(
                              retry_after, self.max_retry_after_seconds))
-                await self._sleep(delay)
+                if isinstance(self.limiter, AsyncIntervalLimiter):
+                    delay = min(
+                        delay,
+                        self.limiter.RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS)
+                    await self.limiter.sleep_interruptibly(
+                        delay, sleeper=self._sleep)
+                else:
+                    await self._sleep(delay)
         raise AssertionError("unreachable retry loop")
 
     async def fetch_incentives(

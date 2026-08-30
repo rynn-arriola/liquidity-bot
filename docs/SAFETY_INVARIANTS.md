@@ -599,3 +599,20 @@ These are implementation requirements, not suggestions.
     projected and paid reward surrendered, recent-candidate availability,
     unknown replacement evidence and no-candidate capacity on a frozen
     held-out interval, followed by explicit operator authorization.
+87. Host API admission may slow discovery but may not turn rate-limit recovery
+    into an exit deadline. Every cooperating WSL process consumes one aggregate
+    4/second clock. Background selection/reporting has its own 2/second lane;
+    maker entry and cached revalidation have an independent 4/second entry lane;
+    account proof, cancels, passive reducers and IOC exits use safety. A 429
+    cools only its originating class, safety's own cooldown is at most one
+    second, and no mutation retries. Non-safety reads publish cooldown and fail
+    promptly instead of sleeping inline; later non-safety work with more than
+    one second remaining defers before network IO. A deferred entry is exactly
+    `FAILED`, not uncertain, causes no market quarantine and gates later entry
+    plans for the remaining cooldown before they create another intent. File
+    locking/state IO must run off the event loop and no process or asyncio lock may be held
+    while waiting. The first operator stop interrupts existing admission and
+    read-retry sleeps; a mutation interrupted before network IO must close its
+    durable intent as exact `FAILED`, while later shutdown safety calls remain
+    available. An authenticated executable that cannot join POSIX coordination
+    must fail closed rather than create another host budget.

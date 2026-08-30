@@ -538,7 +538,10 @@ class RewardMarketSelector:
         self, slugs: Iterable[str], *, now: datetime,
     ) -> tuple[RewardMarketOpportunity, ...]:
         scope = getattr(self.gateway, "traffic_class", None)
-        with scope("background") if callable(scope) else nullcontext():
+        # This small cached-candidate refresh exists to restore an empty slot
+        # promptly after flatness. Keep it on the independent entry lane rather
+        # than queueing behind a full-universe background scan.
+        with scope("entry") if callable(scope) else nullcontext():
             return await self._revalidate_viable(slugs, now=now)
 
     async def _revalidate_viable(

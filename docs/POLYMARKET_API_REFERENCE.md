@@ -85,7 +85,7 @@ Last reviewed: **2026-08-30**.
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
 | Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. The isolated hourly RSS monitor establishes a baseline without history spam, alerts only unseen items and retains unseen state after notification failure. | Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. The monitor remains diagnostic and cannot change trading behavior. |
-| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | Cooperating WSL tools share one file-locked laptop-wide gate. Safety reads, cancels and IOC exits retain the configured 4/second peak; catalog discovery, earnings and maker entry use at most 2/second. A confirmed 429 opens the same bounded `Retry-After` cooldown for every cooperating process, never shorter than the 2/4/8/.../30-second adaptive fallback; mutations never auto-retry. Local telemetry is categorized and redacted and adds no request. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. The project's lower class-aware rates are internal admission policy, not a discovered venue limit. An uncooperative external process or another machine on the same key/public IP can still contribute venue load, so software cannot promise that Cloudflare will never emit a first 429. |
+| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | Cooperating WSL tools share one file-locked laptop-wide 4/second aggregate gate. Background discovery/reports have a separate 2/second lane; maker entry/revalidation have an independent 4/second lane; safety reads, cancels, passive reducers and IOC exits use the 4/second safety lane. A confirmed 429 cools only its originating lane: background/entry retain bounded adaptive `Retry-After`, while safety is capped at one second. Mutations never auto-retry. Local telemetry is categorized/redacted and adds no request. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. The project's lower class-aware rates are internal admission policy, not a discovered venue limit. Native Windows has no compatible `fcntl` coordinator, so the shared factory fails closed and authenticated executable clients must run inside WSL. An uncooperative external process or another machine on the same key/public IP can still contribute venue load, so software cannot promise that Cloudflare will never emit a first 429. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. A response-backed 403 fails only its exact intent and opens a one-minute new-entry circuit. Cancels/reducers bypass entry denial; their own rejection gets a 10-second safety circuit. Successful mutations prove recovery only for their scope. Safe status, structured error code and trace/request ID survive adapter boundaries. | Generic advice to retry POST must never override mutation ambiguity safety. Retail code 7 location/VPN denial was observed on 2026-08-28 while public status was operational; it is account-specific evidence, not cancellation, flatness, a permanent ban or permission to restart. Trace IDs are retained on raised errors and logs, not stored as a new durable ledger relation. |
 | Reporting | [Trader guide](https://docs.polymarket.us/trader-guide/reporting), [Retail portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) | Private events plus retained Retail `/v1/portfolio/activities` backfill recent executions; exactly one account leg is selected with `isAggressor`; execution and trade IDs deduplicate independently; trade state is durable; a linked `TRADE_STATE_BUSTED` fill is reversed exactly once and excluded from P&L/basis/counts. | Venue history can be reset and is never negative evidence. Institutional Report Search, Drop Copy and ledger CSV exports are not integrated or assumed available. |
@@ -173,15 +173,16 @@ This is not a 22-slot-only failure: the earlier 20-slot sample also produced
 1015 at a low aggregate average. The source response is therefore admission
 control rather than a smaller hard slot ceiling. Event-driven lifecycle,
 reward-end and post-flat refills may revalidate a complete selection no older
-than 120 seconds; background discovery and ordinary maker entry yield to the
-safety rate; and every audited executable API client cooperates through
+than 120 seconds; background discovery yields to independent entry and safety
+lanes; and every audited executable API client cooperates through
 `data/api-rate-limiter.state`. This includes the live runner, dashboard,
 scheduled and manual reports, probes, census, shadow/scalp measurements,
 accounting, history backfill and repair tools. A source-level architecture test
 rejects any new executable `AsyncReadOnlyGateway` without an explicit limiter.
-A confirmed 429 publishes an adaptive cooldown into the same state before any
-next cooperating request can claim a slot. Cancel and IOC mutations remain
-non-retrying, and all account/risk proof remains fail-closed.
+A confirmed 429 publishes a class-scoped adaptive cooldown into the same state.
+A discovery/report 429 cannot suspend a cancel, passive reducer or IOC exit;
+safety's own cooldown is capped at one second. Mutations remain non-retrying,
+and all account/risk proof remains fail-closed.
 
 The complete local admission architecture is intentionally layered:
 
@@ -189,15 +190,36 @@ The complete local admission architecture is intentionally layered:
    recovery and bounded refresh rather than the primary event transport.
 2. One POSIX-file-locked host gate serializes every cooperating WSL process,
    so adding a dashboard or manual report cannot add an independent budget.
-3. Request context, not endpoint name alone, assigns pace. Bot account proofs,
-   cancels and IOC exits retain the 4/second safety pace. Whole-universe
-   selection—including its per-candidate book reads—maker entry and every
-   observer/report process use the 2/second background pace.
+3. Request context, not endpoint name or TIF alone, assigns pace. Bot account
+   proofs, cancels, passive GTC reducers and IOC exits retain the 4/second
+   safety pace. Maker entry and bounded cached revalidation use an independent
+   4/second entry lane. Whole-universe selection—including its per-candidate
+   book reads—and every observer/report process use the 2/second background
+   lane. All three still consume the single aggregate 4/second clock.
 4. Bulk catalog/incentive/account endpoints, bounded candidate fan-out and the
    120-second revalidation cache remove calls before they reach the queue.
-5. Confirmed 429 evidence applies a shared bounded exponential cooldown;
-   telemetry records queue wait, response latency, category, failure and 429
-   counts without making another diagnostic request.
+5. Confirmed 429 evidence applies a shared, class-scoped bounded cooldown.
+   Background/entry use the adaptive 2/4/8/.../30-second fallback and at most
+   60 seconds of `Retry-After`; those reads fail promptly after publishing the
+   cooldown instead of serializing the live runner through an inline retry.
+   Later non-safety work also defers locally before network IO when more than
+   one second of that cooldown remains. A deferred entry intent is recorded
+   `FAILED`, never `UNCERTAIN`, because no request was sent; the action loop
+   neither reports nor quarantines that market and holds later entry plans
+   behind the remaining local cooldown, avoiding repeated failed intents.
+   Safety is isolated, may retry inline, and is capped at one second. Telemetry
+   records each lane's cooldown plus queue wait, response latency, category,
+   failure and 429 counts without another diagnostic request.
+6. Shared file claims perform only one short locked transaction in a worker;
+   neither the worker nor the per-process asyncio lock sleeps. Shared 429 writes
+   also run off the event loop. The first stop request interrupts an existing
+   limiter or read-retry wait, while subsequent shutdown proof/cancel/exit calls
+   capture a fresh generation and remain available. A mutation interrupted
+   during pre-network admission closes its durable intent as exact `FAILED`;
+   it cannot survive shutdown as a false unresolved/uncertain order.
+7. Native Windows execution fails closed because `fcntl` coordination is absent.
+   Unit tests may inject an isolated limiter, but an authenticated executable
+   must run inside WSL rather than silently acquiring an independent budget.
 
 This architecture makes market count create queue latency instead of an API
 burst; it does not turn an arbitrary slot count into free capacity. In

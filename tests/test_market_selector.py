@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from liquidity_bot.fill_hazard import FillHazardEstimate
@@ -89,6 +90,12 @@ class FakeGateway:
         self.catalog_calls = 0
         self.book_calls = []
         self.incentive_symbol_calls = []
+        self.traffic_classes = []
+
+    @contextmanager
+    def traffic_class(self, value):
+        self.traffic_classes.append(value)
+        yield
 
     async def list_sports_markets(self):
         self.catalog_calls += 1
@@ -373,6 +380,7 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
             gateway.incentive_symbol_calls,
             [("fresh", "closed", "tight")])
         self.assertEqual(gateway.book_calls, ["fresh"])
+        self.assertEqual(gateway.traffic_classes, ["entry"])
 
     async def test_all_reward_programs_are_considered_not_only_high_pool(self):
         markets = {slug: market(slug) for slug in ("high", "low")}

@@ -22,6 +22,15 @@ class AdapterError(RuntimeError):
         super().__init__(message)
 
 
+class ApiAdmissionDeferred(AdapterError):
+    """A local limiter declined work before any network request was sent.
+
+    This is deliberately distinct from an ambiguous remote outcome.  The
+    caller may safely leave the market unchanged and try again after the
+    reported delay; there is no venue-side order to discover or quarantine.
+    """
+
+
 class RuntimeInvariantViolation(RuntimeError):
     """A local ownership, identity, or exact-risk invariant was violated.
 

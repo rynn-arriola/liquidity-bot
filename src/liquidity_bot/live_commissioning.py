@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import signal
 import time
 import socket
@@ -43,7 +44,8 @@ from .commissioning import (
 )
 from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
-from .errors import AdapterError, RuntimeInvariantViolation
+from .errors import (
+    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation)
 from .execution_ledger import ExecutionLedger, LedgerConflict, QuoteObservation
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
@@ -586,7 +588,17 @@ class CommissioningRunner:
         self._eligibility_state: dict[tuple[str, str], tuple[str, datetime]] = {}
 
     def request_stop(self, reason: str = "operator_requested") -> None:
+        first_request = self._stop_requested is None
         self._stop_requested = str(reason or "operator_requested")
+        if first_request:
+            # A shared cooldown used to sleep inside a worker thread for as
+            # long as 60 seconds. SIGTERM could set this flag but the run loop
+            # could not reach shutdown until that sleep ended. Interrupt only
+            # waits that already began; shutdown captures a fresh generation
+            # and retains full access to cancels, proof reads and IOC exits.
+            interrupt = getattr(self.gateway.limiter, "interrupt_waits", None)
+            if callable(interrupt):
+                interrupt()
 
     @property
     def active_slugs(self) -> tuple[str, ...]:
@@ -3521,6 +3533,9 @@ class CommissioningRunner:
             f"waiting={evidence.waiting_now} "
             f"max_waiting={evidence.max_waiting} "
             f"cooldown={evidence.cooldown_remaining_seconds:.1f} "
+            f"cooldown_safety={evidence.safety_cooldown_remaining_seconds:.1f} "
+            f"cooldown_entry={evidence.entry_cooldown_remaining_seconds:.1f} "
+            f"cooldown_background={evidence.background_cooldown_remaining_seconds:.1f} "
             f"shared={int(evidence.shared_across_processes)} "
             f"categories={categories}",
             flush=True,
@@ -3684,12 +3699,13 @@ class CommissioningRunner:
             if risk_reducing else self._entry_mutation_blocked_until)
         if blocked_until is None:
             return
-        print(
-            f"[mutation-access-restored] at={self._now().isoformat()} "
-            f"kind={action.kind.name} "
-            f"scope={'risk' if risk_reducing else 'entry'}",
-            flush=True,
-        )
+        if self._mutation_access_denial_announced:
+            print(
+                f"[mutation-access-restored] at={self._now().isoformat()} "
+                f"kind={action.kind.name} "
+                f"scope={'risk' if risk_reducing else 'entry'}",
+                flush=True,
+            )
         if risk_reducing:
             self._risk_mutation_blocked_until = None
         else:
@@ -6514,6 +6530,26 @@ class CommissioningRunner:
     ) -> str | None:
         """Retry ambiguous remote outcomes; terminate local invariant failures."""
 
+        if isinstance(exc, ApiAdmissionDeferred):
+            # No request crossed the network boundary.  The existing desired
+            # state remains authoritative. Apply the same account-wide entry
+            # admission circuit before later plans reach durable intent
+            # creation; otherwise every market pass would create another exact
+            # FAILED row during one shared cooldown. Reporting or quarantining
+            # here would turn harmless backpressure into order churn.
+            if exc.error_code != "LOCAL_API_INTERRUPTED":
+                try:
+                    delay = float(exc.retry_after_seconds or 1.0)
+                except (TypeError, ValueError, OverflowError):
+                    delay = 1.0
+                if not math.isfinite(delay):
+                    delay = 1.0
+                deferred_until = self._now() + timedelta(
+                    seconds=min(max(delay, 1.0), 60.0))
+                if (self._entry_mutation_blocked_until is None
+                        or self._entry_mutation_blocked_until < deferred_until):
+                    self._entry_mutation_blocked_until = deferred_until
+            return None
         if isinstance(exc, OrderMutationRejected):
             await self._report_runtime_error(
                 "mutation_access_denied", exc, include_traceback=False)
@@ -7333,7 +7369,7 @@ class CommissioningRunner:
                     await self._send_summary(now)
                     next_summary = now + timedelta(minutes=5)
         except asyncio.CancelledError:
-            stop_reason = "process_cancelled"
+            stop_reason = self._stop_requested or "process_cancelled"
         except Exception as exc:
             stop_reason = f"runner_failure:{type(exc).__name__}"
             # Say WHERE. This alert used to carry the exception type alone, so

@@ -132,19 +132,27 @@ exits remain active; the third consecutive day is terminal.
 
 Every cooperating WSL API client uses `data/api-rate-limiter.state`, so the
 runner, dashboard and scheduled reports cannot each spend an independent REST
-allowance on the same laptop. The configured 4/second rate is reserved for
-account safety reads, cancellations and IOC exits. Catalog discovery, earnings
-and post-only maker creation are paced at no more than 2/second. Selection runs
-inside an explicit background request context, so its book reads do not become
-safety traffic merely because live exit pricing uses the same endpoint. Every
-manual/reporting entrypoint is background-class and an architecture test
-refuses a new executable gateway that omits an explicit limiter. Any confirmed
-HTTP 429 publishes a shared bounded exponential cooldown before another local
-client can claim a request slot. The cooldown never authorizes a mutation
-retry. Event-driven lifecycle, reward-end and post-flat top-ups first attempt
-bounded revalidation of a complete selection no older than 120 seconds, which
-avoids repeating catalog discovery immediately before the stream-handoff
-positions proof.
+allowance on the same laptop. All lanes consume one aggregate 4/second clock.
+Account safety reads, cancellations, passive reducers and IOC exits use the
+safety lane; maker entry and cached top-up revalidation use an independent
+4/second entry lane; catalog discovery, earnings and reports use a 2/second
+background lane. A 429 cools only its originating lane, with safety capped at
+one second, and never authorizes a mutation retry. Background/entry reads fail
+promptly after publishing cooldown rather than sleeping inline; only safety
+reads may retry inline within their short bound. Later background/entry work
+with more than one second of cooldown remaining defers before network IO;
+deferred entry intents are exact `FAILED` records and do not quarantine orders.
+The remaining cooldown also gates later entry plans before another intent is
+created, so one cooldown cannot churn the ledger across every market pass.
+File locking and state writes run off the event loop, no limiter lock sleeps,
+and a first stop request wakes an existing limiter/read-retry wait while leaving
+later shutdown calls usable. A mutation interrupted during pre-network
+admission is durably `FAILED`, never left submitting or uncertain.
+Native Windows authenticated execution fails closed because it cannot join the
+POSIX lock. Every executable gateway still requires an explicit limiter.
+Event-driven lifecycle, reward-end and post-flat top-ups first attempt bounded
+revalidation of a complete selection no older than 120 seconds, avoiding a new
+catalog scan immediately before stream-handoff position proof.
 
 Structured entry rejections are also scoped rather than terminal: expected
 post-only races wait one second in that market, balance/risk failures wait 15

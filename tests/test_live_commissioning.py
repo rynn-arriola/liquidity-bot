@@ -23,7 +23,8 @@ from liquidity_bot.commissioning import (
     CommissioningUnavailable,
 )
 from liquidity_bot.discord_summary import GRAY, RED
-from liquidity_bot.errors import AdapterError, RuntimeInvariantViolation
+from liquidity_bot.errors import (
+    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation)
 from liquidity_bot.execution_ledger import (
     Execution, ExecutionLedger, LedgerConflict, OrderState, PositionState,
     TradeStateObservation)
@@ -1004,6 +1005,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome, "operator_sigterm")
         self.assertEqual(planned, ["market-one"])
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_first_operator_stop_interrupts_existing_api_wait_once(self):
+        runner, _, _ = self.build_runner()
+
+        class InterruptibleLimiter(ImmediateLimiter):
+            def __init__(self):
+                self.interruptions = 0
+
+            def interrupt_waits(self):
+                self.interruptions += 1
+
+        limiter = InterruptibleLimiter()
+        runner.gateway.limiter = limiter
+
+        runner.request_stop("operator_sigterm")
+        runner.request_stop("operator_sigterm_again")
+
+        self.assertEqual(limiter.interruptions, 1)
+        self.assertEqual(runner._stop_requested, "operator_sigterm_again")
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7329,6 +7351,62 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         # Genuine transport failure still retires quotes before resuming.
         self.assertIsNone(stop)
+
+    async def test_local_api_admission_deferral_does_not_report_or_quarantine(self):
+        runner, _, _ = self.build_runner()
+        runner._report_runtime_error = AsyncMock()
+        runner._quarantine_working_orders = AsyncMock()
+
+        stop = await runner._handle_action_failure(
+            ApiAdmissionDeferred(
+                "entry API cooldown active; request not sent",
+                operation="POST /v1/orders",
+                error_code="LOCAL_API_COOLDOWN",
+                retry_after_seconds=30.0,
+            ),
+            runner.market_slug,
+        )
+
+        self.assertIsNone(stop)
+        self.assertEqual(
+            runner._entry_mutation_blocked_until, NOW + timedelta(seconds=30))
+        self.assertEqual(
+            runner._mutation_access_delay([PlanAction(
+                ActionKind.PLACE_POST_ONLY, runner.market_slug, "entry",
+                side="bid", price=.49, qty=Decimal("1"))], NOW,
+                position=Decimal("0")),
+            30.0,
+        )
+        self.assertEqual(
+            runner._mutation_access_delay([PlanAction(
+                ActionKind.CANCEL, runner.market_slug, "safety",
+                order_id="exchange-one")], NOW, position=Decimal("0")),
+            0.0,
+        )
+        runner._report_runtime_error.assert_not_awaited()
+        runner._quarantine_working_orders.assert_not_awaited()
+
+    async def test_operator_interrupted_admission_does_not_open_entry_circuit(self):
+        runner, _, _ = self.build_runner()
+        runner._report_runtime_error = AsyncMock()
+        runner._quarantine_working_orders = AsyncMock()
+
+        stop = await runner._handle_action_failure(
+            ApiAdmissionDeferred(
+                "cancel admission interrupted; request not sent",
+                operation="POST /v1/order/exchange-one/cancel",
+                error_code="LOCAL_API_INTERRUPTED",
+                retry_after_seconds=0.0,
+            ),
+            runner.market_slug,
+            risk_reducing=True,
+        )
+
+        self.assertIsNone(stop)
+        self.assertIsNone(runner._entry_mutation_blocked_until)
+        self.assertIsNone(runner._risk_mutation_blocked_until)
+        runner._report_runtime_error.assert_not_awaited()
+        runner._quarantine_working_orders.assert_not_awaited()
 
     async def test_permission_rejection_blocks_entry_but_not_risk_reduction(self):
         runner, _, notifier = self.build_runner()

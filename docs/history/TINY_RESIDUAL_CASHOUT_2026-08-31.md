@@ -64,6 +64,8 @@ clock can let a few cents retain an entire market slot for most or all of the
 - The complete Windows discovery ran 961 tests; its only four errors were the
   already-intentional POSIX-lock refusal for retired shadow/scalp constructors
   on native Windows. No trading, reconciliation or scheduler test failed.
+- After deployment to the laptop checkout, all 961 tests passed in its WSL
+  virtual environment.
 - Boundary reversal: changing `>= 300` to `> 300` made the exact-five-minute
   regression fail.
 - Alignment reversal: removing the venue-alignment requirement made the
@@ -72,6 +74,8 @@ clock can let a few cents retain an entire market slot for most or all of the
 
 ## Deployment state
 
-The source and tests are reviewed locally. They have not been pushed, deployed
-or loaded by a restart. The sole live laptop runner remains on its prior
-deployed version until the operator separately authorizes deployment/restart.
+Source commit `6c5ea49` is pushed and staged in laptop checkout HEAD `3ae1c69`.
+The operator explicitly withheld restart authorization: supervisor PID 937731
+and runner PID 937743 remained unchanged, and `DEPLOYED_COMMIT` truthfully
+remains `31c2574`. The feature is therefore available for the next separately
+authorized restart but is not active in the current process.

@@ -2,7 +2,7 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Capital guidance prepared for next restart:** reviewed code adds a
+- **Capital guidance staged at `5851370` for next restart:** reviewed code adds a
   read-only Discord card using the existing balance snapshot and no extra API
   calls. At the selected size 13 / 22 slots it keeps $286 slot footprint,
   $104 exposure cushion and $728 seven-day reward-delay runway: $1,118
@@ -11,11 +11,11 @@ Only current operational facts belong here; [historical snapshots](docs/history/
   unavailable. The currently running bot was not stopped or restarted for
   this build; activation remains explicitly pending the next authorized
   restart. [Evidence](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md)
-- **Verified:** 2026-08-31 00:33 ET / 2026-08-31 04:33 UTC
-- **Liquidity bot:** LIVE on the laptop as exactly one size-13/22-slot supervisor PID 645708 and runner PID 645718; dashboard PID 614753 remains active and read-only. A fresh authenticated start gate proved zero venue orders, zero positions and zero unresolved intents. One transient market-WebSocket HTTP 503 kept startup fail-closed, then the built-in retry recovered without operator intervention. At 04:32Z the venue reported 41 live orders across 21 markets and zero nonzero-position markets
+- **Verified:** 2026-08-31 11:14 ET / 2026-08-31 15:14 UTC
+- **Liquidity bot:** LIVE on the laptop as exactly one size-13/22-slot supervisor PID 837439 and runner PID 837452, both unchanged throughout the capital-guidance build/deploy; no stop or restart occurred
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Stop/restart proof:** the first updated-code restart attempt stopped gracefully at 19:25:08Z but correctly remained stopped because two authenticated snapshots proved four positions/four reducers. `Command 1` reused the completed review/deploy evidence, and a fresh 19:30Z authenticated snapshot proved zero positions, zero resting orders, zero unresolved/`UNKNOWN_ABSENT` rows and unblocked rotation. Exactly one new supervisor/runner pair was started; no force-kill, flatten or extra start occurred
-- **Deployed source:** WSL checkout and `DEPLOYED_COMMIT` are `3120a631`; that exact checkout passed 363 focused tests and all 937 tests in 67.043 seconds after the deliberate rollover reversal reproduced the live defect. Windows, GitHub, WSL and deployed source matched before restart
+- **Source state:** PC, laptop Windows, GitHub and the laptop WSL checkout are `5851370`; the unchanged live process still reports loaded marker `3120a631`. The capital build passed all 947 tests in a separate Ubuntu/WSL checkout and 57 focused tests from the staged runtime checkout. This intentional loaded/check-out difference remains until the next authorized restart
 - **Account P&L repair active:** Discord, dashboard and the HARD guard now use cash plus every open position's `cashValue`, less proven non-trading cash. The accepted live cache reported marked trading `-$24.2568` = closed `-$24.2568` + open mark `$0`, with no reward/deposit included. [Evidence](docs/history/ACCOUNT_MARKED_PNL_2026-08-30.md)
 - **Business-logic repair active:** canonical LONG/YES-frame accounting exactly replays the 2026-08-29 settled-cash change at `-$79.4465`; owned taker-exit budgets and entry/exit summaries use durable order roles. Three reversals passed. The 900-second timeout remains unchanged because the available replay favored 900 seconds and had only 29.2% stream coverage. [Evidence](docs/history/BUSINESS_LOGIC_AUDIT_2026-08-30.md)
 - **Daily fee pause / ET rollover:** the count remains `4 × quote size` (52 at size 13), and the scalable `$9.75` ET-day pause correctly reconstructed the prior day's `$9.9600` and blocked entry without killing the process. `3120a631` repaired the baseline/cash ordering cycle: live acceptance created the 2026-08-31 baseline at 04:31:45Z, then reconciled 40 PLACE intents and reported 41 live orders, zero positions and an API window with 589 reads, 41 creates, zero failures and zero 429s. [Evidence](docs/history/TAKER_EXIT_SCALING_2026-08-30.md) · [fee-pause change](docs/history/DAILY_EXECUTION_FEE_PAUSE_2026-08-30.md)

@@ -111,3 +111,28 @@ rows. All 360 focused commissioning/live-runner tests passed, then the complete
 934-test suite passed. A deliberate reversal to the prior formula failed the
 permanent size-13 assertion with `$6.00 != $9.75`, proving that the scalable
 calibration is regression-sensitive.
+
+## First ET-rollover acceptance and repair
+
+The restarted `de6a8d89` runner correctly reconstructed the prior day's
+`$9.9600` against the scalable `$9.75` cap and placed no order before midnight.
+At the 04:00Z ET rollover it cleared the fee latch and completed a fresh
+92-viable-market selection, but still created no PLACE intent. The durable
+ledger had no 2026-08-31 risk-day baseline. One 71.4-second API window then
+recorded 190 read attempts, 13 confirmed 429s and zero mutations, dominated by
+78 balance, 26 cash-history and 27 position reads.
+
+The exact live traceback identified the cycle: `_refresh_balance` scanned cash
+activity while `_baseline_day` still named 2026-08-30, then its mandatory
+day-equality check rejected 2026-08-31. Every retry repeated the same reads and
+could never reach `_roll_realized_baseline`. The runner stayed fail-closed, but
+could neither resume entry nor complete its balance-dependent shutdown proof.
+
+The repair takes one fresh raw equity snapshot, rolls the durable ET-day marks,
+then scans cash activity from that new baseline boundary. Entry has an
+independent gate requiring non-trading-cash evidence tagged to the current ET
+day, so a failure between those stages cannot authorize risk. The new live
+rollover regression passes; deliberately removing the early roll reproduces
+the exact `ET risk day changed during non-trading activity snapshot` error.
+All 363 focused tests and the complete 937-test suite pass on the edited
+checkout.

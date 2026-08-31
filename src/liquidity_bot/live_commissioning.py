@@ -2513,6 +2513,8 @@ class CommissioningRunner:
             and self.risk_guard.can_add_new_risk(now=now)
             and self._provisional_hard_stop_at is None
             and self._baseline_day == today
+            and self._nontrading_cash is not None
+            and self._nontrading_cash_day == today
             and self._execution_fee_pause_day != today.isoformat()
         )
         eligible = state.reward_eligible
@@ -2734,6 +2736,32 @@ class CommissioningRunner:
         snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
 
         observed_at = self._now()
+        today = date.fromisoformat(risk_day(observed_at))
+        if self._baseline_day != today:
+            snapshot_day = date.fromisoformat(risk_day(snapshot.observed_at))
+            if snapshot_day != today:
+                # The bracketed account read itself crossed midnight. It is
+                # not a defensible opening mark for either side of the
+                # boundary; leave entry blocked and take another snapshot.
+                return
+            # Roll the durable ET-day marks before asking cash history to
+            # classify activity. The scan is bounded by the baseline's cash
+            # boundary and verifies that the current risk day matches
+            # ``_baseline_day``. The opposite order deadlocks at midnight:
+            # yesterday remains active, the check fails, and balance/cash
+            # reads retry forever while entry stays blocked.
+            #
+            # Publish only the raw candidate needed to create the baseline;
+            # ``_frame`` separately requires a current-day cash adjustment,
+            # so entry remains fail-closed until the work below succeeds.
+            self._equity_snapshot = snapshot
+            self.balance = snapshot.balance
+            self._roll_realized_baseline()
+            if self._baseline_day != today:
+                # A provisional hard-stop cohort deliberately preserves the
+                # breached day's baseline across midnight. Do not amplify that
+                # state into a cash-history loop against yesterday's boundary.
+                return
         adjustment_due = (
             self._nontrading_cash is None
             or self._nontrading_cash_observed_at is None

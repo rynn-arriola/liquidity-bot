@@ -289,6 +289,17 @@ returned to 150 attempts (`1.873/s`) with zero failures/429s. Thus recovery can
 approach the project's 3/s comfort budget even when steady state remains well
 below it; canary decisions must include recovery bursts, not only quiet means.
 
+The 2026-08-31 ET-midnight acceptance exposed an application retry amplifier,
+not a higher slot demand or a newly discovered venue ceiling. The runner tried
+to refresh non-trading cash while its durable baseline still named the prior
+ET day. Its own day-equality check rejected every otherwise complete snapshot,
+entry remained fail-closed and one 71.4-second window made 190 read attempts:
+78 balance, 26 cash-history and 27 position reads, with 13 confirmed 429s and
+zero mutations. The repair advances the durable day from one fresh raw account
+mark before the dependent cash scan, then requires same-day cash proof plus a
+fresh adjusted mark before entry. This removes the retry loop; it does not
+raise any limiter lane, add an endpoint or reinterpret 429 as venue ambiguity.
+
 The offline capacity model deliberately uses more conservative mutation input
 than that action-line rate and preserves 25% of the internal 4/s governor:
 

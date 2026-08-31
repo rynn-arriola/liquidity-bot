@@ -626,3 +626,11 @@ These are implementation requirements, not suggestions.
     durable intent as exact `FAILED`, while later shutdown safety calls remain
     available. An authenticated executable that cannot join POSIX coordination
     must fail closed rather than create another host budget.
+88. ET-day rollover must establish its durable opening mark before scanning
+    non-trading cash whose boundary and day-equality proof depend on that mark.
+    A raw balance/position candidate may be published only to create the new
+    baseline; it cannot authorize entry. New risk additionally requires a
+    complete non-trading-cash adjustment explicitly tagged to the same current
+    ET day and the final fresh adjusted-equity observation. A cash-history
+    failure therefore leaves entry blocked without retrying against yesterday's
+    boundary or allowing stale prior-day cash evidence to cross midnight.

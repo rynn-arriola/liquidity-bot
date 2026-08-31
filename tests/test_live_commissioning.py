@@ -4266,6 +4266,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.risk_guard.adopt_day_baseline(Decimal("1000"))
         runner.risk_guard.observe_equity(
             Decimal("1000"), observed_at=next_day)
+        runner._nontrading_cash = Decimal("0")
+        runner._nontrading_cash_observed_at = next_day
+        runner._nontrading_cash_day = runner._baseline_day
         self.assertTrue(runner._frame(next_day).new_risk_allowed)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -4530,6 +4533,74 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [r["risk_date"] for r in rows],
             ["2026-08-13", "2026-08-14"])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_balance_refresh_rolls_et_day_before_cash_activity_scan(self):
+        """Midnight must not deadlock baseline and cash-history freshness."""
+
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        tomorrow = NOW + timedelta(days=1)
+        runner.clock = lambda: tomorrow
+        # Force the same adjustment path that production reached at midnight.
+        # Before the rollover repair it compared tomorrow against yesterday's
+        # baseline, raised, and retried read-only balance/cash calls forever.
+        runner._nontrading_cash_observed_at = None
+
+        await runner._refresh_balance(tomorrow)
+
+        expected_day = date.fromisoformat(risk_day(tomorrow))
+        self.assertEqual(runner._baseline_day, expected_day)
+        self.assertEqual(runner._nontrading_cash_day, expected_day)
+        self.assertTrue(runner._frame(tomorrow).new_risk_allowed)
+        rows = runner.ledger.query(
+            "SELECT risk_date FROM execution_risk_day_baselines "
+            "ORDER BY risk_date")
+        self.assertEqual(
+            [row["risk_date"] for row in rows],
+            [risk_day(NOW), risk_day(tomorrow)])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_cross_midnight_snapshot_cannot_stamp_new_day_baseline(self):
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        tomorrow = NOW + timedelta(days=1)
+        runner.clock = lambda: tomorrow
+
+        # The supplied observation belongs to yesterday even though the API
+        # call completed after rollover. A later same-day snapshot must be the
+        # one allowed to establish today's permanent opening mark.
+        await runner._refresh_balance(NOW)
+
+        self.assertEqual(runner._baseline_day.isoformat(), risk_day(NOW))
+        self.assertFalse(runner._frame(tomorrow).new_risk_allowed)
+        rows = runner.ledger.query(
+            "SELECT risk_date FROM execution_risk_day_baselines "
+            "ORDER BY risk_date")
+        self.assertEqual([row["risk_date"] for row in rows], [risk_day(NOW)])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_new_day_cash_failure_keeps_entry_blocked(self):
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        tomorrow = NOW + timedelta(days=1)
+        runner.clock = lambda: tomorrow
+        runner._nontrading_cash_observed_at = None
+
+        with patch(
+                "liquidity_bot.live_commissioning.fetch_nontrading_cash",
+                new=AsyncMock(side_effect=AdapterError("cash unavailable"))):
+            with self.assertRaisesRegex(AdapterError, "cash unavailable"):
+                await runner._refresh_balance(tomorrow)
+
+        expected_day = date.fromisoformat(risk_day(tomorrow))
+        self.assertEqual(runner._baseline_day, expected_day)
+        self.assertIsNone(runner._nontrading_cash)
+        self.assertIsNone(runner._nontrading_cash_day)
+        self.assertFalse(runner._frame(tomorrow).new_risk_allowed)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

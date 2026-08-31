@@ -1,0 +1,87 @@
+import unittest
+from decimal import Decimal
+
+from liquidity_bot.capital_guidance import calculate_capital_guidance
+
+
+class CapitalGuidanceTests(unittest.TestCase):
+    def guidance(self, **overrides):
+        values = {
+            "quote_size": Decimal("13"),
+            "slot_capacity": 22,
+            "portfolio_exposure_cap_usd": Decimal("390"),
+            "weekly_reserve_usd": Decimal("728"),
+            "settled_cash_usd": Decimal("1300"),
+            "buying_power_usd": Decimal("1200"),
+            "state_proven": True,
+        }
+        values.update(overrides)
+        return calculate_capital_guidance(**values)
+
+    def test_size_13_and_22_slots_preserve_existing_portfolio_cushion(self):
+        result = self.guidance()
+
+        self.assertEqual(result.slot_footprint_usd, Decimal("286"))
+        self.assertEqual(result.cushion_usd, Decimal("104"))
+        self.assertEqual(result.weekly_reserve_usd, Decimal("728"))
+        self.assertEqual(result.comfortable_balance_usd, Decimal("1118"))
+        self.assertEqual(result.free_to_withdraw_usd, Decimal("182.00"))
+
+    def test_buying_power_caps_cash_that_is_actually_free(self):
+        result = self.guidance(buying_power_usd=Decimal("75.12"))
+
+        self.assertEqual(result.free_to_withdraw_usd, Decimal("75.12"))
+
+    def test_balance_below_comfortable_never_suggests_a_withdrawal(self):
+        result = self.guidance(
+            settled_cash_usd=Decimal("1000"), buying_power_usd=Decimal("1000"))
+
+        self.assertEqual(result.free_to_withdraw_usd, Decimal("0.00"))
+
+    def test_withdrawal_is_rounded_down_never_up(self):
+        result = self.guidance(
+            settled_cash_usd=Decimal("1228.009"),
+            buying_power_usd=Decimal("1228.009"))
+
+        self.assertEqual(result.free_to_withdraw_usd, Decimal("110.00"))
+
+    def test_unproven_or_invalid_account_state_fails_closed(self):
+        unresolved = self.guidance(
+            state_proven=False, unavailable_reason="unknown orders")
+        invalid = self.guidance(settled_cash_usd=Decimal("NaN"))
+
+        self.assertIsNone(unresolved.free_to_withdraw_usd)
+        self.assertEqual(unresolved.unavailable_reason, "unknown orders")
+        self.assertIsNone(invalid.free_to_withdraw_usd)
+        self.assertEqual(invalid.unavailable_reason, "balance evidence is invalid")
+
+    def test_missing_evidence_fails_closed_but_proven_zero_is_zero(self):
+        missing = self.guidance(settled_cash_usd=None)
+        zero = self.guidance(
+            settled_cash_usd=Decimal("0"), buying_power_usd=Decimal("0"))
+
+        self.assertIsNone(missing.free_to_withdraw_usd)
+        self.assertEqual(
+            missing.unavailable_reason, "balance evidence is unavailable")
+        self.assertEqual(zero.free_to_withdraw_usd, Decimal("0.00"))
+
+    def test_footprint_is_never_underfunded_if_configuration_drifts(self):
+        result = self.guidance(
+            slot_capacity=31, portfolio_exposure_cap_usd=Decimal("390"))
+
+        self.assertEqual(result.slot_footprint_usd, Decimal("403"))
+        self.assertEqual(result.comfortable_balance_usd, Decimal("1131"))
+        self.assertEqual(result.cushion_usd, Decimal("0"))
+
+    def test_static_configuration_is_strictly_validated(self):
+        for changes in (
+                {"quote_size": 0}, {"slot_capacity": 0},
+                {"slot_capacity": True},
+                {"portfolio_exposure_cap_usd": 0},
+                {"weekly_reserve_usd": -1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.guidance(**changes)
+
+
+if __name__ == "__main__":
+    unittest.main()

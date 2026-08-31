@@ -57,6 +57,8 @@ class CommissioningTests(unittest.TestCase):
             str(self.authorized().max_market_exposure_usd), "45")
         self.assertEqual(
             str(self.authorized().max_portfolio_exposure_usd), "150")
+        self.assertEqual(
+            str(self.authorized().weekly_operating_reserve_usd), "280")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
         self.assertEqual(self.authorized().max_hard_exit_retry_seconds, 30)
         self.assertEqual(
@@ -201,6 +203,9 @@ class CommissioningTests(unittest.TestCase):
                     config.max_session_loss_usd, Decimal(size) * Decimal("8"))
                 self.assertEqual(
                     config.hard_stop_loss_usd, Decimal(size) * Decimal("8"))
+                self.assertEqual(
+                    config.weekly_operating_reserve_usd,
+                    Decimal(size) * Decimal("56"))
 
     def test_live_size_thirteen_allows_fifty_two_taker_exits(self):
         config = self.authorized(quote_size=Decimal("13"))

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from .bot_era import BOT_ERA_START_DATE
+from .capital_guidance import calculate_capital_guidance
 from typing import Any
 
 
@@ -132,6 +133,16 @@ class LiquiditySummary:
     # a cancel and its re-place. Not a fault, and counting it as one made the
     # alarm fire on ordinary churn.
     cycling_markets: int = 0
+    # Read-only operating-capital guidance. These are existing runner values,
+    # not additional venue reads. A zero quote size is the compatibility
+    # sentinel for shadow and older callers, which omit the capital card.
+    quote_size: Decimal = Decimal("0")
+    portfolio_exposure_cap_usd: Decimal = Decimal("0")
+    weekly_reserve_usd: Decimal = Decimal("0")
+    settled_cash_usd: Decimal | None = None
+    buying_power_usd: Decimal | None = None
+    capital_state_proven: bool = False
+    capital_unavailable_reason: str | None = None
     pnl_label: str = "trading"
     rest_requests_per_second: float = 0.0
     market_stream_age_seconds: float | None = None
@@ -181,7 +192,9 @@ class LiquiditySummary:
                 self.attributable_paid_rewards_usd, self.pending_rewards_usd,
                 self.session_loss_limit_usd, self.hard_stop_loss_usd,
                 self.session_realized_pnl_usd,
-                self.worst_market_realized_pnl_usd):
+                self.worst_market_realized_pnl_usd,
+                self.quote_size, self.portfolio_exposure_cap_usd,
+                self.weekly_reserve_usd):
             _money(value)
         for value in (
                 self.today_realized_pnl_usd,
@@ -454,6 +467,39 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     reward_text = (_row("PAID attributed", f"{float(paid):,.2f}")
                    + _row("Pending", f"{float(pending):,.2f}"))
 
+    capital_text = ""
+    if summary.quote_size > 0 and summary.slot_capacity > 0:
+        guidance = calculate_capital_guidance(
+            quote_size=summary.quote_size,
+            slot_capacity=summary.slot_capacity,
+            portfolio_exposure_cap_usd=summary.portfolio_exposure_cap_usd,
+            weekly_reserve_usd=summary.weekly_reserve_usd,
+            settled_cash_usd=summary.settled_cash_usd,
+            buying_power_usd=summary.buying_power_usd,
+            state_proven=summary.capital_state_proven,
+            unavailable_reason=summary.capital_unavailable_reason,
+        )
+        capital_text = (
+            _row("Contracts / slots",
+                 f"{guidance.quote_size:g} / {guidance.slot_capacity}")
+            + _row("Slot footprint",
+                   f"${guidance.slot_footprint_usd:,.2f}")
+            + _row("Safety cushion", f"${guidance.cushion_usd:,.2f}")
+            + _row("Weekly reserve", f"${guidance.weekly_reserve_usd:,.2f}")
+            + _row("Comfortable", f"${guidance.comfortable_balance_usd:,.2f}")
+            + _row("Settled cash",
+                   f"${guidance.settled_cash_usd:,.2f}"
+                   if guidance.settled_cash_usd is not None else "UNKNOWN")
+            + _row("Buying power",
+                   f"${guidance.buying_power_usd:,.2f}"
+                   if guidance.buying_power_usd is not None else "UNKNOWN")
+            + _row("Free to withdraw",
+                   f"${guidance.free_to_withdraw_usd:,.2f}"
+                   if guidance.free_to_withdraw_usd is not None
+                   else "UNAVAILABLE"))
+        if guidance.unavailable_reason:
+            capital_text += f"  {guidance.unavailable_reason[:45]}\n"
+
     fence = "```text\n"
     fields = [
         {"name": "\U0001f6e0️ Health", "inline": True,
@@ -465,6 +511,11 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         {"name": "\U0001f381 Rewards", "inline": False,
          "value": fence + reward_text + "```"},
     ]
+    if capital_text:
+        fields.append({
+            "name": "💵 Capital guidance · read only", "inline": False,
+            "value": fence + capital_text + "```",
+        })
     return {"embeds": [{
         "title": (f"{icon} Liquidity Bot — {summary.mode.replace('_', ' ')} "
                   f"— {summary.readiness_status}"),

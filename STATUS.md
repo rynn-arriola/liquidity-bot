@@ -2,6 +2,15 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
+- **Capital guidance prepared for next restart:** reviewed code adds a
+  read-only Discord card using the existing balance snapshot and no extra API
+  calls. At the selected size 13 / 22 slots it keeps $286 slot footprint,
+  $104 exposure cushion and $728 seven-day reward-delay runway: $1,118
+  comfortable balance. Pending rewards are excluded, free-to-withdraw is
+  capped by both settled cash and buying power, and uncertain state displays
+  unavailable. The currently running bot was not stopped or restarted for
+  this build; activation remains explicitly pending the next authorized
+  restart. [Evidence](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md)
 - **Verified:** 2026-08-31 00:33 ET / 2026-08-31 04:33 UTC
 - **Liquidity bot:** LIVE on the laptop as exactly one size-13/22-slot supervisor PID 645708 and runner PID 645718; dashboard PID 614753 remains active and read-only. A fresh authenticated start gate proved zero venue orders, zero positions and zero unresolved intents. One transient market-WebSocket HTTP 503 kept startup fail-closed, then the built-in retry recovered without operator intervention. At 04:32Z the venue reported 41 live orders across 21 markets and zero nonzero-position markets
 - **Former server:** destroyed; it cannot run the bot or execute old schedules

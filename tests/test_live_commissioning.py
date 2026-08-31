@@ -7117,11 +7117,19 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         risk = next(
             field["value"] for field in embed["fields"]
             if "stop loss" in field["name"])
+        capital = next(
+            field["value"] for field in embed["fields"]
+            if "Capital guidance" in field["name"])
         self.assertIn("TRADING TODAY  $-7.25", embed["description"])
         self.assertIn("closed $-7.25 + open mark $+0.00", embed["description"])
         self.assertIn(
             f"${adjusted_loss:.2f} / ${runner.config.hard_stop_loss_usd:.2f}",
             risk)
+        self.assertIn("$100.00", capital)  # 5 contracts × 20 slots
+        self.assertIn("$50.00", capital)   # existing 30× cap cushion
+        self.assertIn("$280.00", capital)  # seven $40 daily budgets
+        self.assertIn("$430.00", capital)
+        self.assertIn("$0.00", capital)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

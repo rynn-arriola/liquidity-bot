@@ -4552,6 +4552,41 @@ class CommissioningRunner:
             slot_capacity=self.config.max_markets,
             awaiting_rotation_markets=self._awaiting_rotation(),
             cycling_markets=self._cycling_markets(),
+            quote_size=self.config.quote_size,
+            portfolio_exposure_cap_usd=(
+                self.config.max_portfolio_exposure_usd),
+            # Reward cash can arrive on later days, so withdrawal guidance
+            # keeps seven full daily hard-stop budgets as operating runway.
+            # Pending rewards are not cash and cannot reduce this reserve.
+            # This is guidance only, not a new stop or trading rule.
+            weekly_reserve_usd=self.config.weekly_operating_reserve_usd,
+            settled_cash_usd=(
+                self.balance.current_balance
+                if self.balance is not None else None),
+            buying_power_usd=(
+                self.balance.buying_power
+                if self.balance is not None else None),
+            # A withdrawal number is more consequential than an ordinary
+            # status metric. Fail closed on stale balance evidence or any
+            # unresolved/unknown ownership state. Working owned orders are
+            # safe: the calculation separately caps free cash by venue buying
+            # power, so their reserved funds cannot be called withdrawable.
+            capital_state_proven=(
+                self.balance is not None
+                and 0 <= (now - self.balance.observed_at).total_seconds()
+                <= (self.risk_guard.max_equity_age_seconds
+                    if self.risk_guard is not None else 0)
+                and not unresolved
+                and not unknown
+                and not problems),
+            capital_unavailable_reason=(
+                "account evidence is stale or unresolved"
+                if (self.balance is None
+                    or (self.risk_guard is not None and not (
+                        0 <= (now - self.balance.observed_at).total_seconds()
+                        <= self.risk_guard.max_equity_age_seconds))
+                    or unresolved or unknown or problems)
+                else None),
             viable_markets=(
                 self._market_selection.viable_markets
                 if self._market_selection is not None else 0),

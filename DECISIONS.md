@@ -45,10 +45,12 @@ Twenty-two passed 30 continuous minutes of startup and selection bursts with zer
 ## Reporting and data choices
 
 - Reward and risk days use Eastern Time.
-- The seven-day reward table and hourly Discord post remain enabled in their
-  reviewed read-only form.
-- `score hours` in the operator-facing report means merged resting side-hours,
-  not session model score-seconds.
+- Discord capital guidance is read-only: exposure reserve plus seven hard-stop
+  days for delayed rewards. Pending is excluded; stale/ambiguous state is
+  unavailable; `free = max(0, min(buying power, settled cash - comfortable))`.
+  Size 13 / 22 slots means $286 + $104 + $728 = $1,118 comfortable.
+- The seven-day reward table and hourly Discord post remain enabled and read-only.
+- `score hours` means merged resting side-hours, not model score-seconds.
 - Pending rewards are displayed but never counted as paid or finalized net.
 - The laptop TV dashboard starts automatically after a successful bot start.
   It remains local/read-only, consumes no venue API budget, and a display or

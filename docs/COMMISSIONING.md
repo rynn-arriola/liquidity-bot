@@ -66,8 +66,19 @@ strategy is profitable and not permission to scale.
   every private shard plus the market socket has an independent 180-second
   silence deadline.
 
+The five-minute LIVE Discord summary reports conservative capital guidance
+without another API call. The comfortable balance is the larger of the
+portfolio exposure cap or `quote size × configured slots`, plus seven daily
+hard-stop budgets for reward-payment delay. A withdrawal ceiling is published
+only from fresh, ambiguity-free account evidence and is
+`max(0, min(buyingPower, currentBalance - comfortable balance))`, rounded down
+to cents. Pending rewards are never treated as cash. This is observation only:
+it neither submits a withdrawal nor changes entry, exposure or stop behavior.
+
 The runner measures marked account equity as the API's USD `currentBalance`
-plus `assetNotional`. It never substitutes `buyingPower` for equity. Buying
+plus every open position's documented `cashValue`; Retail `assetNotional` has
+been observed as zero with nonzero positions and is not used. It never
+substitutes `buyingPower` for equity. Buying
 power gates only a flat market's new post-only entry and is reserved locally
 after successful submissions so a multi-slot sweep cannot reuse stale capacity;
 it never delays a reducer, cancel or IOC exit.

@@ -232,6 +232,45 @@ class DiscordTests(unittest.TestCase):
         self.assertNotIn("Score-seconds", slots)
         self.assertNotIn("17,296.93", slots)
 
+    def test_live_summary_shows_conservative_capital_guidance(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
+            slot_capacity=22, quote_size=Decimal("13"),
+            portfolio_exposure_cap_usd=Decimal("390"),
+            weekly_reserve_usd=Decimal("728"),
+            settled_cash_usd=Decimal("1300"),
+            buying_power_usd=Decimal("1200"), capital_state_proven=True)
+
+        field = next(
+            field for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+
+        self.assertIn("13 / 22", field["value"])
+        self.assertIn("$286.00", field["value"])
+        self.assertIn("$104.00", field["value"])
+        self.assertIn("$728.00", field["value"])
+        self.assertIn("$1,118.00", field["value"])
+        self.assertIn("$182.00", field["value"])
+
+    def test_capital_guidance_hides_withdrawal_when_state_is_unproven(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE",
+            observed_at=NOW, session_started_at=NOW,
+            slot_capacity=22, quote_size=Decimal("13"),
+            portfolio_exposure_cap_usd=Decimal("390"),
+            weekly_reserve_usd=Decimal("728"),
+            settled_cash_usd=Decimal("1300"),
+            buying_power_usd=Decimal("1200"), capital_state_proven=False,
+            capital_unavailable_reason="account evidence is stale or unresolved")
+
+        field = next(
+            field for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+
+        self.assertIn("UNAVAILABLE", field["value"])
+        self.assertNotIn("$182.00", field["value"])
+
     def test_shadow_summary_labels_score_hours_as_this_run(self):
         summary = LiquiditySummary(
             mode="SHADOW", readiness_status="SCALE_ELIGIBLE",

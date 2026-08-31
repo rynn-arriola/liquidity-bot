@@ -251,6 +251,18 @@ intervals are durable. SHADOW remains explicitly scoped to its current run and
 continues to show modeled score-hours. Pending or
 unattributable rewards are visible but never included in accounted net.
 
+LIVE summaries also include a read-only capital card. It derives one
+worst-case quote notional per configured slot, preserves the existing
+portfolio-exposure cushion and adds seven daily hard-stop budgets so the bot
+has a week of operating runway when reward cash arrives later. The displayed
+free-withdraw ceiling is the smaller of current buying power and settled cash
+above that comfortable balance; it rounds down and becomes `UNAVAILABLE` on
+stale, unresolved, unknown or integrity-failed account state. It uses the
+balance snapshot the runner already fetched, makes no additional API request,
+does not count pending rewards and cannot withdraw funds or change trading.
+At size 13 / 22 slots the comfortable balance is $1,118: $286 slot footprint,
+$104 exposure cushion and $728 weekly reserve.
+
 Unexpected termination uses the error webhook. Discord HTTP runs outside the
 WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine
 summaries while retaining code-level critical-alert support. No webhook is

@@ -316,6 +316,12 @@ class CommissioningConfig:
 
         return (self.quote_size * Decimal("0.75")).quantize(Decimal("0.01"))
 
+    @property
+    def weekly_operating_reserve_usd(self) -> Decimal:
+        """Keep seven daily hard-stop budgets while rewards remain pending."""
+
+        return self.hard_stop_loss_usd * Decimal("7")
+
     @classmethod
     def diagnostic_defaults(
         cls,

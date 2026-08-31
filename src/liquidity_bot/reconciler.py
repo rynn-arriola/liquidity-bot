@@ -97,6 +97,14 @@ class ReconcilerPolicy:
     # dead stays ineligible and still clears this dwell.
     reward_eligibility_dwell_seconds: float = 90.0
     force_exit_before_start_seconds: float = 300.0
+    # A fractional maker fill can leave only a few cents of maximum settlement
+    # exposure while still retaining a whole reward slot. Give that position a
+    # short passive chance, then use the ordinary cancel-confirm-IOC machinery
+    # rather than waiting through the full inventory clock. Quantity, not the
+    # UI's marked dollar value, defines this band.
+    small_residual_min_qty: Decimal = Decimal("0.01")
+    small_residual_max_qty: Decimal = Decimal("0.09")
+    small_residual_timeout_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
@@ -121,6 +129,14 @@ class ReconcilerPolicy:
                 "spread hysteresis must be nonnegative and below entry spread")
         if self.force_exit_before_start_seconds <= 0:
             raise ValueError("pre-kickoff flatten deadline must be positive")
+        if (not self.small_residual_min_qty.is_finite()
+                or not self.small_residual_max_qty.is_finite()
+                or self.small_residual_min_qty <= 0
+                or self.small_residual_max_qty < self.small_residual_min_qty):
+            raise ValueError("small residual quantity band is invalid")
+        if (not math.isfinite(self.small_residual_timeout_seconds)
+                or self.small_residual_timeout_seconds <= 0):
+            raise ValueError("small residual timeout must be positive")
 
 
 @dataclass(frozen=True)
@@ -418,8 +434,26 @@ class DesiredStateReconciler:
         pre_kickoff_due = (
             seconds_to_event is not None
             and seconds_to_event <= self.policy.force_exit_before_start_seconds)
+        # Use the durable position-open clock. An initially tiny partial fill
+        # gets the full grace period; a position already held for five minutes
+        # that later shrinks into the tiny band exits the remainder at once
+        # instead of spending another five minutes of slot capacity.
+        venue_minimum = (
+            Decimal(str(frame.market.minimum_trade_qty))
+            if frame.market.minimum_trade_qty is not None else None)
+        small_residual_exactly_tradable = (
+            venue_minimum is not None
+            and venue_minimum > 0
+            and qty >= venue_minimum
+            and qty % venue_minimum == 0)
+        small_residual_due = (
+            self.policy.small_residual_min_qty
+            <= qty <= self.policy.small_residual_max_qty
+            and small_residual_exactly_tradable
+            and inventory_age >= self.policy.small_residual_timeout_seconds)
+        normal_exit_due = inventory_age >= deadline or pre_kickoff_due
 
-        if inventory_age >= deadline or pre_kickoff_due:
+        if normal_exit_due or small_residual_due:
             if frame.working_orders:
                 # The grace measures how long OUR CANCEL has been outstanding,
                 # not how long we are past the deadline. Measuring from the
@@ -482,13 +516,17 @@ class DesiredStateReconciler:
                 depth_haircut=self.policy.exit_depth_haircut,
                 taker_theta=self.policy.taker_theta)
             if ((not exit_result.complete or exit_result.worst_price is None)
-                    and pre_kickoff_due):
+                    and (pre_kickoff_due or small_residual_due)):
                 # The stress haircut exists to pick a price we could still get
                 # if half the displayed depth vanished. At the kickoff deadline
                 # the alternative is no longer a better fill later, it is
                 # settlement: maker-lab's residue settled at -$5.51 per event
                 # while a crossing costs cents. Re-price against displayed
-                # depth rather than refuse and hold into the game.
+                # depth rather than refuse and hold into the game. A tiny
+                # residual gets the same displayed-depth attempt because its
+                # entire maximum settlement exposure is nine cents; if even
+                # displayed depth cannot fill it, the ordinary recoverable
+                # thin-book path below keeps the reducer working.
                 exit_result = cross_exit(
                     frame.book, entry_side=entry_side,
                     entry_price=frame.entry_price, qty=float(qty),
@@ -517,8 +555,12 @@ class DesiredStateReconciler:
             self._hard_exit_started_at.setdefault(slug, frame.now)
             self._hard_exit_attempts[slug] = attempts + 1
             self._hard_exit_sent[slug] = frame.now
+            reason = (
+                "tiny_residual_timeout"
+                if small_residual_due and not normal_exit_due
+                else "hard_inventory_timeout")
             return [PlanAction(
-                ActionKind.PLACE_IOC, slug, "hard_inventory_timeout",
+                ActionKind.PLACE_IOC, slug, reason,
                 side=reducing, price=exit_result.worst_price, qty=qty)]
 
         # Immediately pull every order that can add to the filled direction.

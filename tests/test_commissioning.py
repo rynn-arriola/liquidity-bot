@@ -83,6 +83,12 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             self.authorized().force_exit_before_start_seconds, 300)
         self.assertEqual(
+            self.authorized().small_residual_min_qty, Decimal("0.01"))
+        self.assertEqual(
+            self.authorized().small_residual_max_qty, Decimal("0.09"))
+        self.assertEqual(
+            self.authorized().small_residual_timeout_seconds, 300)
+        self.assertEqual(
             self.authorized().minimum_entry_spread, Decimal("0.02"))
         self.assertEqual(
             self.authorized().minimum_entry_spread, Decimal("0.02"))
@@ -109,6 +115,18 @@ class CommissioningTests(unittest.TestCase):
         with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
             self.authorized(max_inventory_age_seconds=30).assert_authorized(
                 now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
+            self.authorized(
+                small_residual_min_qty=Decimal("0.02")).assert_authorized(
+                    now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
+            self.authorized(
+                small_residual_max_qty=Decimal("0.10")).assert_authorized(
+                    now=overnight)
+        with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
+            self.authorized(
+                small_residual_timeout_seconds=301).assert_authorized(
+                    now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "two cents"):
             self.authorized(
                 minimum_entry_spread=Decimal("0.01")).assert_authorized(

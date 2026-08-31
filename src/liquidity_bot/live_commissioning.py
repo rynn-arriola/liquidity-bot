@@ -561,6 +561,10 @@ class CommissioningRunner:
             minimum_entry_price=float(config.minimum_entry_price),
             force_exit_before_start_seconds=float(
                 config.force_exit_before_start_seconds),
+            small_residual_min_qty=config.small_residual_min_qty,
+            small_residual_max_qty=config.small_residual_max_qty,
+            small_residual_timeout_seconds=float(
+                config.small_residual_timeout_seconds),
         ))
         self._stop_requested: str | None = None
         # Cleared only when shutdown gives up before proving flat, so the

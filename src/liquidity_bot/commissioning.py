@@ -134,6 +134,13 @@ class CommissioningConfig:
     # ~$0.99 and their markout was positive at 60s, 300s and 900s. Waiting is
     # therefore the cheaper side of the trade.
     max_inventory_age_seconds: int = 900
+    # Tiny fractional residues have historically occupied a full reward slot
+    # for roughly the whole 900-second passive window even though 0.01 orders
+    # are accepted and their maximum exposure is only cents. After five
+    # minutes, 0.01-0.09 contract positions use the exact-position IOC path.
+    small_residual_min_qty: Decimal = Decimal("0.01")
+    small_residual_max_qty: Decimal = Decimal("0.09")
+    small_residual_timeout_seconds: int = 300
     # Kickoff overrides the inventory clock. maker-lab disabled its forced
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
@@ -439,10 +446,14 @@ class CommissioningConfig:
                 "commissioning loss learning must allow four taker exits per "
                 "configured contract and refresh earnings every 900 seconds")
         if (self.max_inventory_age_seconds != 900
-                or self.force_exit_before_start_seconds != 300):
+                or self.force_exit_before_start_seconds != 300
+                or self.small_residual_min_qty != Decimal("0.01")
+                or self.small_residual_max_qty != Decimal("0.09")
+                or self.small_residual_timeout_seconds != 300):
             problems.append(
                 "commissioning inventory limits must remain a 900-second "
-                "passive exit window with a 300-second pre-kickoff flatten")
+                "passive exit window, a 300-second pre-kickoff flatten, and "
+                "a five-minute cashout for 0.01-0.09 contract residuals")
         if self.force_exit_before_start_seconds >= self.max_inventory_age_seconds:
             problems.append(
                 "the pre-kickoff flatten must fire before the inventory clock")

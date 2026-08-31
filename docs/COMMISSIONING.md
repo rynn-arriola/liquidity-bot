@@ -36,8 +36,10 @@ strategy is profitable and not permission to scale.
 - cancel the opposite building order immediately after the first fill;
 - work the exact reducing quantity passively at the active touch with no
   cost-basis floor; a basis floor selectively exits winners and strands losers;
-- at 900 seconds of inventory age, or 300 seconds before kickoff whichever
-  comes first, cancel one working order at a time, position-building side
+- for an exact venue-aligned `0.01`–`0.09` contract residue, allow five passive
+  minutes before cashout; `0.10` and larger retain the 900-second inventory
+  clock, while the 300-seconds-before-kickoff deadline overrides both;
+- when any of those exit deadlines arrives, cancel one working order at a time, position-building side
   first, and require positive terminal proof for that exact submitted cancel
   before selecting another. Only after every working order is terminal may the
   runner flatten the exact position with a stressed-depth, price-capped IOC;

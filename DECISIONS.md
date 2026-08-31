@@ -34,7 +34,7 @@ show the operator the discrepancy.
 | Queue position study | Closed and retired; preserve its historical rows/report, never cancel/repost automatically, and do not restart its public-trade collector without a new operator decision |
 | Adverse-fill/cliff study | Collect 60%, 70% and 80% retained-value `WOULD_REFUSE` labels plus recent-selector/reward/no-candidate/unknown cost with zero extra venue calls; no live refusal gate is authorized |
 | Spread-scalp study | Closed and stopped; preserve its isolated database/report and do not restart the collector without a new operator decision |
-| Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
+| Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule; an exact venue-tradable `0.01`–`0.09` contract residue gets five passive minutes, then uses cancel-confirm-exact-IOC cashout |
 | Taker-exit session count | `4 × quote size`; 52 at size 13. This remains a terminal evidence ceiling independent of the fee pause |
 | Execution-fee day pause | Gross positive fees on owned taker fills, cent-rounded `0.75 × quote size`; $9.75 at size 13. This funds about 50 peak-fee exits at every size and closely aligns with the independent `4 × size` count guard at the selected size 13 (52 exits). At the ceiling, cancel/block building quotes but keep the process, monitoring and every exit path alive. Reconstruct from durable fills after a same-day restart; resume only on the next ET day after a fresh account/risk-day baseline and normal gates. Maker rebates do not offset the gross safety budget |
 

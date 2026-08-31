@@ -101,8 +101,10 @@ fresh private state.
 
 Authenticated earnings are snapshotted separately from execution P&L every 15
 minutes. A passive reducer rests the exact quantity at the active touch with no
-cost-basis floor. At 900 seconds of inventory age, or 300 seconds before
-kickoff, the bounded IOC path may cross. The session still ends after
+cost-basis floor. An exact, venue-aligned `0.01`–`0.09` contract residue gets
+five passive minutes before the bounded IOC path may cross; positions at
+`0.10` or above retain the 900-second inventory clock. The separate
+300-seconds-before-kickoff deadline still overrides both. The session still ends after
 `4 × quote size` confirmed taker exits. Gross owned taker fees instead pause
 new trading for the ET risk day at the cent-rounded equivalent of
 `$0.75 × quote size`; the process and exits remain alive and normal gates

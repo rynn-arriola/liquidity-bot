@@ -222,8 +222,9 @@ These are implementation requirements, not suggestions.
     runner holds no orders, no position and no stream subscription, so waiting
     carries no risk. Only an operator stop or a genuine adapter failure ends
     the wait; `SIGTERM`/`SIGINT` handlers are installed before the wait begins.
-55. Inventory waits 900 seconds for a free passive exit before paying to
-    cross. maker-lab's 112 reconstructed episodes resolved passively for 26%
+55. Except for invariant 89's exact `0.01`–`0.09` residual band, inventory
+    waits 900 seconds for a free passive exit before paying to cross.
+    maker-lab's 112 reconstructed episodes resolved passively for 26%
     of episodes within 30 seconds but 46% by 900 seconds, while crossing costs
     a certain taker commission and their markout stayed positive at 60, 300
     and 900 seconds. One contract risks at most about $0.99 by waiting.
@@ -639,3 +640,16 @@ These are implementation requirements, not suggestions.
     ET day and the final fresh adjusted-equity observation. A cash-history
     failure therefore leaves entry blocked without retrying against yesterday's
     boundary or allowing stale prior-day cash evidence to cross midnight.
+89. Tiny-position acceleration is quantity-bounded and exit-only. An exact
+    venue-tradable position from `0.01` through `0.09` contracts may switch
+    from passive reduction to cashout only when its durable position-open clock
+    reaches 300 seconds. A restart may not reset that clock; a larger old
+    position that shrinks into the band is immediately due. Unknown or
+    non-aligned venue minimums fail safe. Every working order is cancelled one
+    at a time, building side first, and exact terminal proof is required before
+    the next cancel or exact-position IOC. Fresh displayed depth may be used
+    only after the normal stressed-depth attempt; insufficient displayed depth
+    remains recoverable and cannot claim flat. Slot release still requires
+    positive flat/order/ambiguity proof. Positions at `0.10` or above keep the
+    900-second clock, and this rule may not change entry selection, capacity,
+    risk limits or API cadence.

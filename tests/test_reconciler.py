@@ -30,6 +30,7 @@ def market() -> MarketMetadata:
     return MarketMetadata(
         "market-one", T0 + timedelta(hours=5), .01, True, False,
         "MARKET_STATE_OPEN", "moneyline",
+        minimum_trade_qty=.01,
         sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE")
 
 
@@ -45,10 +46,11 @@ def policy(age=15, **overrides) -> ReconcilerPolicy:
 def frame(*, now=T0, position="0", orders=(), opened=None, entry=None,
           state_known=True, snapshot=None, portfolio_loss=0,
           eligible=frozenset({"bid", "offer"}), new_risk_allowed=True,
+          metadata=None,
           ) -> MarketFrame:
     snapshot = snapshot or book(now)
     return MarketFrame(
-        market(), now, snapshot, now, Decimal(position), tuple(orders),
+        metadata or market(), now, snapshot, now, Decimal(position), tuple(orders),
         state_known, eligible, {"bid": .01, "offer": .01},
         portfolio_loss, opened, entry, new_risk_allowed)
 
@@ -118,6 +120,176 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(
             actions[0].reason, "soft_reducing_quote_at_active_touch")
+
+    def test_tiny_residual_gets_five_minutes_to_exit_passively(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=299), position="0.09", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertEqual([action.kind for action in actions], [
+            ActionKind.PLACE_POST_ONLY])
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+        self.assertEqual(actions[0].qty, Decimal("0.09"))
+
+    def test_tiny_residual_cashout_uses_exact_quantity_after_five_minutes(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.09", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertEqual([action.kind for action in actions], [
+            ActionKind.PLACE_IOC])
+        self.assertEqual(actions[0].reason, "tiny_residual_timeout")
+        self.assertEqual(actions[0].qty, Decimal("0.09"))
+        self.assertEqual(actions[0].side, "offer")
+
+    def test_tiny_short_residual_cashout_uses_the_reducing_bid(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="-0.01", orders=(),
+            opened=T0, entry=.51))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "tiny_residual_timeout")
+        self.assertEqual(actions[0].qty, Decimal("0.01"))
+        self.assertEqual(actions[0].side, "bid")
+
+    def test_point_ten_position_keeps_the_full_inventory_timeout(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.10", orders=(),
+            opened=T0, entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+
+    def test_tiny_residual_cashout_requires_venue_aligned_quantity(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_min_qty=Decimal("0.01"),
+            small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+        coarse_market = MarketMetadata(
+            "market-one", T0 + timedelta(hours=5), .01, True, False,
+            "MARKET_STATE_OPEN", "moneyline", minimum_trade_qty=.05,
+            sports_market_type_v2="SPORTS_MARKET_TYPE_MONEYLINE")
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.03", orders=(),
+            opened=T0, entry=.49, metadata=coarse_market))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+
+    def test_tiny_residual_cashout_uses_displayed_depth_after_grace(self):
+        # Half-depth is 0.05 and cannot cover 0.09, but displayed depth can.
+        # The tiny cashout is bounded to nine cents and should therefore use
+        # the same exact displayed-depth fallback as the kickoff flatten.
+        thin = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, .10),),
+            (BookLevel(.51, .10),),
+            state="MARKET_STATE_OPEN")
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.09", orders=(),
+            snapshot=thin, opened=T0, entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "tiny_residual_timeout")
+
+    def test_tiny_residual_still_cancels_one_order_before_cashout(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+        reducer = WorkingOrder(
+            "reduce-offer", "offer", .51, Decimal("0.09"))
+        builder = WorkingOrder(
+            "build-bid", "bid", .49, Decimal("2"))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.09",
+            orders=(reducer, builder), opened=T0, entry=.49))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertEqual(actions[0].order_id, "build-bid")
+        self.assertEqual(
+            actions[0].reason, "hard_timeout_cancel_confirm_first")
+
+    def test_tiny_residual_sequences_every_cancel_before_cashout(self):
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+        reducer = WorkingOrder(
+            "reduce-offer", "offer", .51, Decimal("0.09"))
+        builder = WorkingOrder(
+            "build-bid", "bid", .49, Decimal("2"))
+        due = T0 + timedelta(seconds=300)
+
+        first = reconciler.plan(frame(
+            now=due, position="0.09", orders=(reducer, builder),
+            opened=T0, entry=.49))
+        self.assertEqual(first[0].order_id, "build-bid")
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "build-bid", submitted_at=due)
+
+        waiting = reconciler.plan(frame(
+            now=due + timedelta(seconds=1), position="0.09",
+            orders=(reducer, builder), opened=T0, entry=.49))
+        self.assertEqual(waiting, [])
+
+        second = reconciler.plan(frame(
+            now=due + timedelta(seconds=2), position="0.09",
+            orders=(reducer,), opened=T0, entry=.49))
+        self.assertEqual(second[0].kind, ActionKind.CANCEL)
+        self.assertEqual(second[0].order_id, "reduce-offer")
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "reduce-offer",
+            submitted_at=due + timedelta(seconds=2))
+
+        cashout = reconciler.plan(frame(
+            now=due + timedelta(seconds=3), position="0.09", orders=(),
+            opened=T0, entry=.49))
+        self.assertEqual(cashout[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(cashout[0].reason, "tiny_residual_timeout")
+        self.assertEqual(cashout[0].qty, Decimal("0.09"))
+
+    def test_tiny_residual_with_insufficient_displayed_depth_stays_recoverable(self):
+        thinner_than_residual = BookSnapshot(
+            "market-one",
+            (BookLevel(.49, .08),),
+            (BookLevel(.51, .08),),
+            state="MARKET_STATE_OPEN")
+        reconciler = DesiredStateReconciler(policy(
+            age=900, small_residual_max_qty=Decimal("0.09"),
+            small_residual_timeout_seconds=300))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=300), position="0.09", orders=(),
+            snapshot=thinner_than_residual, opened=T0, entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
+        self.assertEqual(
+            actions[0].reason, "hard_exit_deferred_thin_book")
 
     def test_kickoff_exit_uses_displayed_depth_rather_than_settling(self):
         # Thin book: half the displayed depth is not enough to clear the

@@ -37,8 +37,11 @@ strategy is profitable and not permission to scale.
 - work the exact reducing quantity passively at the active touch with no
   cost-basis floor; a basis floor selectively exits winners and strands losers;
 - at 900 seconds of inventory age, or 300 seconds before kickoff whichever
-  comes first, confirm passive cancels and flatten the exact position with a
-  stressed-depth, price-capped IOC; allow at most three confirmed-terminal IOC
+  comes first, cancel one working order at a time, position-building side
+  first, and require positive terminal proof for that exact submitted cancel
+  before selecting another. Only after every working order is terminal may the
+  runner flatten the exact position with a stressed-depth, price-capped IOC;
+  allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
   An early cross costing more than `0.8 × quote size` ($8 at live size 10) is refused
   and the position keeps resting

@@ -951,6 +951,32 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_hard_exit_cancel_grace_starts_after_driver_submission(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        action = PlanAction(
+            ActionKind.CANCEL, "market-one",
+            "hard_timeout_cancel_confirm_first", side="bid",
+            order_id="building-order")
+        result = SimpleNamespace(
+            submitted=None, cancel_intent_id="cancel-intent")
+
+        with patch.object(
+                runner.reconciler, "plan", return_value=[action]), patch.object(
+                    runner.driver, "apply_one",
+                    new=AsyncMock(return_value=result)), patch.object(
+                        runner.reconciler,
+                        "note_hard_exit_cancel_submitted") as note:
+            stop, delay = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(delay, 0)
+        note.assert_called_once()
+        self.assertEqual(note.call_args.args, ("market-one", "building-order"))
+        self.assertEqual(note.call_args.kwargs["submitted_at"], NOW)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_structured_post_only_rejection_has_brief_local_backoff(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

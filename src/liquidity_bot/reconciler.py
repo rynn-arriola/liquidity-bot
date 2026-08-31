@@ -276,6 +276,7 @@ class DesiredStateReconciler:
     _ineligible_since: dict[tuple[str, str], datetime] = field(
         default_factory=dict)
     _hard_exit_cancel_at: dict[str, datetime] = field(default_factory=dict)
+    _hard_exit_cancel_order_id: dict[str, str] = field(default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_attempts: dict[str, int] = field(default_factory=dict)
     _hard_exit_started_at: dict[str, datetime] = field(default_factory=dict)
@@ -322,6 +323,28 @@ class DesiredStateReconciler:
         return (now - sent_at).total_seconds() >= (
             self.policy.hard_exit_confirmation_timeout_seconds)
 
+    def note_hard_exit_cancel_submitted(
+        self, market_slug: str, order_id: str, *, submitted_at: datetime,
+    ) -> None:
+        """Start cancel-confirmation grace for the exact submitted order.
+
+        Planning is not proof that a request crossed the network boundary: a
+        local admission delay can stop it before the driver creates an intent.
+        The live runner calls this only after the driver returns a cancel
+        intent, so a later plan can distinguish "not sent yet" from "sent and
+        awaiting positive terminal proof" without retrying an ambiguous
+        mutation.
+        """
+
+        slug = str(market_slug)
+        self._hard_exit_cancel_order_id[slug] = str(order_id)
+        self._hard_exit_cancel_at[slug] = submitted_at
+
+    def _clear_hard_exit_cancel(self, market_slug: str) -> None:
+        slug = str(market_slug)
+        self._hard_exit_cancel_at.pop(slug, None)
+        self._hard_exit_cancel_order_id.pop(slug, None)
+
     def restart_hard_exit_budget(self, market_slug: str) -> None:
         """Give a retired market a fresh exit budget on a slower cadence.
 
@@ -337,6 +360,7 @@ class DesiredStateReconciler:
 
     def _clear_hard_exit(self, market_slug: str) -> None:
         slug = str(market_slug)
+        self._clear_hard_exit_cancel(slug)
         self._hard_exit_sent.pop(slug, None)
         self._hard_exit_attempts.pop(slug, None)
         self._hard_exit_started_at.pop(slug, None)
@@ -406,16 +430,43 @@ class DesiredStateReconciler:
                 # tkamak-tsokos -- ten retirement rounds over ten minutes, the
                 # position still open when a deploy landed, and a break-even
                 # exit turned into -$1.55.
-                issued_at = self._hard_exit_cancel_at.setdefault(slug, frame.now)
-                if ((frame.now - issued_at).total_seconds()
-                        > self.policy.cancel_confirm_grace_seconds):
-                    return self._critical(
-                        frame, "hard_exit_blocked_cancel_unconfirmed")
+                # The driver applies at most ONE mutation from a plan. Returning
+                # every cancel here made the first tuple member authoritative,
+                # then started one slug-level grace clock as though every order
+                # had been cancelled. With a long position and (offer, bid),
+                # the reducer was cancelled while the untouched bid remained
+                # able to increase the position. Track the exact submitted
+                # order and wait for its positive terminal proof before
+                # selecting the next one. Cancel the position-building side
+                # first so exposure cannot grow while reducers are cleared.
+                target_id = self._hard_exit_cancel_order_id.get(slug)
+                if target_id is not None:
+                    target_still_working = any(
+                        order.order_id == target_id
+                        for order in frame.working_orders)
+                    if target_still_working:
+                        issued_at = self._hard_exit_cancel_at.get(slug)
+                        if (issued_at is not None
+                                and (frame.now - issued_at).total_seconds()
+                                > self.policy.cancel_confirm_grace_seconds):
+                            return self._critical(
+                                frame,
+                                "hard_exit_blocked_cancel_unconfirmed")
+                        return []
+                    # The runner does not plan a market with an unresolved
+                    # intent. Therefore a tracked order disappearing here is
+                    # backed by terminal ledger proof, not snapshot absence.
+                    self._clear_hard_exit_cancel(slug)
+
+                target = next(
+                    (order for order in frame.working_orders
+                     if order.side == building),
+                    frame.working_orders[0],
+                )
                 return [PlanAction(
                     ActionKind.CANCEL, slug, "hard_timeout_cancel_confirm_first",
-                    side=order.side, order_id=order.order_id)
-                    for order in frame.working_orders]
-            self._hard_exit_cancel_at.pop(slug, None)
+                    side=target.side, order_id=target.order_id)]
+            self._clear_hard_exit_cancel(slug)
             attempts = self._hard_exit_attempts.get(slug, 0)
             started_at = self._hard_exit_started_at.get(slug)
             if attempts >= self.policy.max_hard_exit_attempts:

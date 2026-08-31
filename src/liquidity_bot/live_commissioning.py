@@ -4087,6 +4087,19 @@ class CommissioningRunner:
                 actions, market=state.market,
                 position=position, now=now,
                 quote_observation=quote_observation)
+            if (actions and result is not None
+                    and getattr(result, "cancel_intent_id", None) is not None
+                    and actions[0].reason
+                    == "hard_timeout_cancel_confirm_first"):
+                # The grace belongs to the exact request that crossed the
+                # mutation boundary, not to a plan that local admission may
+                # have deferred. The reconciler will wait for terminal proof
+                # of this order before selecting the next hard-exit cancel.
+                self.reconciler.note_hard_exit_cancel_submitted(
+                    slug,
+                    actions[0].order_id or "",
+                    submitted_at=self._now(),
+                )
             if actions and result is not None:
                 self._clear_mutation_access_denial(
                     actions[0], position=position)

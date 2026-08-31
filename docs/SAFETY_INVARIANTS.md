@@ -12,7 +12,12 @@ These are implementation requirements, not suggestions.
    settle: maker-lab ran one and reached settlement 79% losers by construction,
    for -$88.20 in one session. Emergency loss realization stays reserved for
    the bounded hard-timeout path, not the passive reducer.
-6. If the position remains at its hard inventory-age limit, cancel and confirm the passive exit before sending a price-capped IOC. It must never drift to settlement by default.
+6. If the position remains at its hard inventory-age limit, cancel and confirm
+   every working order before sending a price-capped IOC. Hard exit plans and
+   applies one cancel at a time, building side first; confirmation grace starts
+   only after submission and belongs to that exact order. The next cancel may
+   be selected only after positive terminal proof. It must never drift to
+   settlement by default.
 7. A reward order is allowed only for the lifecycle phase applying at that instant.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
 9. Published pools and pending earnings are never treated as cash or guaranteed revenue.

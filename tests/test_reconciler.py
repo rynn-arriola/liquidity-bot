@@ -430,6 +430,9 @@ class ReconcilerTests(unittest.TestCase):
         reconciler.plan(frame(
             now=T0 + timedelta(seconds=21), position="2", orders=(active,),
             opened=T0, entry=.49))
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "exit",
+            submitted_at=T0 + timedelta(seconds=21))
 
         actions = reconciler.plan(frame(
             now=T0 + timedelta(seconds=30), position="2", orders=(active,),
@@ -438,6 +441,86 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual([item.kind for item in actions], [ActionKind.CRITICAL])
         self.assertEqual(
             actions[0].reason, "hard_exit_blocked_cancel_unconfirmed")
+
+    def test_hard_exit_cancels_building_order_then_reducer_one_at_a_time(self):
+        """Two working orders cannot share one cancel-confirmation timer."""
+        reconciler = DesiredStateReconciler(policy())
+        reducer = WorkingOrder("reduce-offer", "offer", .51, Decimal("2"))
+        builder = WorkingOrder("build-bid", "bid", .49, Decimal("2"))
+        due = T0 + timedelta(seconds=21)
+
+        first = reconciler.plan(frame(
+            now=due, position="2", orders=(reducer, builder),
+            opened=T0, entry=.49))
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].kind, ActionKind.CANCEL)
+        self.assertEqual(first[0].order_id, "build-bid")
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "build-bid", submitted_at=due)
+
+        waiting = reconciler.plan(frame(
+            now=due + timedelta(seconds=1), position="2",
+            orders=(reducer, builder), opened=T0, entry=.49))
+        self.assertEqual(waiting, [])
+
+        second = reconciler.plan(frame(
+            now=due + timedelta(seconds=2), position="2", orders=(reducer,),
+            opened=T0, entry=.49))
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0].kind, ActionKind.CANCEL)
+        self.assertEqual(second[0].order_id, "reduce-offer")
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "reduce-offer",
+            submitted_at=due + timedelta(seconds=2))
+
+        exit_action = reconciler.plan(frame(
+            now=due + timedelta(seconds=3), position="2", orders=(),
+            opened=T0, entry=.49))
+        self.assertEqual([item.kind for item in exit_action], [
+            ActionKind.PLACE_IOC])
+        self.assertEqual(exit_action[0].qty, Decimal("2"))
+
+    def test_short_hard_exit_cancels_building_offer_first(self):
+        reconciler = DesiredStateReconciler(policy())
+        reducer = WorkingOrder("reduce-bid", "bid", .49, Decimal("2"))
+        builder = WorkingOrder("build-offer", "offer", .51, Decimal("2"))
+
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=21), position="-2",
+            orders=(reducer, builder), opened=T0, entry=.51))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].order_id, "build-offer")
+
+    def test_hard_exit_cancel_grace_starts_only_after_submission(self):
+        reconciler = DesiredStateReconciler(policy())
+        active = WorkingOrder("exit", "offer", .51, Decimal("2"))
+
+        first = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=21), position="2", orders=(active,),
+            opened=T0, entry=.49))
+        later = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=40), position="2", orders=(active,),
+            opened=T0, entry=.49))
+
+        self.assertEqual(first[0].kind, ActionKind.CANCEL)
+        self.assertEqual(later[0].kind, ActionKind.CANCEL)
+
+    def test_restart_clears_exact_hard_exit_cancel_tracking(self):
+        reconciler = DesiredStateReconciler(policy())
+        active = WorkingOrder("exit", "offer", .51, Decimal("2"))
+        reconciler.note_hard_exit_cancel_submitted(
+            "market-one", "exit", submitted_at=T0)
+
+        reconciler.restart_hard_exit_budget("market-one")
+        actions = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=21), position="2", orders=(active,),
+            opened=T0, entry=.49))
+
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertNotIn("market-one", reconciler._hard_exit_cancel_at)
+        self.assertNotIn("market-one", reconciler._hard_exit_cancel_order_id)
 
     def test_position_remaining_after_ioc_is_critical(self):
         reconciler = DesiredStateReconciler(policy())

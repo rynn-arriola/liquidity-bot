@@ -18,6 +18,7 @@ history, not current instructions or runtime truth.
 | [Size-scaled taker-exit count — 2026-08-30](TAKER_EXIT_SCALING_2026-08-30.md) | Trigger evidence, `4 × size` decision, slot-control audit, edge cases and deployment proof |
 | [API backpressure accounting and observability — 2026-08-30](API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md) | Selection deferral semantics, shared cooldown telemetry and review evidence |
 | [TV dashboard active scope — 2026-08-30](TV_DASHBOARD_ACTIVE_SCOPE_2026-08-30.md) | Stopped collector-scope defect, live-PID runner handoff, ledger fallback and edge-case proof |
+| [Hard-exit sequential cancel repair — 2026-08-31](HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md) | Two-order planner/driver mismatch, exposure-growth incident, per-order confirmation repair and acceptance boundary |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

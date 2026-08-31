@@ -37,6 +37,10 @@ Do not enforce a threshold from the historical association. Freeze a training
 interval and a later held-out interval. A candidate must reduce realized loss
 by more than reward surrendered and must not create material dark-slot cost.
 Any live proposal requires a separate review and explicit operator decision.
+The 2026-08-31 decision keeps all 60/70/80 labels measurement-only for at least
+three complete ET days under size 13 / 22 slots. Seventy percent is provisional,
+not authorized behavior. The 900-second inventory deadline is not part of this
+experiment; the larger clean completion-time sample rejected shortening it.
 
 ## 2. Ledger growth slope
 

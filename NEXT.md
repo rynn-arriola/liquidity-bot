@@ -3,12 +3,12 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-**Sequential hard-exit live acceptance pending next authorized restart:** staged source commit `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. All 952 staged-checkout tests passed; the live runner remains unchanged. After a later authorized restart, naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
-**Capital-guidance live display pending next authorized restart:** the deployed
+**Sequential hard-exit natural acceptance pending:** active source/marker `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. The 17:46Z flat-gated restart loaded it and normal startup passed. Naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
+**Capital-guidance live display acceptance pending:** the loaded
 card must show size 13 / 22 as $286 footprint + $104 cushion + $728 weekly
 reserve = $1,118 comfortable, with free cash matching the fresh cash/power
 snapshot. Stale/ambiguous state must be `UNAVAILABLE`; traffic must not change.
-No restart is authorized here. [Design](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md).
+[Design](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md).
 
 **Capacity ceiling remains open:** the bounded 22-slot canary passed its 30-minute startup/selection-burst gate with 3,392 attempts, zero failures/429s, request rates `1.263-2.643/s` and maximum queue depth one. The 2026-08-30 12:13Z restart loaded `821f5c85` with the size-13 taker-exit count raised from the stale fixed 20 to `4 × size = 52`; no slot-dependent capital, API or timeout budget increased. Its first accepted window reached 38 working orders across 22 markets, zero positions/unresolved/absent/foreign rows and `2.579/s` with zero failures/429s. The ET-day, non-terminal fee pause is calibrated at `0.75 × size` ($9.75 at size 13); prior-day reconstruction, process survival, next-day rollover and re-entry now have live acceptance. Naturally verify only the remaining threshold behavior: building quotes cancel at the day ceiling, exits and process remain live and one alert is sent. [Capacity criteria](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence) · [Taker-exit evidence](docs/history/TAKER_EXIT_SCALING_2026-08-30.md) · [Fee-pause evidence](docs/history/DAILY_EXECUTION_FEE_PAUSE_2026-08-30.md).
 
@@ -54,7 +54,7 @@ passed. Upload/readback and a restore drill remain because the operator deferred
 Drive. Never upload recovery/SSH keys, raw SQLite/WAL files or plaintext.
 
 ## 2. Remaining natural acceptance
-The current live runner loaded `0ff6e3c6`. Continue accepting these paths
+The current live runner loaded source marker `31c2574`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply

@@ -85,3 +85,19 @@ Natural acceptance after that restart requires a real two-order hard exit to
 show one building-side cancel, positive terminal proof, then the next cancel;
 it must not show `pending=2`, position growth from an untouched builder, or a
 retirement caused by the shared cancel timer.
+
+## Activation
+
+At 17:43Z the old runner's final position closed through its existing exit
+path. Graceful stop then cancelled its working slate and emitted `flat: true`.
+An independent authenticated read at `2026-08-31T17:45:43Z` proved zero open
+orders and zero positions. No force-kill or manual flatten was used.
+
+No `src/` or `tests/` file changed after source commit `31c2574`, so the
+deployment marker advanced to that exact source commit before startup. Exactly
+one size-13/22-slot supervisor PID 937731 and runner PID 937743 started. At
+17:50:44Z the read-only local dashboard reported 22 bound markets, 38 working
+orders across 19 markets, zero positions, zero unresolved intents and zero
+unknown orders. The startup API window recorded 362 attempts at 2.156/s with
+zero failures, zero 429s and queue depth one. This accepts ordinary startup;
+the specific two-order hard-exit path remains natural-only and pending.

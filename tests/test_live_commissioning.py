@@ -7159,6 +7159,108 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_terminal_venue_history_does_not_hide_withdrawal_guidance(self):
+        """Terminal imported history is provenance, not current ambiguity."""
+
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        now = runner._now()
+        runner.ledger.apply_order_event(
+            "rest", "terminal-venue-history",
+            OrderState(
+                client_order_id="venue:terminal-history",
+                exchange_order_id="terminal-history",
+                market_slug=runner.market_slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("5"),
+                status="FILLED",
+                event_at=now),
+            received_at=now)
+
+        await runner._send_summary(runner._now())
+
+        embed = notifier.payloads[-1][0]["embeds"][0]
+        health = next(
+            field["value"] for field in embed["fields"]
+            if "Health" in field["name"])
+        capital = next(
+            field["value"] for field in embed["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn(f"{'Unknown orders':<19}{0:>10}", health)
+        self.assertNotIn("UNAVAILABLE", capital)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_active_unowned_order_still_hides_withdrawal_guidance(self):
+        """The reporting repair must not weaken live ownership safety."""
+
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        now = runner._now()
+        runner.ledger.apply_order_event(
+            "rest", "active-unowned-order",
+            OrderState(
+                client_order_id="venue:still-active",
+                exchange_order_id="still-active",
+                market_slug=runner.market_slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=now),
+            received_at=now)
+
+        await runner._send_summary(runner._now())
+
+        embed = notifier.payloads[-1][0]["embeds"][0]
+        health = next(
+            field["value"] for field in embed["fields"]
+            if "Health" in field["name"])
+        capital = next(
+            field["value"] for field in embed["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn(f"{'Unknown orders':<19}{1:>10}", health)
+        self.assertIn("UNAVAILABLE", capital)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_absent_owned_order_still_hides_withdrawal_guidance(self):
+        """Missing terminal proof remains ambiguous even for an owned id."""
+
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        now = runner._now()
+        runner.ledger.apply_order_event(
+            "rest", "owned-order-now-absent",
+            OrderState(
+                client_order_id="liquidity-owned-absent",
+                exchange_order_id="owned-absent",
+                market_slug=runner.market_slug,
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="UNKNOWN_ABSENT",
+                event_at=now),
+            received_at=now)
+
+        await runner._send_summary(runner._now())
+
+        embed = notifier.payloads[-1][0]["embeds"][0]
+        health = next(
+            field["value"] for field in embed["fields"]
+            if "Health" in field["name"])
+        capital = next(
+            field["value"] for field in embed["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn(f"{'Unknown orders':<19}{1:>10}", health)
+        self.assertIn("UNAVAILABLE", capital)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_shutdown_drains_buffered_terminal_cancel_proof(self):
         """A stopped consumer must still apply proof already on its socket."""
 

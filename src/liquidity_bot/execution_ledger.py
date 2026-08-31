@@ -1972,6 +1972,24 @@ class ExecutionLedger:
             absent_sql, absent_params).fetchone()[0]
         return unknown_orders == 0 and self.ownership_is_known()
 
+    def account_unknown_order_count(self) -> int:
+        """Count order rows that still make account ownership uncertain.
+
+        A venue-imported row is unknown only while it is active.  Once the
+        venue has positively reported FILLED, REJECTED or another terminal
+        state, the historical ``venue:`` prefix explains provenance but no
+        longer represents live account ambiguity.  UNKNOWN_ABSENT remains
+        unknown regardless of provenance until positive terminal proof lands.
+        """
+
+        placeholders = ",".join("?" for _ in ACTIVE_ORDER_STATES)
+        return int(self.connection.execute(
+            "SELECT COUNT(*) FROM execution_orders "
+            "WHERE status='UNKNOWN_ABSENT' OR "
+            f"(client_order_id LIKE 'venue:%' AND status IN ({placeholders}))",
+            tuple(sorted(ACTIVE_ORDER_STATES)),
+        ).fetchone()[0])
+
     def ownership_is_known(self) -> bool:
         """No order resting on our key that this bot never placed.
 

@@ -4491,9 +4491,7 @@ class CommissioningRunner:
                 max(0.0, (now - slug_basis.opened_at).total_seconds()))
         working = self.ledger.working_orders()
         unresolved = self.ledger.unresolved_intents()
-        unknown = self.ledger.query(
-            "SELECT COUNT(*) n FROM execution_orders "
-            "WHERE status='UNKNOWN_ABSENT' OR client_order_id LIKE 'venue:%'")[0]["n"]
+        unknown = self.ledger.account_unknown_order_count()
         equity_change = Decimal("0")
         if self._equity_snapshot is not None and self.risk_guard is not None:
             equity_change = (

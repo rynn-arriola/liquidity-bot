@@ -2,7 +2,6 @@
 
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
-
 **Sequential hard-exit natural acceptance pending:** active source/marker `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. The 17:46Z flat-gated restart loaded it and normal startup passed. Naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
 **Tiny-residual deployment and natural acceptance pending:** reviewed local source gives an exact venue-tradable `0.01`–`0.09` contract position five passive minutes, then reuses the sequential cancel-confirm-exact-IOC path. It is not pushed, deployed or active. After an authorized flat-gated deployment/restart, naturally require `[action] ... reason=tiny_residual_timeout`, exact residual quantity, no overlapping cancel/IOC, positive flat proof and ordinary slot refill; do not induce a fill. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md).
 **Capital-guidance live display acceptance pending:** the loaded

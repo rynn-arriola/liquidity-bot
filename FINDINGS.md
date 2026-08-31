@@ -97,5 +97,4 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
   covered 100 markets, 24,050 books and 792 trades at 99.3% stream coverage with
   no gaps/reconnects/errors/REST 429s and no effect on the live runner.
 - **Rolling scalp episodes are not leave-it orders.** Untouched pairs renew at
-  five minutes and can rotate out of scope. Exact GTC evidence therefore needs
-  the bounded retained cohort; it excludes coverage loss and uses no future row.
+  five minutes and can rotate out of scope. Exact GTC evidence needs the bounded retained cohort; it excludes coverage loss and uses no future row.

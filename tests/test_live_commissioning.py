@@ -532,8 +532,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_due_contract_refresh_uses_bounded_bulk_requests(self):
         runner, _, _ = self.build_runner()
-        runner.config = replace(runner.config, max_markets=22)
-        slugs = tuple(f"market-{index}" for index in range(22))
+        runner.config = replace(runner.config, max_markets=24)
+        slugs = tuple(f"market-{index}" for index in range(24))
         runner._bind_markets(slugs)
 
         async def markets_for(batch):
@@ -563,7 +563,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             call.args[0]
             for call in runner.gateway.fetch_incentives.await_args_list
         ]
-        self.assertEqual([len(batch) for batch in market_batches], [8, 8, 6])
+        self.assertEqual([len(batch) for batch in market_batches], [8, 8, 8])
         self.assertEqual(incentive_batches, market_batches)
         self.assertTrue(all(
             runner.state_for(slug).market is not None
@@ -7159,6 +7159,31 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_live_summary_uses_the_complete_size_ten_24_slot_policy(self):
+        """The operator card must report the exact configuration it is running."""
+
+        runner, _, notifier = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.config = replace(
+            runner.config, quote_size=Decimal("10"), max_markets=24)
+
+        await runner._send_summary(runner._now())
+
+        embed = notifier.payloads[-1][0]["embeds"][0]
+        fields = {field["name"]: field["value"] for field in embed["fields"]}
+        slots = next(value for name, value in fields.items() if "Slots" in name)
+        risk = next(value for name, value in fields.items() if "stop loss" in name)
+        capital = next(
+            value for name, value in fields.items() if "Capital guidance" in name)
+        self.assertIn(f"{'Quoting':<19}{'0/24':>10}", slots)
+        self.assertIn("$0.00 / $96.00", risk)
+        self.assertEqual(risk.count("$0.00 / $96.00"), 2)
+        for expected in (
+                "10 / 24", "$240.00", "$100.00", "$672.00", "$1,012.00"):
+            self.assertIn(expected, capital)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_terminal_venue_history_does_not_hide_withdrawal_guidance(self):
         """Terminal imported history is provenance, not current ambiguity."""
 
@@ -8794,7 +8819,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "live_commissioning",
             "--auto-select-rewards",
             "--quote-size", "30",
-            "--max-markets", "22",
+            "--max-markets", "24",
             "--arm-live",
             "--accept-one-contract-risk",
             "--exclusive-api-key",
@@ -8811,7 +8836,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(args.auto_select_rewards)
         self.assertIsNone(args.market_slug)
         self.assertEqual(args.quote_size, 30)
-        self.assertEqual(args.max_markets, 22)
+        self.assertEqual(args.max_markets, 24)
 
     def test_cli_rejects_quote_size_outside_the_reviewed_range(self):
         argv = [
@@ -8827,7 +8852,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
-            "--max-markets", "23",
+            "--max-markets", "25",
         ]
         with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
             main()

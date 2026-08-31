@@ -75,7 +75,7 @@ def main() -> int:
     parser.add_argument("--baseline-slots", type=int, default=20)
     parser.add_argument("--baseline-runner-cpu", type=float, default=0.564)
     parser.add_argument("--comfortable-runner-cpu", type=float, default=0.75)
-    parser.add_argument("--portfolio-quote-units", type=float, default=30.0)
+    parser.add_argument("--portfolio-cushion-units", type=float, default=10.0)
     parser.add_argument("--exposure-cushion", type=float, default=0.25)
     args = parser.parse_args()
     if args.minimum <= 0 or args.maximum < args.minimum or args.step <= 0:
@@ -87,7 +87,7 @@ def main() -> int:
         comfortable_runner_cpu_cores=args.comfortable_runner_cpu,
     )
     exposure = ExposureProfile(
-        portfolio_quote_units=args.portfolio_quote_units,
+        portfolio_cushion_quote_units=args.portfolio_cushion_units,
         required_cushion_over_slots=args.exposure_cushion,
     )
 
@@ -145,14 +145,14 @@ def main() -> int:
             minimum=1,
             maximum=100,
             exposure=ExposureProfile(
-                portfolio_quote_units=1_000_000_000,
+                portfolio_cushion_quote_units=0,
                 required_cushion_over_slots=0,
             ),
         )
         print(
             f"{name} factor ceilings: REST/public={api_ceiling} "
             f"CPU={floor((args.comfortable_runner_cpu / args.baseline_runner_cpu) * args.baseline_slots)} "
-            f"exposure={floor(args.portfolio_quote_units / (1 + args.exposure_cushion))} "
+            f"exposure={floor(args.portfolio_cushion_units / args.exposure_cushion) if args.exposure_cushion else 'unbounded'} "
             "public-subscription=100"
         )
     return 0

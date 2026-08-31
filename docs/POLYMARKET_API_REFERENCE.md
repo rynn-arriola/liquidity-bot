@@ -306,7 +306,7 @@ than that action-line rate and preserves 25% of the internal 4/s governor:
 | Scenario | Explicit assumptions | Result after bounded contract batching |
 |---|---|---|
 | Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier. | The complete position-valued risk mark adds `0.40/s` over the former one-balance model. At 22 slots the updated estimate is `2.10/s`; at 24 it is `2.16/s` (54% of the gate). The earlier 56-slot API-only estimate is retired pending replay with the new fixed load. |
-| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Updated estimates are `3.41/s` at 20 and `3.59/s` at 22. They remain below the hard 4/s gate but no longer preserve the chosen 25% request headroom, so clean ordinary windows cannot authorize more slots and the restarted 22-slot runtime must be checked for queue/deadline effects. |
+| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Updated executable-model estimates are `3.43/s` at 20, `3.61/s` at 22 and `3.78/s` at 24. They remain below the hard 4/s gate through 24 but do not preserve the chosen 25% request headroom, so live canary evidence is mandatory. |
 | Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages. | Demand is about `7.90/s` at 20 and `8.57/s` at 22 after the fixed mark load, proving this is a degraded-feed design limit, not a viable scaling mode. Each owner receives a fresh service-time sample and new risk still fails closed on stale books; the correct scale design is bounded fallback plus stream recovery, not whole-slate REST polling. |
 
 These results do **not** select 19, 24 or 56 as the final production width.
@@ -314,10 +314,10 @@ They prove that 24 is not a documented venue slot limit and that average normal
 REST load is not currently the first modeled constraint. A 2026-08-29 point
 sample measured the runner at `0.564` of one CPU core at 20 slots; a deliberately
 conservative linear projection reaches the `0.75`-core comfort budget at 26
-slots. Current portfolio policy provides 30 quote-size units; preserving its
-25% cushion caps fully utilized width at 24 slots. Both are project constraints,
-not API limits, and both require new measurement or an explicit risk decision
-before increasing production width.
+slots. Portfolio policy now derives exposure as `(configured slots + 10) ×
+quote size`, so capacity no longer consumes a hidden fixed reserve; at the
+selected size-10/24 target the cap is $340 with $100 cushion. CPU, request scheduling and the
+fourth private shard at slot 25 remain independent constraints, not API limits.
 
 ### Evidence required before choosing the durable maximum
 
@@ -350,7 +350,12 @@ carried 43 discovery and 124 book reads. Execution-history reads continued
 without the prior `1015` recurrence. One brief acknowledged cancel was normal
 in-flight churn and cleared; there was no persistent unresolved/unknown state,
 stream drop, decode failure, recovery or safety deadline. This accepts the
-bounded canary, not a permanent 22-slot policy.
+bounded canary, not a permanent 22-slot policy. On 2026-08-31 the operator
+authorized preparing one 24-slot canary. Twenty-four fills the same three
+private shards as `8/8/8`; 25 is still refused. The corrected executable model
+includes all three balance/positions/balance mark calls and matches the table
+above. The canary remains inactive until reviewed source, positive
+flat/order-free proof and a separately authorized restart.
 The durable maximum is the highest width
 that preserves the chosen request headroom with zero safety-deadline misses,
 zero sustained backlog/429s, acceptable response/wait tails, proven stream

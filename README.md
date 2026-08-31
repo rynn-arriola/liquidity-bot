@@ -55,7 +55,7 @@ The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a bounded commissioning process. It joins the active sports
 catalog to reward programs and binds one executor across a validated 20-slot
-baseline or an explicitly authorized restart-scoped canary of at most 22 selected
+baseline or an explicitly authorized restart-scoped canary of at most 24 selected
 markets. The operative authorized limits are below. Quote size is read from the
 restart-scoped runtime setting; quantity-linked limits are derived and
 hard-locked by `CommissioningConfig`:
@@ -64,10 +64,10 @@ hard-locked by `CommissioningConfig`:
 |---|---|
 | quote size | 10 contracts (restart-scoped, allowed whole values 5-30) |
 | concurrently bound markets | 20 |
-| portfolio exposure | $300 at size 10 (`30 × size`) |
+| portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | market loss stop | $40 at size 10 (`4 × size`) |
-| session loss stop | $80 at size 10 (`8 × size`) realized trading loss |
-| emergency hard stop | $80 at size 10 (`8 × size`) adjusted marked equity; provisional with open inventory |
+| session loss stop | `8 × size × slots / 20`; $80 at size 10 / 20 slots, $96 at 24 |
+| emergency hard stop | same breadth-scaled threshold on adjusted marked equity; provisional with open inventory |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -75,7 +75,7 @@ hard-locked by `CommissioningConfig`:
 | REST budget | 4 requests/second |
 
 The daily loss budget resets at midnight `America/New_York`, including DST.
-The two size-10 $80 rows share one scaled threshold but use different sensors
+The two account-stop rows share one quantity/breadth-scaled threshold but use different sensors
 and responses. A marked breach blocks new entries immediately.
 With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop; realized loss can still
@@ -262,8 +262,9 @@ above that comfortable balance; it rounds down and becomes `UNAVAILABLE` on
 stale, unresolved, unknown or integrity-failed account state. It uses the
 balance snapshot the runner already fetched, makes no additional API request,
 does not count pending rewards and cannot withdraw funds or change trading.
-At size 13 / 22 slots the comfortable balance is $1,118: $286 slot footprint,
-$104 exposure cushion and $728 weekly reserve.
+At the selected next-run size 10 / 24, comfortable capital is $1,012: $240
+slot footprint, $100 exposure cushion and $672 weekly reserve (seven $96
+hard-stop days). The unchanged live size-13/22 process retains its loaded value.
 
 Unexpected termination uses the error webhook. Discord HTTP runs outside the
 WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine
@@ -347,7 +348,7 @@ market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
 supervisor and read-only diagnostics use the same value. Size never changes
 under live orders. The early-exit cap, per-market and portfolio exposure, loss
 stops and daily fee pause derive automatically from it. Portfolio exposure is
-`30 × size`: 20 quote-notionals plus a proportional ten-notional cushion:
+`(configured slots + 10) × size`: every slot plus a proportional ten-notional cushion:
 
 ```bash
 ./scripts/start_commissioning.sh

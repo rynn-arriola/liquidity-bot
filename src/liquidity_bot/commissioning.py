@@ -68,10 +68,11 @@ class CommissioningConfig:
     equity. It may share the session stop's dollar threshold because the two
     sensors still cover different losses and trigger different responses.
 
-    The size-10 baseline is $40 per market and one $80 threshold for both the
-    realized-session and marked-equity sensors. The operator chose proportional
-    scaling on 2026-08-28: 4x, 8x and 8x quote quantity. The two $80-equivalent
-    sensors remain independent even though their thresholds match.
+    The size-10/20-slot baseline is $40 per market and one $80 threshold for
+    both the realized-session and marked-equity sensors. Per-market loss stays
+    at 4x quote quantity. The two account sensors scale as 8x quantity times
+    configured breadth / 20, preserving the baseline allowance per slot. They
+    remain independent even though their thresholds match.
     """
 
     market_slug: str
@@ -103,7 +104,8 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    # Twenty markets across three private connections (8 + 8 + 4).
+    # Twenty markets across three private connections (8 + 8 + 4); the
+    # authorized 24-slot canary fills the same three shards (8 + 8 + 8).
     #
     # Not set by the socket cap. Measured 2026-08-15 after the market feed was
     # made survivable (one unusable book used to kill it), three runs at each
@@ -122,10 +124,10 @@ class CommissioningConfig:
     # riding toward settlement -- how maker-lab lost $443.88.
     #
     # Worst case exposure: both sides of a market risk quote_size x p +
-    # quote_size x (1 - p) = quote_size. The 20-slot baseline consumes 20x
-    # size; the portfolio control adds a 10x cushion for 30x total. The bounded
-    # 22-slot measurement canary keeps the same 30x cap, leaving an 8x (36%)
-    # cushion rather than silently increasing account exposure.
+    # quote_size x (1 - p) = quote_size. The portfolio control funds the exact
+    # restart-scoped width plus ten more quote-size units. That preserves the
+    # operator's original 20 + 10 design when capacity changes instead of
+    # silently shrinking its cushion. At size 13 / 24 this is 34 x 13 = $442.
     max_markets: int = DEFAULT_SLOT_CAPACITY
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
@@ -189,7 +191,8 @@ class CommissioningConfig:
     # session budget daily forever with nothing forcing attention -- and the
     # emergency ceiling cannot catch it either, because that re-baselines each
     # morning too. One bad day is variance; three in a row is a broken model.
-    # At live size 10 the $80 session limit bounds three days near $240.
+    # At size 10 / 20 slots the $80 baseline bounds three days near $240;
+    # wider configured breadth scales that bound proportionally.
     max_consecutive_loss_stop_days: int = 3
     # Exposure budgets remain distinct from realized-loss stops. Per-market
     # exposure has nine-times headroom. Portfolio exposure funds 20 fully
@@ -295,15 +298,25 @@ class CommissioningConfig:
 
     @property
     def max_session_loss_usd(self) -> Decimal:
-        """Keep the size-10 $80 realized-session policy proportional."""
+        """Scale the size-10/20-slot $80 session policy with breadth."""
 
-        return self.quote_size * Decimal("8")
+        return (
+            self.quote_size
+            * Decimal("8")
+            * Decimal(self.max_markets)
+            / Decimal(DEFAULT_SLOT_CAPACITY)
+        )
 
     @property
     def hard_stop_loss_usd(self) -> Decimal:
-        """Keep the size-10 $80 marked-equity policy proportional."""
+        """Scale the size-10/20-slot $80 hard policy with breadth."""
 
-        return self.quote_size * Decimal("8")
+        return (
+            self.quote_size
+            * Decimal("8")
+            * Decimal(self.max_markets)
+            / Decimal(DEFAULT_SLOT_CAPACITY)
+        )
 
     @property
     def max_market_exposure_usd(self) -> Decimal:
@@ -313,9 +326,9 @@ class CommissioningConfig:
 
     @property
     def max_portfolio_exposure_usd(self) -> Decimal:
-        """Fund twenty slots plus a proportional ten-quote cushion."""
+        """Fund every configured slot plus ten quote-size cushion units."""
 
-        return self.quote_size * Decimal("30")
+        return self.quote_size * Decimal(self.max_markets + 10)
 
     @property
     def max_daily_execution_fees_usd(self) -> Decimal:

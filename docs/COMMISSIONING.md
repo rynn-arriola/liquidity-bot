@@ -12,16 +12,17 @@ strategy is profitable and not permission to scale.
 
 - join every executable active sports market to its liquidity rewards and
   expose the account to the validated restart capacity: 20 by default and at
-  most 22 only for an explicitly authorized measurement canary;
+  most 24 only for an explicitly authorized measurement canary;
 - refresh selection every 15 minutes, deeply evaluate at most 100 books per
   pass through the shared governor, and round-robin deferred lower-ranked
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 5 contracts per quote by default across 20-22 concurrently bound markets
+- 5 contracts per quote by default across 20-24 concurrently bound markets
   (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 30; the live operator setting is
-  13. `quote_size.py` is the single quantity authority; `slot_capacity.py`
+  restart-scoped whole number from 5 through 30; it is 13 in the unchanged
+  live process and 10 for the next restart. `quote_size.py` is the single
+  quantity authority; `slot_capacity.py`
   independently validates breadth, and a bare launcher invocation always
   restores the 20-slot baseline rather than inheriting a prior canary;
 - require at least a 2-cent full-book spread before a new building quote;
@@ -45,14 +46,14 @@ strategy is profitable and not permission to scale.
   runner flatten the exact position with a stressed-depth, price-capped IOC;
   allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
-  An early cross costing more than `0.8 × quote size` ($8 at live size 10) is refused
+  An early cross costing more than `0.8 × quote size` ($8 at next-run size 10) is refused
   and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
-- allow at most `4 × quote size` taker exits (52 at live size 13), which remains
+- allow at most `4 × quote size` taker exits (40 at next-run size 10), which remains
   a terminal session evidence budget; independently, pause new trading for the
   ET day when gross owned taker fees reach the cent-rounded value of
-  `0.75 × quote size` ($9.75 at size 13), funding about 50 peak-fee exits at
+  `0.75 × quote size` ($7.50 at size 10), funding about 50 peak-fee exits at
   every size. The fee pause keeps monitoring,
   cancels and all reducing paths alive and can clear only after the next ET
   midnight plus a fresh risk-day/account baseline and the normal entry gates;

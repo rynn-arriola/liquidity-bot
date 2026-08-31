@@ -2,6 +2,7 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
+- **Size-10/24 canary reviewed and committed locally, not loaded:** the operator selected size 10 and breadth-scaled account stops. Source accepts only 20-24, uses `8/8/8`, derives $340 portfolio exposure, $96 session/hard stops and $1,012 comfortable capital at size 10 / 24, while per-market loss/exposure become $40/$90 and REST/strategy clocks stay fixed. A display audit found and repaired the TV browser's stale 22-slot ceiling; Discord and terminal regressions prove the complete 10/24 values. The display reversal failed exactly and all 969 Ubuntu tests pass; the unchanged live process remains size 13 / 22. [Evidence](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md)
 - **Capital-guidance terminal-history repair committed locally, not loaded:** the live card's `UNAVAILABLE` was a summary predicate defect, not stale capital. At 19:44Z the account mark was 13 seconds old with zero unresolved/`UNKNOWN_ABSENT` rows; all 59 reported unknowns were terminal venue history (55 filled, four rejected). The repair keeps active unowned and absent orders fail-closed, passed 964/964 Ubuntu tests plus reversal, and changes no API, strategy, risk or 22-slot path. It is not pushed/deployed; runner PID 937743 remains unchanged. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md)
 - **Tiny-residual cashout staged, not loaded:** source commit `6c5ea49` is pushed and present in laptop checkout HEAD `3ae1c69`; all 961 laptop tests, focused 87/87, production-flow 435/435 and two deliberate reversals passed. Exact venue-tradable `0.01`–`0.09` positions get five passive minutes, then sequential cancel-confirm-exact-IOC; `0.10+`, the 900-second clock, 22 slots and API cadence are unchanged. The unchanged runner PID 937743 still has marker `31c2574`, so this activates only after a separately authorized restart. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md)
 - **Hard-exit sequencing repair active; natural path acceptance pending:** source/deployment marker `31c2574` cancels one order at a time, building side first, and starts grace only after exact submission. All 952 laptop-checkout tests passed. The flat-gated 17:46Z restart loaded it; do not induce a two-order hard exit. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md)
@@ -26,7 +27,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 - **Dashboard scope repair accepted:** the active runner published exact PID 937743, capacity 22 and all 22 bound markets, replacing the stopped-run fallback scope. [Evidence](docs/history/TV_DASHBOARD_ACTIVE_SCOPE_2026-08-30.md)
 - **Host API correction active:** `0ff6e3c6` retains one aggregate 4/second WSL gate with independent background/entry/safety lanes, stops selection/revalidation on the first local cooldown, avoids error/fallback-scan amplification and exposes peer lane cooldowns without another API call. The first live window at 19:33:57Z reported 429s `0`, failures `0`, `shared=1` and all lanes at `0.0`; a later shared background deadline appeared at `2.7s` beside local 429s `0`, left entry/safety at zero and cleared next window. No backpressure, JSON-state, quarantine or runtime error appeared. [Evidence](docs/history/API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md)
 - **Desktop cold backup:** inactive; its latest parity execution-ledger recovery copy matches the laptop SHA-256 and passes SQLite integrity `ok`. It is not activated and has no credential path, trading process, service, timer or API check
-- **Selected quantity:** size 13 = 52 terminal taker exits, $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard and $10.40 early-cross. The selected gross owned taker-fee ET-day pause is `$9.75` (`0.75 × size`); the bot is live with this reviewed configuration
+- **Selected quantity/runtime:** the unchanged live size-13/22 process has its loaded $390 portfolio cap, $117 market exposure, $52 market loss, $104 session/hard, $10.40 early-cross, 52 terminal taker exits and $9.75 ET-day fee pause. The next size-10/24 target is $340 portfolio, $90 market exposure, $40 market loss, $96 session/hard, $8 early-cross, 40 exits and $7.50 fee pause
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
@@ -34,8 +35,8 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 | Setting | Current decision |
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
-| Quote size | 13 contracts selected; bot live |
-| Concurrent capacity | 22-slot bounded canary live and accepted; 20 remains the launcher default and permanent baseline |
+| Quote size | 13 loaded live; 10 selected for the next flat-gated restart |
+| Concurrent capacity | 22 live and accepted; 24 prepared but not loaded; 20 remains the bare-launcher default |
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2 cents; 1.5-cent retention hysteresis |

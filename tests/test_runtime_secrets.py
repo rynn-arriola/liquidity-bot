@@ -236,9 +236,9 @@ class DiscordTests(unittest.TestCase):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
-            slot_capacity=22, quote_size=Decimal("13"),
-            portfolio_exposure_cap_usd=Decimal("390"),
-            weekly_reserve_usd=Decimal("728"),
+            slot_capacity=24, quote_size=Decimal("10"),
+            portfolio_exposure_cap_usd=Decimal("340"),
+            weekly_reserve_usd=Decimal("672"),
             settled_cash_usd=Decimal("1300"),
             buying_power_usd=Decimal("1200"), capital_state_proven=True)
 
@@ -246,20 +246,20 @@ class DiscordTests(unittest.TestCase):
             field for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
             if "Capital guidance" in field["name"])
 
-        self.assertIn("13 / 22", field["value"])
-        self.assertIn("$286.00", field["value"])
-        self.assertIn("$104.00", field["value"])
-        self.assertIn("$728.00", field["value"])
-        self.assertIn("$1,118.00", field["value"])
-        self.assertIn("$182.00", field["value"])
+        self.assertIn("10 / 24", field["value"])
+        self.assertIn("$240.00", field["value"])
+        self.assertIn("$100.00", field["value"])
+        self.assertIn("$672.00", field["value"])
+        self.assertIn("$1,012.00", field["value"])
+        self.assertIn("$288.00", field["value"])
 
     def test_capital_guidance_hides_withdrawal_when_state_is_unproven(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW,
-            slot_capacity=22, quote_size=Decimal("13"),
-            portfolio_exposure_cap_usd=Decimal("390"),
-            weekly_reserve_usd=Decimal("728"),
+            slot_capacity=24, quote_size=Decimal("10"),
+            portfolio_exposure_cap_usd=Decimal("340"),
+            weekly_reserve_usd=Decimal("672"),
             settled_cash_usd=Decimal("1300"),
             buying_power_usd=Decimal("1200"), capital_state_proven=False,
             capital_unavailable_reason="account evidence is stale or unresolved")
@@ -269,7 +269,7 @@ class DiscordTests(unittest.TestCase):
             if "Capital guidance" in field["name"])
 
         self.assertIn("UNAVAILABLE", field["value"])
-        self.assertNotIn("$182.00", field["value"])
+        self.assertNotIn("$288.00", field["value"])
 
     def test_shadow_summary_labels_score_hours_as_this_run(self):
         summary = LiquiditySummary(

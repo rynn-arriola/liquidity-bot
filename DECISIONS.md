@@ -20,35 +20,33 @@ show the operator the discrepancy.
 | Choice | Decision in force |
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
-| Quote size | 13 contracts live; whole values 5-30 are supported and restart-scoped |
-| Concurrent market capacity | 20 slots remains the bare-launcher default. The 22-slot measurement canary passed, and on 2026-08-30 the operator explicitly selected another flat-gated restart at 22 after ending the monitoring period; the live setting is therefore 22 until a later operator decision |
+| Quote size | 13 contracts remains loaded in the live process. The next flat-gated restart target is 10; whole values 5-30 are supported and restart-scoped |
+| Concurrent market capacity | 20 slots remains the bare-launcher default. The live process remains 22. On 2026-08-31 the operator authorized preparing one flat-gated, restart-scoped 24-slot canary; it is not active until a separately authorized restart loads reviewed source. Values 20-24 are valid, while 25 remains refused |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
 | Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary configured-capacity service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
-| Portfolio / market exposure | `30 × / 9 × quote size`; $390 / $117 at size 13. The cap is unchanged by the 22-slot canary: 20 slots leave a 10-notional cushion and 22 leave an 8-notional (36%) cushion |
-| Market loss stop | `4 × quote size`; $52 at size 13 |
-| Account loss threshold | `8 × quote size`; $104 at size 13 for both realized-session and marked-equity sensors; an open-position marked breach is provisional until a breach-time position closes |
+| Portfolio / market exposure | `(configured slots + 10) × / 9 × quote size`. The next size-10/24 target is $340 / $90 with a $100 breadth cushion. The unchanged live size-13/22 process still has its loaded $390 / $117 until restart |
+| Market loss stop | `4 × quote size`; $40 at the next size-10 target ($52 remains loaded) |
+| Account loss threshold | `8 × quote size × configured slots / 20`; $96 at size 10 / 24 for both realized-session and marked-equity sensors. The live process remains loaded at $104. An open-position marked breach is provisional until a breach-time position closes |
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Closed and retired; preserve its historical rows/report, never cancel/repost automatically, and do not restart its public-trade collector without a new operator decision |
 | Adverse-fill/cliff study | Collect 60%, 70% and 80% retained-value `WOULD_REFUSE` labels plus recent-selector/reward/no-candidate/unknown cost with zero extra venue calls; no live refusal gate is authorized |
 | Spread-scalp study | Closed and stopped; preserve its isolated database/report and do not restart the collector without a new operator decision |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule; an exact venue-tradable `0.01`–`0.09` contract residue gets five passive minutes, then uses cancel-confirm-exact-IOC cashout |
-| Taker-exit session count | `4 × quote size`; 52 at size 13. This remains a terminal evidence ceiling independent of the fee pause |
-| Execution-fee day pause | Gross positive fees on owned taker fills, cent-rounded `0.75 × quote size`; $9.75 at size 13. This funds about 50 peak-fee exits at every size and closely aligns with the independent `4 × size` count guard at the selected size 13 (52 exits). At the ceiling, cancel/block building quotes but keep the process, monitoring and every exit path alive. Reconstruct from durable fills after a same-day restart; resume only on the next ET day after a fresh account/risk-day baseline and normal gates. Maker rebates do not offset the gross safety budget |
+| Taker-exit session count | `4 × quote size`; 40 at the next size-10 target. This remains a terminal evidence ceiling independent of the fee pause |
+| Execution-fee day pause | Gross positive fees on owned taker fills, cent-rounded `0.75 × quote size`; $7.50 at size 10. This funds about 50 peak-fee exits at every size and closely aligns with the independent `4 × size` count guard. At the ceiling, cancel/block building quotes but keep the process, monitoring and every exit path alive. Reconstruct from durable fills after a same-day restart; resume only on the next ET day after a fresh account/risk-day baseline and normal gates. Maker rebates do not offset the gross safety budget |
 
 The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
 
-Twenty-two passed 30 continuous minutes of startup and selection bursts with zero failures/429s, sustained queue, safety deadline, stream loss or persistent account ambiguity. After ending that monitoring period, the operator explicitly chose to restart at 22 again; 22 is the current live setting while 20 remains the bare-launcher default. Any later capacity-safety breach still requires a graceful stop and positive flat proof before another start.
+Twenty-two passed 30 continuous minutes of startup and selection bursts with zero failures/429s, sustained queue, safety deadline, stream loss or persistent account ambiguity. The prepared size-10/24 canary uses the same three private shards as `8/8/8`; it keeps the 4/s governor and six-hour horizon, scales breadth-dependent account stops, and lets quantity-derived values fall with size 10. Start only after graceful stop and positive flat/order-free proof, observe at least 30 continuous minutes through a selection burst, and return to size 10 / 22 on any failure/429, sustained queue, safety deadline, stream-coverage loss or persistent account ambiguity.
 
 ## Reporting and data choices
 
 - Reward and risk days use Eastern Time.
-- Discord capital guidance is read-only: exposure reserve plus seven hard-stop
-  days for delayed rewards. Pending is excluded; stale/ambiguous state is
-  unavailable; `free = max(0, min(buying power, settled cash - comfortable))`.
-  Size 13 / 22 slots means $286 + $104 + $728 = $1,118 comfortable.
+- Discord capital guidance is read-only: exposure reserve plus seven hard-stop days for delayed rewards. Pending is excluded; stale/ambiguous state is unavailable; `free = max(0, min(buying power, settled cash - comfortable))`.
+  At the next size-10/24 target, $240 footprint + $100 cushion + $672 weekly reserve = $1,012 comfortable. The running old process reports its loaded size-13/22 value until restart.
 - The seven-day reward table and hourly Discord post remain enabled and read-only.
 - `score hours` means merged resting side-hours, not model score-seconds.
 - Pending rewards are displayed but never counted as paid or finalized net.

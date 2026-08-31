@@ -35,6 +35,7 @@ class ApiWorkload:
     contract_requests_per_batch: int = 2
     contract_batch_size: int = 1
     balance_refresh_seconds: float = 5.0
+    account_mark_requests: int = 3
     cash_refresh_seconds: float = 15.0
     cash_activity_pages: int = 1
     reconcile_seconds: float = 10.0
@@ -72,6 +73,7 @@ class ApiWorkload:
         counts = (
             self.contract_requests_per_batch,
             self.contract_batch_size,
+            self.account_mark_requests,
             self.cash_activity_pages,
             self.open_order_pages,
             self.position_pages,
@@ -84,6 +86,8 @@ class ApiWorkload:
             raise ValueError("capacity request counts cannot be negative")
         if self.contract_batch_size <= 0:
             raise ValueError("contract_batch_size must be positive")
+        if self.account_mark_requests <= 0:
+            raise ValueError("account_mark_requests must be positive")
         if min(
             self.mutation_requests_per_second,
             self.absent_order_requests_per_second,
@@ -96,9 +100,9 @@ class ApiWorkload:
         if slots <= 0:
             raise ValueError("slots must be positive")
 
-        # The ordinary five-second balance read is already counted.  When the
-        # 15-second cash proof is due, the runner adds the activity pages and a
-        # second bracketing balance.
+        # The ordinary five-second marked-risk read is balance/positions/
+        # balance.  When the 15-second cash proof is due, the runner adds the
+        # activity pages and a second bracketing balance.
         cash_adjustment = (
             self.cash_activity_pages + 1
         ) / self.cash_refresh_seconds
@@ -114,7 +118,9 @@ class ApiWorkload:
         ) / self.selection_refresh_seconds
 
         reads = {
-            "balance": 1 / self.balance_refresh_seconds,
+            "account_mark": (
+                self.account_mark_requests / self.balance_refresh_seconds
+            ),
             "cash_adjustment": cash_adjustment,
             "account_reconciliation": reconciliation,
             "market_contracts": (
@@ -174,21 +180,21 @@ class HardwareProfile:
 
 @dataclass(frozen=True)
 class ExposureProfile:
-    """Slot capacity expressed without changing quote size or dollar policy."""
+    """Portfolio headroom expressed as quote-size units beyond all slots."""
 
-    portfolio_quote_units: float = 30.0
+    portfolio_cushion_quote_units: float = 10.0
     required_cushion_over_slots: float = 0.25
 
     def __post_init__(self) -> None:
-        if self.portfolio_quote_units <= 0:
-            raise ValueError("portfolio_quote_units must be positive")
+        if self.portfolio_cushion_quote_units < 0:
+            raise ValueError("portfolio cushion cannot be negative")
         if self.required_cushion_over_slots < 0:
             raise ValueError("required exposure cushion cannot be negative")
 
     def cushion_over_slots(self, slots: int) -> float:
         if slots <= 0:
             raise ValueError("slots must be positive")
-        return (self.portfolio_quote_units - slots) / slots
+        return self.portfolio_cushion_quote_units / slots
 
 
 @dataclass(frozen=True)
@@ -272,12 +278,12 @@ def _scheduled_requests(
                 sequence += 1
 
     add(
-        "balance",
+        "account_mark",
         _periodic_releases(
             interval=workload.balance_refresh_seconds,
             duration=duration_seconds,
         ),
-        count=1,
+        count=workload.account_mark_requests,
         deadline_seconds=10.0,
         priority=1,
     )

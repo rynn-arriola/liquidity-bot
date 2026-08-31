@@ -6,6 +6,8 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,11 +16,20 @@ from scripts import dashboard
 
 
 class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
-    def test_risk_caps_follow_the_restart_scoped_quantity(self):
-        config = dashboard.CommissioningConfig.diagnostic_defaults(
-            quote_size=Decimal("20"))
+    def test_risk_caps_follow_restart_scoped_quantity_and_breadth(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            quote_size = root / "quote_size"
+            slot_capacity = root / "slot_capacity"
+            quote_size.write_text("10\n", encoding="utf-8")
+            slot_capacity.write_text("24\n", encoding="utf-8")
+            config = dashboard.CommissioningConfig.diagnostic_defaults(
+                runtime_quote_size_path=quote_size,
+                runtime_slot_capacity_path=slot_capacity)
 
-        self.assertEqual(dashboard._risk_caps(config), (160.0, 80.0, 160.0))
+        self.assertEqual(config.quote_size, Decimal("10"))
+        self.assertEqual(config.max_markets, 24)
+        self.assertEqual(dashboard._risk_caps(config), (96.0, 40.0, 96.0))
 
     async def _render_with_failure(self, fail_at: str) -> str:
         class FailingAccount:

@@ -28,7 +28,7 @@ Before diagnosing, changing, deploying, stopping or starting anything:
    For a rollback or stable-version request, read
    [docs/STABLE_RELEASE.md](docs/STABLE_RELEASE.md) before touching git,
    deployment files, databases or the running process.
-   For the laptop live display, automatic browser behavior, or a visual 20-slot
+   For the laptop live display, automatic browser behavior, or a visual configured-slot
    diagnosis, read [docs/TV_DASHBOARD.md](docs/TV_DASHBOARD.md). Its local
    snapshot is operational evidence with an age, never authenticated venue
    proof.
@@ -160,7 +160,7 @@ are evidence the operator asked to see.
    venue orders and positions.
 2. Search the existing findings before proposing a cause.
 3. Inspect the complete affected flow, including failure, recovery, shutdown,
-   restart and 20-slot interactions.
+   restart and configured-capacity interactions.
 4. Explain the diagnosis and recommendation clearly. Preserve the operator's
    decision point when the change affects business behavior or risk.
 5. For every fix, before push or deployment: add focused regressions, deliberately reverse the fix to prove a test fails, restore it, run the appropriate complete suite, perform the permanent dedicated edge-case audit in `AI_ENGINEERING.md`, and review the final diff. Tests passing or operational urgency never substitutes for this review.

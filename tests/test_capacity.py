@@ -30,7 +30,7 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(
             set(result),
             {
-                "balance",
+                "account_mark",
                 "cash_adjustment",
                 "account_reconciliation",
                 "market_contracts",
@@ -41,7 +41,7 @@ class CapacityTests(unittest.TestCase):
                 "mutations",
             },
         )
-        self.assertAlmostEqual(result["balance"], 0.2)
+        self.assertAlmostEqual(result["account_mark"], 0.6)
         self.assertAlmostEqual(result["cash_adjustment"], 2 / 15)
         self.assertAlmostEqual(result["account_reconciliation"], 0.3)
         self.assertAlmostEqual(result["market_contracts"], 0.8)
@@ -58,7 +58,7 @@ class CapacityTests(unittest.TestCase):
         result = workload.request_breakdown(8)
 
         self.assertEqual(result["mutations"], 0.25)
-        self.assertEqual(result["balance"], 0.4)
+        self.assertEqual(result["account_mark"], 1.2)
 
     def test_bounded_contract_batches_remove_per_slot_request_growth(self):
         workload = ApiWorkload(contract_batch_size=8)
@@ -73,17 +73,17 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(item.private_connections, 3)
         self.assertEqual(item.public_subscriptions, 24)
 
-    def test_current_exposure_policy_limits_twenty_five_percent_cushion_to_24(self):
+    def test_dynamic_exposure_policy_preserves_ten_quote_units(self):
         workload = ApiWorkload(requested_headroom_fraction=0)
         exposure = ExposureProfile(
-            portfolio_quote_units=30,
+            portfolio_cushion_quote_units=10,
             required_cushion_over_slots=0.25,
         )
 
         self.assertTrue(
-            assess_capacity(24, workload, exposure=exposure).comfortable
+            assess_capacity(40, workload, exposure=exposure).comfortable
         )
-        item = assess_capacity(25, workload, exposure=exposure)
+        item = assess_capacity(41, workload, exposure=exposure)
         self.assertFalse(item.comfortable)
         self.assertIn("portfolio exposure", " ".join(item.blockers))
 
@@ -95,7 +95,7 @@ class CapacityTests(unittest.TestCase):
         )
         workload = ApiWorkload(requested_headroom_fraction=0)
         exposure = ExposureProfile(
-            portfolio_quote_units=100,
+            portfolio_cushion_quote_units=100,
             required_cushion_over_slots=0,
         )
 
@@ -137,7 +137,7 @@ class CapacityTests(unittest.TestCase):
             comfortable_runner_cpu_cores=0.75,
         )
         exposure = ExposureProfile(
-            portfolio_quote_units=30,
+            portfolio_cushion_quote_units=10,
             required_cushion_over_slots=0.25,
         )
 
@@ -148,13 +148,14 @@ class CapacityTests(unittest.TestCase):
                 hardware=hardware,
                 exposure=exposure,
             ),
-            24,
+            26,
         )
 
     def test_deadline_replay_passes_a_light_normal_workload(self):
         workload = ApiWorkload(
-            quiet_market_fraction=0.05,
+            quiet_market_fraction=0,
             mutation_requests_per_second=0.02,
+            contract_batch_size=8,
             selection_catalog_pages=2,
             selection_incentive_pages=1,
             selection_book_requests=4,
@@ -229,9 +230,9 @@ class CapacityTests(unittest.TestCase):
         fifo_misses = dict(fifo.misses_by_category)
         priority_misses = dict(priority.misses_by_category)
         self.assertGreater(
-            fifo_misses.get("balance", 0)
+            fifo_misses.get("account_mark", 0)
             + fifo_misses.get("account_reconciliation", 0),
-            priority_misses.get("balance", 0)
+            priority_misses.get("account_mark", 0)
             + priority_misses.get("account_reconciliation", 0),
         )
 

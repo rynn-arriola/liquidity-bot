@@ -51,3 +51,25 @@ reporting assertion passed, while four measurement-runner constructors refused
 their production host-wide limiter exactly because native Windows has no POSIX
 `flock`. The authoritative full run remains the exact deployed laptop WSL
 environment, where that required limiter and the installed SDK are available.
+
+## Deployment and first live acceptance
+
+Commit `9001a4b` was pushed and fast-forwarded into the clean laptop WSL
+checkout. `DEPLOYED_COMMIT` names that exact commit, whose complete production
+environment suite passed 970/970 in 63.004 seconds. The prior runner stopped
+gracefully; independent authenticated checks at 22:29:14Z and 22:34:31Z each
+proved zero open orders, zero positions, zero unresolved/absent/unowned state.
+
+Supervisor 1027997 and runner 1028005 then started with size 10 / 24. The
+loaded configuration reports the intended `$10.00` ET-day fee cap. Beginning
+at 22:36:22Z, the runner placed new orders rather than re-emitting the old
+`$7.50` pause. Its first three API windows reported 0 failures, 0 rate limits,
+maximum `2.154/s` and maximum queue depth one. This proves the configuration
+and immediate behavior; the separate 30-minute capacity gate remains governed
+by the slot-canary record.
+
+That gate completed through 23:06Z with 26 windows, 2,774 attempts,
+`1.209-2.154/s`, zero failures/429s and queue depth one. No old `$7.50`
+execution-fee pause reappeared. The configured `$10` cap remains a real safety
+budget: a later owned taker fill may legitimately consume the remaining daily
+allowance and pause new entries while exits stay available.

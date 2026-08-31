@@ -2,25 +2,23 @@
 
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
-**Size-10/24 canary activation pending:** source `59baf67` is pushed, deployed on the laptop and passed the capacity/display reversals plus all 969 tests locally and in WSL. It is not loaded. A later explicit restart requires graceful stop plus authenticated flat/order-free/ambiguity-free proof. Observe at least 30 continuous minutes across startup and selection: exact 24-owner scope and 24 TV cards, Discord $96 stops/$1,012 comfortable capital, `8/8/8` private coverage, CPU, API rates/categories, zero failure/429, no sustained queue/safety deadline and no unresolved/unknown state. Roll back to size 10 / 22 on any breach. [Evidence](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md).
-**Capital-guidance terminal-history activation pending:** source `e02011f` is pushed and included in the synchronized laptop checkout and deployed source marker `04129eb`; it ignores positively terminal `venue:` history while active unowned and `UNKNOWN_ABSENT` rows still force `UNAVAILABLE`. The unchanged runner still loads `31c2574`, so a separately authorized restart is required to activate it. First natural summary must show current unknown count zero and a dollar ceiling from fresh cash/power, without another API request. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md).
+**Discord capital-summary timing repair awaits push/deploy/restart:** reviewed source delays only a routine five-minute post whose fresh balance is temporarily blocked by current order ambiguity. It rechecks local proof every two seconds, sends a clean amount as soon as proof arrives and sends unchanged `UNAVAILABLE` after 60 seconds if it does not; stale balance, shutdown and critical summaries bypass the delay. Three focused regressions, deliberate reversal and the 973-test native pass (969 trading/reporting passes plus four expected POSIX-limiter refusals) are complete. Deploy/full-test only after push, then load at a flat-gated restart and observe the first scheduled Discord post. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md).
 **Sequential hard-exit natural acceptance pending:** active source/marker `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. The 17:46Z flat-gated restart loaded it and normal startup passed. Naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
-**Tiny-residual activation and natural acceptance pending:** source `6c5ea49` is pushed and included in the synchronized laptop checkout and deployed source marker `04129eb`; the final deployed source passed all 969 tests, while unchanged runner PID 937743 still loads `31c2574`. After a separately authorized flat-gated restart, naturally require `[action] ... reason=tiny_residual_timeout`, exact residual quantity, no overlapping cancel/IOC, positive flat proof and ordinary slot refill; do not induce a fill. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md).
-**Capital-guidance live display acceptance pending:** after activation the card must show the size-10/24 target as $240 footprint + $100 cushion + $672 weekly reserve = $1,012 comfortable. Free cash must match the fresh cash/power snapshot; stale/ambiguous state remains `UNAVAILABLE` and traffic must not change. The unchanged live process still has its loaded size-13/22 value. [Design](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md) · [breadth scaling](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md).
+**Tiny-residual natural acceptance pending:** source `6c5ea49` is loaded inside `9001a4b`. Naturally require `[action] ... reason=tiny_residual_timeout`, exact residual quantity, no overlapping cancel/IOC, positive flat proof and ordinary slot refill; do not induce a fill. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md).
 
-**Capacity ceiling remains open:** the bounded 22-slot canary passed its 30-minute startup/selection-burst gate with 3,392 attempts, zero failures/429s, request rates `1.263-2.643/s` and maximum queue depth one. Source prepares 24 with a dynamic ten-unit breadth cushion, but 22 remains the accepted width until the separate 24-slot gate above passes. The ET-day fee pause is now `$10 × (size / 10) × (slots / 24)`; naturally verify that the first size-10/24 restart reconstructs today's `$9.5300` below the new `$10` cap, places an order, and still pauses at or above the cap without affecting exits. [Capacity criteria](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence) · [24-slot design](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md) · [Fee scaling](docs/history/DAILY_EXECUTION_FEE_BREADTH_SCALING_2026-08-31.md).
+**Capacity ceiling remains open beyond 24:** loaded size 10 / 24 passed its 30-minute gate across 26 windows and 2,774 attempts at `1.209-2.154/s`, zero failures/429s and queue depth one. Continue natural degraded-stream/lifecycle/exit observation; rollback remains size 10 / 22 on any capacity-linked breach, and 25 stays refused. [Capacity criteria](docs/POLYMARKET_API_REFERENCE.md#api-capacity-and-scaling-evidence) · [24-slot evidence](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md).
 
 **API admission correction active; natural backpressure acceptance pending:** `0ff6e3c6` keeps one aggregate 4/second WSL gate while isolating background 2/second, entry 4/second and safety 4/second lanes; passive reducers are safety, 429 cooldown is class-scoped, long non-safety work defers before network IO, stop wakes old waits and native Windows fails closed. It also stops selection/revalidation at its first local cooldown, keeps designed pause out of Discord `Lost to errors` and runtime-error accounting, avoids cache-to-full-scan amplification, and merges peer-published lane cooldowns into `[api-budget]` without another request. All 926 local/exact-deployed tests pass and both deliberate reversals failed exactly. `Command 1` loaded it after fresh zero-position/zero-order proof. The first live window reported `shared=1`, failures/429s `0`, all lane fields present and no JSON-state, quarantine or runtime error. A later window accepted merged visibility with background `2.7s`, entry/safety zero and local 429s zero; it cleared next window. Naturally require one `[api-backpressure]` line without market-failure fan-out or immediate fallback when a selection is actually deferred, plus bounded safety wait and no mutation retry/quarantine. A 22-book REST-only refresh still cannot fit inside five seconds at 4/second, so stream-loss capacity remains open. [Admission evidence](docs/history/HOST_API_ADMISSION_PRIORITY_2026-08-30.md) · [observability evidence](docs/history/API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md).
 ## 0a. Load and naturally accept private Ping/Pong liveness
 Commit `2aa9fec` includes the `a1ba212` repair and is deployed after a flat-gated restart and 830 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 
-## 0. Continue natural acceptance of the size-13 deployment
-Commit `2aa9fec` is active after 830 deployed WSL tests and exact marker/source proof. At 14:27Z it held 19/20 quoting slots, 34 quantity-13 orders and zero positions/absent/unresolved rows or risk stop. Continue observing the measured execution-history 429s as part of the capacity gate.
+## 0. Continue natural acceptance of size 10 / 24
+Commit `9001a4b` is active after 970 deployed WSL tests and exact marker/source proof. Its bounded canary passed; continue observing natural fills/exits, stream recovery and lifecycle bursts without inducing a fault.
 
 The score-clock repair already received natural acceptance: one backward sample
 logged `action=ignored_stale_sample`, added no retirement and the runner reached
-20/20. Continue observing quantity-13 fills/exits, risk scaling, stream
-freshness and mutation resolution; do not induce a fault.
+its configured scope. Continue observing size-10 fills/exits, risk scaling,
+stream freshness and mutation resolution; do not induce a fault.
 
 ## 1. Observe the laptop as the only production runtime
 The operator explicitly authorized the laptop restart. Commit `a1ba212` is
@@ -52,7 +50,7 @@ passed. Upload/readback and a restore drill remain because the operator deferred
 Drive. Never upload recovery/SSH keys, raw SQLite/WAL files or plaintext.
 
 ## 2. Remaining natural acceptance
-The current live runner loaded source marker `31c2574`. Continue accepting these paths
+The current live runner loaded source marker `9001a4b`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply
@@ -93,8 +91,8 @@ global fallback.
 
 ## 5. Collect the retained-value refusal shadow
 
-From the active `0ff6e3c6` runner, collect the 60%, 70% and 80%
-`WOULD_REFUSE` labels under the current size-13/22-slot configuration. Require
+From the active runner, collect the 60%, 70% and 80%
+`WOULD_REFUSE` labels under the current size-10/24-slot configuration. Require
 complete PLACE/fill linkage, recent-candidate versus stale/no-candidate counts, projected
 and paid reward opportunity cost, dark-slot time and canonical realized trading
 outcome. Freeze a later held-out interval before proposing any threshold. The

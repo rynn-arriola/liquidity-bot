@@ -262,9 +262,13 @@ above that comfortable balance; it rounds down and becomes `UNAVAILABLE` on
 stale, unresolved, unknown or integrity-failed account state. It uses the
 balance snapshot the runner already fetched, makes no additional API request,
 does not count pending rewards and cannot withdraw funds or change trading.
-At the selected next-run size 10 / 24, comfortable capital is $1,012: $240
-slot footprint, $100 exposure cushion and $672 weekly reserve (seven $96
-hard-stop days). The unchanged live size-13/22 process retains its loaded value.
+To avoid sampling an ordinary cancel between submission and terminal proof, a
+routine post may wait up to 60 seconds only while its balance is fresh and
+current order ambiguity is the blocker; two-second rechecks are ledger-only.
+Stale or persistent evidence remains `UNAVAILABLE`, and shutdown/critical
+summaries never wait. At loaded size 10 / 24, comfortable capital is $1,012:
+$240 slot footprint, $100 exposure cushion and $672 weekly reserve (seven $96
+hard-stop days).
 
 Unexpected termination uses the error webhook. Discord HTTP runs outside the
 WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine

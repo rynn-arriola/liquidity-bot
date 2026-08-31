@@ -45,6 +45,41 @@ native Windows because POSIX host locking is mandatory. The same complete
 suite passed 964/964 in an isolated Ubuntu WSL environment on the inactive
 desktop in 119.751 seconds.
 
-The repair is reviewed and committed locally but is not yet pushed, deployed
-or loaded. The
-laptop supervisor and runner were not stopped or restarted.
+The original repair was committed as `e02011f`; deployed commit `9001a4b`
+includes it and the 22:34Z flat-gated restart loaded it. A live check at
+22:39:53Z saw one genuine cancel intent and correctly stayed `UNAVAILABLE`.
+After terminal proof arrived, the 22:40:26Z check saw zero unresolved and zero
+unknown orders despite the retained terminal venue history, fresh settled cash
+and buying power of `$1,406.26`, a `$1,012.00` comfortable balance and
+`Free to withdraw $394.25`. The check used the same ledger predicate and
+capital function as Discord; it made one separately governed balance read and
+changed no trading state.
+
+## Follow-up: scheduled-summary timing
+
+The operator still saw `UNAVAILABLE` in the Discord webhook after the loaded
+terminal-history repair. This does not contradict the clean `$394.25` sample.
+The runner sends the card every five minutes, and its ordinary cancel flow is
+intentionally unresolved until positive terminal proof arrives. A scheduled
+post that lands inside those seconds truthfully sees ambiguity even though the
+next local state is clean. Repeated order maintenance makes that timing
+collision common enough to look permanent.
+
+The follow-up repair leaves the capital predicate unchanged. A routine summary
+with fresh balance evidence and current order ambiguity waits for local proof,
+rechecking every two seconds for at most 60 seconds. It sends immediately once
+proof is clean; at the bound it sends the same fail-closed `UNAVAILABLE` value.
+Missing or stale balance evidence is never deferred, and shutdown/critical
+summaries bypass the delay. Rechecks read the ledger only: no balance, order or
+other venue request is added, and no strategy, ownership, risk, slot, reward,
+shutdown or restart behavior changes.
+
+Focused regressions cover a cancel that clears after two seconds and produces
+a numeric card, ambiguity that survives the exact 60-second boundary and stays
+unavailable, and stale balance evidence that reports immediately. The clean
+path asserts the limiter count does not move. Deliberately bypassing the
+deferral failed the brief-proof regression exactly. The complete native run
+reached 973 tests: every 969 trading/reporting assertion passed and the same
+four authenticated measurement constructors refused native Windows because
+the required POSIX host lock is unavailable. Exact laptop WSL verification,
+deployment, restart activation and the first natural scheduled post remain.

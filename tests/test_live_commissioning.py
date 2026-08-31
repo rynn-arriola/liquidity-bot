@@ -7288,6 +7288,111 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_scheduled_summary_waits_for_brief_order_proof_then_sends(self):
+        """Ordinary cancel transit must not become a misleading Discord card."""
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        now = runner._now()
+        unresolved = [{
+            "intent_id": "cancel-in-flight",
+            "market_slug": runner.market_slug,
+        }]
+        runner.ledger.unresolved_intents = lambda slug=None: list(unresolved)
+        runner.ledger.account_unknown_order_count = lambda: 0
+        before = len(notifier.payloads)
+        venue_calls = runner.gateway.limiter.calls
+
+        next_due = await runner._send_scheduled_summary(now)
+
+        self.assertEqual(len(notifier.payloads), before)
+        self.assertEqual(next_due, now + timedelta(seconds=2))
+        self.assertEqual(
+            runner.gateway.limiter.calls, venue_calls,
+            "proof deferral must remain ledger-only")
+
+        unresolved.clear()
+        next_due = await runner._send_scheduled_summary(
+            now + timedelta(seconds=2))
+
+        self.assertEqual(len(notifier.payloads), before + 1)
+        capital = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertNotIn("UNAVAILABLE", capital)
+        self.assertEqual(next_due, now + timedelta(minutes=5, seconds=2))
+        self.assertIsNone(runner._summary_proof_wait_started_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduled_summary_reports_persistent_ambiguity_at_bound(self):
+        """Deferral is bounded; missing proof remains visibly unavailable."""
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        now = runner._now()
+        runner.ledger.unresolved_intents = lambda slug=None: [
+            {
+                "intent_id": "still-unresolved",
+                "market_slug": runner.market_slug,
+            }]
+        runner.ledger.account_unknown_order_count = lambda: 1
+        before = len(notifier.payloads)
+
+        first_due = await runner._send_scheduled_summary(now)
+        self.assertEqual(len(notifier.payloads), before)
+        self.assertEqual(first_due, now + timedelta(seconds=2))
+
+        # Preserve fresh balance evidence so the test reaches the ambiguity
+        # bound rather than taking the deliberately immediate stale-data path.
+        runner.balance = replace(
+            runner.balance,
+            observed_at=now + timedelta(seconds=60))
+        next_due = await runner._send_scheduled_summary(
+            now + timedelta(seconds=60))
+
+        self.assertEqual(len(notifier.payloads), before + 1)
+        capital = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn("UNAVAILABLE", capital)
+        self.assertEqual(next_due, now + timedelta(minutes=6))
+        self.assertIsNone(runner._summary_proof_wait_started_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduled_summary_never_defers_stale_balance_evidence(self):
+        """A balance-data fault stays visible instead of masquerading as churn."""
+
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        now = runner._now()
+        runner.balance = replace(
+            runner.balance,
+            observed_at=now - timedelta(
+                seconds=runner.risk_guard.max_equity_age_seconds + 1))
+        runner.ledger.unresolved_intents = lambda slug=None: [
+            {
+                "intent_id": "also-unresolved",
+                "market_slug": runner.market_slug,
+            }]
+        before = len(notifier.payloads)
+
+        next_due = await runner._send_scheduled_summary(now)
+
+        self.assertEqual(len(notifier.payloads), before + 1)
+        capital = next(
+            field["value"]
+            for field in notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn("UNAVAILABLE", capital)
+        self.assertEqual(next_due, now + timedelta(minutes=5))
+        self.assertIsNone(runner._summary_proof_wait_started_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_shutdown_drains_buffered_terminal_cancel_proof(self):
         """A stopped consumer must still apply proof already on its socket."""
 

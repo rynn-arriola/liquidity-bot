@@ -125,13 +125,23 @@ adds no API traffic.
   graceful stop, positive flat proof and rollback to size 10 / 22 slots.
 - The running laptop process was not stopped or restarted for this work.
 
-## Acceptance still required
+## Live acceptance
 
-After an explicitly authorized flat-gated restart at `auto 10 24`, observe at
-least 30 continuous minutes spanning startup and a real selection burst. Record
-API attempt rates/categories, failures/429s, limiter wait/queue tails, exact
-three-shard coverage, CPU use, 24-owner scope, unresolved/unknown state and
-normal exit progress. Until that passes, 22 is the accepted live width.
+Commit `9001a4b` passed all 970 tests in the exact laptop WSL environment. The
+prior process stopped gracefully, and authenticated checks at 22:29:14Z and
+22:34:31Z each proved zero venue orders, positions, unresolved intents,
+`UNKNOWN_ABSENT` rows and active unowned orders before size 10 / 24 started.
+
+The 22:36Z startup reached exact 24-owner scope and placed 53 orders through a
+real selection burst. The continuous gate through 23:06Z covered 26 API
+windows and 2,774 attempts: `1.209-2.154/s`, zero failures, zero 429s, wait p99
+at most `0.464s`, response p99 at most `1.294s` and queue depth at most one.
+Working order count normally held 35-43 across 21-24 markets. Transient
+cancel-time unresolved/unknown state cleared normally; there was no persistent
+ambiguity, execution-fee error, runtime recovery, retirement or private-shard
+fault. One ordinary lifecycle top-up replaced an expired market and restored
+24 active owners. The bounded canary therefore passed; size 10 / 22 remains
+the rollback target for any later capacity-linked breach, and 25 stays refused.
 
 ## Local verification
 

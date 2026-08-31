@@ -80,6 +80,10 @@ only from fresh, ambiguity-free account evidence and is
 `max(0, min(buyingPower, currentBalance - comfortable balance))`, rounded down
 to cents. Pending rewards are never treated as cash. This is observation only:
 it neither submits a withdrawal nor changes entry, exposure or stop behavior.
+A routine post whose fresh balance is blocked only by current order ambiguity
+may wait up to 60 seconds for local terminal proof, with ledger-only rechecks
+every two seconds. Stale evidence is reported immediately and persistent
+ambiguity remains `UNAVAILABLE`; shutdown and critical summaries do not wait.
 
 The runner measures marked account equity as the API's USD `currentBalance`
 plus every open position's documented `cashValue`; Retail `assetNotional` has

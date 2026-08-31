@@ -492,6 +492,9 @@ These are implementation requirements, not suggestions.
     render every dependent venue field `unknown`/`unavailable`, must never say
     `flat`, and must not derive empty-slot arithmetic from default counters.
     Reporting availability cannot alter runner, ledger, selector or risk state.
+    A routine summary may defer at most 60 seconds only when fresh balance is
+    blocked by current order ambiguity; rechecks are ledger-only, persistent
+    ambiguity remains unavailable, and shutdown/critical summaries never wait.
 76. Explicit closed-market lifecycle proof may reclaim a slot only through the
     incremental top-up transaction. A cached exact market row may schedule the
     scan, but the exact owner must be freshly read as closed, inactive or a

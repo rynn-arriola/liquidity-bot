@@ -75,7 +75,7 @@ clock can let a few cents retain an entire market slot for most or all of the
 ## Deployment state
 
 Source commit `6c5ea49` is pushed and staged in laptop checkout HEAD `3ae1c69`.
-The operator explicitly withheld restart authorization: supervisor PID 937731
-and runner PID 937743 remained unchanged, and `DEPLOYED_COMMIT` truthfully
-remains `31c2574`. The feature is therefore available for the next separately
-authorized restart but is not active in the current process.
+That paragraph records the original staged state. Deployed commit `9001a4b`
+includes the source and was loaded by the 22:34Z flat-gated restart as
+supervisor 1027997 / runner 1028005 after all 970 laptop WSL tests passed.
+Natural tiny-residue acceptance remains pending; do not induce a fill.

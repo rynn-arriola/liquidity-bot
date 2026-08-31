@@ -277,6 +277,17 @@ class CommissioningRunner:
     # runs every 5 minutes, so this is effectively three summaries of silence.
     QUIET_ALARM_SECONDS = 900.0
 
+    # A five-minute report can land in the few seconds between an owned cancel
+    # being submitted and its positive terminal proof arriving. Publishing
+    # `UNAVAILABLE` for that ordinary in-flight interval makes capital
+    # guidance look permanently broken even though the next account state is
+    # clean. Delay only that scheduled report, never the safety gate or the
+    # withdrawal calculation. Persistent ambiguity still becomes visible at
+    # this bound, and the recheck is ledger-only so reporting cannot consume
+    # venue capacity needed by trading.
+    SUMMARY_PROOF_DEFERRAL_SECONDS = 60.0
+    SUMMARY_PROOF_RECHECK_SECONDS = 2.0
+
     # How often to re-ask the venue about an order we have lost sight of. See
     # the throttle in `_rest_reconcile`: unbounded re-asking puts a 404's
     # retry backoff on the critical path of every reconcile.
@@ -589,6 +600,10 @@ class CommissioningRunner:
         self._bot_era_rewards: dict[str, Decimal] = {}
         self._orders_before = 0
         self._runtime_error_counts: dict[str, int] = {}
+        # First scheduled-summary instant whose otherwise-fresh capital proof
+        # was blocked only by current order ambiguity. Shutdown and critical
+        # summaries bypass this reporting-only delay.
+        self._summary_proof_wait_started_at: datetime | None = None
         self._entry_mutation_blocked_until: datetime | None = None
         self._risk_mutation_blocked_until: datetime | None = None
         self._mutation_access_denial_announced = False
@@ -4738,6 +4753,56 @@ class CommissioningRunner:
         await self._alarm_if_quoting_nothing(
             now, resting=resting_markets, reasons=idle_reasons)
 
+    def _scheduled_summary_has_transient_capital_ambiguity(
+        self, now: datetime,
+    ) -> bool:
+        """Return whether a routine summary may briefly wait for order proof.
+
+        Only current order ambiguity is deferrable. Missing/stale balance
+        evidence is reported immediately as unavailable, because waiting must
+        not hide an account-data problem. This helper performs local reads
+        only and cannot alter ownership or ask the venue for fresher state.
+        """
+
+        if self.balance is None or self.risk_guard is None:
+            return False
+        balance_age = (now - self.balance.observed_at).total_seconds()
+        if not 0 <= balance_age <= self.risk_guard.max_equity_age_seconds:
+            return False
+        return bool(
+            self.ledger.unresolved_intents()
+            or self.ledger.account_unknown_order_count())
+
+    async def _send_scheduled_summary(self, now: datetime) -> datetime:
+        """Send a routine summary or return its next bounded proof recheck.
+
+        The capital calculation remains fail-closed. A clean state sends now;
+        an ordinary in-flight order waits at most 60 seconds; persistent
+        ambiguity then sends the unchanged `UNAVAILABLE` representation.
+        """
+
+        if not self._scheduled_summary_has_transient_capital_ambiguity(now):
+            self._summary_proof_wait_started_at = None
+            await self._send_summary(now)
+            return now + timedelta(minutes=5)
+
+        started = self._summary_proof_wait_started_at
+        if started is None or now < started:
+            self._summary_proof_wait_started_at = now
+            return now + timedelta(
+                seconds=self.SUMMARY_PROOF_RECHECK_SECONDS)
+
+        if ((now - started).total_seconds()
+                >= self.SUMMARY_PROOF_DEFERRAL_SECONDS):
+            self._summary_proof_wait_started_at = None
+            await self._send_summary(now)
+            return now + timedelta(minutes=5)
+
+        return min(
+            started + timedelta(seconds=self.SUMMARY_PROOF_DEFERRAL_SECONDS),
+            now + timedelta(seconds=self.SUMMARY_PROOF_RECHECK_SECONDS),
+        )
+
     async def _alarm_if_quoting_nothing(
         self, now: datetime, *, resting: int, reasons: tuple[tuple[str, int], ...],
     ) -> None:
@@ -7571,8 +7636,8 @@ class CommissioningRunner:
                                 "order mutation unresolved for more than "
                                 f"{limit:.0f} seconds")
                         if now >= next_summary:
-                            await self._send_summary(now)
-                            next_summary = now + timedelta(minutes=5)
+                            next_summary = await self._send_scheduled_summary(
+                                now)
                     # Attributable mutations quarantine only their owner. An
                     # intent without a market cannot be scoped, so retain the
                     # account-wide fail-closed behavior for that case.
@@ -7591,8 +7656,7 @@ class CommissioningRunner:
                 if stop_reason:
                     break
                 if now >= next_summary:
-                    await self._send_summary(now)
-                    next_summary = now + timedelta(minutes=5)
+                    next_summary = await self._send_scheduled_summary(now)
         except asyncio.CancelledError:
             stop_reason = self._stop_requested or "process_cancelled"
         except Exception as exc:

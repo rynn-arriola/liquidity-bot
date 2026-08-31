@@ -68,3 +68,8 @@ the bot supervisor/runner remained 563476/563490. The first repaired snapshot
 reported `CURRENT_LEDGER_EVIDENCE`, 21 quoting, zero observed, one empty, 38
 working orders and zero position/unresolved/unknown rows. The exact runner cache
 will replace fallback only after the next ordinary bot restart; none occurred.
+
+The next ordinary restart occurred on 2026-08-31 after the ET-rollover repair.
+At 04:31:47Z the active runner published `RUNNER_ACTIVE_MARKETS` with exact PID
+645718, capacity 22 and all 22 bound markets. This completes the pending exact
+runner-scope acceptance without a dashboard-only reload.

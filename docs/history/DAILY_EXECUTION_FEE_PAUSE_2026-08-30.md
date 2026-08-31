@@ -136,3 +136,27 @@ rollover regression passes; deliberately removing the early roll reproduces
 the exact `ET risk day changed during non-trading activity snapshot` error.
 All 363 focused tests and the complete 937-test suite pass on the edited
 checkout.
+
+## Repaired live acceptance
+
+Commit `3120a6318310b0b3b069a769d98d3ded4515ea17` was pushed, fast-forwarded
+into the WSL runtime, retested with all 937 tests passing in 67.043 seconds and
+recorded in `DEPLOYED_COMMIT`. Parity matched Windows, GitHub, WSL and deployed
+source. A fresh authenticated gate then proved zero live venue orders, zero
+nonzero positions and zero `SUBMITTING`/`UNCERTAIN` intents before exactly one
+size-13/22-slot runner started.
+
+The first market-WebSocket handshake returned HTTP 503. Startup remained
+fail-closed with zero mutations, and the existing retry recovered without an
+operator restart. The repaired runner wrote the durable 2026-08-31 baseline at
+04:31:45Z, began PLACE actions at 04:31:55Z and reconciled 40 of the first 41
+creates by 04:32:49Z. A direct authenticated read reported 41 live orders
+across 21 markets and zero nonzero-position markets. The corresponding
+`[api-budget]` window contained 589 reads, 41 mutations, zero failures, zero
+rate limits, p99 wait 0.470 seconds and maximum queue depth one. This accepts
+the rollover ordering repair, fresh cash-day gate, new-day fee reset and
+post-rollover entry path on the live runtime.
+
+The same restart also completed the pending dashboard-scope acceptance: the
+runner published `RUNNER_ACTIVE_MARKETS` at 04:31:47Z with exact PID 645718,
+capacity 22 and all 22 bound markets.

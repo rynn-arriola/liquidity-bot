@@ -81,5 +81,19 @@ path asserts the limiter count does not move. Deliberately bypassing the
 deferral failed the brief-proof regression exactly. The complete native run
 reached 973 tests: every 969 trading/reporting assertion passed and the same
 four authenticated measurement constructors refused native Windows because
-the required POSIX host lock is unavailable. Exact laptop WSL verification,
-deployment, restart activation and the first natural scheduled post remain.
+the required POSIX host lock is unavailable.
+
+Exact staged laptop WSL verification passed 973/973. Commit `0245d31` was
+pushed to GitHub, fast-forwarded into the laptop checkout and WSL deployment,
+and written to `DEPLOYED_COMMIT`. Command 1 then stopped the old process
+gracefully in about nine seconds; its final record said `flat: true`, and an
+independent authenticated read at 23:44:39Z proved zero venue orders,
+positions, unresolved intents, unknown absences and active unowned orders.
+
+The restarted size-10/24 process is supervisor 1029753 / runner 1029761. It
+published the exact 24-owner scope and its first natural scheduled summary ran
+the loaded path at 23:52:12Z. The surrounding API windows were 1.270-1.484/s
+with zero failures or 429s; the immediately following ledger observation had
+zero unresolved and zero unknown rows. Discord's outbound message body is not
+persisted locally, so the operator-visible field remains the final rendering
+check. No manual webhook fire or extra live API probe was used for acceptance.

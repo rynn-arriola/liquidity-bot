@@ -2,7 +2,7 @@
 
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
-**Discord capital-summary timing repair awaits push/deploy/restart:** reviewed source delays only a routine five-minute post whose fresh balance is temporarily blocked by current order ambiguity. It rechecks local proof every two seconds, sends a clean amount as soon as proof arrives and sends unchanged `UNAVAILABLE` after 60 seconds if it does not; stale balance, shutdown and critical summaries bypass the delay. Three focused regressions, deliberate reversal and the 973-test native pass (969 trading/reporting passes plus four expected POSIX-limiter refusals) are complete. Deploy/full-test only after push, then load at a flat-gated restart and observe the first scheduled Discord post. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md).
+**Discord capital-summary rendering needs only operator-visible acceptance:** `0245d31` is pushed, deployed and loaded after 973/973 exact laptop WSL tests and flat/order-free proof. The first routine post traversed the loaded path at 23:52:12Z; the webhook response body is not retained locally, so confirm the visible `Free to withdraw` field. If it is still unavailable, record that message's exact timestamp before changing policy: persistent ambiguity or stale balance must remain fail-closed. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md).
 **Sequential hard-exit natural acceptance pending:** active source/marker `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. The 17:46Z flat-gated restart loaded it and normal startup passed. Naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
 **Tiny-residual natural acceptance pending:** source `6c5ea49` is loaded inside `9001a4b`. Naturally require `[action] ... reason=tiny_residual_timeout`, exact residual quantity, no overlapping cancel/IOC, positive flat proof and ordinary slot refill; do not induce a fill. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md).
 
@@ -13,7 +13,7 @@ This file contains unfinished work. Completed implementation history is in
 Commit `2aa9fec` includes the `a1ba212` repair and is deployed after a flat-gated restart and 830 WSL tests. Naturally accept a quiet private-shard interval beyond 180 seconds without false handoff and confirm any real Ping/Pong failure still enters bounded recovery with `cancels=0`, unchanged ownership, no persistent unresolved/`UNKNOWN_ABSENT` and no quarantine.
 
 ## 0. Continue natural acceptance of size 10 / 24
-Commit `9001a4b` is active after 970 deployed WSL tests and exact marker/source proof. Its bounded canary passed; continue observing natural fills/exits, stream recovery and lifecycle bursts without inducing a fault.
+Commit `0245d31` is active after 973 exact staged WSL tests and exact marker/source proof. Its bounded canary passed; continue observing natural fills/exits, stream recovery and lifecycle bursts without inducing a fault.
 
 The score-clock repair already received natural acceptance: one backward sample
 logged `action=ignored_stale_sample`, added no retirement and the runner reached
@@ -50,7 +50,7 @@ passed. Upload/readback and a restore drill remain because the operator deferred
 Drive. Never upload recovery/SSH keys, raw SQLite/WAL files or plaintext.
 
 ## 2. Remaining natural acceptance
-The current live runner loaded source marker `9001a4b`. Continue accepting these paths
+The current live runner loaded source marker `0245d31`. Continue accepting these paths
 only when they occur naturally; do not induce a live failure:
 
 - persistent economic-idle replacement commits one-for-one against real supply

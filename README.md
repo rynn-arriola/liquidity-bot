@@ -105,7 +105,7 @@ cost-basis floor. At 900 seconds of inventory age, or 300 seconds before
 kickoff, the bounded IOC path may cross. The session still ends after
 `4 × quote size` confirmed taker exits. Gross owned taker fees instead pause
 new trading for the ET risk day at the cent-rounded equivalent of
-`$6 × quote size / 13`; the process and exits remain alive and normal gates
+`$0.75 × quote size`; the process and exits remain alive and normal gates
 may authorize entry again the next ET day.
 
 Recoverable market/private adapter failures no longer terminate the process.

@@ -29,7 +29,7 @@ These are implementation requirements, not suggestions.
     (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
     (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`),
     taker-exit count (`4 × size`) and the cent-rounded ET-day gross taker-fee
-    pause (`6 / 13 × size`) are computed properties. Portfolio
+    pause (`0.75 × size`) are computed properties. Portfolio
     exposure funds 20 baseline slot-notionals plus a ten-notional cushion; at
     22 it remains fixed and leaves an eight-notional (36%) cushion.
 
@@ -122,7 +122,8 @@ These are implementation requirements, not suggestions.
 35. A session stops after `4 × quote size` confirmed taker exits (52 at the
     persisted live size 13), then cancels, reconciles and proves flat. The
     independent gross owned taker-fee budget is scoped to the ET risk day and
-    equals the cent-rounded value of `6 / 13 × quote size` ($6.00 at size 13).
+    equals the cent-rounded value of `0.75 × quote size` ($9.75 at size 13),
+    funding about 50 peak-fee exits at every authorized size.
     Reaching it immediately makes every flat-state building quote undesired,
     but never terminates the process or disables a passive reducer, IOC exit,
     cancel, state monitor or pre-kickoff flatten. Durable same-day fills

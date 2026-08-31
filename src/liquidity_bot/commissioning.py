@@ -312,11 +312,9 @@ class CommissioningConfig:
 
     @property
     def max_daily_execution_fees_usd(self) -> Decimal:
-        """Scale the operator's size-13 $6 ET-day gross-fee budget."""
+        """Fund fifty peak-fee exits per ET day at every quote size."""
 
-        return (
-            self.quote_size * Decimal("6") / Decimal("13")
-        ).quantize(Decimal("0.01"))
+        return (self.quote_size * Decimal("0.75")).quantize(Decimal("0.01"))
 
     @classmethod
     def diagnostic_defaults(

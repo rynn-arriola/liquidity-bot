@@ -76,7 +76,7 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
         self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
-            self.authorized().max_daily_execution_fees_usd, Decimal("2.31"))
+            self.authorized().max_daily_execution_fees_usd, Decimal("3.75"))
         self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
         self.assertEqual(
             self.authorized().force_exit_before_start_seconds, 300)
@@ -186,7 +186,7 @@ class CommissioningTests(unittest.TestCase):
                     config.max_market_exposure_usd, Decimal(size) * Decimal("9"))
                 self.assertEqual(
                     config.max_daily_execution_fees_usd,
-                    (Decimal(size) * Decimal("6") / Decimal("13")).quantize(
+                    (Decimal(size) * Decimal("0.75")).quantize(
                         Decimal("0.01")))
                 self.assertEqual(config.max_taker_exit_orders, size * 4)
                 self.assertEqual(
@@ -207,7 +207,7 @@ class CommissioningTests(unittest.TestCase):
 
         self.assertEqual(config.max_taker_exit_orders, 52)
         self.assertEqual(
-            config.max_daily_execution_fees_usd, Decimal("6.00"))
+            config.max_daily_execution_fees_usd, Decimal("9.75"))
 
     def test_size_ten_and_twenty_match_operator_risk_profiles(self):
         expected = {

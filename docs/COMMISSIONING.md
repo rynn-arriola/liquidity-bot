@@ -47,7 +47,8 @@ strategy is profitable and not permission to scale.
 - allow at most `4 × quote size` taker exits (52 at live size 13), which remains
   a terminal session evidence budget; independently, pause new trading for the
   ET day when gross owned taker fees reach the cent-rounded value of
-  `6 / 13 × quote size` ($6.00 at size 13). The fee pause keeps monitoring,
+  `0.75 × quote size` ($9.75 at size 13), funding about 50 peak-fee exits at
+  every size. The fee pause keeps monitoring,
   cancels and all reducing paths alive and can clear only after the next ET
   midnight plus a fresh risk-day/account baseline and the normal entry gates;
 - $40 per-market realized-loss stop and one $80 account threshold measured by

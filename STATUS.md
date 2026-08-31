@@ -2,8 +2,8 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Verified:** 2026-08-30 23:28 ET / 2026-08-31 03:28 UTC
-- **Liquidity bot:** RUNNING on the laptop under supervisor PID 632255 and runner PID 632263, but new trading is correctly PAUSED for the rest of the 2026-08-30 ET risk day. Startup reconstructed `$9.9600` gross owned taker fees against the new `$6.00` day budget; the process, monitoring and exits remain alive and normal gates may resume entry after midnight ET. Dashboard PID 614753 remains active and read-only
+- **Verified:** 2026-08-30 23:38 ET / 2026-08-31 03:38 UTC
+- **Liquidity bot:** STOPPED by explicit operator request. `stop_commissioning.sh` ended supervisor PID 632255 and runner PID 632263 gracefully; the final record is `operator_sigterm` and flat. A fresh authenticated dashboard read proved zero venue orders, zero positions, zero absent and zero unresolved rows. Dashboard PID 614753 remains active and read-only
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Stop/restart proof:** the first updated-code restart attempt stopped gracefully at 19:25:08Z but correctly remained stopped because two authenticated snapshots proved four positions/four reducers. `Command 1` reused the completed review/deploy evidence, and a fresh 19:30Z authenticated snapshot proved zero positions, zero resting orders, zero unresolved/`UNKNOWN_ABSENT` rows and unblocked rotation. Exactly one new supervisor/runner pair was started; no force-kill, flatten or extra start occurred
 - **Deployed source:** WSL checkout and `DEPLOYED_COMMIT` are `be03d647`; the exact WSL checkout passed all 934 tests in 69.284 seconds and runner PID 632263 loaded that source
@@ -20,7 +20,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 - **Dashboard scope repair active:** the retired collector's 6,144-second-old `STOPPED` scope previously produced 17 false `OBSERVED` cells. The dashboard-only reload now uses current ledger evidence: 21 quoting, zero observed, one empty, 38 working orders and zero position/unresolved/unknown rows. The exact PID-bound runner scope publisher remains safely dormant until the next normal bot restart. [Evidence](docs/history/TV_DASHBOARD_ACTIVE_SCOPE_2026-08-30.md)
 - **Host API correction active:** `0ff6e3c6` retains one aggregate 4/second WSL gate with independent background/entry/safety lanes, stops selection/revalidation on the first local cooldown, avoids error/fallback-scan amplification and exposes peer lane cooldowns without another API call. The first live window at 19:33:57Z reported 429s `0`, failures `0`, `shared=1` and all lanes at `0.0`; a later shared background deadline appeared at `2.7s` beside local 429s `0`, left entry/safety at zero and cleared next window. No backpressure, JSON-state, quarantine or runtime error appeared. [Evidence](docs/history/API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md)
 - **Desktop cold backup:** inactive; its latest parity execution-ledger recovery copy matches the laptop SHA-256 and passes SQLite integrity `ok`. It is not activated and has no credential path, trading process, service, timer or API check
-- **Active quantity:** size 13 = 52 terminal taker exits, $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard and $10.40 early-cross. The `$6.00` gross owned taker-fee ET-day pause is active
+- **Selected quantity:** size 13 = 52 terminal taker exits, $390 portfolio exposure, $117 market exposure, $52 market loss, $104 session/hard and $10.40 early-cross. The selected gross owned taker-fee ET-day pause is `$9.75` (`0.75 × size`); the bot remains stopped while this change is reviewed and deployed
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Stable rollback:** `v1.0.0` points to `744b7c1`
 
@@ -28,14 +28,14 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 | Setting | Current decision |
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
-| Quote size | 13 contracts live; new trading paused until the next eligible ET day |
+| Quote size | 13 contracts selected; bot stopped |
 | Concurrent capacity | 22-slot bounded canary live and accepted; 20 remains the launcher default and permanent baseline |
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2 cents; 1.5-cent retention hysteresis |
 | Portfolio / market loss | $390 exposure / $52 loss (`30× / 4×` size); market exposure is $117 (`9×`) |
 | Account threshold | $104 realized sensor and $104 marked-equity sensor |
-| Taker-exit count / fee | 52 distinct owned taker-exit orders terminates the session / $6.00 gross owned taker fees pauses new trading for the ET day |
+| Taker-exit count / fee | 52 distinct owned taker-exit orders terminates the session / $9.75 gross owned taker fees pauses new trading for the ET day |
 | Risk day | `America/New_York`, DST-aware |
 
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.

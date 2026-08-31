@@ -44,6 +44,15 @@ Disk size alone is not a concern. Watch for a sudden increase in daily growth,
 which can reveal retry storms or duplicate event writes. Use SQLite online
 backup and read-only diagnostics; never copy the live WAL database directly.
 
+## Open design: 0.15 entry-floor counterfactual
+
+Do not enforce 0.15 from the retrospective “extreme market” association: it
+uses any extreme fill and therefore includes the costly exit. A valid future
+measurement must label the actual building decision, record whether 0.15 alone
+would refuse it, and compare canonical realized outcome, paid reward and
+replacement/dark-slot cost over complete ET days. This is not collecting yet;
+building it requires a separate operator request. [Verification](docs/history/TRADING_LOSS_PRICE_MIX_VERIFICATION_2026-08-31.md).
+
 ## Retired measurements
 
 - **Queue depletion / almost-front:** 12,227 orders over 5.90 days produced

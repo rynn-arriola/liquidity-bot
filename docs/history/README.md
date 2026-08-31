@@ -19,6 +19,7 @@ history, not current instructions or runtime truth.
 | [API backpressure accounting and observability — 2026-08-30](API_BACKPRESSURE_OBSERVABILITY_2026-08-30.md) | Selection deferral semantics, shared cooldown telemetry and review evidence |
 | [TV dashboard active scope — 2026-08-30](TV_DASHBOARD_ACTIVE_SCOPE_2026-08-30.md) | Stopped collector-scope defect, live-PID runner handoff, ledger fallback and edge-case proof |
 | [Hard-exit sequential cancel repair — 2026-08-31](HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md) | Two-order planner/driver mismatch, exposure-growth incident, per-order confirmation repair and acceptance boundary |
+| [Trading-loss price-mix verification — 2026-08-31](TRADING_LOSS_PRICE_MIX_VERIFICATION_2026-08-31.md) | Reproduction of price/league tables, role-classification flaw and 0.15 entry-floor decision boundary |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

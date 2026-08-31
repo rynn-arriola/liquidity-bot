@@ -143,6 +143,12 @@ suite passed 969/969 in 100.069 seconds. The hourly gain table contains no
 quantity, breadth, stop or capital constants and is therefore unaffected.
 Documentation audit limits and `git diff --check` are clean.
 
-The amended work is committed locally as a separate change after the earlier
-capital-guidance ambiguity repair. It is not pushed, deployed or loaded, and
-no laptop process was stopped or restarted.
+Source commit `59baf67c654642a0fbb4b4d20cbe6cc4c5ca71d3` was pushed to
+GitHub and fast-forwarded into the clean laptop WSL checkout. The deployed
+marker and tracked source/tests/scripts/web files matched that commit, and the
+exact laptop checkout passed all 969 tests in 69.890 seconds at low CPU
+priority. The required parity run also produced a verified private recovery
+copy before deployment. Supervisor 937731 and runner 937743 were not signaled,
+stopped or restarted; the running command remains size 13 / 22, so the new
+runner configuration still activates only after a separately authorized
+flat-gated restart.

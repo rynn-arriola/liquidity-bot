@@ -2,20 +2,14 @@
 
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
-- **Capital guidance staged at `5851370` for next restart:** reviewed code adds a
-  read-only Discord card using the existing balance snapshot and no extra API
-  calls. At the selected size 13 / 22 slots it keeps $286 slot footprint,
-  $104 exposure cushion and $728 seven-day reward-delay runway: $1,118
-  comfortable balance. Pending rewards are excluded, free-to-withdraw is
-  capped by both settled cash and buying power, and uncertain state displays
-  unavailable. The currently running bot was not stopped or restarted for
-  this build; activation remains explicitly pending the next authorized
-  restart. [Evidence](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md)
-- **Verified:** 2026-08-31 11:14 ET / 2026-08-31 15:14 UTC
+- **Hard-exit sequencing repair staged for the next authorized restart:** source commit `31c2574` cancels one order at a time, building side first, and starts grace only after exact submission. All 952 laptop-checkout tests passed; live PIDs 837439/837452 and loaded marker `3120a631` are unchanged, with no stop/restart. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md)
+- **0.15 entry-floor recommendation rejected for now:** raw price/league tables reproduce, but the analysis treated liquidity as role and included expensive exits in “extreme.” Role-correct recent entries were -$0.0730/pair extreme versus -$0.0707 otherwise, not 2× worse. Floor remains 0.10. [Verification](docs/history/TRADING_LOSS_PRICE_MIX_VERIFICATION_2026-08-31.md)
+- **Capital guidance staged at `5851370` for next restart:** the zero-API Discord card keeps $286 slot footprint + $104 cushion + $728 seven-day runway = $1,118 comfortable at size 13 / 22; pending is excluded, free cash is capped by settled cash/buying power, uncertainty is unavailable and the live runner remains unchanged. [Evidence](docs/history/CAPITAL_WITHDRAWAL_GUIDANCE_2026-08-31.md)
+- **Verified:** 2026-08-31 13:00 ET / 2026-08-31 17:00 UTC
 - **Liquidity bot:** LIVE on the laptop as exactly one size-13/22-slot supervisor PID 837439 and runner PID 837452, both unchanged throughout the capital-guidance build/deploy; no stop or restart occurred
 - **Former server:** destroyed; it cannot run the bot or execute old schedules
 - **Stop/restart proof:** the first updated-code restart attempt stopped gracefully at 19:25:08Z but correctly remained stopped because two authenticated snapshots proved four positions/four reducers. `Command 1` reused the completed review/deploy evidence, and a fresh 19:30Z authenticated snapshot proved zero positions, zero resting orders, zero unresolved/`UNKNOWN_ABSENT` rows and unblocked rotation. Exactly one new supervisor/runner pair was started; no force-kill, flatten or extra start occurred
-- **Source state:** PC, laptop Windows, GitHub and the laptop WSL checkout are `5851370`; the unchanged live process still reports loaded marker `3120a631`. The capital build passed all 947 tests in a separate Ubuntu/WSL checkout and 57 focused tests from the staged runtime checkout. This intentional loaded/check-out difference remains until the next authorized restart
+- **Source state:** GitHub and the reviewed laptop WSL checkout include hard-exit source commit `31c2574` plus the documented price-mix verification; the unchanged live process still reports loaded marker `3120a631`. The staged checkout passed all 952 tests. This intentional loaded/check-out difference remains until the next authorized restart
 - **Account P&L repair active:** Discord, dashboard and the HARD guard now use cash plus every open position's `cashValue`, less proven non-trading cash. The accepted live cache reported marked trading `-$24.2568` = closed `-$24.2568` + open mark `$0`, with no reward/deposit included. [Evidence](docs/history/ACCOUNT_MARKED_PNL_2026-08-30.md)
 - **Business-logic repair active:** canonical LONG/YES-frame accounting exactly replays the 2026-08-29 settled-cash change at `-$79.4465`; owned taker-exit budgets and entry/exit summaries use durable order roles. Three reversals passed. The 900-second timeout remains unchanged because the available replay favored 900 seconds and had only 29.2% stream coverage. [Evidence](docs/history/BUSINESS_LOGIC_AUDIT_2026-08-30.md)
 - **Daily fee pause / ET rollover:** the count remains `4 × quote size` (52 at size 13), and the scalable `$9.75` ET-day pause correctly reconstructed the prior day's `$9.9600` and blocked entry without killing the process. `3120a631` repaired the baseline/cash ordering cycle: live acceptance created the 2026-08-31 baseline at 04:31:45Z, then reconciled 40 PLACE intents and reported 41 live orders, zero positions and an API window with 589 reads, 41 creates, zero failures and zero 429s. [Evidence](docs/history/TAKER_EXIT_SCALING_2026-08-30.md) · [fee-pause change](docs/history/DAILY_EXECUTION_FEE_PAUSE_2026-08-30.md)

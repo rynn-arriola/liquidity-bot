@@ -3,7 +3,7 @@
 This file contains unfinished work. Completed implementation history is in
 [docs/history/NEXT_THROUGH_2026-08-27.md](docs/history/NEXT_THROUGH_2026-08-27.md).
 
-**Sequential hard-exit live acceptance pending next authorized restart:** the reviewed repair cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. Deployment leaves the current runner unchanged. After a later authorized restart, naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
+**Sequential hard-exit live acceptance pending next authorized restart:** staged source commit `31c2574` cancels one working order at a time, building side first, and waits for exact positive terminal proof before selecting the next. All 952 staged-checkout tests passed; the live runner remains unchanged. After a later authorized restart, naturally require a two-order hard exit with sequential `pending=1`, no builder fill/shared-timer retirement and an exact final reducer/IOC; do not induce it. [Evidence](docs/history/HARD_EXIT_SEQUENTIAL_CANCEL_2026-08-31.md).
 **Capital-guidance live display pending next authorized restart:** the deployed
 card must show size 13 / 22 as $286 footprint + $104 cushion + $728 weekly
 reserve = $1,118 comfortable, with free cash matching the fresh cash/power

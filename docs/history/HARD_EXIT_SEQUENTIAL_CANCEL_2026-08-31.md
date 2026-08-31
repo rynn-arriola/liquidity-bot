@@ -72,9 +72,15 @@ verification is recorded below after it completes.
 
 ## Deployment and acceptance boundary
 
-Deployment is authorized without a restart. Updating the laptop checkout does
-not reload the already-running Python process, so the live runner remains on
-its previous loaded marker until the operator separately authorizes a restart.
+Source commit `31c2574` was pushed before deployment. The laptop WSL checkout
+was fast-forwarded to the reviewed main history and matched it exactly; its
+production virtual environment passed all 952 tests in 67.847 seconds. The
+supervisor/runner remained PIDs 837439/837452, both started at 09:14 ET, and
+the loaded marker remained `3120a631`. No stop or restart occurred.
+
+Updating the laptop checkout does not reload the already-running Python
+process, so the live runner remains on its previous loaded marker until the
+operator separately authorizes a restart.
 Natural acceptance after that restart requires a real two-order hard exit to
 show one building-side cancel, positive terminal proof, then the next cancel;
 it must not show `pending=2`, position growth from an untouched builder, or a

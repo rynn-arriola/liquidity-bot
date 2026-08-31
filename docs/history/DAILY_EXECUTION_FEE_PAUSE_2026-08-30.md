@@ -73,6 +73,19 @@ No venue request, API retry or shared-rate-limit behavior was added.
 - Complete local WSL suite: 934 tests passed in 92.876 seconds.
 - Final diff/edge review found no new venue call, retry, shared-rate change,
   ownership relaxation, exit suppression, secret/database addition or
-  capacity coupling. Push, deployment and exact-runtime verification are
-  pending below this checkpoint.
-- The bot remains stopped; this change does not authorize a restart.
+  capacity coupling.
+- Commit `be03d64764cadb567cdbe586d69749bd2884b5c4` was pushed to GitHub,
+  fast-forwarded into the WSL runtime from the matching Windows checkout and
+  passed all 934 tests there in 69.284 seconds. `DEPLOYED_COMMIT`, WSL HEAD,
+  Windows HEAD and GitHub then matched exactly.
+- A fresh authenticated 03:25 UTC start gate proved zero venue orders, zero
+  positions, zero `UNKNOWN_ABSENT` orders and zero unresolved intents. Exactly
+  one size-13/22-slot supervisor and runner pair started.
+- Startup reconstructed `$9.9600` of same-day gross owned taker fees. This is
+  higher than the earlier `$4.00` checkpoint because additional later
+  exit/shutdown fills were durably imported. The new runner emitted
+  `[execution-fee-pause]`, remained alive, placed no new orders and an
+  authenticated 03:28 UTC acceptance again proved zero orders, zero positions,
+  zero absent and zero unresolved rows. This naturally accepts same-day
+  reconstruction, non-termination and entry suppression. Automatic next-day
+  re-eligibility remains pending the ET midnight boundary and fresh gates.

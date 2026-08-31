@@ -332,9 +332,13 @@ class CommissioningConfig:
 
     @property
     def max_daily_execution_fees_usd(self) -> Decimal:
-        """Fund fifty peak-fee exits per ET day at every quote size."""
+        """Scale the size-10/24-slot $10 ET-day gross taker-fee budget."""
 
-        return (self.quote_size * Decimal("0.75")).quantize(Decimal("0.01"))
+        return (
+            self.quote_size
+            * Decimal(self.max_markets)
+            / Decimal("24")
+        ).quantize(Decimal("0.01"))
 
     @property
     def weekly_operating_reserve_usd(self) -> Decimal:

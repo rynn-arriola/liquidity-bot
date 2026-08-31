@@ -48,6 +48,11 @@ taker-exit count and $7.50 ET-day fee pause; the four-request/second governor,
 six-hour horizon and 900-second inventory clock remain fixed. The account stops
 are the deliberate exception and become $96 at 24 slots.
 
+That fee sentence records the prepared design before its first activation. The
+22:06Z start reconstructed `$9.5300` against `$7.50` and paused safely; the
+operator then superseded only the fee policy with the quantity-and-breadth rule
+recorded in [daily fee breadth scaling](DAILY_EXECUTION_FEE_BREADTH_SCALING_2026-08-31.md).
+
 Changing quantity and breadth in the same restart means the acceptance proves
 the combined size-10/24 operating envelope, not an isolated reward or fill-rate
 effect from either variable. API topology still isolates cleanly because 24

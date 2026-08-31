@@ -35,11 +35,11 @@ These are implementation requirements, not suggestions.
     (`(slots + 10) × size`), market loss (`4 × size`), both account sensors
     (`8 × size × slots / 20`),
     taker-exit count (`4 × size`) and the cent-rounded ET-day gross taker-fee
-    pause (`0.75 × size`) are computed properties. Portfolio
+    pause (`$10 × size / 10 × slots / 24`) are computed properties. Portfolio
     exposure funds every restart-configured slot-notional plus a ten-notional
-    cushion. Breadth scales only portfolio exposure and the two account-wide
-    stops; per-market loss/exposure, fee, exit-count and REST retain their
-    quantity or policy meanings.
+    cushion. Breadth scales portfolio exposure, the two account-wide stops and
+    the daily fee budget; per-market loss/exposure, exit-count and REST retain
+    their quantity or policy meanings.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
     invariant 57 but was **disproved** -- 29 subscriptions were later sustained
@@ -130,8 +130,8 @@ These are implementation requirements, not suggestions.
 35. A session stops after `4 × quote size` confirmed taker exits (52 at the
     persisted live size 13), then cancels, reconciles and proves flat. The
     independent gross owned taker-fee budget is scoped to the ET risk day and
-    equals the cent-rounded value of `0.75 × quote size` ($9.75 at size 13),
-    funding about 50 peak-fee exits at every authorized size.
+    equals the cent-rounded value of `$10 × (quote size / 10) × (slots / 24)`
+    ($10 at size 10 / 24 slots).
     Reaching it immediately makes every flat-state building quote undesired,
     but never terminates the process or disables a passive reducer, IOC exit,
     cancel, state monitor or pre-kickoff flatten. Durable same-day fills

@@ -78,7 +78,7 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
         self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
-            self.authorized().max_daily_execution_fees_usd, Decimal("3.75"))
+            self.authorized().max_daily_execution_fees_usd, Decimal("4.17"))
         self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
         self.assertEqual(
             self.authorized().force_exit_before_start_seconds, 300)
@@ -206,7 +206,7 @@ class CommissioningTests(unittest.TestCase):
                     config.max_market_exposure_usd, Decimal(size) * Decimal("9"))
                 self.assertEqual(
                     config.max_daily_execution_fees_usd,
-                    (Decimal(size) * Decimal("0.75")).quantize(
+                    (Decimal(size) * Decimal("20") / Decimal("24")).quantize(
                         Decimal("0.01")))
                 self.assertEqual(config.max_taker_exit_orders, size * 4)
                 self.assertEqual(
@@ -225,12 +225,27 @@ class CommissioningTests(unittest.TestCase):
                     config.weekly_operating_reserve_usd,
                     Decimal(size) * Decimal("56"))
 
-    def test_live_size_thirteen_allows_fifty_two_taker_exits(self):
+    def test_size_thirteen_default_width_scales_both_fee_and_count_guards(self):
         config = self.authorized(quote_size=Decimal("13"))
 
         self.assertEqual(config.max_taker_exit_orders, 52)
         self.assertEqual(
-            config.max_daily_execution_fees_usd, Decimal("9.75"))
+            config.max_daily_execution_fees_usd, Decimal("10.83"))
+
+    def test_daily_execution_fee_budget_scales_with_quantity_and_width(self):
+        expected = {
+            (10, 20): "8.33",
+            (10, 22): "9.17",
+            (10, 24): "10.00",
+            (13, 22): "11.92",
+            (30, 24): "30.00",
+        }
+        for (size, slots), amount in expected.items():
+            with self.subTest(size=size, slots=slots):
+                config = self.authorized(
+                    quote_size=Decimal(size), max_markets=slots)
+                self.assertEqual(
+                    config.max_daily_execution_fees_usd, Decimal(amount))
 
     def test_portfolio_exposure_tracks_slot_width_plus_ten_unit_cushion(self):
         for slots, expected in ((20, "390"), (22, "416"), (24, "442")):

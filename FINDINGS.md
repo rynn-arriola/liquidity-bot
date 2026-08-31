@@ -1,6 +1,7 @@
 # Findings index
 Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.md) before theorizing: `rg -n -i "<term>" FINDINGS.md docs/history/FINDINGS_*.md`.
 ## Current high-value findings
+- **The ET-day fee pause now has quantity and breadth authority.** Starting the first size-10/24 canary reconstructed `$9.5300` gross taker fees against the old quantity-only `$7.50` cap and correctly blocked new risk. The operator set the 10/24 reference to `$10`; source now scales it as `$10 × (size / 10) × (slots / 24)`, while the durable ET-day total, gross-only accounting and exit-safe pause behavior remain unchanged. [Evidence](docs/history/DAILY_EXECUTION_FEE_BREADTH_SCALING_2026-08-31.md).
 - **Breadth now scales capital and account stops without changing per-market policy.** Prepared source uses `(slots + 10) × size` portfolio exposure and `8 × size × slots / 20` session/hard limits. The next size-10/24 target is $340 portfolio, $96 account stops and $1,012 comfortable capital; per-market loss/exposure, fee/count exits, REST and strategy clocks remain quantity- or policy-linked. It is not loaded. [Evidence](docs/history/SLOT_CAPACITY_CANARY_24_2026-08-31.md).
 - **Capital availability was hidden by terminal provenance, not stale balance.** At 19:44Z the live mark was 13 seconds old with zero unresolved/absent rows, but the summary called 59 terminal `venue:` rows unknown (55 filled, four rejected). Only active unowned orders and `UNKNOWN_ABSENT` rows are current ambiguity; terminal history must remain visible without suppressing the withdrawal ceiling. [Evidence](docs/history/CAPITAL_GUIDANCE_TERMINAL_HISTORY_2026-08-31.md).
 - **Tiny fractional positions are tradable; their delay was policy, not a venue minimum.** The ledger contains 569 accepted sub-one-contract PLACE orders and 384 sub-one fills, both down to `0.01`, with no quantity-minimum rejection. An observed `0.03` residue later reduced exactly and flattened. In 32 paired maker-small episodes, 23 remained beyond 15 minutes, so the ordinary clock could let a few cents occupy a whole slot. The five-minute exact `0.01`–`0.09` repair is pushed and staged in the laptop checkout but not loaded by the unchanged runner. [Evidence](docs/history/TINY_RESIDUAL_CASHOUT_2026-08-31.md).
@@ -90,8 +91,7 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
   automatically. Status, structured error code and trace/request ID are safe
   diagnostics, and owned SDK clients use the recommended 15-second timeout.
 - **Changelog monitoring belongs outside trading.** The public RSS feed can be
-  polled by a lock/timeout-bounded process with independent state and Discord
-  notification. It needs no API key, ledger access, REST budget or runner hook.
+  polled by a lock/timeout-bounded process with independent state and Discord notification. It needs no API key, ledger access, REST budget or runner hook.
 - **Retail list volume fields were absent on the observed 2026-08-28 wire.**
   The first implementation silently selected no pure markets. Bounded discovery
   now ranks homogeneous full-book `sharesTraded`; its 10-minute acceptance

@@ -4223,10 +4223,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.ledger.prepare_intent(
             "fee-exit-intent", "PLACE", "market-one",
             "liquidity-fee-exit", {}, created_at=at)
+        fee_total = runner.config.max_daily_execution_fees_usd + Decimal("0.01")
+        partial_fee = fee_total / Decimal("2")
         for index in range(2):
             runner.ledger.apply_execution(Execution(
                 f"fee-partial-{index}", "market-one", "ORDER_SIDE_SELL",
-                Decimal("0.49"), Decimal("0.5"), Decimal("1.88"), at,
+                Decimal("0.49"), Decimal("0.5"), partial_fee, at,
                 client_order_id="liquidity-fee-exit", liquidity="TAKER",
                 intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
         runner.ledger.apply_execution(Execution(
@@ -4239,7 +4241,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._execution_fee_pause_day, risk_day(at))
         self.assertEqual(
             runner._execution_fee_pause_pending,
-            (risk_day(at), Decimal("3.76")))
+            (risk_day(at), fee_total))
         self.assertFalse(runner._frame(at).new_risk_allowed)
 
         await runner._announce_execution_fee_pause()

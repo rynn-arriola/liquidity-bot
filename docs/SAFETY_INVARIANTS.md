@@ -28,8 +28,8 @@ These are implementation requirements, not suggestions.
     change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
     (`30 × size`), market loss (`4 × size`), both account sensors (`8 × size`),
-    taker-exit count (`4 × size`) and the session fee cap (`0.30 × size`) are
-    computed properties. Portfolio
+    taker-exit count (`4 × size`) and the cent-rounded ET-day gross taker-fee
+    pause (`6 / 13 × size`) are computed properties. Portfolio
     exposure funds 20 baseline slot-notionals plus a ten-notional cushion; at
     22 it remains fixed and leaves an eight-notional (36%) cushion.
 
@@ -63,7 +63,11 @@ These are implementation requirements, not suggestions.
     state, or through the bounded non-flat exit in invariant 32.
 25. Losses have a **4 × size** per-market threshold and one **8 × size**
     account threshold observed by two independent sensors: realized session
-    loss pauses new risk, while adjusted marked-account-equity loss
+    loss pauses new risk for the ET day, immediately makes flat-state building
+    quotes undesired, keeps the process and every reducing path alive, and may
+    resume only after the next ET midnight plus fresh ordinary gates. Three
+    consecutive loss-stop days remain a terminal human-review breaker. Adjusted
+    marked-account-equity loss
     (`currentBalance` plus every open position's Retail `cashValue`, less
     proven non-trading cash) is the emergency sensor. Every complete mark is
     bracketed by equal settled-cash reads; `assetNotional` is not used because
@@ -115,12 +119,17 @@ These are implementation requirements, not suggestions.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published
     pool size is never substituted for the bot's proportional share.
-35. A session stops maker quoting after `4 × quote size` confirmed taker exits
-    (52 at the persisted live size 13) or `0.30 × quote size` of session
-    execution fees ($3.90 at size 13), whichever comes first, then cancels,
-    reconciles and proves flat. The count and dollar ceilings are independent:
-    an expensive-fee session may stop before exhausting the scaled count. The
-    budget exists to collect exit evidence; it is a ceiling, not a target.
+35. A session stops after `4 × quote size` confirmed taker exits (52 at the
+    persisted live size 13), then cancels, reconciles and proves flat. The
+    independent gross owned taker-fee budget is scoped to the ET risk day and
+    equals the cent-rounded value of `6 / 13 × quote size` ($6.00 at size 13).
+    Reaching it immediately makes every flat-state building quote undesired,
+    but never terminates the process or disables a passive reducer, IOC exit,
+    cancel, state monitor or pre-kickoff flatten. Durable same-day fills
+    reconstruct the pause after a restart; negative rebates never offset
+    positive taker fees. The pause clears only on a new ET day and a fresh
+    account/risk-day baseline plus all ordinary entry gates. Both budgets are
+    ceilings, not targets.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.

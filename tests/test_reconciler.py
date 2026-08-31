@@ -44,15 +44,44 @@ def policy(age=15, **overrides) -> ReconcilerPolicy:
 
 def frame(*, now=T0, position="0", orders=(), opened=None, entry=None,
           state_known=True, snapshot=None, portfolio_loss=0,
-          eligible=frozenset({"bid", "offer"})) -> MarketFrame:
+          eligible=frozenset({"bid", "offer"}), new_risk_allowed=True,
+          ) -> MarketFrame:
     snapshot = snapshot or book(now)
     return MarketFrame(
         market(), now, snapshot, now, Decimal(position), tuple(orders),
         state_known, eligible, {"bid": .01, "offer": .01},
-        portfolio_loss, opened, entry)
+        portfolio_loss, opened, entry, new_risk_allowed)
 
 
 class ReconcilerTests(unittest.TestCase):
+    def test_account_pause_immediately_cancels_building_quotes(self):
+        orders = (
+            WorkingOrder("bid-order", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-order", "offer", .51, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            orders=orders, new_risk_allowed=False))
+
+        self.assertEqual({action.kind for action in actions}, {
+            ActionKind.CANCEL})
+        self.assertEqual({action.order_id for action in actions}, {
+            "bid-order", "offer-order"})
+        self.assertTrue(all(
+            action.reason ==
+            "side_no_longer_desired:account_new_risk_paused"
+            for action in actions))
+
+    def test_account_pause_does_not_disable_inventory_reducer(self):
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            position="2", opened=T0, entry=.49,
+            new_risk_allowed=False))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(
+            actions[0].reason, "soft_reducing_quote_at_active_touch")
+
     def test_flat_positive_candidate_places_two_small_post_only_quotes(self):
         actions = DesiredStateReconciler(policy()).plan(frame())
         self.assertEqual({action.side for action in actions}, {"bid", "offer"})

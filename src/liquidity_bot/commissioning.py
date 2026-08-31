@@ -311,10 +311,12 @@ class CommissioningConfig:
         return self.quote_size * Decimal("30")
 
     @property
-    def max_session_execution_fees_usd(self) -> Decimal:
-        """Retain the size-5 twenty-exit peak-fee dollar calibration."""
+    def max_daily_execution_fees_usd(self) -> Decimal:
+        """Scale the operator's size-13 $6 ET-day gross-fee budget."""
 
-        return self.quote_size * Decimal("0.30")
+        return (
+            self.quote_size * Decimal("6") / Decimal("13")
+        ).quantize(Decimal("0.01"))
 
     @classmethod
     def diagnostic_defaults(

@@ -76,7 +76,8 @@ from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
 from .reward_calendar import (
-    NEW_YORK, reward_day, risk_day, split_reward_day_interval)
+    NEW_YORK, reward_day, reward_day_bounds, risk_day,
+    split_reward_day_interval)
 from .resting_time import resting_side_hours_by_day
 from .reconciler import (
     ActionKind,
@@ -510,6 +511,12 @@ class CommissioningRunner:
         # pauses, consumed once by `_announce_loss_stop_pause`.
         self._loss_pause_pending: tuple[str, list[str], int] | None = None
         self._loss_pause_announced_day: str | None = None
+        # The gross taker-fee budget is an ET-day entry pause, not a process
+        # stop. It is reconstructed from durable owned fills after a restart,
+        # so restarting cannot buy a second budget on the same day.
+        self._execution_fee_pause_day: str | None = None
+        self._execution_fee_pause_pending: tuple[str, Decimal] | None = None
+        self._execution_fee_pause_announced_day: str | None = None
         # A marked-equity breach may be only a temporary mark on open
         # inventory. It blocks new entries immediately, then waits until at
         # least one position that was open during the breach is positively
@@ -1893,7 +1900,8 @@ class CommissioningRunner:
             f"${self.config.max_market_loss_usd} per-market stop, "
             f"${self.config.hard_stop_loss_usd} hard stop, "
             f"{self.config.max_taker_exit_orders} taker-exit count cap, "
-            f"${self.config.max_session_execution_fees_usd} execution-fee cap, "
+            f"${self.config.max_daily_execution_fees_usd} ET-day "
+            "execution-fee pause, "
             "operator-controlled stop; pregame and loss gates remain active."
             + selection_note)
         if not getattr(delivery, "sent", False):
@@ -2499,10 +2507,16 @@ class CommissioningRunner:
             return MarketFrame(
                 state.market, now, state.book, state.book_observed_at, position,
                 self._working_orders(state.slug), False, state.reward_eligible, {}, 0)
+        today = date.fromisoformat(risk_day(now))
+        new_risk_allowed = (
+            self.risk_guard is not None
+            and self.risk_guard.can_add_new_risk(now=now)
+            and self._provisional_hard_stop_at is None
+            and self._baseline_day == today
+            and self._execution_fee_pause_day != today.isoformat()
+        )
         eligible = state.reward_eligible
-        if (position == 0 and self.risk_guard is not None
-                and (not self.risk_guard.can_add_new_risk(now=now)
-                     or self._provisional_hard_stop_at is not None)):
+        if position == 0 and not new_risk_allowed:
             # A stale/unknown marked balance is recoverable, but existing flat-
             # state quotes would still add risk if filled. Make them undesired
             # so the reconciler cancels them while the process stays alive.
@@ -2525,6 +2539,7 @@ class CommissioningRunner:
                 excluding=state.slug),
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
+            new_risk_allowed=new_risk_allowed,
         )
 
     def _quote_observation_for_action(
@@ -3130,28 +3145,53 @@ class CommissioningRunner:
             # both directions use BUY_* because SELL_* inverts the price
             # frame (live_orders._intent). Liquidity and ownership are the
             # durable exit evidence instead. Every bot-generated IOC is
-            # risk-reducing; entries are post-only. Count one exit per owned
-            # client order while still summing fees from every partial fill.
-            rows = self.ledger.query(
+            # risk-reducing; entries are post-only. The order-count learning
+            # guard remains session-scoped and terminal.
+            session_rows = self.ledger.query(
                 "SELECT f.client_order_id,f.fee FROM execution_fills f "
                 "WHERE f.received_at>=? AND f.reversed=0 "
                 "AND f.liquidity='TAKER' "
                 "AND EXISTS (SELECT 1 FROM execution_intents i "
                 "WHERE i.operation='PLACE' "
                 "AND i.client_order_id=f.client_order_id)",
-                (self.started_at.isoformat(),),
+                (self.started_at.astimezone(timezone.utc).isoformat(),),
             )
             taker_exit_orders = {
-                str(row["client_order_id"] or "") for row in rows
+                str(row["client_order_id"] or "") for row in session_rows
             }
-            positive_fees = sum(
-                (max(Decimal("0"), Decimal(str(row["fee"]))) for row in rows),
-                Decimal("0"),
-            )
             if len(taker_exit_orders) >= self.config.max_taker_exit_orders:
                 return "commissioning_taker_exit_limit"
-            if positive_fees >= self.config.max_session_execution_fees_usd:
-                return "commissioning_execution_fee_limit"
+        today = risk_day(now)
+        if (self._execution_fee_pause_day is not None
+                and self._execution_fee_pause_day != today):
+            self._execution_fee_pause_day = None
+        day_start, _ = reward_day_bounds(today)
+        daily_rows = self.ledger.query(
+            "SELECT f.client_order_id,f.fee FROM execution_fills f "
+            "WHERE f.received_at>=? AND f.received_at<=? "
+            "AND f.reversed=0 AND f.liquidity='TAKER' "
+            "AND EXISTS (SELECT 1 FROM execution_intents i "
+            "WHERE i.operation='PLACE' "
+            "AND i.client_order_id=f.client_order_id)",
+            (day_start.isoformat(), now.astimezone(timezone.utc).isoformat()),
+        )
+        positive_daily_fees = sum(
+            (max(Decimal("0"), Decimal(str(row["fee"])))
+             for row in daily_rows),
+            Decimal("0"),
+        )
+        if positive_daily_fees >= self.config.max_daily_execution_fees_usd:
+            if self._execution_fee_pause_day != today:
+                self._execution_fee_pause_pending = (
+                    today, positive_daily_fees)
+                print(
+                    f"[execution-fee-pause] at={now.isoformat()} day={today} "
+                    f"gross_taker_fees={positive_daily_fees} "
+                    f"cap={self.config.max_daily_execution_fees_usd} "
+                    "action=block_new_risk_until_next_et_day",
+                    flush=True,
+                )
+            self._execution_fee_pause_day = today
         blockers = self.risk_guard.blockers(now=now)
         # Missing/stale equity is recoverable only by staying alive with new
         # risk disabled. A clock failure or explicit critical condition still
@@ -3227,6 +3267,26 @@ class CommissioningRunner:
             f"settlement. It resumes on its own at the next ET midnight. "
             f"Consecutive loss-stop days: {streak} -- "
             f"{remaining} more and it stops for good and needs a human.",
+            critical=True)
+
+    async def _announce_execution_fee_pause(self) -> None:
+        """Tell Discord once per ET day that gross taker fees paused entry."""
+
+        pending, self._execution_fee_pause_pending = (
+            self._execution_fee_pause_pending, None)
+        if pending is None:
+            return
+        day, fees = pending
+        if self._execution_fee_pause_announced_day == day:
+            return
+        self._execution_fee_pause_announced_day = day
+        await self.notifier.send_async(
+            f"🛑 Liquidity Bot used ${fees} of its "
+            f"${self.config.max_daily_execution_fees_usd} gross taker-fee "
+            f"budget for {day} and has PAUSED new trading. The process stays "
+            "alive; existing exits and the pre-kickoff flatten continue. "
+            "Trading becomes eligible again after the next ET midnight and "
+            "a fresh account/risk-day baseline passes the normal gates.",
             critical=True)
 
     async def _announce_provisional_hard_stop(self) -> None:
@@ -7115,6 +7175,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
+                await self._announce_execution_fee_pause()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
@@ -7256,6 +7317,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
+                await self._announce_execution_fee_pause()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break

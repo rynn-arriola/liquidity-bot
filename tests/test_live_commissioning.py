@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from argparse import Namespace
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from pathlib import Path
@@ -4190,7 +4190,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_taker_exit_fee_budget_sums_partial_fill_fees(self):
+    async def test_daily_taker_fee_budget_sums_partial_fills_and_pauses(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()
         at = NOW + timedelta(seconds=1)
@@ -4200,12 +4200,73 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         for index in range(2):
             runner.ledger.apply_execution(Execution(
                 f"fee-partial-{index}", "market-one", "ORDER_SIDE_SELL",
-                Decimal("0.49"), Decimal("0.5"), Decimal("0.75"), at,
+                Decimal("0.49"), Decimal("0.5"), Decimal("1.16"), at,
                 client_order_id="liquidity-fee-exit", liquidity="TAKER",
                 intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
+        runner.ledger.apply_execution(Execution(
+            "fee-rebate", "market-one", "ORDER_SIDE_SELL",
+            Decimal("0.49"), Decimal("0.1"), Decimal("-10"), at,
+            client_order_id="liquidity-fee-exit", liquidity="TAKER",
+            intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
 
+        self.assertIsNone(runner._stop_reason(at))
+        self.assertEqual(runner._execution_fee_pause_day, risk_day(at))
         self.assertEqual(
-            runner._stop_reason(at), "commissioning_execution_fee_limit")
+            runner._execution_fee_pause_pending,
+            (risk_day(at), Decimal("2.32")))
+        self.assertFalse(runner._frame(at).new_risk_allowed)
+
+        await runner._announce_execution_fee_pause()
+        fee_messages = [
+            message for message, _critical in runner.notifier.messages
+            if "gross taker-fee budget" in message]
+        self.assertEqual(len(fee_messages), 1)
+        runner._stop_reason(at + timedelta(seconds=1))
+        await runner._announce_execution_fee_pause()
+        self.assertEqual(len([
+            message for message, _critical in runner.notifier.messages
+            if "gross taker-fee budget" in message]), 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_daily_fee_pause_survives_restart_and_resets_by_et_day(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        prior_day = datetime(2026, 8, 13, 3, 59, tzinfo=timezone.utc)
+        today = NOW + timedelta(seconds=1)
+        for label, at, fee in (
+                ("prior", prior_day, Decimal("99")),
+                ("today", today, runner.config.max_daily_execution_fees_usd)):
+            runner.ledger.prepare_intent(
+                f"{label}-intent", "PLACE", "market-one",
+                f"liquidity-{label}-exit", {}, created_at=at)
+            runner.ledger.apply_execution(Execution(
+                f"{label}-fill", "market-one", "ORDER_SIDE_SELL",
+                Decimal("0.49"), Decimal("1"), fee, at,
+                client_order_id=f"liquidity-{label}-exit",
+                liquidity="TAKER", intent="ORDER_INTENT_BUY_SHORT"),
+                received_at=at)
+
+        self.assertIsNone(runner._stop_reason(today))
+        self.assertEqual(runner._execution_fee_pause_day, "2026-08-13")
+
+        # Process-local state is not the authority: durable same-day fills
+        # reconstruct the pause after a restart.
+        runner._execution_fee_pause_day = None
+        runner._execution_fee_pause_pending = None
+        self.assertIsNone(runner._stop_reason(today + timedelta(seconds=1)))
+        self.assertEqual(runner._execution_fee_pause_day, "2026-08-13")
+
+        next_day = datetime(2026, 8, 14, 4, 1, tzinfo=timezone.utc)
+        self.assertIsNone(runner._stop_reason(next_day))
+        self.assertIsNone(runner._execution_fee_pause_day)
+        # Midnight alone cannot reopen entries on yesterday's baseline.
+        self.assertFalse(runner._frame(next_day).new_risk_allowed)
+        runner._baseline_day = date(2026, 8, 14)
+        runner.risk_guard.adopt_day_baseline(Decimal("1000"))
+        runner.risk_guard.observe_equity(
+            Decimal("1000"), observed_at=next_day)
+        self.assertTrue(runner._frame(next_day).new_risk_allowed)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -4303,7 +4364,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             f"{runner.config.max_taker_exit_orders} taker-exit", banner)
         self.assertIn(
-            f"${runner.config.max_session_execution_fees_usd} execution-fee",
+            f"${runner.config.max_daily_execution_fees_usd} ET-day execution-fee",
             banner)
         # The gate has been advisory since 2026-08-14; saying "enforced" was
         # one of the four wrong facts.
@@ -4593,6 +4654,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # Seen, and recorded against the day, but not terminal on day one.
         self.assertIsNone(runner._stop_reason(NOW))
         self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
+        self.assertFalse(
+            runner._frame(NOW).new_risk_allowed,
+            "a loss pause must make resting building quotes immediately "
+            "undesired while the process remains alive")
         self.assertIn("loss limit",
                       " ".join(runner.risk_guard.blockers(now=NOW)))
         self.assertEqual(

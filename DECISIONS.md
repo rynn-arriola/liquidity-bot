@@ -35,7 +35,8 @@ show the operator the discrepancy.
 | Adverse-fill/cliff study | Collect 60%, 70% and 80% retained-value `WOULD_REFUSE` labels plus recent-selector/reward/no-candidate/unknown cost with zero extra venue calls; no live refusal gate is authorized |
 | Spread-scalp study | Closed and stopped; preserve its isolated database/report and do not restart the collector without a new operator decision |
 | Inventory deadline | 900 seconds, with the separate pre-kickoff flatten rule |
-| Taker-exit session count | `4 × quote size`; 52 at size 13. The independent `0.30 × quote size` execution-fee ceiling remains unchanged and may stop the session first |
+| Taker-exit session count | `4 × quote size`; 52 at size 13. This remains a terminal evidence ceiling independent of the fee pause |
+| Execution-fee day pause | Gross positive fees on owned taker fills, cent-rounded `6 / 13 × quote size`; $6.00 at size 13. At the ceiling, cancel/block building quotes but keep the process, monitoring and every exit path alive. Reconstruct from durable fills after a same-day restart; resume only on the next ET day after a fresh account/risk-day baseline and normal gates. Maker rebates do not offset the gross safety budget |
 
 The two account sensors protect different evidence and responses; their shared size-scaled threshold is not permission to remove either. The marked sensor blocks new entries immediately but, while inventory is open, waits for a breach-time position to close and a later adjusted balance instead of forcing a paper-loss liquidation. A confirmed result may stop with another position open; the realized sensor independently pauses new risk at the same threshold.
 

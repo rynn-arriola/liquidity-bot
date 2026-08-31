@@ -137,6 +137,10 @@ class MarketFrame:
     existing_portfolio_worst_loss: float
     position_opened_at: datetime | None = None
     entry_price: float | None = None
+    # Account-wide permission to add exposure. False cancels flat-state
+    # building quotes immediately, without passing through reward hysteresis;
+    # inventory planning ignores it and therefore keeps every exit available.
+    new_risk_allowed: bool = True
 
     def __post_init__(self) -> None:
         for name, value in (("now", self.now),
@@ -557,6 +561,10 @@ class DesiredStateReconciler:
         # been dropped further up. Every removal now records its cause.
         drop_cause: dict[str, str] = {}
         desired_sides = ({"bid", "offer"} if market_open else set())
+        if not frame.new_risk_allowed:
+            for side in desired_sides:
+                drop_cause[side] = "account_new_risk_paused"
+            desired_sides.clear()
         if not frame.market.is_supported_moneyline:
             desired_sides.clear()
         resting_sides = {order.side for order in frame.working_orders}

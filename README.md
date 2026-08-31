@@ -102,8 +102,11 @@ fresh private state.
 Authenticated earnings are snapshotted separately from execution P&L every 15
 minutes. A passive reducer rests the exact quantity at the active touch with no
 cost-basis floor. At 900 seconds of inventory age, or 300 seconds before
-kickoff, the bounded IOC path may cross; maker quoting ends after 20 confirmed
-taker exits or `0.30 × quote size` in session execution fees.
+kickoff, the bounded IOC path may cross. The session still ends after
+`4 × quote size` confirmed taker exits. Gross owned taker fees instead pause
+new trading for the ET risk day at the cent-rounded equivalent of
+`$6 × quote size / 13`; the process and exits remain alive and normal gates
+may authorize entry again the next ET day.
 
 Recoverable market/private adapter failures no longer terminate the process.
 The runner logs the stack, disables new risk, cancels known working quotes,
@@ -329,7 +332,7 @@ market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
 30; when supplied as the second argument it is persisted under `data/` so the
 supervisor and read-only diagnostics use the same value. Size never changes
 under live orders. The early-exit cap, per-market and portfolio exposure, loss
-stops and session fee cap derive automatically from it. Portfolio exposure is
+stops and daily fee pause derive automatically from it. Portfolio exposure is
 `30 × size`: 20 quote-notionals plus a proportional ten-notional cushion:
 
 ```bash

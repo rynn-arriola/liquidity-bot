@@ -233,3 +233,45 @@ REST or the scheduler from the incomplete phase counters alone.  Review
 `773677b2f` next; only a later explicitly authorized flat restart may migrate
 and load it.  The live process, source checkout and ledger were not changed by
 this preparation.
+
+## Independent replay review and maintenance-stop correction — 2026-09-01
+
+An independent live-copy review approved `773677b2f`.  Against 3,712 fills and
+1,051 markets, old and new maps had identical keys and zero value mismatches
+both account-wide and with a cutoff.  The market-leading index supplied most
+of the measured reduction (344.5 ms to 24.6 ms for the old repeated replay),
+while the single chronological pass reduced the remaining work to 18.1 ms.
+An ordering index was tested and rejected because removing the temporary sort
+changed only 16.7 ms to 15.8 ms; any later growth problem belongs to a
+fill-invalidated cache, not another index.  Keep both prepared changes and load
+them only on a separately authorized flat restart.
+
+The same review called 11:22-11:29Z healthy steady state.  That interpretation
+does not survive the incident timeline.  The runner entered maintenance at
+06:56Z, passed its account health gate only at 11:10Z, and then encountered
+inactive contracts and empty books throughout recovery.  Fast passes in that
+window skipped normal successful decision work because failure responses were
+quick; they cannot prove that the earlier 70-80 second passes were merely a
+startup transient.  Re-baseline only after venue and per-market data are
+healthy.  The telemetry field `cpu_cores` is recent process CPU divided by the
+full wall-clock reporting window, not an active-work-only ratio; lifetime
+`TIME/ELAPSED` answers a different averaging question.
+
+The maintenance stop exposed a separate recovery defect.  Generic
+`_refresh_book` accepts one-sided books but immediately dereferences both sides
+to validate potential entry payloads, and it performs that active-entry
+validation even when an inactive/retired owner needs only recovery or exit
+pricing.  This produced empty-iterable `ValueError` and inactive-market
+`OrderValidationError`.  Split generic book acquisition from entry-only
+validation and cover one-sided plus inactive-with-position recovery before a
+future deployment.  Do not globally disable empty-book refresh: the ITF owner
+still had a 10-contract position after shutdown and must remain unconditional.
+Only flat, order-free owners may receive maintenance-aware bounded backoff,
+with stream evidence waking them immediately.
+
+The runner received SIGTERM, exhausted 31 bounded shutdown book retries and
+exited itself at 11:45:16Z; it was not force-killed.  Its terminal record said
+`flat=false`.  An independent authenticated 11:48Z snapshot proved zero open
+orders and one nonzero position, `10.0000` contracts in
+`aec-itfme-pathom-julbie-2026-09-01`.  The bot remains stopped and must not be
+restarted or called flat until authoritative position resolution.

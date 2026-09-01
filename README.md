@@ -351,7 +351,8 @@ market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
 30; when supplied as the second argument it is persisted under `data/` so the
 supervisor and read-only diagnostics use the same value. Size never changes
 under live orders. The early-exit cap, per-market and portfolio exposure, loss
-stops and daily fee pause derive automatically from it. Portfolio exposure is
+stops and daily fee telemetry reference derive automatically from it. Fees do
+not gate trading. Portfolio exposure is
 `(configured slots + 10) × size`: every slot plus a proportional ten-notional cushion:
 
 ```bash

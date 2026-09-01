@@ -78,7 +78,7 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
         self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
-            self.authorized().max_daily_execution_fees_usd, Decimal("4.17"))
+            self.authorized().execution_fee_observation_usd, Decimal("4.17"))
         self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
         self.assertEqual(
             self.authorized().force_exit_before_start_seconds, 300)
@@ -205,7 +205,7 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(
                     config.max_market_exposure_usd, Decimal(size) * Decimal("9"))
                 self.assertEqual(
-                    config.max_daily_execution_fees_usd,
+                    config.execution_fee_observation_usd,
                     (Decimal(size) * Decimal("20") / Decimal("24")).quantize(
                         Decimal("0.01")))
                 self.assertEqual(config.max_taker_exit_orders, size * 4)
@@ -230,7 +230,7 @@ class CommissioningTests(unittest.TestCase):
 
         self.assertEqual(config.max_taker_exit_orders, 52)
         self.assertEqual(
-            config.max_daily_execution_fees_usd, Decimal("10.83"))
+            config.execution_fee_observation_usd, Decimal("10.83"))
 
     def test_daily_execution_fee_budget_scales_with_quantity_and_width(self):
         expected = {
@@ -245,7 +245,7 @@ class CommissioningTests(unittest.TestCase):
                 config = self.authorized(
                     quote_size=Decimal(size), max_markets=slots)
                 self.assertEqual(
-                    config.max_daily_execution_fees_usd, Decimal(amount))
+                    config.execution_fee_observation_usd, Decimal(amount))
 
     def test_portfolio_exposure_tracks_slot_width_plus_ten_unit_cushion(self):
         for slots, expected in ((20, "390"), (22, "416"), (24, "442")):

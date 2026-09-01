@@ -522,12 +522,16 @@ class CommissioningRunner:
         # pauses, consumed once by `_announce_loss_stop_pause`.
         self._loss_pause_pending: tuple[str, list[str], int] | None = None
         self._loss_pause_announced_day: str | None = None
-        # The gross taker-fee budget is an ET-day entry pause, not a process
-        # stop. It is reconstructed from durable owned fills after a restart,
-        # so restarting cannot buy a second budget on the same day.
-        self._execution_fee_pause_day: str | None = None
-        self._execution_fee_pause_pending: tuple[str, Decimal] | None = None
-        self._execution_fee_pause_announced_day: str | None = None
+        # Gross taker fees remain ET-day telemetry. The operator removed fee
+        # enforcement after the $10 reference canceled an otherwise healthy
+        # 24-slot slate on 2026-08-31. Durable fills reconstruct the notice
+        # after restart, but only the loss and exit-count guards authorize a
+        # trading pause/stop.
+        self._execution_fee_observation_day: str | None = None
+        self._execution_fee_observation_pending: (
+            tuple[str, Decimal] | None
+        ) = None
+        self._execution_fee_observation_announced_day: str | None = None
         # A marked-equity breach may be only a temporary mark on open
         # inventory. It blocks new entries immediately, then waits until at
         # least one position that was open during the breach is positively
@@ -1919,8 +1923,8 @@ class CommissioningRunner:
             f"${self.config.max_market_loss_usd} per-market stop, "
             f"${self.config.hard_stop_loss_usd} hard stop, "
             f"{self.config.max_taker_exit_orders} taker-exit count cap, "
-            f"${self.config.max_daily_execution_fees_usd} ET-day "
-            "execution-fee pause, "
+            f"${self.config.execution_fee_observation_usd} ET-day "
+            "execution-fee telemetry reference, "
             "operator-controlled stop; pregame and loss gates remain active."
             + selection_note)
         if not getattr(delivery, "sent", False):
@@ -2534,7 +2538,6 @@ class CommissioningRunner:
             and self._baseline_day == today
             and self._nontrading_cash is not None
             and self._nontrading_cash_day == today
-            and self._execution_fee_pause_day != today.isoformat()
         )
         eligible = state.reward_eligible
         if position == 0 and not new_risk_allowed:
@@ -3209,9 +3212,9 @@ class CommissioningRunner:
             if len(taker_exit_orders) >= self.config.max_taker_exit_orders:
                 return "commissioning_taker_exit_limit"
         today = risk_day(now)
-        if (self._execution_fee_pause_day is not None
-                and self._execution_fee_pause_day != today):
-            self._execution_fee_pause_day = None
+        if (self._execution_fee_observation_day is not None
+                and self._execution_fee_observation_day != today):
+            self._execution_fee_observation_day = None
         day_start, _ = reward_day_bounds(today)
         daily_rows = self.ledger.query(
             "SELECT f.client_order_id,f.fee FROM execution_fills f "
@@ -3227,18 +3230,19 @@ class CommissioningRunner:
              for row in daily_rows),
             Decimal("0"),
         )
-        if positive_daily_fees >= self.config.max_daily_execution_fees_usd:
-            if self._execution_fee_pause_day != today:
-                self._execution_fee_pause_pending = (
+        if positive_daily_fees >= self.config.execution_fee_observation_usd:
+            if self._execution_fee_observation_day != today:
+                self._execution_fee_observation_pending = (
                     today, positive_daily_fees)
                 print(
-                    f"[execution-fee-pause] at={now.isoformat()} day={today} "
+                    f"[execution-fee-observation] at={now.isoformat()} "
+                    f"day={today} "
                     f"gross_taker_fees={positive_daily_fees} "
-                    f"cap={self.config.max_daily_execution_fees_usd} "
-                    "action=block_new_risk_until_next_et_day",
+                    f"reference={self.config.execution_fee_observation_usd} "
+                    "action=observe_only",
                     flush=True,
                 )
-            self._execution_fee_pause_day = today
+            self._execution_fee_observation_day = today
         blockers = self.risk_guard.blockers(now=now)
         # Missing/stale equity is recoverable only by staying alive with new
         # risk disabled. A clock failure or explicit critical condition still
@@ -3316,25 +3320,22 @@ class CommissioningRunner:
             f"{remaining} more and it stops for good and needs a human.",
             critical=True)
 
-    async def _announce_execution_fee_pause(self) -> None:
-        """Tell Discord once per ET day that gross taker fees paused entry."""
+    async def _announce_execution_fee_observation(self) -> None:
+        """Tell Discord once per ET day that fees crossed the reference."""
 
-        pending, self._execution_fee_pause_pending = (
-            self._execution_fee_pause_pending, None)
+        pending, self._execution_fee_observation_pending = (
+            self._execution_fee_observation_pending, None)
         if pending is None:
             return
         day, fees = pending
-        if self._execution_fee_pause_announced_day == day:
+        if self._execution_fee_observation_announced_day == day:
             return
-        self._execution_fee_pause_announced_day = day
+        self._execution_fee_observation_announced_day = day
         await self.notifier.send_async(
-            f"🛑 Liquidity Bot used ${fees} of its "
-            f"${self.config.max_daily_execution_fees_usd} gross taker-fee "
-            f"budget for {day} and has PAUSED new trading. The process stays "
-            "alive; existing exits and the pre-kickoff flatten continue. "
-            "Trading becomes eligible again after the next ET midnight and "
-            "a fresh account/risk-day baseline passes the normal gates.",
-            critical=True)
+            f"ℹ️ Liquidity Bot gross taker fees reached ${fees} for {day}, "
+            f"above the ${self.config.execution_fee_observation_usd} "
+            "telemetry reference. This does not pause trading; account-loss, "
+            "market-loss and taker-exit-count protections remain enforced.")
 
     async def _announce_provisional_hard_stop(self) -> None:
         """Announce a paper breach once, then its position-close recovery."""
@@ -7318,7 +7319,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
-                await self._announce_execution_fee_pause()
+                await self._announce_execution_fee_observation()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
@@ -7460,7 +7461,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
-                await self._announce_execution_fee_pause()
+                await self._announce_execution_fee_observation()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break

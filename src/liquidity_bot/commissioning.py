@@ -331,8 +331,8 @@ class CommissioningConfig:
         return self.quote_size * Decimal(self.max_markets + 10)
 
     @property
-    def max_daily_execution_fees_usd(self) -> Decimal:
-        """Scale the size-10/24-slot $10 ET-day gross taker-fee budget."""
+    def execution_fee_observation_usd(self) -> Decimal:
+        """Scale the size-10/24-slot $10 ET-day fee telemetry reference."""
 
         return (
             self.quote_size

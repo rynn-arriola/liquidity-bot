@@ -82,3 +82,13 @@ zero positions, zero unresolved intents and zero unknown absences. Surrounding
 API windows had zero failures and zero 429s. This is live acceptance of the
 configured pause, not a capacity regression; restart reconstructs the same
 durable total, while the next ET-day rollover clears the non-terminal pause.
+
+## Superseded policy
+
+The natural acceptance also showed that this gate was too restrictive for the
+business goal: a single additional exit erased the full reward-earning slate
+while account-loss protections remained far from their thresholds. The
+operator therefore removed fee enforcement on 2026-08-31. The scaled amount
+remains useful telemetry, but the later
+[gate-removal record](EXECUTION_FEE_GATE_REMOVAL_2026-08-31.md) is authoritative
+for current behavior.

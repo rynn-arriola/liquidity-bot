@@ -27,7 +27,7 @@ These are implementation requirements, not suggestions.
 13. Commissioning is pregame only and uses one exclusively held API key with
     maker-lab stopped. Size and breadth are restart-scoped operator inputs.
     Quote size is a whole value bounded to 5-30; the persisted live setting is
-    13 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
+    10 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
     be explicitly set only from 20 through the authorized canary ceiling of 24;
     a bare restart must return to 20. The six-hour selection horizon does not
     change. Early-exit loss
@@ -35,10 +35,11 @@ These are implementation requirements, not suggestions.
     (`(slots + 10) × size`), market loss (`4 × size`), both account sensors
     (`8 × size × slots / 20`),
     taker-exit count (`4 × size`) and the cent-rounded ET-day gross taker-fee
-    pause (`$10 × size / 10 × slots / 24`) are computed properties. Portfolio
+    telemetry reference (`$10 × size / 10 × slots / 24`) are computed
+    properties. Crossing the fee reference must not alter trading. Portfolio
     exposure funds every restart-configured slot-notional plus a ten-notional
     cushion. Breadth scales portfolio exposure, the two account-wide stops and
-    the daily fee budget; per-market loss/exposure, exit-count and REST retain
+    the fee observation; per-market loss/exposure, exit-count and REST retain
     their quantity or policy meanings.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in

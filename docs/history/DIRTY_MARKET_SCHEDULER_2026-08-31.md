@@ -275,3 +275,31 @@ exited itself at 11:45:16Z; it was not force-killed.  Its terminal record said
 orders and one nonzero position, `10.0000` contracts in
 `aec-itfme-pathom-julbie-2026-09-01`.  The bot remains stopped and must not be
 restarted or called flat until authoritative position resolution.
+
+## Recovery book validation repair — 2026-09-01
+
+The operator authorized the recovery repair and a later safe restart.  Local
+commit `5f1ef3369` leaves `_refresh_book` responsible only for authenticated
+book acquisition, receipt timing, dirty scheduling and required contract
+identity.  A separate startup boundary validates every side that is actually
+present before entry authorization.  Non-recovery startup therefore retains
+tick, quantity, active/open and payload checks; recovery can retain a valid
+one-sided or inactive/closed book without invoking entry-only rules.  The REST
+adapter's both-sides-empty refusal and the mutation-time payload validator are
+unchanged.
+
+Three focused regressions cover one-sided acquisition without `min`/`max` on
+an empty collection, inactive-book acquisition with entry refusal retained,
+and recovery startup with an inactive one-sided market.  Deliberately restoring
+the generic-path validation and unconditional side dereferences failed all
+three with the exact old `ValueError`/`OrderValidationError` shapes.  After
+restoration, the focused eight-test recovery slice, complete 371-test live
+runner module and full 998-test pinned-WSL suite passed.  Final review found no
+change to ownership, empty-book refusal, API request count, mutation sequencing,
+position service, shutdown budgets, quote size, slot capacity or risk policy.
+
+This repair does not clear the live operational blocker.  A fresh 12:02Z
+account snapshot still proved zero open orders and the same `10.0000` position;
+the exact market metadata was `active=true`, `closed=true`, status
+`MARKET_STATUS_CLOSED`, and its authenticated book remained empty on both
+sides.  No code can safely cross an empty book or force venue settlement.

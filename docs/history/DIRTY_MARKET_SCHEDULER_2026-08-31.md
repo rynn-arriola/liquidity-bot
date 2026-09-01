@@ -182,3 +182,54 @@ action and execution-state evidence. Do not widen capacity or claim a CPU win.
 A follow-up design must separate cheap quiet-book liveness servicing from full
 business-decision eligibility while preserving the five-second planning
 freshness gate, unconditional position service and existing rollback triggers.
+
+## CPU attribution review and prepared ledger repair — 2026-09-01
+
+The first post-load attribution corrected two overclaims while preserving the
+useful diagnosis.  The 04:43:11Z `[api-budget]` window really did contain 87
+attempts over 62.2 seconds, including 51 `market_book` reads, 84 total reads
+and three mutations.  That proves book REST is the largest request category in
+that window.  It does **not** prove that 93% of elapsed time was REST: p95 wait
+and response values are not averages and cannot be multiplied by every
+request.  Likewise `max_waiting=1` counts admission waiters, not in-flight
+requests, and the once-per-outer-loop event-delay sample cannot exclude every
+short synchronous CPU burst.  The source remains mostly serial, but those
+three telemetry fields must retain their narrower meanings.
+
+One independent CPU defect was proven directly.  The live read-only ledger had
+3,697 fills across 1,048 historical markets and no market-leading fill index.
+`realized_by_market()` called `realized_pnl(slug)` once for every historical
+market, so every risk refresh scanned the full fill table 1,048 times.  Live
+read-only timing was 311.562 ms for `realized_by_market()`, 19.750 ms for one
+`realized_pnl()` and 0.256 ms for `working_orders()`.  On an in-memory copy of
+the same fills, the old market query took 262–278 ms for the complete map; a
+single chronological replay took about 19 ms, and adding
+`execution_fills(market_slug, reversed)` reduced individual market lookup to
+22–29 ms for the complete repeated benchmark.
+
+Local implementation commit `773677b2f` prepares both repairs without changing
+the accounting equation: all non-reversed fills are still replayed in
+`event_at, received_at, execution_id` order, each market retains independent
+inventory matching, a `since` cutoff still replays old basis before attributing
+new realization, and an all-reversed historical market still appears with
+zero.  The additive index is created on every ledger open with `IF NOT EXISTS`.
+Focused tests cover exact equivalence to individual replay, interleaved
+markets, cutoff basis, reversed-only history, one fill-history SELECT, query
+plan and migration of an existing database.
+
+Deliberately restoring the old implementation made the one-read regression
+fail with three fill queries for two markets.  Deliberately removing the index
+made both index tests fail and restored SQLite's `SCAN execution_fills` plan.
+After restoration, the focused ledger suite passed 59/59 and an isolated
+archive using the pinned laptop WSL environment passed 995/995 in 74.696
+seconds.  Windows' unpinned Python 3.14 environment is intentionally not the
+acceptance environment; it lacks the project SDK and timezone packages.
+
+No profiler attribution is claimed for the remaining CPU.  A temporary,
+isolated `py-spy` install could not attach to the live runner because Linux
+`ptrace_scope=1` denied the non-root observer and passwordless sudo was not
+available.  Kernel tracing policy was not changed.  Do not redesign quiet-book
+REST or the scheduler from the incomplete phase counters alone.  Review
+`773677b2f` next; only a later explicitly authorized flat restart may migrate
+and load it.  The live process, source checkout and ledger were not changed by
+this preparation.

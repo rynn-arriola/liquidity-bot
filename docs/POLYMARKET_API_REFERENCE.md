@@ -125,6 +125,19 @@ throughput and lengthen head-of-line delay even when average request rate is
 below four. Capacity replay therefore accepts response latency as an explicit
 input and checks deadlines/backlog as well as average requests per second.
 
+The loaded 24-slot runner supplied a narrower post-scheduler sample at
+04:43:11Z on 2026-09-01: 87 attempts in 62.2 seconds, comprising 84 reads and
+three mutations.  `market_book` was the largest category at 51 attempts;
+balance used 12, positions seven and execution history four.  This is evidence
+that quiet-book REST dominates request count in that window, not evidence that
+the venue rate limit was reached: the window recorded no failure or 429.
+`max_waiting=1` counts limiter admission waiters and does not prove the number
+of requests already in flight.  The logged p95 wait and response values are
+tail percentiles, not per-request averages, so multiplying their sum by all 87
+attempts is not a valid elapsed-time attribution.  Any later scheduler or
+capacity change must measure per-request/category duration or use a permitted
+sampling profiler before assigning the remaining CPU or wall time.
+
 ### Measured live baseline and modeled scenarios
 
 Read-only log analysis of the laptop session from its 2026-08-29 12:25 UTC

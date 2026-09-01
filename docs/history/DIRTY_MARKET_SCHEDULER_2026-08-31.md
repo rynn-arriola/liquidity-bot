@@ -116,3 +116,33 @@ then advance only 26 → 28 → 30 → 32 with the existing API gates and reward
 resting side-hour as an additional stop condition. Worker processes remain out
 of scope; if later needed, they may perform pure calculation over immutable
 snapshots only, with no credentials, limiter claim or venue call.
+
+## Pre-load staging and baseline — 2026-09-01
+
+The reviewed source/index commits were fast-forwarded into the clean laptop WSL
+checkout at `17144599577b5b19af75debd048ec6a9efa62171`. An isolated archive of
+that exact checkout passed 988/988 tests in 70.815 seconds. Windows, GitHub and
+WSL source match. The existing runner PID 1030888 and
+`DEPLOYED_COMMIT=4b6e4e80b39ea1960053bddf16d3e2591193fb53` remain unchanged; no
+stop or restart occurred. A read-only live-ledger check confirmed
+`idx_execution_orders_status` is still absent, so the additive migration has
+not run against production and no staged source is loaded.
+
+Parity's verified online snapshot at 2026-09-01T04:05:54.736447Z froze the
+pre-load size-10/24 comparison window beginning with the current runner at
+00:14:34Z:
+
+- 154.2647 resting side-hours / 175.9699 side-span hours = 87.6654%
+  span-weighted resting; 1.7268 resting side-hours per market-span hour;
+- 611 actions across 39 distinct markets; full UTC hours 01/02/03 reached
+  24/17/17 distinct action markets respectively;
+- cancel action→next same-owner-side PLACE: n=203, p50 43.073s, p90 195.867s;
+- positive terminal cancel confirmation→next same-owner-side PLACE: n=275,
+  p50 48.999s, p90 144.717s;
+- zero `execution_state_unknown` lines and zero runner failures;
+- two quarantines: one recovered private disconnect and one recovered market
+  stream silence. These are part of the baseline rather than scheduler faults.
+
+This 3.8558-hour window is the frozen comparison, not an acceptance verdict.
+Use evaluated/skipped plus decision/action latency across several comparable
+post-load windows, and retain the existing rollback triggers.

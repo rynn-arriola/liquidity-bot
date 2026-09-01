@@ -303,3 +303,12 @@ account snapshot still proved zero open orders and the same `10.0000` position;
 the exact market metadata was `active=true`, `closed=true`, status
 `MARKET_STATUS_CLOSED`, and its authenticated book remained empty on both
 sides.  No code can safely cross an empty book or force venue settlement.
+
+The reviewed commits were pushed and the clean WSL checkout fast-forwarded to
+`43a4c78acb54ba1f3fd7d0ad6950f1a711175841`.  Its exact post-deployment suite
+passed 998/998 in 71.823 seconds, after which `DEPLOYED_COMMIT` advanced to the
+executable commit `5f1ef33693818aaa5a8ad5a22e367d208dd17090` (the later commit
+is documentation only).  A final authenticated gate at 12:17Z again proved
+zero open orders, the same 10-contract position, closed metadata and a
+both-sides-empty book.  The safety gate therefore refused startup.  No runner,
+supervisor or dashboard was started and no venue mutation occurred.

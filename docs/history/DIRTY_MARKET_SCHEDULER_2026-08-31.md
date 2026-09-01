@@ -146,3 +146,39 @@ pre-load size-10/24 comparison window beginning with the current runner at
 This 3.8558-hour window is the frozen comparison, not an acceptance verdict.
 Use evaluated/skipped plus decision/action latency across several comparable
 post-load windows, and retain the existing rollback triggers.
+
+## Load and initial live acceptance — 2026-09-01
+
+`Command 1` stopped supervisor/runner 1030880/1030888 gracefully. The terminal
+record proved `flat: true`; a separate authenticated read then proved zero open
+orders and zero nonzero positions, while the ledger proved zero unresolved
+intents, unknown absences and nonzero positions. `DEPLOYED_COMMIT` advanced to
+the reviewed executable commit `17144599577b5b19af75debd048ec6a9efa62171`
+only after that proof. Supervisor 1037235 and runner 1037243 then started once
+at size 10 / 24. The additive `idx_execution_orders_status` migration is
+present on the live ledger.
+
+Startup completed its full account/market safety preflight before mutation.
+At 04:30Z one read-only authenticated acceptance found 44 open orders across
+all 24 selected markets and zero nonzero-position markets, matching zero
+unresolved intents and zero unknown absences in the ledger. The first two API
+windows reported 458 attempts/45 mutations over 208.4 seconds and 108/5 over
+73.3 seconds, with zero failures, zero rate limits, zero cooldown and queue
+depth one.
+
+The optimization itself is not yet accepted. The first six scheduler windows
+reported 0 skipped across 168 pass owners; steady windows used 0.679-0.726 CPU
+core with 70-80 second duration. Source inspection matches the observation:
+`_scheduled_market_slugs` treats `next_book_refresh` as a full decision due
+condition, while each quiet-book check is scheduled only three seconds after
+the latest book. Every deadline has therefore elapsed before the next long
+pass, even without another dirty trigger. A brief fail-closed equity freshness
+transition canceled two bids as `account_new_risk_paused`; both were
+automatically replaced 14-45 seconds later, and marked day P&L was only
+`-$3.3890`, so no fee/loss gate fired.
+
+Leave the healthy 24-slot bot live and collect comparable multi-window resting,
+action and execution-state evidence. Do not widen capacity or claim a CPU win.
+A follow-up design must separate cheap quiet-book liveness servicing from full
+business-decision eligibility while preserving the five-second planning
+freshness gate, unconditional position service and existing rollback triggers.

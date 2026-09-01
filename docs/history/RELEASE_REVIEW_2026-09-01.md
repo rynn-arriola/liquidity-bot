@@ -92,10 +92,10 @@ ownership; it did not rely on the preceding conservative `flat=false` terminal
 record. Exactly one size-10/24 supervisor/runner pair started.
 
 Initial loaded evidence is consistent with the review: active scope was
-`RUNNING`; authenticated state showed 17 orders across 17 markets and zero
-positions during a 19-owner refill; exact lifecycle top-up released four ended
-owners; and the first post-mutation API window had 187 attempts, 17 creates,
-zero failures, zero 429s and zero cooldown. No change to healthy quote output or
+`RUNNING`; authenticated state showed 39 orders across 22 markets and zero
+positions after refill restored the exact 24-owner scope; and a 76.7-second
+post-mutation API window had 174 attempts, 25 mutations, zero failures, zero
+429s and zero cooldown. No change to healthy quote output or
 risk limits was observed. Positioned inactive wait, UI maintenance transition,
 one-sided recovery and steady-state performance remain natural acceptance items
 rather than induced tests.

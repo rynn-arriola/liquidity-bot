@@ -96,8 +96,8 @@ one size-10/24 runner started.
 The loaded lifecycle path requested refill, released four ended owners and
 added viable replacements without producing the old recurring
 `market_incentive_refresh ... is not open` runtime-error loop. Authenticated
-acceptance at 16:02Z found 17 orders across 17 markets and zero positions while
-the runner published a 19-owner `RUNNING` scope during continued refill. The
-first post-mutation API window completed 187 attempts including 17 creates with
-zero failures, rate limits or cooldown. No exact inactive position existed, so
+acceptance at 16:07Z found 39 orders across 22 markets and zero positions after
+the runner restored the exact 24-owner `RUNNING` scope. A 76.7-second
+post-mutation API window completed 174 attempts including 25 mutations with zero
+failures, rate limits or cooldown. No exact inactive position existed, so
 mutation-free wait, reopening and flat-release acceptance remain natural-only.

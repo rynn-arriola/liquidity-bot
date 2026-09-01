@@ -31,7 +31,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 - **Desktop cold backup:** inactive; its latest parity execution-ledger recovery copy matches the laptop SHA-256 and passes SQLite integrity `ok`. It is not activated and has no credential path, trading process, service, timer or API check
 - **Selected quantity/runtime:** loaded size 10 / 24 has $340 portfolio cap, $90 market exposure, $40 market loss, $96 session/hard, $8 early-cross and 40 terminal taker exits; the $10 ET-day gross-fee value is telemetry only
 - **Natural defect acceptance:** a backward sample at 04:19:49Z emitted `[score-clock] ... action=ignored_stale_sample`; no retirement followed and the runner reached 20/20 quoting. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
-- **Stable rollback:** `v1.0.0` points to `744b7c1`
+- **Stable rollback:** `v1.1.0` is the current size-10/24-slot anchor matching loaded source `4b6e4e8`; `v1.0.0` remains the immutable earlier size-10/20-slot checkpoint
 
 ## Active operating envelope
 | Setting | Current decision |

@@ -1,5 +1,27 @@
 # Stable release and rollback anchor
 
+## Current stable baseline
+
+`v1.1.0` is the immutable known-good production checkpoint selected on
+2026-08-31 before work on capacity beyond 24 slots. It preserves the loaded
+size-10, 24-slot, six-hour implementation, the class-aware host API admission
+controls, corrected account/trading reporting, breadth-scaled capital and loss
+controls, safe lifecycle refill, retained-value shadow measurement and
+observe-only execution-fee telemetry.
+
+The tag's executable `src/`, `tests/` and launcher content exactly matches the
+loaded source marker `4b6e4e80b39ea1960053bddf16d3e2591193fb53`.
+Commits between that marker and the tagged checkpoint are documentation-only.
+The deployed source passed 973/973 isolated WSL tests, and the size-10/24-slot
+canary passed 26 API windows and 2,774 attempts with zero failures or 429s and
+maximum queue depth one. Laptop, GitHub and WSL parity passed when the
+checkpoint was prepared; the offline desktop peer remained pending and was
+not overwritten.
+
+Creating this checkpoint did not stop, restart, deploy or otherwise alter the
+live bot. The production ledger, runtime settings and venue state are not part
+of the tag.
+
 ## First stable baseline
 
 `v1.0.0` is the first immutable known-good production checkpoint. The tag
@@ -31,12 +53,13 @@ server-local databases, logs, runtime setting files or schema migrations.
 Never use a destructive reset of `main` and never equate a code rollback with
 a flat account. When the operator requests a rollback:
 
-1. Preserve all dirty workstation/server files and identify the suspect commits
-   with `git diff v1.0.0..HEAD`.
+1. Select the intended immutable stable tag (normally `v1.1.0`), preserve all
+   dirty workstation/runtime files and identify the suspect commits with
+   `git diff <stable-tag>..HEAD`.
 2. Verify live process, orders, positions and unresolved ownership. Stop or
    restart only with the operator's authorization and the normal flatness rules.
-3. Audit every database migration after `v1.0.0`; older code must not open a
-   newer ledger until compatibility is positively proved.
+3. Audit every database migration after the selected stable tag; older code
+   must not open a newer ledger until compatibility is positively proved.
 4. Review the tag in a separate worktree or revert the suspect commits with new
    commits on `main`; do not rewrite shared history.
 5. Run focused regressions, deliberate reversal where applicable, the complete
@@ -44,5 +67,5 @@ a flat account. When the operator requests a rollback:
 6. Update `DEPLOYED_COMMIT`, verify server hashes and tests, then restart only
    when separately authorized and safe. Verify venue state after startup.
 
-`v1.0.0` remains immutable. Later stable checkpoints receive new version tags;
-never move or reuse this tag.
+Every stable tag remains immutable. Later stable checkpoints receive new
+version tags; never move or reuse an existing tag.

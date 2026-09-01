@@ -63,6 +63,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 
 ## Multi-machine operating choice
 
+- `v1.1.0` is the current immutable stable rollback anchor selected before capacity work beyond 24 slots; its executable content matches loaded source `4b6e4e8`, while `v1.0.0` remains the earlier 20-slot checkpoint.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.

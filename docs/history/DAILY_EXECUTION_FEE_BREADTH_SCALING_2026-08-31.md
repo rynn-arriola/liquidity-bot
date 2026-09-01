@@ -73,3 +73,12 @@ That gate completed through 23:06Z with 26 windows, 2,774 attempts,
 execution-fee pause reappeared. The configured `$10` cap remains a real safety
 budget: a later owned taker fill may legitimately consume the remaining daily
 allowance and pause new entries while exits stay available.
+
+That natural boundary occurred at 23:55:38Z. A hard-timeout exit moved the
+durable 2026-08-31 ET-day gross owned taker fee total from `$9.5300` to
+`$10.0800`. The runner emitted `[execution-fee-pause] ... cap=10.00`, then
+canceled entry quotes with `account_new_risk_paused` and reached zero orders,
+zero positions, zero unresolved intents and zero unknown absences. Surrounding
+API windows had zero failures and zero 429s. This is live acceptance of the
+configured pause, not a capacity regression; restart reconstructs the same
+durable total, while the next ET-day rollover clears the non-terminal pause.

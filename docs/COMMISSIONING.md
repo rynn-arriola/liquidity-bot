@@ -273,6 +273,17 @@ Start, inspect, and stop:
 ./scripts/stop_commissioning.sh
 ```
 
+After the UI-maintenance entry gate has been loaded by an authorized restart,
+new entries can be paused or resumed without stopping the process. Positions,
+cancels and exits remain live; resume cannot override an active UI-maintenance
+hold:
+
+```bash
+PYTHONPATH=src python -B scripts/entry_pause.py pause
+PYTHONPATH=src python -B scripts/entry_pause.py status
+PYTHONPATH=src python -B scripts/entry_pause.py resume
+```
+
 After the retained-value shadow build is deliberately deployed and the runner
 is restarted, verify its order-linked coverage locally on the laptop:
 

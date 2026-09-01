@@ -406,6 +406,20 @@ class DesiredStateReconciler:
 
     def plan(self, frame: MarketFrame) -> list[PlanAction]:
         slug = frame.market.slug
+        # Removing known flat-state exposure needs neither a fresh book nor
+        # fresh private state.  UI/operator maintenance can begin while a
+        # market stream is quiet; waiting for book recovery before cancelling
+        # would leave the very entry quotes the pause exists to withdraw.
+        # Ownership was already proved when WorkingOrder was constructed, and
+        # CANCEL cannot add inventory. The one-mutation driver still sequences
+        # these through durable intents and exact terminal reconciliation.
+        if (frame.position == 0 and not frame.new_risk_allowed
+                and frame.working_orders):
+            return [PlanAction(
+                ActionKind.CANCEL, slug,
+                "side_no_longer_desired:account_new_risk_paused",
+                side=order.side, order_id=order.order_id)
+                for order in frame.working_orders]
         if not frame.state_known:
             return self._critical(frame, "execution_state_unknown")
         if frame.book.slug != slug:

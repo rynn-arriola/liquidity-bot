@@ -313,7 +313,7 @@ def _read_active_scope_snapshot(
         if observed_at > now + timedelta(seconds=5):
             raise ValueError("active-scope observed_at is in the future")
         status = payload.get("status")
-        if status not in {"RUNNING", "STOPPED"}:
+        if status not in {"RUNNING", "ENTRY_PAUSED", "STOPPED"}:
             raise ValueError("active-scope status is invalid")
         publisher_pid = payload.get("publisher_pid")
         if (isinstance(publisher_pid, bool)
@@ -339,7 +339,7 @@ def _read_active_scope_snapshot(
             raise ValueError("active-scope market count exceeds capacity")
         age = _age_seconds(observed_at, now)
         usable = (
-            status == "RUNNING"
+            status in {"RUNNING", "ENTRY_PAUSED"}
             and snapshot_capacity == capacity
             and publisher_pid in runner_pids
         )
@@ -552,7 +552,7 @@ def _ledger_state(
                 scope_markets = list(active_scope["markets"])
                 scope = {
                     "size": len(scope_markets),
-                    "status": "RUNNING",
+                    "status": active_scope["status"],
                     "source": "RUNNER_ACTIVE_SCOPE",
                     "updated_at": active_scope["observed_at"],
                     "age_seconds": active_scope["age_seconds"],

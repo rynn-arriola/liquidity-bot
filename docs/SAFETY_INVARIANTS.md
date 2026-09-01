@@ -696,3 +696,18 @@ These are implementation requirements, not suggestions.
     any ambiguity or ownership drift removes the exception and returns to
     ordinary fail-closed recovery. Unrelated markets may use only the remaining
     configured slots.
+92. Public Polymarket US application maintenance removes new-risk authority but
+    cannot remove risk-reduction authority or manufacture venue truth. Only the
+    exact official product-scoped maintenance/trading-paused evidence may enter
+    this gate; generic text, public status, Retail API success and probe failure
+    are insufficient to claim either maintenance or recovery. A flat owner's
+    entry quotes become undesired through the unchanged reconciler, while every
+    nonzero position remains unconditional and retains passive reduction,
+    cancel-confirm sequencing, IOC deadlines and pre-kickoff flattening. An
+    unknown observation never clears a pause; recovery requires three
+    consecutive healthy official-page observations. A persistent operator
+    pause may independently block entry, but operator resume clears only that
+    latch and may not override UI maintenance. The public probe carries no
+    credential, makes no venue API call or mutation, is bounded and runs off
+    the event loop. Neither signal may prove flatness, cancellation, ownership,
+    settlement, account health or permission to restart.

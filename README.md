@@ -123,6 +123,20 @@ unsafe/ambiguous ownership remain terminal safety events.
 `stop_commissioning.sh` requests graceful cancellation, flattening, and exact
 flat-state proof before exit.
 
+The public US application has a separate reduce-only gate because it can block
+ordinary users while the Retail API still responds. Exact official
+`Maintenance Mode` / trading-paused evidence cancels flat entry quotes and
+blocks new ones while keeping the process, account reconciliation and every
+position exit alive. Three healthy application checks are required to resume.
+The same behavior can be latched manually without a restart after this feature
+is loaded:
+
+```bash
+PYTHONPATH=src python -B scripts/entry_pause.py pause
+PYTHONPATH=src python -B scripts/entry_pause.py status
+PYTHONPATH=src python -B scripts/entry_pause.py resume
+```
+
 The $80 realized session sensor subtracts positively classified completed
 rewards, deposits, withdrawals, bonuses and transfers from settled-cash change.
 It shares the report's completion-time cash parser, requires explicit EOF within

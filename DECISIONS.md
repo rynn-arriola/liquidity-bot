@@ -7,8 +7,7 @@ show the operator the discrepancy.
 
 ## Decision rights
 
-- The human operator chooses strategy behavior, risk limits, capital, quote
-  size, slot count, deployment timing and stop/restart timing.
+- The human operator chooses strategy behavior, risk limits, capital, quote size, slot count, deployment timing and stop/restart timing.
 - AI agents investigate, explain, implement, test, review, document and carry
   out authorized operations. Every fix requires a dedicated final review and relevant edge-case audit before both push and deployment; passing tests do not waive it. Agents should not assume the operator writes code.
 - Explain proposed changes in plain language, including expected benefit,
@@ -20,6 +19,7 @@ show the operator the discrepancy.
 | Choice | Decision in force |
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
+| UI maintenance participation | Exact official Polymarket US application maintenance pauses new entries and cancels flat entry quotes without stopping the runner; cancels and position exits remain live. Resume requires three healthy application checks. A persistent operator pause has the same reduce-only scope and cannot override UI maintenance when cleared |
 | Quote size | 10 contracts is loaded live; whole values 5-30 are supported and restart-scoped |
 | Concurrent market capacity | 24 slots is loaded and passed its 30-minute canary. Twenty remains the bare-launcher default; values 20-24 are valid, while 25 remains refused |
 | Entry horizon | Six hours before the modeled pregame boundary |

@@ -1,6 +1,7 @@
 # Findings index
 Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.md) before theorizing: `rg -n -i "<term>" FINDINGS.md docs/history/FINDINGS_*.md`.
 ## Current high-value findings
+- **Retail API health and customer UI participation can diverge.** On 2026-09-01 the official US application said `Maintenance Mode` / `Trading is paused right now` while public status and authenticated API reads remained healthy; one ordinary bot order filled during that overlap. API success therefore cannot prove customers can trade symmetrically. The reviewed remedy is reduce-only: cancel/block flat entries, preserve the live process and every position exit, and require three exact healthy UI observations before resuming. [Evidence](docs/history/UI_MAINTENANCE_ENTRY_PAUSE_2026-09-01.md).
 - **Global Polymarket health does not make every market executable.** After 31 bounded shutdown retries, the runner stopped truthfully `flat=false`; independent authenticated proof found zero orders and one exact 10-contract position in `aec-itfme-pathom-julbie-2026-09-01`. At 12:22-12:23Z public health/status and an authenticated account read were operational, yet the exact market still had a valid empty book and no settlement record. Treating that owner as an account-wide veto leaves every unrelated slot unavailable indefinitely. The bounded remedy is exact-owner settlement wait: no quote/mutation on that slug, one slot/full-risk reservation, private/account monitoring and 60-second read-only book polling, while independently proven markets may trade. Terminal record plus venue snapshot remain stop authority.
 - **Generic book refresh was incorrectly coupled to two-sided active-entry validation.** `_refresh_book` dereferenced both sides and called entry validation for inactive recovery owners. Reviewed `5f1ef3369` moves entry-only checks to startup, validates only present sides and preserves empty-book/missing-metadata/order-payload refusal. The current ITF owner still has 10 contracts in a closed market with no depth, so the code repair cannot force settlement and its repeated positioned-owner reads remain safety work.
 - **The 11:22-11:29Z fast passes are degraded recovery, not a healthy CPU baseline.** Maintenance began at 06:56Z; the health gate passed only at 11:10Z, after which many Retail markets remained inactive or empty. Fast 3-4 second passes and lower CPU during that interval reflect early failures and missing normal decision work. Also, `[decision-scheduler] cpu_cores` is process CPU divided by the full recent wall-clock window, while `TIME/ELAPSED` is lifetime average; it is not an active-work-only ratio.
@@ -78,8 +79,7 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
   during that window. A post-maintenance empty pre-window history result is not
   positive proof of no fill, cancellation or flatness; retain normal durable-
   ledger and current authenticated-state requirements.
-- **Trade state is independent of fill delivery.** Retail activity can retain a
-  trade as `TRADE_STATE_BUSTED` after its execution leg was booked. Trade ID,
+- **Trade state is independent of fill delivery.** Retail activity can retain a trade as `TRADE_STATE_BUSTED` after its execution leg was booked. Trade ID,
   lifecycle state and an exactly-once reversal are therefore separate durable
   facts; a current authoritative position snapshot outranks fill arithmetic.
 - **REST freshness cannot certify WebSocket liveness.** The 20-market private

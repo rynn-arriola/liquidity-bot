@@ -28,8 +28,9 @@ def write_active_scope_snapshot(
         raise ValueError("active-scope observation must be timezone-aware")
     if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
         raise ValueError("active-scope capacity must be a positive integer")
-    if status not in {"RUNNING", "STOPPED"}:
-        raise ValueError("active-scope status must be RUNNING or STOPPED")
+    if status not in {"RUNNING", "ENTRY_PAUSED", "STOPPED"}:
+        raise ValueError(
+            "active-scope status must be RUNNING, ENTRY_PAUSED or STOPPED")
     pid = os.getpid() if publisher_pid is None else publisher_pid
     if isinstance(pid, bool) or not isinstance(pid, int) or pid < 1:
         raise ValueError("active-scope publisher PID must be a positive integer")

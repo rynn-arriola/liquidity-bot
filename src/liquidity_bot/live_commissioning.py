@@ -55,6 +55,13 @@ from .execution_ledger import (
     LedgerConflict,
     QuoteObservation,
 )
+from .entry_pause import (
+    OPERATOR_ENTRY_PAUSE_PATH,
+    UiTradingProbe,
+    UiTradingState,
+    operator_entry_pause_requested,
+    probe_polymarket_us_homepage,
+)
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
     AsyncTradingGateway,
@@ -176,6 +183,14 @@ PRIVATE_HANDOFF_RATE_LIMIT_MAX_SECONDS = 60.0
 MAINTENANCE_FAILURE_THRESHOLD = 3
 MAINTENANCE_STABLE_READS = 3
 MAINTENANCE_POLL_SECONDS = 60.0
+
+# The public US application can pause customer participation while authenticated
+# API reads and mutations still succeed.  This independent signal controls only
+# new risk.  One exact banner pauses immediately; recovery requires three
+# consecutive healthy observations so a rolling frontend deploy cannot flap
+# entries.  It makes no venue API request and carries no credentials.
+UI_AVAILABILITY_POLL_SECONDS = 60.0
+UI_AVAILABILITY_STABLE_READS = 3
 
 # A ready stream task and a no-op repair coroutine can both complete without
 # suspending. Yield on every outer pass so Unix signal callbacks, the isolated
@@ -383,6 +398,8 @@ class CommissioningRunner:
         reward_selector: RewardMarketSelector | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
         limiter: AsyncIntervalLimiter | None = None,
+        ui_availability_probe: Callable[[], UiTradingProbe] | None = None,
+        operator_entry_pause_path: Path = OPERATOR_ENTRY_PAUSE_PATH,
     ):
         self.client = client
         self.config = config
@@ -390,6 +407,19 @@ class CommissioningRunner:
         self.notifier = notifier
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep
+        self._ui_availability_probe = (
+            ui_availability_probe or probe_polymarket_us_homepage)
+        self._operator_entry_pause_path = operator_entry_pause_path
+        self._manual_entry_paused = False
+        self._ui_entry_paused = False
+        self._ui_availability_initialized = False
+        self._ui_availability_state = UiTradingState.UNKNOWN
+        self._ui_availability_detail = "not_checked"
+        self._ui_healthy_streak = 0
+        self._next_ui_availability_check_at: datetime | None = None
+        self._ui_availability_task: asyncio.Task | None = None
+        self._entry_pause_reason: str | None = None
+        self._entry_pause_cancel_requested = False
         limiter = limiter or AsyncIntervalLimiter.from_rate(
             float(config.rest_requests_per_second))
         self.gateway = AsyncReadOnlyGateway(client, limiter=limiter)
@@ -1320,6 +1350,149 @@ class CommissioningRunner:
             self._nontrading_cash is not None,
             self._nontrading_cash_day == today,
             session_ready,
+            not self._entry_pause_active(),
+        )
+
+    def _entry_pause_active(self) -> bool:
+        """Whether new risk is blocked without affecting reducers or exits."""
+
+        return self._manual_entry_paused or (
+            self._ui_availability_initialized and self._ui_entry_paused)
+
+    def _current_entry_pause_reason(self) -> str | None:
+        if self._manual_entry_paused:
+            return "operator"
+        if self._ui_availability_initialized and self._ui_entry_paused:
+            if self._ui_availability_state == UiTradingState.MAINTENANCE:
+                return "polymarket_us_ui_maintenance"
+            if self._ui_availability_state == UiTradingState.HEALTHY:
+                return "polymarket_us_ui_recovery_pending"
+            return "polymarket_us_ui_unavailable"
+        return None
+
+    async def _publish_entry_pause_transition(
+        self, previous_reason: str | None, now: datetime,
+    ) -> None:
+        reason = self._current_entry_pause_reason()
+        self._entry_pause_reason = reason
+        if reason == previous_reason:
+            return
+        if reason is not None and previous_reason is not None:
+            self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+            print(
+                f"[entry-pause] at={now.isoformat()} state=paused "
+                f"reason={reason} ui={self._ui_availability_state.value} "
+                f"detail={self._ui_availability_detail}",
+                flush=True,
+            )
+            return
+        for slug in self.active_slugs:
+            self._mark_market_dirty(slug, now)
+        paused = reason is not None
+        if paused:
+            self._entry_pause_cancel_requested = True
+        self._publish_active_scope_snapshot(
+            status="ENTRY_PAUSED" if paused else "RUNNING")
+        if paused:
+            print(
+                f"[entry-pause] at={now.isoformat()} state=paused "
+                f"reason={reason} ui={self._ui_availability_state.value} "
+                f"detail={self._ui_availability_detail}",
+                flush=True,
+            )
+            await self.notifier.send_async(
+                "⏸️ Liquidity Bot paused NEW ENTRIES while keeping cancels "
+                f"and position exits live. Reason: {reason}.")
+        else:
+            print(
+                f"[entry-pause] at={now.isoformat()} state=resumed "
+                f"ui={self._ui_availability_state.value} "
+                f"healthy_streak={self._ui_healthy_streak}",
+                flush=True,
+            )
+            await self.notifier.send_async(
+                "▶️ Liquidity Bot new entries resumed after the entry-pause "
+                "gate returned healthy.")
+
+    def _apply_ui_availability(self, result: UiTradingProbe) -> None:
+        if not isinstance(result, UiTradingProbe):
+            result = UiTradingProbe(
+                UiTradingState.UNKNOWN, "invalid_probe_result")
+        was_initialized = self._ui_availability_initialized
+        self._ui_availability_initialized = True
+        self._ui_availability_state = result.state
+        self._ui_availability_detail = result.detail
+        if result.state == UiTradingState.MAINTENANCE:
+            self._ui_entry_paused = True
+            self._ui_healthy_streak = 0
+        elif result.state == UiTradingState.HEALTHY:
+            if self._ui_entry_paused:
+                self._ui_healthy_streak += 1
+                if self._ui_healthy_streak >= UI_AVAILABILITY_STABLE_READS:
+                    self._ui_entry_paused = False
+            else:
+                # A clean first startup proof need not impose an artificial
+                # two-minute delay.  The three-read rule applies after a pause.
+                self._ui_healthy_streak = max(1, self._ui_healthy_streak + 1)
+        else:
+            # Unknown can never clear an existing pause.  At startup it fails
+            # closed because no positive UI participation proof exists yet.
+            if not was_initialized:
+                self._ui_entry_paused = True
+            self._ui_healthy_streak = 0
+
+    async def _refresh_entry_pause(
+        self, now: datetime, *, startup: bool = False,
+    ) -> None:
+        """Poll the local latch promptly and the public UI off the event loop."""
+
+        previous_reason = self._current_entry_pause_reason()
+        self._manual_entry_paused = operator_entry_pause_requested(
+            self._operator_entry_pause_path)
+
+        if startup:
+            try:
+                result = await asyncio.to_thread(self._ui_availability_probe)
+            except Exception as exc:
+                result = UiTradingProbe(
+                    UiTradingState.UNKNOWN, type(exc).__name__)
+            self._apply_ui_availability(result)
+            self._next_ui_availability_check_at = now + timedelta(
+                seconds=UI_AVAILABILITY_POLL_SECONDS)
+        else:
+            task = self._ui_availability_task
+            if task is not None and task.done():
+                self._ui_availability_task = None
+                try:
+                    result = task.result()
+                except Exception as exc:
+                    result = UiTradingProbe(
+                        UiTradingState.UNKNOWN, type(exc).__name__)
+                self._apply_ui_availability(result)
+                self._next_ui_availability_check_at = now + timedelta(
+                    seconds=UI_AVAILABILITY_POLL_SECONDS)
+            due = self._next_ui_availability_check_at
+            if self._ui_availability_task is None and (
+                    due is None or now >= due):
+                self._ui_availability_task = asyncio.create_task(
+                    asyncio.to_thread(self._ui_availability_probe))
+        await self._publish_entry_pause_transition(previous_reason, now)
+
+    def _take_entry_pause_cancel_slugs(self) -> tuple[str, ...]:
+        """Return exact flat owners whose known quotes need prompt withdrawal."""
+
+        if not self._entry_pause_cancel_requested:
+            return ()
+        self._entry_pause_cancel_requested = False
+        working = {
+            str(row["market_slug"]) for row in self.ledger.working_orders()
+            if row["market_slug"]
+        }
+        return tuple(
+            slug for slug in self.active_slugs
+            if (slug in working
+                and slug in self._markets
+                and self.ledger.position(slug) == 0)
         )
 
     def _scheduler_owner_sets(
@@ -3096,7 +3269,9 @@ class CommissioningRunner:
         if position != 0 and basis is None:
             return MarketFrame(
                 state.market, now, state.book, state.book_observed_at, position,
-                self._working_orders(state.slug), False, state.reward_eligible, {}, 0)
+                self._working_orders(state.slug), False,
+                state.reward_eligible, {}, 0,
+                new_risk_allowed=False)
         today = date.fromisoformat(risk_day(now))
         new_risk_allowed = (
             self.risk_guard is not None
@@ -3105,6 +3280,7 @@ class CommissioningRunner:
             and self._baseline_day == today
             and self._nontrading_cash is not None
             and self._nontrading_cash_day == today
+            and not self._entry_pause_active()
         )
         eligible = state.reward_eligible
         if position == 0 and not new_risk_allowed:
@@ -3422,9 +3598,14 @@ class CommissioningRunner:
         self.risk_guard.observe_market_realized(market_realized)
         self._publish_live_pnl_snapshot()
 
-    def _publish_active_scope_snapshot(self, *, status: str = "RUNNING") -> None:
+    def _publish_active_scope_snapshot(
+        self, *, status: str | None = None,
+    ) -> None:
         """Refresh the TV slot scope without giving the dashboard bot access."""
 
+        if status is None:
+            status = (
+                "ENTRY_PAUSED" if self._entry_pause_active() else "RUNNING")
         try:
             write_active_scope_snapshot(
                 ACTIVE_SCOPE_CACHE_PATH,
@@ -6046,6 +6227,7 @@ class CommissioningRunner:
 
         return (
             self.config.auto_select_reward_markets
+            and not self._entry_pause_active()
             and (now >= next_selection
                  or self._reward_end_top_up_requested
                  or self._lifecycle_top_up_requested_at is not None
@@ -7983,6 +8165,10 @@ class CommissioningRunner:
         try:
             startup_mode = await self.preflight_until_ready()
             preflight_complete = True
+            # Establish public participation state before any frame can
+            # authorize new exposure. Existing positions still take the same
+            # reducer and hard-exit paths when this fails closed.
+            await self._refresh_entry_pause(self._now(), startup=True)
             self._publish_active_scope_snapshot()
             if startup_mode == "RECOVERY_ONLY":
                 self.request_stop("startup_recovery_only")
@@ -8034,12 +8220,19 @@ class CommissioningRunner:
                 if len(self._scheduler_event_loop_delays) > 8192:
                     del self._scheduler_event_loop_delays[:-8192]
                 now = self._now()
+                await self._refresh_entry_pause(now)
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
                 await self._announce_execution_fee_observation()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
+                pause_cancel_slugs = self._take_entry_pause_cancel_slugs()
+                if pause_cancel_slugs:
+                    stop_reason = await self._decision_sweep(
+                        pause_cancel_slugs) or ""
+                    if stop_reason:
+                        break
                 if self._streams_need_rebind:
                     # Both `next_*` tasks are reading streams that are already
                     # closed, so waiting on them below can only ever time out.
@@ -8283,6 +8476,7 @@ class CommissioningRunner:
                     continue
                 if (self.config.auto_select_reward_markets
                         and now >= next_selection
+                        and not self._entry_pause_active()
                         and self._safe_to_scan()):
                     stream_tasks = (market_task, private_task)
                     for task in stream_tasks:
@@ -8442,6 +8636,11 @@ class CommissioningRunner:
             else:
                 traceback.print_exc()
         finally:
+            if self._ui_availability_task is not None:
+                self._ui_availability_task.cancel()
+                await asyncio.gather(
+                    self._ui_availability_task, return_exceptions=True)
+                self._ui_availability_task = None
             stream_tasks = tuple(
                 task for task in (market_task, private_task) if task is not None)
             for task in stream_tasks:

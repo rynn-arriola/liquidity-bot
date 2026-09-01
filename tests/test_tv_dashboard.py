@@ -283,6 +283,16 @@ class TvDashboardTests(unittest.TestCase):
             self.assertTrue(report["available"])
             self.assertFalse(report["usable"])
 
+    def test_entry_paused_runner_scope_remains_usable_and_visible(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = self._active_scope_cache(
+                root, ["paused-market"], status="ENTRY_PAUSED")
+            report = _read_active_scope_snapshot(cache, NOW, 20, {100})
+            self.assertTrue(report["available"])
+            self.assertTrue(report["usable"])
+            self.assertEqual(report["status"], "ENTRY_PAUSED")
+
     def test_active_scope_writer_rejects_ambiguous_payloads(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "scope.json"

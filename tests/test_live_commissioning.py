@@ -30,6 +30,7 @@ from liquidity_bot.errors import (
 from liquidity_bot.execution_ledger import (
     Execution, ExecutionLedger, LedgerConflict, OrderState, PositionState,
     TradeStateObservation)
+from liquidity_bot.entry_pause import UiTradingProbe, UiTradingState
 from liquidity_bot.live_commissioning import (
     MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
     MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
@@ -467,9 +468,145 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             market_stream_factory=FakeMarketStream,
             private_stream_factory=FakePrivateStream,
             reward_selector=reward_selector,
+            ui_availability_probe=lambda: UiTradingProbe(
+                UiTradingState.HEALTHY, "test"),
+            operator_entry_pause_path=(
+                ledger.path.parent / "operator-entry-pause.json"),
         )
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
+
+    async def test_ui_maintenance_pauses_only_new_risk(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner._ui_availability_initialized = True
+        runner._apply_ui_availability(UiTradingProbe(
+            UiTradingState.MAINTENANCE, "exact_ui_banner"))
+        await runner._publish_entry_pause_transition(None, NOW)
+
+        flat = runner._frame(NOW)
+        self.assertFalse(flat.new_risk_allowed)
+        self.assertEqual(flat.reward_eligible, frozenset())
+        runner.ledger.apply_execution(Execution(
+            execution_id="maintenance-held",
+            client_order_id="liquidity-maintenance-held",
+            exchange_order_id="maintenance-held-order",
+            market_slug="market-one",
+            side="BUY",
+            price=Decimal("0.50"),
+            qty=Decimal("10"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=NOW,
+        ), received_at=NOW)
+        held = runner._frame(NOW)
+        self.assertFalse(held.new_risk_allowed)
+        self.assertEqual(held.position, Decimal("10"))
+        self.assertTrue(held.reward_eligible)
+        held_actions = runner.reconciler.plan(held)
+        self.assertTrue(held_actions)
+        self.assertTrue(all(
+            action.kind != ActionKind.PLACE_POST_ONLY
+            or action.side == "offer"
+            for action in held_actions))
+        self.assertTrue(runner._entry_pause_cancel_requested)
+        self.assertIn("paused NEW ENTRIES", notifier.messages[-1][0])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_ui_pause_requires_three_healthy_reads_to_resume(self):
+        runner, _, notifier = self.build_runner()
+        runner._ui_availability_initialized = True
+        runner._ui_entry_paused = True
+        runner._ui_availability_state = UiTradingState.MAINTENANCE
+        runner._entry_pause_reason = "polymarket_us_ui_maintenance"
+
+        for expected in (1, 2):
+            runner._apply_ui_availability(UiTradingProbe(
+                UiTradingState.HEALTHY, "official_homepage"))
+            await runner._publish_entry_pause_transition(
+                "polymarket_us_ui_maintenance", NOW)
+            self.assertTrue(runner._entry_pause_active())
+            self.assertEqual(runner._ui_healthy_streak, expected)
+
+        runner._apply_ui_availability(UiTradingProbe(
+            UiTradingState.HEALTHY, "official_homepage"))
+        await runner._publish_entry_pause_transition(
+            "polymarket_us_ui_maintenance", NOW)
+        self.assertFalse(runner._entry_pause_active())
+        self.assertIn("new entries resumed", notifier.messages[-1][0])
+
+    async def test_entry_pause_cancels_flat_quotes_through_reconciler(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner.ledger.prepare_intent(
+            "paused-place", "PLACE", "market-one", "paused-client",
+            {
+                "marketSlug": "market-one",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "10",
+            },
+            created_at=NOW)
+        runner.ledger.transition_intent(
+            "paused-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "paused-place", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="paused-exchange")
+        runner.ledger.apply_order_event(
+            "test", "paused-open-order", OrderState(
+                client_order_id="paused-client",
+                exchange_order_id="paused-exchange",
+                market_slug="market-one", side="BUY",
+                price=Decimal("0.49"), original_qty=Decimal("10"),
+                filled_qty=Decimal("0"), status="OPEN", event_at=NOW),
+            received_at=NOW)
+        runner._ui_availability_initialized = True
+        runner._apply_ui_availability(UiTradingProbe(
+            UiTradingState.MAINTENANCE, "exact_ui_banner"))
+        runner.book_observed_at = NOW - timedelta(minutes=1)
+
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertEqual(actions[0].order_id, "paused-exchange")
+        self.assertEqual(
+            actions[0].reason,
+            "side_no_longer_desired:account_new_risk_paused")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unknown_ui_never_clears_pause_and_manual_pause_dominates(self):
+        runner, _, _ = self.build_runner()
+        runner._ui_availability_initialized = True
+        runner._ui_entry_paused = True
+        runner._ui_availability_state = UiTradingState.MAINTENANCE
+        runner._apply_ui_availability(UiTradingProbe(
+            UiTradingState.UNKNOWN, "TimeoutError"))
+        self.assertTrue(runner._entry_pause_active())
+        self.assertEqual(runner._ui_healthy_streak, 0)
+
+        runner._ui_entry_paused = False
+        runner._manual_entry_paused = True
+        self.assertTrue(runner._entry_pause_active())
+        self.assertEqual(runner._current_entry_pause_reason(), "operator")
+
+    async def test_startup_probe_failure_enters_reduce_only_without_crashing(self):
+        runner, _, _ = self.build_runner()
+        runner._ui_availability_probe = Mock(
+            side_effect=TimeoutError("frontend unavailable"))
+
+        await runner._refresh_entry_pause(NOW, startup=True)
+
+        self.assertTrue(runner._entry_pause_active())
+        self.assertEqual(
+            runner._current_entry_pause_reason(),
+            "polymarket_us_ui_unavailable")
+        self.assertEqual(runner._ui_availability_state, UiTradingState.UNKNOWN)
 
     @staticmethod
     def quiet_scheduler(runner, now=NOW):

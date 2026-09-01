@@ -56,9 +56,16 @@ cannot change scope.
 
 ## Live acceptance
 
-After the reviewed deployment/restart, require the known unclosable position
-to remain visible, risk-reserved and mutation-free; no recurring lifecycle
-top-up request from its minute refresh; ordinary top-up for other releasable or
-free slots; zero new API failure/429 fan-out; and unchanged order ownership.
-The position must never be called flat or removed from the ledger merely to
-permit restart.
+Loaded commit `20812787e` started as runner `1254107` at 18:54 UTC.  The known
+`+10.0000` owner entered inactive wait at 18:54:49Z with one slot reserved.
+Through 18:59:03Z it produced no mutation intent and no lifecycle top-up; the
+only refill was the ordinary scheduled scan at 18:56:40Z.  Startup recovery
+flattened the two ordinary residual positions and retained only the known
+venue-bugged owner.
+
+The runner rebuilt 36 orders across 18 markets with zero `UNKNOWN_ABSENT` rows
+or unresolved intents.  Its first two API windows completed 355 and 159
+attempts at 2.460/s and 1.637/s, both with zero failures, 429s or cooldown and
+`max_waiting=1`.  This accepts the exact amplification repair.  Natural reopen
+and authoritative-flat release remain uninduced; the position must never be
+called flat or removed from the ledger merely to free its slot.

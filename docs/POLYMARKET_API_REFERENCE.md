@@ -177,6 +177,17 @@ must not be suppressed. Non-trading reports use the opportunistic report lane.
 If mandatory safety/recovery traffic contends, breadth is rolled back instead
 of throttling that evidence.
 
+The 2026-09-01 32-slot canary also exposed a source-level discovery amplifier
+rather than a venue limit. One exact non-open owner retained a real position,
+but each successful one-minute metadata probe requested urgent lifecycle
+top-up before the runtime established that the slot was risk-reserved and could
+not be released. Requests reached 19/23/24 per hour across 16:00–18:00 UTC and
+many scans changed no owner. Admission control bounded the traffic, but the
+correct fix is earlier suppression: an exact positioned inactive wait does not
+request discovery; a flat non-open owner and a later authoritative position-
+zero transition still do. This removes calls without delaying a legal exit,
+weakening ownership or changing the normal under-capacity selection schedule.
+
 ### Measured live baseline and modeled scenarios
 
 Read-only log analysis of the laptop session from its 2026-08-29 12:25 UTC

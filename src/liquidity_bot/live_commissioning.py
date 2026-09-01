@@ -1104,10 +1104,17 @@ class CommissioningRunner:
             state.incentive = None
             state.reward_eligible = frozenset()
             state.clear_economics()
-            if accept_bound_lifecycle_end:
-                self._request_lifecycle_top_up(now)
+            # A positioned owner cannot release its slot while the contract is
+            # non-open.  Isolate that exact risk before requesting replacement
+            # work; otherwise every scheduled metadata probe starts another
+            # full discovery scan even though capacity cannot change.  Flat
+            # owners still request the immediate lifecycle top-up below, and
+            # _sync_inactive_market_wait_positions requests it when positive
+            # account evidence later proves this position flat.
             if self._enter_inactive_market_wait(slug, now):
                 return
+            if accept_bound_lifecycle_end:
+                self._request_lifecycle_top_up(now)
             if for_exit:
                 return
             raise _ConfirmedMarketNotOpen(f"{slug} is not open")

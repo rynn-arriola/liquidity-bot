@@ -25,6 +25,7 @@ history, not current instructions or runtime truth.
 | [Dirty-market decision scheduler — 2026-08-31](DIRTY_MARKET_SCHEDULER_2026-08-31.md) | Latency-first 32-slot preparation, unconditional position safety, exact dirty/timer triggers, telemetry, reversal and activation gates |
 | [Exact settlement-wait recovery — 2026-09-01](SETTLEMENT_WAIT_RECOVERY_2026-09-01.md) | Market-specific empty-book evidence, exact-owner isolation policy, risk/capacity boundaries, verification and activation gate |
 | [Inactive-market lifecycle recovery — 2026-09-01](INACTIVE_MARKET_LIFECYCLE_RECOVERY_2026-09-01.md) | Exact non-open owner evidence, safe refill, mutation-free positioned wait, unknown-data backoff and activation gate |
+| [Positioned inactive-owner top-up amplification — 2026-09-01](INACTIVE_POSITION_TOP_UP_AMPLIFICATION_2026-09-01.md) | Repeated lifecycle-discovery trigger, reserved-position suppression, transition tests and live acceptance gate |
 | [Combined release review — 2026-09-01](RELEASE_REVIEW_2026-09-01.md) | Cumulative business-output audit, cross-change interactions, exact WSL verification and deployment gates |
 | [Direct 32-slot canary preparation — 2026-09-01](SLOT_CAPACITY_CANARY_32_PREPARATION_2026-09-01.md) | Complete API-consumer inventory, empirical 24→32 projection, opportunistic reporting lane, derived risk and rollback gates |
 

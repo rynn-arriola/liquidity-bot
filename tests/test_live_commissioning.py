@@ -6012,6 +6012,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_positioned_inactive_refresh_does_not_request_top_up(self):
+        """A reserved risk slot cannot benefit from repeated discovery."""
+
+        runner, _client, _notifier, _selector, _market, _mode = (
+            await self._start_with_inactive_market_wait())
+        slug = "market-one"
+        now = runner._now()
+        state = runner.state_for(slug)
+        closed = replace(
+            state.market,
+            active=False,
+            closed=True,
+            status="MARKET_STATUS_CLOSED",
+        )
+        runner._lifecycle_top_up_requested_at = None
+
+        with patch("sys.stdout", new=io.StringIO()) as output:
+            runner._apply_contracts(
+                state,
+                market=closed,
+                incentive=None,
+                now=now,
+                for_exit=True,
+                accept_bound_lifecycle_end=True,
+            )
+            runner._apply_contracts(
+                state,
+                market=closed,
+                incentive=None,
+                now=runner._now(),
+                for_exit=True,
+                accept_bound_lifecycle_end=True,
+            )
+
+        self.assertEqual(runner._inactive_market_wait_slugs, {slug})
+        self.assertIsNone(runner._lifecycle_top_up_requested_at)
+        self.assertNotIn("[top-up-request]", output.getvalue())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_inactive_market_wait_requires_clear_order_ownership(self):
         runner, _client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()

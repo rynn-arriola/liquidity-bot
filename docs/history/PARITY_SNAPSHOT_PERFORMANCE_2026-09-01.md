@@ -57,3 +57,10 @@ returned integrity `ok` and destination SHA-256
 It made no venue request and did not stop or restart the bot or dashboard.
 Native Windows installation of that same captured copy completed in 2.4 seconds
 with the identical manifest and SHA-256.
+
+Commit `8e06327f0` was pushed and live-safely fast-forwarded into WSL without a
+process restart. The first complete repaired parity run then captured,
+installed and verified a fresh 205,697,024-byte private recovery copy in 18.4
+seconds. Its only reported drift was the already documented, intentionally
+unloaded UI-maintenance runner source relative to `DEPLOYED_COMMIT`; the parity
+tool itself requires no runner restart.

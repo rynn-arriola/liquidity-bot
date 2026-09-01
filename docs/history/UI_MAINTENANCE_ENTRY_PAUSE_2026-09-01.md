@@ -79,6 +79,12 @@ coordinator remains independent.
 
 ## Rollout boundary
 
-Deployment does not load this runner change. A separately authorized safe
-restart is required. Until then the current runner cannot see the operator
-latch or homepage signal.
+Commit `6a3cf279e` is pushed to GitHub and staged in the laptop WSL checkout.
+The staged native-WSL suite passed 1,024/1,024. Deployment does not load this
+runner change: the live process still names executable marker `0bcfbbc96` and
+was not stopped or restarted. A separately authorized safe restart is required.
+Until then the current runner cannot see the operator latch or homepage signal.
+
+Backup-PC peer parity remains pending because its private configuration still
+names the retired OneDrive checkout and overlapping peer checks were already in
+progress. No remote configuration was overwritten as part of this rollout.

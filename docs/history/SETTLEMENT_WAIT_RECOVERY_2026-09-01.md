@@ -84,3 +84,14 @@ at configured capacity 24, no mutation for the waiting slug, exact portfolio
 exposure reservation, continued account/private proof and normal exit planning
 if a book returns. Roll back and stop on any ownership ambiguity, dropped owner,
 unreserved exposure, quote on the waiting slug or missed returned-book exit.
+
+## Live activation
+
+Operator-authorized startup at `13:43Z` loaded executable `0bcfbbc96` at size
+10 / 24 slots. The runner reconstructed exactly one settlement-wait owner for
+the persisted `10.0000` position and logged `capacity_reserved=1`. Its first
+full cycle reached 24 total owners; authenticated acceptance found 38 open
+orders across 22 unrelated markets, zero orders for the waiting slug and no
+other position. The first 72.2-second mutation window made 183 attempts,
+including 44 ordinary mutations, with zero failures, rate limits or cooldown.
+Natural returned-book exit and flat slot-release behavior remain uninduced.

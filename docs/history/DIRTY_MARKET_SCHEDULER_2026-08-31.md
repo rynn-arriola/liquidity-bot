@@ -86,6 +86,20 @@ market reserves buying power first; and a create response carrying an embedded
 OPEN/FILL could resolve before a later private event, so the successful
 mutation itself now wakes that exact owner.
 
+A later independent review found a third candidate-only defect before
+deployment. `_scheduler_owner_sets` is reached twice per outer loop, but its
+active-order arm filtered only by `status` while the existing order index began
+with `market_slug`. On the 39,652-row live ledger, SQLite therefore scanned all
+historical orders in 3.66–3.93 milliseconds per call, or about 7.3–7.9
+milliseconds per pass. A new `(status, market_slug)` covering index changes the
+plan from `SCAN` to `SEARCH`; an in-memory live-ledger copy measured
+0.067–0.122 milliseconds per call. Writable ledger startup creates the index
+additively for both new and existing databases. Dedicated regressions prove
+the migration and exact query plan, and temporarily removing the index made
+the plan regression fail with the original `SCAN`. The restored ledger and
+live-runner slice passes 420/420, and the complete pinned-WSL suite passes
+988/988 in 96.975 seconds. No live database was modified.
+
 ## Activation and rollback gate
 
 Do not load this during the announced Polymarket maintenance and do not restart

@@ -109,6 +109,15 @@ class ExecutionLedgerTests(unittest.TestCase):
             (after.st_size, after.st_mtime_ns),
             (observed.st_size, observed.st_mtime_ns))
 
+    def test_active_order_status_lookup_uses_status_leading_index(self):
+        plan = self.ledger.query(
+            "EXPLAIN QUERY PLAN SELECT market_slug FROM execution_orders "
+            "WHERE status IN ('OPEN','PARTIAL','PENDING')")
+
+        details = " ".join(str(row["detail"]) for row in plan)
+        self.assertIn("SEARCH execution_orders", details)
+        self.assertIn("idx_execution_orders_status", details)
+
     def test_pre_submit_intent_survives_crash_and_is_idempotent(self):
         created = self.ledger.prepare_intent(
             "intent-one", "PLACE", "market-one", "client-one",
@@ -768,6 +777,27 @@ class RejectReasonTests(unittest.TestCase):
         columns = {row["name"] for row in
                    led.connection.execute("PRAGMA table_info(execution_orders)")}
         self.assertIn("reject_reason", columns)
+
+    def test_an_existing_database_gains_the_status_leading_order_index(self):
+        root = Path(tempfile.mkdtemp(prefix="order-index-old-"))
+        path = root / "old.db"
+        legacy = sqlite3.connect(path)
+        legacy.execute(
+            "CREATE TABLE execution_orders (client_order_id TEXT PRIMARY KEY,"
+            "exchange_order_id TEXT UNIQUE, market_slug TEXT NOT NULL,"
+            "side TEXT, price TEXT, original_qty TEXT,"
+            "filled_qty TEXT NOT NULL, status TEXT NOT NULL,"
+            "event_at TEXT NOT NULL, received_at TEXT NOT NULL,"
+            "unknown_reason TEXT, reject_reason TEXT)")
+        legacy.commit()
+        legacy.close()
+
+        led = ExecutionLedger(path)
+        self.addCleanup(led.close)
+
+        indexes = {row["name"] for row in led.connection.execute(
+            "PRAGMA index_list(execution_orders)")}
+        self.assertIn("idx_execution_orders_status", indexes)
 
 
 class PairSettlementTests(unittest.TestCase):

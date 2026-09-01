@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS execution_orders (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_orders_market_status
     ON execution_orders(market_slug, status);
+CREATE INDEX IF NOT EXISTS idx_execution_orders_status
+    ON execution_orders(status, market_slug);
 CREATE TABLE IF NOT EXISTS execution_fills (
     execution_id TEXT PRIMARY KEY,
     client_order_id TEXT,

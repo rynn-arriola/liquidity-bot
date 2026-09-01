@@ -45,7 +45,8 @@ from liquidity_bot.live_commissioning import (
     main,
 )
 from liquidity_bot.live_orders import (
-    OrderMutationRejected, OrderOutcomeUncertain, OrderRequest)
+    OrderMutationRejected, OrderOutcomeUncertain, OrderRequest,
+    OrderValidationError)
 from liquidity_bot.market_selector import (
     RewardMarketOpportunity,
     RewardMarketSelection,
@@ -5701,6 +5702,67 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.market = await runner.gateway.fetch_market("market-one")
         await runner._refresh_book(NOW)
         self.assertEqual(runner.book_observed_at, received)
+
+    async def test_one_sided_book_refresh_does_not_dereference_missing_side(self):
+        runner, client, _ = self.build_runner()
+        runner.market = await runner.gateway.fetch_market("market-one")
+        original = client.markets.book
+
+        async def one_sided(slug):
+            response = await original(slug)
+            response["marketData"]["offers"] = []
+            return response
+
+        client.markets.book = one_sided
+
+        await runner._refresh_book(NOW)
+        runner._validate_entry_book("market-one")
+
+        self.assertTrue(runner.book.bids)
+        self.assertFalse(runner.book.offers)
+
+    async def test_inactive_market_book_refresh_remains_available_to_recovery(self):
+        runner, _, _ = self.build_runner()
+        runner.market = replace(
+            await runner.gateway.fetch_market("market-one"),
+            active=False, closed=True, status="MARKET_STATUS_CLOSED")
+
+        await runner._refresh_book(NOW)
+
+        self.assertTrue(runner.book.is_two_sided)
+        with self.assertRaisesRegex(
+                OrderValidationError, "not active for order entry"):
+            runner._validate_entry_book("market-one")
+
+    async def test_recovery_startup_accepts_inactive_one_sided_book(self):
+        runner, client, _ = self.build_runner()
+        original_market = client.markets.retrieve_by_slug
+        original_book = client.markets.book
+
+        async def inactive_market(slug):
+            response = await original_market(slug)
+            response["market"].update({
+                "active": False,
+                "closed": True,
+                "status": "MARKET_STATUS_CLOSED",
+            })
+            return response
+
+        async def one_sided_book(slug):
+            response = await original_book(slug)
+            response["marketData"]["offers"] = []
+            return response
+
+        client.markets.retrieve_by_slug = inactive_market
+        client.markets.book = one_sided_book
+        runner._recovery_slugs = {"market-one"}
+
+        await runner._refresh_bound_books(NOW)
+
+        self.assertEqual(runner.active_slugs, ("market-one",))
+        self.assertTrue(runner.book.bids)
+        self.assertFalse(runner.book.offers)
+        self.assertTrue(runner.market.closed)
 
     async def test_book_due_check_reads_clock_after_upstream_api_latency(self):
         after_slow_io = NOW + timedelta(seconds=6)

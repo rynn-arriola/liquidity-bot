@@ -62,6 +62,7 @@ from .live_orders import (
     OrderMutationRejected,
     OrderOutcomeUncertain,
     OrderRequest,
+    OrderValidationError,
     build_order_payload,
 )
 from .live_pnl_cache import write_live_pnl_snapshot
@@ -1136,6 +1137,15 @@ class CommissioningRunner:
     async def _refresh_book(
         self, now: datetime, slug: str | None = None,
     ) -> None:
+        """Refresh market data without imposing entry-only requirements.
+
+        Book acquisition is shared by entry, reduction, recovery and shutdown.
+        A one-sided book can still price the side needed to reduce inventory,
+        and a closed market can still need servicing while its position is
+        unsettled.  Entry payload validation therefore belongs at the startup
+        entry boundary, not in this generic refresh path.
+        """
+
         state = self.state_for(slug or self.market_slug)
         state.book = await self.gateway.fetch_book(state.slug)
         # Stamp receipt, not request start. REST and limiter latency can be a
@@ -1145,16 +1155,38 @@ class CommissioningRunner:
             state.book, observed_at=state.book_observed_at)
         self._mark_market_dirty(state.slug, state.book_observed_at)
         if state.market is None:
+            # Entry validation is separate, but a book without matching
+            # contract identity is still not usable by any decision path.
             raise RuntimeError("market metadata is unavailable")
+
+    def _validate_entry_book(self, slug: str) -> None:
+        """Validate every priceable entry side before startup authorization.
+
+        Missing sides are not fabricated and are not dereferenced.  The
+        reconciler already refuses building risk until a book is two-sided,
+        while recovery and exits may legitimately use the one side present.
+        """
+
+        state = self.state_for(slug)
+        if state.market is None:
+            raise RuntimeError("market metadata is unavailable")
+        if state.book is None:
+            raise RuntimeError("market book is unavailable")
+        if not state.book.bids and not state.book.offers:
+            raise OrderValidationError("book is empty on both sides")
         # Validate both possible passive wire payloads before the first
-        # private subscription can authorize mutation.
+        # private subscription can authorize mutation, but only when that side
+        # exists. One-sided books are valid recovery inputs and cannot safely
+        # be dereferenced through min()/max() on an empty collection.
         size = self.config.quote_size
-        build_order_payload(OrderRequest(
-            state.market.slug, "bid",
-            Decimal(str(state.book.best_bid.price)), size), state.market)
-        build_order_payload(OrderRequest(
-            state.market.slug, "offer",
-            Decimal(str(state.book.best_offer.price)), size), state.market)
+        if state.book.bids:
+            build_order_payload(OrderRequest(
+                state.market.slug, "bid",
+                Decimal(str(state.book.best_bid.price)), size), state.market)
+        if state.book.offers:
+            build_order_payload(OrderRequest(
+                state.market.slug, "offer",
+                Decimal(str(state.book.best_offer.price)), size), state.market)
 
     def _accept_book(self, book: BookSnapshot) -> None:
         """Route a streamed book to the market it belongs to.
@@ -4734,6 +4766,8 @@ class CommissioningRunner:
                 await self._refresh_contracts(
                     now, slug, for_exit=slug in recovering)
                 await self._refresh_book(now, slug)
+                if slug not in recovering:
+                    self._validate_entry_book(slug)
                 healthy.append(slug)
             except Exception as exc:
                 if slug in recovering:

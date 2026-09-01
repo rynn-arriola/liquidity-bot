@@ -559,6 +559,62 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(entry_cooldown, 0.0)
             self.assertEqual(background_cooldown, 0.0)
 
+    def test_report_lane_waits_for_idle_capacity_without_throttling_background(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            limiter = adapters.shared_api_limiter(4, state_path=state)
+            self.assertEqual(
+                limiter._claim_shared_slot(4.0, "report"), (0.0, 0.0))
+            shared = json.loads(state.read_text(encoding="utf-8"))
+            self.assertIn("next_report_at", shared)
+            self.assertNotIn("next_background_at", shared)
+            self.assertNotIn("next_entry_at", shared)
+
+            background_delay, background_cooldown = limiter._claim_shared_slot(
+                0.5, "background")
+            report_delay, report_cooldown = limiter._claim_shared_slot(
+                4.0, "report")
+
+            self.assertGreaterEqual(background_delay, 0.20)
+            self.assertLess(background_delay, 0.70)
+            self.assertGreaterEqual(report_delay, 3.90)
+            self.assertLess(report_delay, 4.20)
+            self.assertEqual(background_cooldown, 0.0)
+            self.assertEqual(report_cooldown, 0.0)
+
+    def test_report_lane_requires_an_unused_aggregate_interval(self):
+        import liquidity_bot.adapters as adapters
+
+        if adapters.fcntl is None:
+            self.skipTest("shared limiter uses POSIX flock in production WSL")
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "api-rate-limiter.state"
+            limiter = adapters.shared_api_limiter(4, state_path=state)
+            self.assertEqual(
+                limiter._claim_shared_slot(0.25, "safety"), (0.0, 0.0))
+
+            report_delay, cooldown = limiter._claim_shared_slot(4.0, "report")
+
+            self.assertGreaterEqual(report_delay, 0.25)
+            self.assertLess(report_delay, 0.70)
+            self.assertEqual(cooldown, 0.0)
+
+    def test_report_rate_limit_isolated_from_trading_classes(self):
+        limiter = AsyncIntervalLimiter()
+        self.run_async(limiter.record_result(
+            duration_seconds=0.1, status_code=429, failed=True,
+            retry_after_seconds=30.0, traffic_class="report"))
+
+        evidence = limiter.telemetry()
+        self.assertGreater(evidence.report_cooldown_remaining_seconds, 1.8)
+        self.assertEqual(evidence.background_cooldown_remaining_seconds, 0.0)
+        self.assertEqual(evidence.entry_cooldown_remaining_seconds, 0.0)
+        self.assertEqual(evidence.safety_cooldown_remaining_seconds, 0.0)
+
     def test_operator_interrupt_preempts_existing_cooldown_but_future_safety_works(self):
         limiter = AsyncIntervalLimiter()
 

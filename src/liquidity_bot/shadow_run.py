@@ -93,7 +93,7 @@ class ShadowRunner:
         self.gateway = AsyncReadOnlyGateway(
             client,
             limiter=shared_api_limiter(config.rest_requests_per_second),
-            default_traffic_class="background")
+            default_traffic_class="report")
         self.store = ShadowStore(config.database)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = f"shadow-{timestamp}-{uuid.uuid4().hex[:8]}"

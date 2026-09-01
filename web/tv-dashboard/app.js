@@ -57,11 +57,11 @@ function renderSlots(slots, capacity) {
   const grid = byId("slot-grid");
   grid.replaceChildren();
   const safeSlots = Array.isArray(slots) ? slots : [];
-  const fallbackCapacity = Math.min(24, Math.max(20, safeSlots.length || 20));
-  const safeCapacity = Number.isInteger(capacity) && capacity >= 20 && capacity <= 24
+  const fallbackCapacity = Math.min(32, Math.max(20, safeSlots.length || 20));
+  const safeCapacity = Number.isInteger(capacity) && capacity >= 20 && capacity <= 32
     ? capacity
     : fallbackCapacity;
-  const columns = safeCapacity > 22 ? 12 : (safeCapacity > 20 ? 11 : 10);
+  const columns = safeCapacity > 24 ? 16 : (safeCapacity > 22 ? 12 : (safeCapacity > 20 ? 11 : 10));
   grid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
   for (let index = 0; index < safeCapacity; index += 1) {
     const source = safeSlots[index] || { number: index + 1, market: null, status: "empty" };

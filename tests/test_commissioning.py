@@ -162,11 +162,11 @@ class CommissioningTests(unittest.TestCase):
         # 25 left a blind spot for no reason. 100 covers the whole pool.
         self.assertEqual(config.max_selection_book_candidates, 100)
 
-    def test_twenty_four_slot_canary_is_authorized_but_more_is_refused(self):
+    def test_thirty_two_slot_canary_is_authorized_but_more_is_refused(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
-        self.authorized(max_markets=24).assert_authorized(now=now)
-        with self.assertRaisesRegex(CommissioningRefused, "20 to 24"):
-            self.authorized(max_markets=25).assert_authorized(now=now)
+        self.authorized(max_markets=32).assert_authorized(now=now)
+        with self.assertRaisesRegex(CommissioningRefused, "20 to 32"):
+            self.authorized(max_markets=33).assert_authorized(now=now)
 
     def test_auto_selection_constants_and_reserved_slug_are_locked(self):
         now = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
@@ -237,6 +237,7 @@ class CommissioningTests(unittest.TestCase):
             (10, 20): "8.33",
             (10, 22): "9.17",
             (10, 24): "10.00",
+            (10, 32): "13.33",
             (13, 22): "11.92",
             (30, 24): "30.00",
         }
@@ -248,7 +249,9 @@ class CommissioningTests(unittest.TestCase):
                     config.execution_fee_observation_usd, Decimal(amount))
 
     def test_portfolio_exposure_tracks_slot_width_plus_ten_unit_cushion(self):
-        for slots, expected in ((20, "390"), (22, "416"), (24, "442")):
+        for slots, expected in (
+            (20, "390"), (22, "416"), (24, "442"), (32, "546")
+        ):
             with self.subTest(slots=slots):
                 config = self.authorized(
                     quote_size=Decimal("13"), max_markets=slots)
@@ -269,9 +272,11 @@ class CommissioningTests(unittest.TestCase):
             (10, 20): "80",
             (10, 22): "88",
             (10, 24): "96",
+            (10, 32): "128",
             (13, 20): "104",
             (13, 22): "114.4",
             (13, 24): "124.8",
+            (13, 32): "166.4",
         }
         for (size, slots), limit in expected.items():
             with self.subTest(size=size, slots=slots):
@@ -286,6 +291,21 @@ class CommissioningTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     config.max_market_loss_usd, Decimal(size) * Decimal("4"))
+
+    def test_size_ten_thirty_two_canary_derives_every_breadth_control(self):
+        config = self.authorized(
+            quote_size=Decimal("10"), max_markets=32)
+
+        self.assertEqual(config.max_portfolio_exposure_usd, Decimal("420"))
+        self.assertEqual(config.max_market_exposure_usd, Decimal("90"))
+        self.assertEqual(config.max_market_loss_usd, Decimal("40"))
+        self.assertEqual(config.max_session_loss_usd, Decimal("128"))
+        self.assertEqual(config.hard_stop_loss_usd, Decimal("128"))
+        self.assertEqual(config.weekly_operating_reserve_usd, Decimal("896"))
+        self.assertEqual(
+            config.execution_fee_observation_usd, Decimal("13.33"))
+        self.assertEqual(config.max_taker_exit_orders, 40)
+        self.assertEqual(config.rest_requests_per_second, Decimal("4"))
 
     def test_size_ten_and_twenty_match_operator_risk_profiles(self):
         expected = {
@@ -323,15 +343,15 @@ class CommissioningTests(unittest.TestCase):
     def test_runtime_slot_file_drives_diagnostics_and_rejects_bad_values(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "slot_capacity"
-            path.write_text("24\n", encoding="utf-8")
-            self.assertEqual(configured_slot_capacity(path), 24)
+            path.write_text("32\n", encoding="utf-8")
+            self.assertEqual(configured_slot_capacity(path), 32)
             self.assertEqual(
                 CommissioningConfig.diagnostic_defaults(
                     runtime_slot_capacity_path=path).max_markets,
-                24,
+                32,
             )
-            path.write_text("25\n", encoding="utf-8")
-            with self.assertRaisesRegex(CommissioningRefused, "20 to 24"):
+            path.write_text("33\n", encoding="utf-8")
+            with self.assertRaisesRegex(CommissioningRefused, "20 to 32"):
                 configured_slot_capacity(path)
 
     def test_shell_launchers_use_the_single_quote_size_authority(self):
@@ -369,11 +389,13 @@ class CommissioningTests(unittest.TestCase):
                 self.assertIn("REFUSED", output.call_args.args[0])
 
     def test_slot_capacity_shell_authority_accepts_only_canary_range(self):
-        for raw in ("20", "21", "22", "23", "24", "24.0"):
+        for raw in (
+            "20", "21", "22", "23", "24", "25", "28", "31", "32", "32.0"
+        ):
             with self.subTest(raw=raw), patch("builtins.print") as output:
                 self.assertEqual(slot_capacity_main([raw]), 0)
                 output.assert_called_once_with(int(Decimal(raw)))
-        for raw in ("19", "24.5", "25", "nan", "bad"):
+        for raw in ("19", "24.5", "32.5", "33", "nan", "bad"):
             with self.subTest(raw=raw), patch("builtins.print") as output:
                 self.assertEqual(slot_capacity_main([raw]), 2)
                 self.assertIn("REFUSED", output.call_args.args[0])

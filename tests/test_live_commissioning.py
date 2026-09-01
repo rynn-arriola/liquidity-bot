@@ -9917,7 +9917,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "live_commissioning",
             "--auto-select-rewards",
             "--quote-size", "30",
-            "--max-markets", "24",
+            "--max-markets", "32",
             "--arm-live",
             "--accept-one-contract-risk",
             "--exclusive-api-key",
@@ -9934,7 +9934,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(args.auto_select_rewards)
         self.assertIsNone(args.market_slug)
         self.assertEqual(args.quote_size, 30)
-        self.assertEqual(args.max_markets, 24)
+        self.assertEqual(args.max_markets, 32)
 
     def test_cli_rejects_quote_size_outside_the_reviewed_range(self):
         argv = [
@@ -9950,7 +9950,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         argv = [
             "live_commissioning",
             "--auto-select-rewards",
-            "--max-markets", "25",
+            "--max-markets", "33",
         ]
         with patch("sys.argv", argv), self.assertRaises(SystemExit) as error:
             main()

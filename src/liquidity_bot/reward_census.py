@@ -306,7 +306,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     gateway = AsyncReadOnlyGateway(
         client,
         limiter=shared_api_limiter(args.requests_per_second),
-        default_traffic_class="background")
+        default_traffic_class="report")
     selector = RewardMarketSelector(
         gateway,
         RewardSelectionPolicy(

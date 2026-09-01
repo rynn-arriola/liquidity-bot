@@ -302,12 +302,39 @@ class RewardTableTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("flock -n", wrapper)
-        self.assertIn("timeout 90s", wrapper)
+        self.assertIn("timeout 45m", wrapper)
         self.assertIn("nice -n 10", wrapper)
         self.assertIn("--days 7 --post-discord --quiet", wrapper)
         self.assertIn("--dashboard-cache data/tv-gain-snapshot.json", wrapper)
         self.assertNotIn("discord.com/api/webhooks", wrapper)
         self.assertIn("require_rewards_webhook=True", report)
+        self.assertIn(
+            "ACCOUNT_REPORT_RATE_PER_SECOND = "
+            "OPPORTUNISTIC_REPORT_RATE_PER_SECOND",
+            report,
+        )
+        self.assertIn('default_traffic_class="report"', report)
+
+    def test_nontrading_reports_use_the_opportunistic_lane(self):
+        root = Path(__file__).resolve().parents[1]
+        report_paths = (
+            "scripts/accounting.py",
+            "scripts/backfill_executions.py",
+            "scripts/daily_pnl.py",
+            "scripts/dashboard.py",
+            "scripts/period_mix.py",
+            "scripts/resting_by_kickoff.py",
+            "scripts/reward_table.py",
+            "scripts/rewards_report.py",
+            "scripts/usable_markets.py",
+            "src/liquidity_bot/reward_census.py",
+            "src/liquidity_bot/scalp_run.py",
+            "src/liquidity_bot/shadow_run.py",
+        )
+        for relative in report_paths:
+            with self.subTest(path=relative):
+                text = (root / relative).read_text(encoding="utf-8")
+                self.assertIn('default_traffic_class="report"', text)
 
 
 class _Account:

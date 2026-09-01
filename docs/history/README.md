@@ -26,6 +26,7 @@ history, not current instructions or runtime truth.
 | [Exact settlement-wait recovery — 2026-09-01](SETTLEMENT_WAIT_RECOVERY_2026-09-01.md) | Market-specific empty-book evidence, exact-owner isolation policy, risk/capacity boundaries, verification and activation gate |
 | [Inactive-market lifecycle recovery — 2026-09-01](INACTIVE_MARKET_LIFECYCLE_RECOVERY_2026-09-01.md) | Exact non-open owner evidence, safe refill, mutation-free positioned wait, unknown-data backoff and activation gate |
 | [Combined release review — 2026-09-01](RELEASE_REVIEW_2026-09-01.md) | Cumulative business-output audit, cross-change interactions, exact WSL verification and deployment gates |
+| [Direct 32-slot canary preparation — 2026-09-01](SLOT_CAPACITY_CANARY_32_PREPARATION_2026-09-01.md) | Complete API-consumer inventory, empirical 24→32 projection, opportunistic reporting lane, derived risk and rollback gates |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

@@ -41,6 +41,20 @@ class CapitalGuidanceTests(unittest.TestCase):
         self.assertEqual(result.comfortable_balance_usd, Decimal("1216.8"))
         self.assertEqual(result.free_to_withdraw_usd, Decimal("83.20"))
 
+    def test_size_10_and_32_slots_use_the_wider_daily_risk_reserve(self):
+        result = self.guidance(
+            slot_capacity=32,
+            portfolio_exposure_cap_usd=Decimal("420"),
+            weekly_reserve_usd=Decimal("896"),
+            settled_cash_usd=Decimal("1500"),
+            buying_power_usd=Decimal("1500"),
+        )
+
+        self.assertEqual(result.slot_footprint_usd, Decimal("320"))
+        self.assertEqual(result.cushion_usd, Decimal("100"))
+        self.assertEqual(result.comfortable_balance_usd, Decimal("1316"))
+        self.assertEqual(result.free_to_withdraw_usd, Decimal("184.00"))
+
     def test_buying_power_caps_cash_that_is_actually_free(self):
         result = self.guidance(buying_power_usd=Decimal("75.12"))
 

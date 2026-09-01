@@ -19,6 +19,202 @@ from math import ceil
 from typing import Mapping
 
 
+# Every category emitted by adapters._request_category is classified here.
+# The capacity report deliberately fails when a future category is not in this
+# inventory, so a new endpoint cannot silently disappear from a width review.
+FIXED_API_CATEGORIES = frozenset({
+    "balance",
+    "cash_history",
+    "earnings",
+    "open_orders",
+    "positions",
+})
+BATCHED_API_CATEGORIES = frozenset({
+    "incentive_contract_batch",
+    "market_contract_batch",
+})
+SLOT_SCALED_API_CATEGORIES = frozenset({
+    "execution_history",
+    "incentive_discovery",
+    "market_book",
+    "market_contract",
+    "market_discovery",
+    "market_settlement",
+    "mutation_cancel",
+    "mutation_create",
+    "mutation_other",
+    "order_retrieve",
+    "read_other",
+})
+KNOWN_API_CATEGORIES = (
+    FIXED_API_CATEGORIES
+    | BATCHED_API_CATEGORIES
+    | SLOT_SCALED_API_CATEGORIES
+)
+
+
+@dataclass(frozen=True)
+class ApiBudgetWindow:
+    """One secret-free runtime limiter window parsed from the runner log."""
+
+    elapsed_seconds: float
+    slots: int
+    attempts: int
+    failures: int
+    rate_limited: int
+    max_waiting: int
+    attempts_by_category: Mapping[str, int]
+
+
+@dataclass(frozen=True)
+class ApiWindowProjection:
+    """Empirical projection from one observed width to a proposed width."""
+
+    source_slots: int
+    target_slots: int
+    elapsed_seconds: float
+    projected_runner_attempts: float
+    projected_runner_rps: float
+    scheduled_report_average_rps: float
+    scheduled_report_peak_rps: float
+    projected_host_average_rps: float
+    projected_host_coincident_report_rps: float
+    projected_by_category: Mapping[str, float]
+
+
+def parse_api_budget_line(line: str) -> ApiBudgetWindow | None:
+    """Parse one ``[api-budget]`` line without accepting partial evidence."""
+
+    if "[api-budget]" not in str(line):
+        return None
+    fields: dict[str, str] = {}
+    for token in str(line).split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        fields[key] = value
+    required = {
+        "slots", "seconds", "attempts", "failures", "rate_limited",
+        "max_waiting", "categories",
+    }
+    missing = sorted(required - fields.keys())
+    if missing:
+        raise ValueError(
+            "API budget line is missing fields: " + ", ".join(missing))
+    try:
+        categories = (
+            {}
+            if fields["categories"] == "none"
+            else {
+                name: int(raw)
+                for item in fields["categories"].split(",")
+                for name, raw in (item.split(":", 1),)
+                if name
+            }
+        )
+        result = ApiBudgetWindow(
+            elapsed_seconds=float(fields["seconds"]),
+            slots=int(fields["slots"]),
+            attempts=int(fields["attempts"]),
+            failures=int(fields["failures"]),
+            rate_limited=int(fields["rate_limited"]),
+            max_waiting=int(fields["max_waiting"]),
+            attempts_by_category=categories,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("API budget line contains an invalid value") from exc
+    if result.elapsed_seconds <= 0 or result.slots <= 0:
+        raise ValueError("API budget window seconds and slots must be positive")
+    if min(
+        result.attempts,
+        result.failures,
+        result.rate_limited,
+        result.max_waiting,
+        *result.attempts_by_category.values(),
+    ) < 0:
+        raise ValueError("API budget counts cannot be negative")
+    if sum(result.attempts_by_category.values()) != result.attempts:
+        raise ValueError("API budget categories do not equal total attempts")
+    unknown = sorted(set(result.attempts_by_category) - KNOWN_API_CATEGORIES)
+    if unknown:
+        raise ValueError(
+            "unclassified API budget categories: " + ", ".join(unknown))
+    return result
+
+
+def project_api_budget_window(
+    window: ApiBudgetWindow,
+    target_slots: int,
+    *,
+    contract_batch_size: int = 8,
+    scheduled_report_requests: int = 12,
+    scheduled_report_interval_seconds: float = 3600.0,
+    scheduled_report_max_rps: float = 0.25,
+    host_limiter_rps: float = 4.0,
+) -> ApiWindowProjection:
+    """Conservatively project one observed window to another slot width.
+
+    Account reads that remain one page below 100 owners are fixed. Contract
+    and incentive batches move by the exact ``ceil(slots / 8)`` step. Every
+    other event-, discovery-, execution- or market-shaped category scales with
+    width; this is intentionally conservative for the first 32-slot canary.
+
+    The hourly reward report is a cooperating second process. Its calls share
+    the same host limiter but are absent from the runner's local attempt
+    counter, so both its average and a worst coincident-window burst are shown.
+    """
+
+    if target_slots <= 0 or contract_batch_size <= 0:
+        raise ValueError("projection slots and batch size must be positive")
+    if (
+        scheduled_report_requests < 0
+        or scheduled_report_interval_seconds <= 0
+        or scheduled_report_max_rps <= 0
+        or host_limiter_rps <= 0
+    ):
+        raise ValueError("scheduled report inputs are invalid")
+    unknown = sorted(set(window.attempts_by_category) - KNOWN_API_CATEGORIES)
+    if unknown:
+        raise ValueError(
+            "unclassified API budget categories: " + ", ".join(unknown))
+    slot_factor = target_slots / window.slots
+    batch_factor = (
+        ceil(target_slots / contract_batch_size)
+        / ceil(window.slots / contract_batch_size)
+    )
+    projected: dict[str, float] = {}
+    for category, attempts in window.attempts_by_category.items():
+        if category in FIXED_API_CATEGORIES:
+            factor = 1.0
+        elif category in BATCHED_API_CATEGORIES:
+            factor = batch_factor
+        else:
+            factor = slot_factor
+        projected[category] = attempts * factor
+    runner_attempts = sum(projected.values())
+    runner_rps = runner_attempts / window.elapsed_seconds
+    report_average = (
+        scheduled_report_requests / scheduled_report_interval_seconds)
+    report_peak = min(
+        scheduled_report_max_rps,
+        scheduled_report_requests / window.elapsed_seconds,
+    )
+    return ApiWindowProjection(
+        source_slots=window.slots,
+        target_slots=target_slots,
+        elapsed_seconds=window.elapsed_seconds,
+        projected_runner_attempts=runner_attempts,
+        projected_runner_rps=runner_rps,
+        scheduled_report_average_rps=report_average,
+        scheduled_report_peak_rps=report_peak,
+        projected_host_average_rps=runner_rps + report_average,
+        projected_host_coincident_report_rps=(
+            min(host_limiter_rps, runner_rps + report_peak)
+        ),
+        projected_by_category=projected,
+    )
+
+
 @dataclass(frozen=True)
 class ApiWorkload:
     """REST work generated by one commissioning configuration.
@@ -44,11 +240,16 @@ class ApiWorkload:
     execution_activity_pages: int = 1
     mutation_requests_per_second: float = 0.0
     absent_order_requests_per_second: float = 0.0
+    lifecycle_requests_per_second: float = 0.0
+    recovery_requests_per_second: float = 0.0
     earnings_refresh_seconds: float = 900.0
     selection_refresh_seconds: float = 900.0
     selection_catalog_pages: int = 0
     selection_incentive_pages: int = 0
     selection_book_requests: int = 0
+    scheduled_report_requests: int = 12
+    scheduled_report_refresh_seconds: float = 3600.0
+    scheduled_report_deadline_seconds: float = 2700.0
     read_attempt_multiplier: float = 1.0
     requested_headroom_fraction: float = 0.25
 
@@ -62,6 +263,10 @@ class ApiWorkload:
             "reconcile_seconds": self.reconcile_seconds,
             "earnings_refresh_seconds": self.earnings_refresh_seconds,
             "selection_refresh_seconds": self.selection_refresh_seconds,
+            "scheduled_report_refresh_seconds": (
+                self.scheduled_report_refresh_seconds),
+            "scheduled_report_deadline_seconds": (
+                self.scheduled_report_deadline_seconds),
             "read_attempt_multiplier": self.read_attempt_multiplier,
         }
         if any(value <= 0 for value in positive.values()):
@@ -81,6 +286,7 @@ class ApiWorkload:
             self.selection_catalog_pages,
             self.selection_incentive_pages,
             self.selection_book_requests,
+            self.scheduled_report_requests,
         )
         if any(value < 0 for value in counts):
             raise ValueError("capacity request counts cannot be negative")
@@ -91,6 +297,8 @@ class ApiWorkload:
         if min(
             self.mutation_requests_per_second,
             self.absent_order_requests_per_second,
+            self.lifecycle_requests_per_second,
+            self.recovery_requests_per_second,
         ) < 0:
             raise ValueError("capacity event rates cannot be negative")
 
@@ -135,7 +343,17 @@ class ApiWorkload:
             ),
             "selection": selection,
             "earnings": 1 / self.earnings_refresh_seconds,
-            "absent_order_repair": self.absent_order_requests_per_second,
+            "order_retrieve": self.absent_order_requests_per_second,
+            "market_lifecycle": self.lifecycle_requests_per_second,
+            "account_recovery": self.recovery_requests_per_second,
+            # The hourly reward-table process shares the same host limiter but
+            # is outside the runner's process-local telemetry. Its bounded
+            # worst path is earnings + two cash-history walks + a
+            # balance/positions/balance bracket: twelve calls.
+            "scheduled_reporting": (
+                self.scheduled_report_requests
+                / self.scheduled_report_refresh_seconds
+            ),
         }
         scaled_reads = {
             name: rate * self.read_attempt_multiplier
@@ -366,11 +584,25 @@ def _scheduled_requests(
         priority=0,
     )
     add(
-        "absent_order_repair",
+        "order_retrieve",
         event_releases(workload.absent_order_requests_per_second),
         count=1,
         deadline_seconds=60.0,
         priority=2,
+    )
+    add(
+        "market_lifecycle",
+        event_releases(workload.lifecycle_requests_per_second),
+        count=1,
+        deadline_seconds=60.0,
+        priority=2,
+    )
+    add(
+        "account_recovery",
+        event_releases(workload.recovery_requests_per_second),
+        count=1,
+        deadline_seconds=20.0,
+        priority=1,
     )
     add(
         "earnings",
@@ -382,6 +614,17 @@ def _scheduled_requests(
         count=1,
         deadline_seconds=workload.earnings_refresh_seconds,
         priority=4,
+    )
+    add(
+        "scheduled_reporting",
+        _periodic_releases(
+            interval=workload.scheduled_report_refresh_seconds,
+            duration=duration_seconds,
+            phase=min(420.0, duration_seconds / 2),
+        ),
+        count=workload.scheduled_report_requests,
+        deadline_seconds=workload.scheduled_report_deadline_seconds,
+        priority=5,
     )
     selection_count = workload.selection_burst_requests()
     if selection_count:

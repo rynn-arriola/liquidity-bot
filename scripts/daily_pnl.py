@@ -119,7 +119,7 @@ async def reward_by_day(gateway=None) -> tuple[dict, dict]:
 
         gateway = AsyncReadOnlyGateway(
             client_from_environment(), limiter=shared_api_limiter(),
-            default_traffic_class="background")
+            default_traffic_class="report")
     rows = await gateway.fetch_earnings(program_type="liquidityProgram")
     paid: dict = defaultdict(Decimal)
     pending: dict = defaultdict(Decimal)

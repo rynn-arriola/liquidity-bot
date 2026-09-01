@@ -62,7 +62,7 @@ EARNING_SHARE = {
 async def main() -> int:
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     policy = CommissioningConfig.diagnostic_defaults().reward_selection_policy()
     now = datetime.now(timezone.utc)
     window = now + timedelta(seconds=policy.selection_horizon_seconds)

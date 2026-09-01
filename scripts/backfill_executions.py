@@ -124,7 +124,7 @@ async def main() -> int:
     ledger = ExecutionLedger(db)
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     account = AsyncAccountSnapshotGateway(
         gateway, resolve_client_id=ledger.resolve_client_order_id)
 

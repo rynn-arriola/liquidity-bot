@@ -45,6 +45,7 @@ __all__ = [
     "AsyncIntervalLimiter",
     "AsyncReadOnlyGateway",
     "LimiterTelemetry",
+    "OPPORTUNISTIC_REPORT_RATE_PER_SECOND",
     "parse_book_response",
     "parse_trade_response",
     "REST_REQUEST_TIMEOUT_SECONDS",
@@ -56,6 +57,7 @@ __all__ = [
 # 15 seconds. The SDK otherwise defaults to 30 seconds, long enough for one
 # hung request to consume most of the private-state freshness window.
 REST_REQUEST_TIMEOUT_SECONDS = 15.0
+OPPORTUNISTIC_REPORT_RATE_PER_SECOND = 0.25
 
 
 def _amount(value: Any, *, field: str) -> float:
@@ -349,6 +351,7 @@ class LimiterTelemetry:
     safety_cooldown_remaining_seconds: float
     entry_cooldown_remaining_seconds: float
     background_cooldown_remaining_seconds: float
+    report_cooldown_remaining_seconds: float
     shared_across_processes: bool
 
 
@@ -415,7 +418,9 @@ class AsyncIntervalLimiter:
 
     Background catalog discovery deliberately uses half the configured peak
     rate. Maker entry has an independent configured-rate lane, while safety
-    reads, cancels, passive reducers and IOC exits use the safety lane. All
+    reads, cancels, passive reducers and IOC exits use the safety lane.
+    Read-only reports use a fourth, opportunistic lane: it waits for an unused
+    aggregate interval and is capped at one request every four seconds. All
     classes still consume the same global clock, so their aggregate cannot
     exceed the configured host rate.
     """
@@ -426,6 +431,9 @@ class AsyncIntervalLimiter:
     RATE_LIMIT_MAX_COOLDOWN_SECONDS = 60.0
     RATE_LIMIT_MAX_SAFETY_COOLDOWN_SECONDS = 1.0
     BACKGROUND_MINIMUM_INTERVAL_SECONDS = 0.5
+    REPORT_MINIMUM_INTERVAL_SECONDS = (
+        1.0 / OPPORTUNISTIC_REPORT_RATE_PER_SECOND)
+    REPORT_IDLE_INTERVAL_SECONDS = 0.30
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
 
     def __init__(
@@ -455,6 +463,7 @@ class AsyncIntervalLimiter:
         self._next_at = 0.0
         self._next_entry_at = 0.0
         self._next_background_at = 0.0
+        self._next_report_at = 0.0
         self._telemetry_started_at = time.monotonic()
         self._attempts = 0
         self._read_attempts = 0
@@ -471,12 +480,14 @@ class AsyncIntervalLimiter:
             "safety": 0.0,
             "entry": 0.0,
             "background": 0.0,
+            "report": 0.0,
         }
         self._rate_limit_streak_by_class = Counter()
         self._last_rate_limit_at_by_class = {
             "safety": 0.0,
             "entry": 0.0,
             "background": 0.0,
+            "report": 0.0,
         }
         self._interrupt_generation = 0
         self._interrupt_event = asyncio.Event()
@@ -515,12 +526,18 @@ class AsyncIntervalLimiter:
         self, operation: str, request_kind: str, traffic_class: str | None,
     ) -> float:
         chosen = traffic_class or self._traffic_class(operation, request_kind)
-        if chosen not in {"background", "entry", "safety"}:
-            raise ValueError("traffic_class must be background, entry, or safety")
+        if chosen not in {"background", "entry", "report", "safety"}:
+            raise ValueError(
+                "traffic_class must be background, entry, report, or safety")
         if chosen == "background":
             return max(
                 self.minimum_interval_seconds,
                 self.BACKGROUND_MINIMUM_INTERVAL_SECONDS,
+            )
+        if chosen == "report":
+            return max(
+                self.minimum_interval_seconds,
+                self.REPORT_MINIMUM_INTERVAL_SECONDS,
             )
         return self.minimum_interval_seconds
 
@@ -531,8 +548,9 @@ class AsyncIntervalLimiter:
         """Return the validated class used by both admission and its result."""
 
         chosen = traffic_class or self._traffic_class(operation, request_kind)
-        if chosen not in {"background", "entry", "safety"}:
-            raise ValueError("traffic_class must be background, entry, or safety")
+        if chosen not in {"background", "entry", "report", "safety"}:
+            raise ValueError(
+                "traffic_class must be background, entry, report, or safety")
         return chosen
 
     @staticmethod
@@ -629,6 +647,8 @@ class AsyncIntervalLimiter:
             return "next_entry_at"
         if traffic_class == "background":
             return "next_background_at"
+        if traffic_class == "report":
+            return "next_report_at"
         return None
 
     @staticmethod
@@ -661,6 +681,19 @@ class AsyncIntervalLimiter:
                         if traffic_class == "safety" else
                         self.RATE_LIMIT_MAX_COOLDOWN_SECONDS))
                 due = max(now, aggregate_due, cooldown_due)
+                if traffic_class == "report" and aggregate_due > 0.0:
+                    # ``aggregate_due`` is written by old and new runners.
+                    # Waiting beyond it proves one aggregate slot stayed
+                    # unused without requiring a new shared-state field or a
+                    # simultaneous runner upgrade.
+                    due = max(
+                        due,
+                        aggregate_due + max(
+                            0.0,
+                            self.REPORT_IDLE_INTERVAL_SECONDS
+                            - self.shared_global_interval_seconds,
+                        ),
+                    )
                 lane_clock = self._lane_clock_name(traffic_class)
                 if lane_clock is not None:
                     due = max(
@@ -762,7 +795,8 @@ class AsyncIntervalLimiter:
                                 ),
                             ) - now,
                         )
-                        for traffic_class in ("background", "entry", "safety")
+                        for traffic_class in (
+                            "background", "entry", "report", "safety")
                     }
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -802,6 +836,8 @@ class AsyncIntervalLimiter:
                             lane_due = self._next_entry_at
                         elif chosen_class == "background":
                             lane_due = self._next_background_at
+                        elif chosen_class == "report":
+                            lane_due = self._next_report_at
                         cooldown_due = self._cooldown_until_by_class[chosen_class]
                         due = max(
                             now,
@@ -809,6 +845,15 @@ class AsyncIntervalLimiter:
                             lane_due,
                             cooldown_due,
                         )
+                        if chosen_class == "report" and self._next_at > 0.0:
+                            due = max(
+                                due,
+                                self._next_at + max(
+                                    0.0,
+                                    self.REPORT_IDLE_INTERVAL_SECONDS
+                                    - self.shared_global_interval_seconds,
+                                ),
+                            )
                         delay = max(0.0, due - now)
                         cooldown_delay = max(0.0, cooldown_due - now)
                         if delay == 0.0:
@@ -817,6 +862,8 @@ class AsyncIntervalLimiter:
                                 self._next_entry_at = now + interval
                             elif chosen_class == "background":
                                 self._next_background_at = now + interval
+                            elif chosen_class == "report":
+                                self._next_report_at = now + interval
                 if self._interrupt_generation != interrupt_generation:
                     raise asyncio.CancelledError
                 if delay <= 0.0:
@@ -976,6 +1023,7 @@ class AsyncIntervalLimiter:
             safety_cooldown_remaining_seconds=class_cooldowns["safety"],
             entry_cooldown_remaining_seconds=class_cooldowns["entry"],
             background_cooldown_remaining_seconds=class_cooldowns["background"],
+            report_cooldown_remaining_seconds=class_cooldowns["report"],
             shared_across_processes=(
                 self.shared_state_path is not None and fcntl is not None),
         )
@@ -1075,10 +1123,11 @@ class AsyncReadOnlyGateway:
                 or max_retry_after_seconds < 0):
             raise ValueError("retry settings are invalid")
         if default_traffic_class not in {
-            None, "background", "entry", "safety",
+            None, "background", "entry", "report", "safety",
         }:
             raise ValueError(
-                "default_traffic_class must be background, entry, safety, or None")
+                "default_traffic_class must be background, entry, report, "
+                "safety, or None")
         self.client = client
         self.limiter = limiter or AsyncIntervalLimiter()
         self.incentive_batch_size = incentive_batch_size

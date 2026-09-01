@@ -101,7 +101,7 @@ async def main() -> int:
 
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     kickoff: dict[str, datetime | None] = {}
     for slug in sorted({s for s, _, _ in spans}):
         try:

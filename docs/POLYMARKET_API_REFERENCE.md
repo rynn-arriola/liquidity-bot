@@ -85,7 +85,7 @@ Last reviewed: **2026-09-01**.
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|
 | Changelog and venue health | [Changelog](https://docs.polymarket.us/changelog), [live status](https://status.polymarketexchange.com/) | Mandatory diagnostic sources for unexplained venue behavior. The isolated hourly RSS monitor establishes a baseline without history spam, alerts only unseen items and retains unseen state after notification failure. | Changelog `v0.0.79` announced 2026-08-27 extended maintenance and a stored execution-history reset; an empty pre-maintenance history query therefore cannot prove that no execution occurred. The monitor remains diagnostic and cannot change trading behavior. |
-| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | Cooperating WSL tools share one file-locked laptop-wide 4/second aggregate gate. Background discovery/reports have a separate 2/second lane; maker entry/revalidation have an independent 4/second lane; safety reads, cancels, passive reducers and IOC exits use the 4/second safety lane. A confirmed 429 cools only its originating lane: background/entry retain bounded adaptive `Retry-After`, while safety is capped at one second. Mutations never auto-retry. Categorized/redacted telemetry adds no request; its attempt/response counters are process-local while its lane cooldown fields merge bounded host-shared deadlines. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. The project's lower class-aware rates are internal admission policy, not a discovered venue limit. Native Windows has no compatible `fcntl` coordinator, so the shared factory fails closed and authenticated executable clients must run inside WSL. An uncooperative external process or another machine on the same key/public IP can still contribute venue load, so software cannot promise that Cloudflare will never emit a first 429. |
+| Rate limits | [Trader guide](https://docs.polymarket.us/trader-guide/rate-limits), [Retail reference](https://docs.polymarket.us/api-reference/rate-limits) | Cooperating WSL tools share one file-locked laptop-wide 4/second aggregate gate. Background discovery has a separate 2/second lane; maker entry/revalidation have an independent 4/second lane; safety reads, cancels, passive reducers and IOC exits use the 4/second safety lane. Read-only reports/measurements use an opportunistic fourth lane: only after an unused aggregate interval and at most `0.25/s`. A confirmed 429 cools only its originating lane: report/background/entry retain bounded adaptive `Retry-After`, while safety is capped at one second. Mutations never auto-retry. Categorized/redacted telemetry adds no request; its attempt/response counters are process-local while its four lane cooldown fields merge bounded host-shared deadlines. | Retail documents a global authenticated ceiling of 20 requests/second per API key and a public ceiling of 20 requests/second per IP. The project's lower class-aware rates are internal admission policy, not a discovered venue limit. Native Windows has no compatible `fcntl` coordinator, so the shared factory fails closed and authenticated executable clients must run inside WSL. An uncooperative external process or another machine on the same key/public IP can still contribute venue load, so software cannot promise that Cloudflare will never emit a first 429. |
 | Fees and rebates | [Fee schedule](https://docs.polymarket.us/fees), [Retail order schema](https://docs.polymarket.us/api-reference/orders/get-order) | Each Retail fill's signed `commissionNotionalCollected.value` is stored directly in USD. Positive taker fees reduce realized P&L; negative maker rebates increase it. The session fee stop counts only positive fees, while entry forecasts intentionally assume zero maker rebate. | Effective exchange-wide from 00:00 ET on 2026-07-01: `fee = theta × contracts × price × (1 - price)`, with taker theta `0.06` and maker theta `-0.0125`. Venue fees/rebates use cent-level banker's rounding. Partner execution reports use scaled integer notional, but the Retail `MoneyAmount.value` must not be divided by partner price/quantity scales. |
 | Error handling | [Trader guide](https://docs.polymarket.us/trader-guide/error-handling) | 4xx failures are not blindly retried; 429 reads use bounded backoff; 5xx/transport failures enter scoped recovery or maintenance pause; ambiguous mutations remain durable and quarantined until positive reconciliation. A response-backed 403 fails only its exact intent and opens a one-minute new-entry circuit. Cancels/reducers bypass entry denial; their own rejection gets a 10-second safety circuit. Successful mutations prove recovery only for their scope. Safe status, structured error code and trace/request ID survive adapter boundaries. | Generic advice to retry POST must never override mutation ambiguity safety. Retail code 7 location/VPN denial was observed on 2026-08-28 while public status was operational; it is account-specific evidence, not cancellation, flatness, a permanent ban or permission to restart. Trace IDs are retained on raised errors and logs, not stored as a new durable ledger relation. |
 | Market lifecycle status | [Retail markets](https://docs.polymarket.us/api-reference/market/overview) | A successful exact-market response with `active=false`, `closed=true` or an explicit non-open status is positive lifecycle evidence, not a transport failure. A flat bound owner may become a replacement candidate only after the normal fresh top-up reconciliation re-fetches that exact market and still proves it non-open. An inactive market with an exactly reconciled bot-owned position remains reserved and fully risk-counted, but does not issue locally impossible orders; one-minute metadata probes restore its ordinary exit path if it reopens. | Production evidence on 2026-09-01 showed many exact market responses in a non-open state during venue maintenance while authenticated account reads remained healthy. Missing, malformed, timed-out or generic failed responses never prove closure or authorize slot release. The local Retail payload validator refuses both new and reducing order construction against confirmed non-open metadata, so repeatedly planning IOC exits cannot recover such a position. |
@@ -107,7 +107,7 @@ production authorization.
 
 The live process does more than place and cancel orders. Its steady and burst
 work must all fit through the same conservative 4-request/second process gate.
-The following inventory was audited end to end on 2026-08-29:
+The following inventory was audited end to end again on 2026-09-01:
 
 | Responsibility | Current cadence and request demand | Scaling behavior |
 |---|---|---|
@@ -120,6 +120,8 @@ The following inventory was audited end to end on 2026-08-29:
 | Market selection | On the measured planning assumptions, 52 catalog pages, 4 incentive pages and up to 60 candidate books every 900 seconds: `116/900 = 0.129/s` on average, but a 116-request burst with a 29-second floor at 4 requests/second. | Catalog/page/book-sensitive burst. |
 | Earnings | One earnings read every 900 seconds: about `0.0011/s`. | Fixed. |
 | Recovery and retry | Confirmed 429 read retries, private-stream handoff proof, missing-order repair, pagination and maintenance probes consume additional reads. Unknown mutations do not retry. | Failure- and page-sensitive; must be measured in tail windows. |
+| Hourly reward table | Worst bounded path is one earnings read, two cash-history walks of at most four pages each, two balance reads and one position read: at most 12 calls. It is outside the runner's process-local telemetry. | Fixed and independently scheduled. It now waits for spare shared allowance, is capped at `0.25/s`, has its own lane/cooldown and may use up to 45 minutes of the hourly interval. |
+| Manual reports and measurements | Accounting, P&L, dashboard diagnostic, period mix, resting-by-kickoff, reward census, usable-market, shadow and scalp tools can fan out across catalog, book and account reads. | Not part of steady live demand unless actually running. Every audited non-trading tool uses the same opportunistic report lane; repair/safety tools retain their stronger class. |
 
 Selection and service are largely serial. Response latency below the 0.25-second
 governor interval is hidden by the gate; slower responses reduce effective
@@ -139,6 +141,41 @@ tail percentiles, not per-request averages, so multiplying their sum by all 87
 attempts is not a valid elapsed-time attribution.  Any later scheduler or
 capacity change must measure per-request/category duration or use a permitted
 sampling profiler before assigning the remaining CPU or wall time.
+
+The 2026-09-01 direct-32 preparation parsed the latest twenty healthy 24-slot
+windows rather than inferring from action logs. They covered 1,595.6 seconds,
+with observed median/p95/max `1.852/2.295/2.485` requests/second, maximum queue
+eight and zero failures/confirmed 429s. Every emitted category was classified:
+book, discovery, contract/incentive batch and single-contract reads; balance,
+positions, cash/execution history and open orders; order retrieval; earnings;
+and create/cancel mutations. Fixed account work stayed fixed, eight-market
+contract batches stepped from three to four, and every other event/market term
+scaled conservatively by `32/24`. The resulting 32-slot median/p95/max was
+`2.361/2.912/3.189/s`; a coincident bounded report raised the maximum projection
+to `3.329/s`. This is normal-window canary evidence only. The deterministic
+busy model is `4.73/s` at 32 and the fully silent-feed model is `11.94/s`, so
+degraded/recovery rollback gates remain mandatory.
+
+The same read-only report now ranks high-demand limiter windows by exact UTC
+time and correlates their API categories with the secret-free event tags since
+the preceding window. Across the latest 100 24-slot windows, the maximum was
+`2.801/s` at `2026-09-01T15:38:12Z`: 165 book reads led the interval, with 15
+creates plus runtime-recovery, market-retirement and stale-book signals. Other
+high windows at `15:29:09Z`, `15:30:28Z`, `15:24:20Z`, `16:11:53Z` and
+`16:24:38Z` separate selection/refill, exact-order ambiguity repair and
+mutation churn from the book-heavy baseline. Their conservative 32-slot
+maximum is `3.601/s`, or `3.739/s` with coincident report work. These are
+sustained governed intervals, not raw instantaneous spikes: the shared 4/s
+gate smooths calls, while queue and latency expose pressure before 429 alone.
+
+Controls follow business responsibility. Stream freshness and bounded
+empty/dead-market retries may reduce book fallback, but position markets remain
+unconditional. Discovery may be cached, batched and coalesced, but mandatory
+slot replacement remains timely. Entry replans may be coalesced, while cancels,
+reducers, IOC exits, exact-order ambiguity proof, account proof and recovery
+must not be suppressed. Non-trading reports use the opportunistic report lane.
+If mandatory safety/recovery traffic contends, breadth is rolled back instead
+of throttling that evidence.
 
 ### Measured live baseline and modeled scenarios
 
@@ -209,8 +246,12 @@ The complete local admission architecture is intentionally layered:
    proofs, cancels, passive GTC reducers and IOC exits retain the 4/second
    safety pace. Maker entry and bounded cached revalidation use an independent
    4/second entry lane. Whole-universe selection—including its per-candidate
-   book reads—and every observer/report process use the 2/second background
-   lane. All three still consume the single aggregate 4/second clock.
+   book reads—uses the 2/second background lane. Non-trading reports and
+   measurements use a separate opportunistic lane capped at one request every
+   four seconds and require at least one unused aggregate interval before a
+   claim. Report claims update only `next_report_at`, never the background,
+   entry or safety clock. All four still consume the single aggregate
+   4/second clock.
 4. Bulk catalog/incentive/account endpoints, bounded candidate fan-out and the
    120-second revalidation cache remove calls before they reach the queue.
 5. Confirmed 429 evidence applies a shared, class-scoped bounded cooldown.
@@ -227,9 +268,9 @@ The complete local admission architecture is intentionally layered:
    neither reports nor quarantines that market and holds later entry plans
    behind the remaining local cooldown, avoiding repeated failed intents.
    Safety is isolated, may retry inline, and is capped at one second. Telemetry
-   records each lane's cooldown plus queue wait, response latency, category,
+   records each of the four lane cooldowns plus queue wait, response latency, category,
    failure and 429 counts without another diagnostic request. Attempt,
-   response and 429 counts remain local to the reporting process; the three
+   response and 429 counts remain local to the reporting process; the four
    cooldown fields merge the bounded shared file deadlines, so a peer-induced
    cooldown may correctly appear beside `rate_limited=0`. The shared snapshot
    uses non-blocking file locking in a worker and falls back to local evidence
@@ -320,19 +361,22 @@ than that action-line rate and preserves 25% of the internal 4/s governor:
 
 | Scenario | Explicit assumptions | Result after bounded contract batching |
 |---|---|---|
-| Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier. | The complete position-valued risk mark adds `0.40/s` over the former one-balance model. At 22 slots the updated estimate is `2.10/s`; at 24 it is `2.16/s` (54% of the gate). The earlier 56-slot API-only estimate is retired pending replay with the new fixed load. |
-| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05` for retry/page pressure. | Updated executable-model estimates are `3.43/s` at 20, `3.61/s` at 22 and `3.78/s` at 24. They remain below the hard 4/s gate through 24 but do not preserve the chosen 25% request headroom, so live canary evidence is mandatory. |
-| Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages. | Demand is about `7.90/s` at 20 and `8.57/s` at 22 after the fixed mark load, proving this is a degraded-feed design limit, not a viable scaling mode. Each owner receives a fresh service-time sample and new risk still fails closed on stale books; the correct scale design is bounded fallback plus stream recovery, not whole-slate REST polling. |
+| Normal | 10% of owners need quiet-book REST fallback; `0.10` mutations/s; one execution page; no retry multiplier; bounded hourly report included at its long-run average. | `2.17/s` at 24 and `2.47/s` at 32. The deterministic replay still records ten quiet-book deadline misses at both widths, so average headroom alone is not acceptance. |
+| Busy | 25% quiet owners; `0.25` mutations/s; two execution pages; reads multiplied by `1.05`; explicit order-retrieve, lifecycle and recovery traffic. | `4.00/s` at 24 and `4.73/s` at 32. Thirty-two exceeds the internal host gate in this modeled window and must roll back if live tail evidence approaches it. |
+| Entire public feed silent under current fallback | Every owner requests a REST book every 3 seconds; two execution pages; bounded hourly report included. | `9.24/s` at 24 and `11.94/s` at 32, proving this is a degraded-feed design limit, not a viable scaling mode. New risk still fails closed on stale books; stream recovery and risk-owner priority, not whole-slate REST polling, are the safety design. |
 
-These results do **not** select 19, 24 or 56 as the final production width.
+These results do **not** select 24 or 32 as the final production width.
 They prove that 24 is not a documented venue slot limit and that average normal
 REST load is not currently the first modeled constraint. A 2026-08-29 point
 sample measured the runner at `0.564` of one CPU core at 20 slots; a deliberately
 conservative linear projection reaches the `0.75`-core comfort budget at 26
 slots. Portfolio policy now derives exposure as `(configured slots + 10) ×
 quote size`, so capacity no longer consumes a hidden fixed reserve; at the
-selected size-10/24 target the cap is $340 with $100 cushion. CPU, request scheduling and the
-fourth private shard at slot 25 remain independent constraints, not API limits.
+selected size-10/32 canary the cap is $420 with $100 cushion. CPU, request
+scheduling and the fourth private shard remain independent constraints, not
+API limits. The latest steady CPU baseline used for the conservative linear
+projection was `0.398` core at 24, giving `0.531` at 32—below the `0.75` comfort
+budget but not a substitute for live latency/thermal evidence.
 
 ### Evidence required before choosing the durable maximum
 
@@ -370,7 +414,29 @@ authorized preparing one 24-slot canary. Twenty-four fills the same three
 private shards as `8/8/8`; 25 is still refused. The corrected executable model
 includes all three balance/positions/balance mark calls and matches the table
 above. The canary remains inactive until reviewed source, positive
-flat/order-free proof and a separately authorized restart.
+flat/order-free proof and a separately authorized restart. That 24-slot canary
+later passed and remains the loaded runtime.
+
+On 2026-09-01 the operator chose to prepare one direct 32-slot canary rather
+than repeat staged 26/28/30 deployments. Prepared source accepts only whole
+widths 20-32 and still defaults a missing/bare setting to 20; 33 is refused
+before venue access. Thirty-two uses four private shards of eight, remains
+below the public 100-market subscription bound and derives size-10 controls of
+`$420` portfolio exposure, `$40` market loss, `$128` account loss, `$896`
+seven-day reserve, `$13.33` fee observation and 40 taker exits. Quote size,
+ranking, spread/price gates, inventory clocks, mutation authority and all
+per-market business decisions are unchanged. The prepared code is not live
+until separately reviewed, deployed and restarted from positive flat/order-free
+proof.
+
+The direct canary must reduce immediately on any capacity-linked failure or
+confirmed 429; `max_waiting > 1` in two consecutive windows; missed reducer,
+pre-kickoff or account-proof deadline; market/private stream coverage loss;
+persistent `execution_state_unknown`/account ambiguity; unacceptable decision
+latency, CPU or thermals; or a decline in reward per resting side-hour. A quiet
+normal window cannot waive a busy/recovery breach. The initial response is 24;
+22 remains the earlier known-good fallback if the failure matches its rollback
+procedure.
 The durable maximum is the highest width
 that preserves the chosen request headroom with zero safety-deadline misses,
 zero sustained backlog/429s, acceptable response/wait tails, proven stream

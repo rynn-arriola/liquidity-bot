@@ -9,7 +9,7 @@ from typing import Sequence
 
 DEFAULT_SLOT_CAPACITY = 20
 MIN_SLOT_CAPACITY = 20
-MAX_SLOT_CAPACITY = 24
+MAX_SLOT_CAPACITY = 32
 
 
 def parse_slot_capacity(value: object) -> int:

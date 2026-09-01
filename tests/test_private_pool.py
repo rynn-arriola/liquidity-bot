@@ -113,6 +113,20 @@ class PrivateStreamPoolTests(unittest.IsolatedAsyncioTestCase):
                    for slug in stream.started_with]
         self.assertEqual(len(set(covered)), 24)
 
+    async def test_thirty_two_market_canary_fills_four_bounded_connections(self):
+        pool = self.pool()
+        await pool.start([f"market-{i}" for i in range(32)])
+        self.addAsyncCleanup(pool.close)
+
+        self.assertEqual(pool.connection_count, 4)
+        self.assertEqual(
+            [len(stream.started_with) for stream in FakeStream.instances],
+            [8, 8, 8, 8],
+        )
+        covered = [slug for stream in FakeStream.instances
+                   for slug in stream.started_with]
+        self.assertEqual(len(set(covered)), 32)
+
     async def test_events_from_every_connection_reach_one_queue(self):
         pool = self.pool()
         await pool.start([f"market-{i}" for i in range(16)])

@@ -244,7 +244,7 @@ async def main() -> int:
 
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     account = AsyncAccountSnapshotGateway(gateway)
     account_snapshot = await account.fetch_equity_snapshot(observed_at=now)
     equity = _money(account_snapshot.marked_equity)

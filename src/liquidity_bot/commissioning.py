@@ -104,8 +104,9 @@ class CommissioningConfig:
     # scoped one market per subscription because positionSubscription
     # omits marketSlug, while orders can be account-wide because order
     # events always carry it. 1 orders + 8 positions + 1 balance = 10.
-    # Twenty markets across three private connections (8 + 8 + 4); the
-    # authorized 24-slot canary fills the same three shards (8 + 8 + 8).
+    # Twenty markets use three private connections (8 + 8 + 4); 24 fills
+    # those three shards and the authorized 32-slot canary fills four complete
+    # shards (8 + 8 + 8 + 8).
     #
     # Not set by the socket cap. Measured 2026-08-15 after the market feed was
     # made survivable (one unusable book used to kill it), three runs at each
@@ -116,12 +117,13 @@ class CommissioningConfig:
     #     24 -> 22/24 slugs, 184-202 msgs, 0 dropped
     #     29 -> 27/29 slugs, 202-226 msgs, 0 dropped
     #
-    # The socket sustains 29. **The real ceiling is what REST can carry alone
-    # when the socket drops**, because that is when a held position still has
-    # to be exitable: N markets refresh in N/4 seconds against a 5s staleness
-    # bound, so 20 sits exactly at the limit and 24+ does not fit. Above 20 a
-    # feed drop leaves every book stale, the exit unpriceable, and inventory
-    # riding toward settlement -- how maker-lab lost $443.88.
+    # The socket sustains at least 29, while the public documented subscription
+    # limit is 100. REST fallback, account proof, mutations, recovery bursts
+    # and the fourth private shard remain separate constraints. A fully silent
+    # market stream cannot keep every flat book inside the five-second entry
+    # freshness bound at any currently tested wide slate, so 32 is canary-only
+    # and relies on the existing fail-closed stream/recovery behavior rather
+    # than pretending REST can replace the stream.
     #
     # Worst case exposure: both sides of a market risk quote_size x p +
     # quote_size x (1 - p) = quote_size. The portfolio control funds the exact

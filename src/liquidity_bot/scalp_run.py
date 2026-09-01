@@ -117,7 +117,7 @@ class ScalpRunner:
         self.gateway = AsyncReadOnlyGateway(
             client,
             limiter=shared_api_limiter(config.rest_requests_per_second),
-            default_traffic_class="background",
+            default_traffic_class="report",
         )
         self.store = ScalpStore(config.database)
         unfinished = self.store.latest_unfinished_run()

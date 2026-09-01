@@ -542,7 +542,7 @@ async def main() -> int:
         gateway = AsyncReadOnlyGateway(
             client_from_environment(),
             limiter=shared_api_limiter(),
-            default_traffic_class="background",
+            default_traffic_class="report",
         )
         account = AsyncAccountSnapshotGateway(gateway)
         live = await account.fetch_open_orders(observed_at=now)

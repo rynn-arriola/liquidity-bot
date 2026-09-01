@@ -36,7 +36,8 @@ from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa:
 from liquidity_bot.account_snapshots import (  # noqa: E402
     AsyncAccountSnapshotGateway, account_equity_snapshot)
 from liquidity_bot.adapters import (  # noqa: E402
-    AsyncReadOnlyGateway, shared_api_limiter)
+    AsyncReadOnlyGateway, OPPORTUNISTIC_REPORT_RATE_PER_SECOND,
+    shared_api_limiter)
 from liquidity_bot.cash_activity import (  # noqa: E402
     CashActivityUnavailable,
     NontradingCashChange,
@@ -53,7 +54,7 @@ from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
 
 
 ACCOUNT_ACTIVITY_MAX_PAGES = 4
-ACCOUNT_REPORT_RATE_PER_SECOND = 1.0
+ACCOUNT_REPORT_RATE_PER_SECOND = OPPORTUNISTIC_REPORT_RATE_PER_SECOND
 BASELINE_START_TOLERANCE = timedelta(minutes=2)
 
 # This baseline landed four minutes after midnight because the hard-stop
@@ -734,7 +735,7 @@ async def main() -> int:
     gateway = AsyncReadOnlyGateway(
         client_from_environment(),
         limiter=shared_api_limiter(ACCOUNT_REPORT_RATE_PER_SECOND),
-        default_traffic_class="background",
+        default_traffic_class="report",
         max_pages=ACCOUNT_ACTIVITY_MAX_PAGES)
     paid, pending = await reward_by_day(gateway)
     history: dict[str, Decimal] = {}

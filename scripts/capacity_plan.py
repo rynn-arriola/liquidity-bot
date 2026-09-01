@@ -22,18 +22,24 @@ def _scenario(name: str, args: argparse.Namespace) -> ApiWorkload:
         selection_incentive_pages=args.incentive_pages,
         selection_book_requests=args.selection_books,
         contract_batch_size=args.contract_batch_size,
+        scheduled_report_requests=args.hourly_report_requests,
         requested_headroom_fraction=args.request_headroom,
     )
     if name == "normal":
         return ApiWorkload(
             quiet_market_fraction=args.normal_quiet_fraction,
             mutation_requests_per_second=args.normal_mutation_rps,
+            absent_order_requests_per_second=args.normal_order_retrieve_rps,
+            lifecycle_requests_per_second=args.normal_lifecycle_rps,
             **shared,
         )
     if name == "busy":
         return ApiWorkload(
             quiet_market_fraction=args.busy_quiet_fraction,
             mutation_requests_per_second=args.busy_mutation_rps,
+            absent_order_requests_per_second=args.busy_order_retrieve_rps,
+            lifecycle_requests_per_second=args.busy_lifecycle_rps,
+            recovery_requests_per_second=args.busy_recovery_rps,
             execution_activity_pages=2,
             read_attempt_multiplier=args.busy_read_multiplier,
             **shared,
@@ -49,6 +55,7 @@ def _scenario(name: str, args: argparse.Namespace) -> ApiWorkload:
             rest_requests_per_second=args.rest_rps,
             requested_headroom_fraction=args.request_headroom,
             contract_batch_size=args.contract_batch_size,
+            scheduled_report_requests=args.hourly_report_requests,
         )
     raise ValueError(f"unknown capacity scenario: {name}")
 
@@ -66,6 +73,12 @@ def main() -> int:
     parser.add_argument("--busy-quiet-fraction", type=float, default=0.25)
     parser.add_argument("--normal-mutation-rps", type=float, default=0.10)
     parser.add_argument("--busy-mutation-rps", type=float, default=0.25)
+    parser.add_argument("--normal-order-retrieve-rps", type=float, default=0.0)
+    parser.add_argument("--busy-order-retrieve-rps", type=float, default=0.05)
+    parser.add_argument("--normal-lifecycle-rps", type=float, default=0.0)
+    parser.add_argument("--busy-lifecycle-rps", type=float, default=0.05)
+    parser.add_argument("--busy-recovery-rps", type=float, default=0.10)
+    parser.add_argument("--hourly-report-requests", type=int, default=12)
     parser.add_argument("--busy-read-multiplier", type=float, default=1.05)
     parser.add_argument("--catalog-pages", type=int, default=52)
     parser.add_argument("--incentive-pages", type=int, default=4)

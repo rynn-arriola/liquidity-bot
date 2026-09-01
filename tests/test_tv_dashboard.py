@@ -334,15 +334,15 @@ class TvDashboardTests(unittest.TestCase):
             root = Path(directory)
             database, log = self._fixture(root)
             capacity = root / "slot_capacity"
-            capacity.write_text("24\n", encoding="utf-8")
+            capacity.write_text("32\n", encoding="utf-8")
 
             state = collect_state(
                 database, log, now=NOW, processes=[],
                 slot_capacity_path=capacity)
 
-            self.assertEqual(state["capacity"], 24)
-            self.assertEqual(len(state["ledger"]["slots"]), 24)
-            self.assertEqual(state["ledger"]["slots"][-1]["number"], 24)
+            self.assertEqual(state["capacity"], 32)
+            self.assertEqual(len(state["ledger"]["slots"]), 32)
+            self.assertEqual(state["ledger"]["slots"][-1]["number"], 32)
 
     def test_gain_snapshot_is_local_validated_and_exposed(self):
         with TemporaryDirectory() as directory:
@@ -542,9 +542,9 @@ class TvDashboardTests(unittest.TestCase):
         self.assertIn('fetch("/api/state"', javascript)
         self.assertIn("index < safeCapacity", javascript)
         self.assertIn("renderSlots(ledger.slots, capacity)", javascript)
-        self.assertIn("capacity <= 24", javascript)
-        self.assertIn("Math.min(24, Math.max(20", javascript)
-        self.assertIn("safeCapacity > 22 ? 12", javascript)
+        self.assertIn("capacity <= 32", javascript)
+        self.assertIn("Math.min(32, Math.max(20", javascript)
+        self.assertIn("safeCapacity > 24 ? 16", javascript)
         self.assertNotIn("capacity <= 22", javascript)
         self.assertNotIn("polymarket.us", javascript.lower())
         self.assertNotIn("reward", html.lower())

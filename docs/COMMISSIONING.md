@@ -12,16 +12,17 @@ strategy is profitable and not permission to scale.
 
 - join every executable active sports market to its liquidity rewards and
   expose the account to the validated restart capacity: 20 by default and at
-  most 24 only for an explicitly authorized measurement canary;
+  most 32 only for an explicitly authorized measurement canary;
 - refresh selection every 15 minutes, deeply evaluate at most 100 books per
   pass through the shared governor, and round-robin deferred lower-ranked
   programs on later passes;
 - admit only `SPORTS_MARKET_TYPE_MONEYLINE`; two-sided futures, props, totals,
   spreads, and drawable outcomes remain discovery-only;
-- 5 contracts per quote by default across 20-24 concurrently bound markets
+- 5 contracts per quote by default across 20-32 concurrently bound markets;
+  widths above the loaded 24 are reviewed canary inputs, not durable defaults
   (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 30; it is 13 in the unchanged
-  live process and 10 for the next restart. `quote_size.py` is the single
+  restart-scoped whole number from 5 through 30; the current reviewed canary
+  uses size 10. `quote_size.py` is the single
   quantity authority; `slot_capacity.py`
   independently validates breadth, and a bare launcher invocation always
   restores the 20-slot baseline rather than inheriting a prior canary;

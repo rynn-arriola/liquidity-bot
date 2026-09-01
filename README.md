@@ -55,7 +55,7 @@ The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
 permits only a bounded commissioning process. It joins the active sports
 catalog to reward programs and binds one executor across a validated 20-slot
-baseline or an explicitly authorized restart-scoped canary of at most 24 selected
+baseline or an explicitly authorized restart-scoped canary of at most 32 selected
 markets. The operative authorized limits are below. Quote size is read from the
 restart-scoped runtime setting; quantity-linked limits are derived and
 hard-locked by `CommissioningConfig`:
@@ -63,10 +63,10 @@ hard-locked by `CommissioningConfig`:
 | limit | value |
 |---|---|
 | quote size | 10 contracts (restart-scoped, allowed whole values 5-30) |
-| concurrently bound markets | 20 |
+| concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | market loss stop | $40 at size 10 (`4 × size`) |
-| session loss stop | `8 × size × slots / 20`; $80 at size 10 / 20 slots, $96 at 24 |
+| session loss stop | `8 × size × slots / 20`; $80 at size 10 / 20 slots, $96 at 24, $128 at 32 |
 | emergency hard stop | same breadth-scaled threshold on adjusted marked equity; provisional with open inventory |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |

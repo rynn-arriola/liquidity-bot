@@ -62,7 +62,7 @@ async def main() -> int:
 
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     rows = await gateway.fetch_earnings()
     if not rows:
         print("no earnings rows returned -- check credentials")

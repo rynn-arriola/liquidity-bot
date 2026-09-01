@@ -4598,6 +4598,7 @@ class CommissioningRunner:
             f"cooldown_safety={evidence.safety_cooldown_remaining_seconds:.1f} "
             f"cooldown_entry={evidence.entry_cooldown_remaining_seconds:.1f} "
             f"cooldown_background={evidence.background_cooldown_remaining_seconds:.1f} "
+            f"cooldown_report={evidence.report_cooldown_remaining_seconds:.1f} "
             f"shared={int(evidence.shared_across_processes)} "
             f"categories={categories}",
             flush=True,

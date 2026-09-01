@@ -28,8 +28,10 @@ These are implementation requirements, not suggestions.
     maker-lab stopped. Size and breadth are restart-scoped operator inputs.
     Quote size is a whole value bounded to 5-30; the persisted live setting is
     10 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
-    be explicitly set only from 20 through the authorized canary ceiling of 24;
-    a bare restart must return to 20. The six-hour selection horizon does not
+    be explicitly set only from 20 through the authorized canary ceiling of 32;
+    32 remains a measured canary, not a durable default or proof that the
+    whole slate can fall back to REST. A bare restart must return to 20. The
+    six-hour selection horizon does not
     change. Early-exit loss
     (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
     (`(slots + 10) × size`), market loss (`4 × size`), both account sensors
@@ -632,9 +634,10 @@ These are implementation requirements, not suggestions.
     held-out interval, followed by explicit operator authorization.
 87. Host API admission may slow discovery but may not turn rate-limit recovery
     into an exit deadline. Every cooperating WSL process consumes one aggregate
-    4/second clock. Background selection/reporting has its own 2/second lane;
-    maker entry and cached revalidation have an independent 4/second entry lane;
-    account proof, cancels, passive reducers and IOC exits use safety. A 429
+    4/second clock. Background selection has its own 2/second lane; invariant
+    94 gives reporting a separate opportunistic lane; maker entry and cached
+    revalidation have an independent 4/second entry lane; account proof,
+    cancels, passive reducers and IOC exits use safety. A 429
     cools only its originating class, safety's own cooldown is at most one
     second, and no mutation retries. Non-safety reads publish cooldown and fail
     promptly instead of sleeping inline; later non-safety work with more than
@@ -731,3 +734,12 @@ These are implementation requirements, not suggestions.
     never prove closure or authorize replacement. After twelve consecutive
     unknown contract/incentive refresh failures, read retries back off from one
     minute to a bounded fifteen-minute ceiling without releasing ownership.
+94. Read-only analytics, reward reports and shadow measurements are
+    opportunistic API work. They must use the shared WSL coordinator's report
+    lane, wait until at least one aggregate request interval was unused, make
+    no more than one request every four seconds and publish only their own
+    cooldown. They may finish later within their reporting interval and may
+    never delay the background-discovery, entry or safety lane clocks. The
+    cached five-minute Discord summary and TV dashboard snapshot add no venue
+    request. Cancels, reducers, exits, account proof, reconciliation and
+    ambiguity recovery must never be demoted to report traffic.

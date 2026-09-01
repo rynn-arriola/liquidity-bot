@@ -54,7 +54,7 @@ async def main() -> int:
     now = datetime.now(timezone.utc)
     gateway = AsyncReadOnlyGateway(
         client_from_environment(), limiter=shared_api_limiter(),
-        default_traffic_class="background")
+        default_traffic_class="report")
     policy = CONFIG.reward_selection_policy()
     selection = await RewardMarketSelector(gateway, policy=policy).select(now=now)
 

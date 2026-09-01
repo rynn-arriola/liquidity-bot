@@ -118,6 +118,16 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertIn("SEARCH execution_orders", details)
         self.assertIn("idx_execution_orders_status", details)
 
+    def test_market_fill_lookup_uses_market_leading_index(self):
+        plan = self.ledger.query(
+            "EXPLAIN QUERY PLAN SELECT price,qty,fee,intent,event_at "
+            "FROM execution_fills WHERE reversed=0 AND market_slug=? "
+            "ORDER BY event_at,received_at,execution_id", ("market-one",))
+
+        details = " ".join(str(row["detail"]) for row in plan)
+        self.assertIn("SEARCH execution_fills", details)
+        self.assertIn("idx_execution_fills_market", details)
+
     def test_pre_submit_intent_survives_crash_and_is_idempotent(self):
         created = self.ledger.prepare_intent(
             "intent-one", "PLACE", "market-one", "client-one",
@@ -799,6 +809,29 @@ class RejectReasonTests(unittest.TestCase):
             "PRAGMA index_list(execution_orders)")}
         self.assertIn("idx_execution_orders_status", indexes)
 
+    def test_an_existing_database_gains_the_market_fill_index(self):
+        root = Path(tempfile.mkdtemp(prefix="fill-index-old-"))
+        path = root / "old.db"
+        legacy = sqlite3.connect(path)
+        legacy.execute(
+            "CREATE TABLE execution_fills (execution_id TEXT PRIMARY KEY,"
+            "client_order_id TEXT, exchange_order_id TEXT,"
+            "market_slug TEXT NOT NULL, side TEXT NOT NULL, price TEXT NOT NULL,"
+            "qty TEXT NOT NULL, fee TEXT NOT NULL, liquidity TEXT,"
+            "intent TEXT NOT NULL, event_at TEXT NOT NULL,"
+            "received_at TEXT NOT NULL, outcome TEXT, trade_id TEXT,"
+            "trade_state TEXT, reversed INTEGER NOT NULL DEFAULT 0,"
+            "reversed_at TEXT)")
+        legacy.commit()
+        legacy.close()
+
+        led = ExecutionLedger(path)
+        self.addCleanup(led.close)
+
+        indexes = {row["name"] for row in led.connection.execute(
+            "PRAGMA index_list(execution_fills)")}
+        self.assertIn("idx_execution_fills_market", indexes)
+
 
 class PairSettlementTests(unittest.TestCase):
     """Stored prices are LONG-frame, and a matched pair settles at one dollar."""
@@ -809,12 +842,14 @@ class PairSettlementTests(unittest.TestCase):
         self.addCleanup(led.close)
         return led
 
-    def fill(self, led, eid, side, intent, price, qty, fee="0"):
+    def fill(
+            self, led, eid, side, intent, price, qty, fee="0", *,
+            market="market-one", event_at=None):
+        event_at = event_at or datetime(2026, 8, 15, tzinfo=UTC)
         led.apply_execution(Execution(
-            execution_id=eid, market_slug="market-one", side=side,
+            execution_id=eid, market_slug=market, side=side,
             price=Decimal(price), qty=Decimal(qty), fee=Decimal(fee),
-            event_at=datetime(2026, 8, 15, tzinfo=UTC), intent=intent),
-            received_at=datetime(2026, 8, 15, tzinfo=UTC))
+            event_at=event_at, intent=intent), received_at=event_at)
 
     def test_a_round_trip_realises_the_pair_settlement(self):
         """BUY_SHORT at 0.33 costs 0.67 in the opposite outcome.
@@ -886,6 +921,73 @@ class PairSettlementTests(unittest.TestCase):
 
         self.assertEqual(
             led.realized_pnl("market-one", since=after), Decimal("0.45"))
+
+    def test_realized_by_market_matches_individual_market_replays(self):
+        led = self.ledger()
+        self.fill(led, "one-long", "ORDER_SIDE_BUY",
+                  "ORDER_INTENT_BUY_LONG", "0.40", "5")
+        self.fill(led, "one-short", "ORDER_SIDE_SELL",
+                  "ORDER_INTENT_BUY_SHORT", "0.50", "5", fee="0.05")
+        self.fill(led, "two-long", "ORDER_SIDE_BUY",
+                  "ORDER_INTENT_BUY_LONG", "0.55", "3",
+                  market="market-two")
+        self.fill(led, "two-short", "ORDER_SIDE_SELL",
+                  "ORDER_INTENT_BUY_SHORT", "0.40", "3",
+                  market="market-two")
+
+        by_market = led.realized_by_market()
+
+        self.assertEqual(by_market, {
+            "market-one": led.realized_pnl("market-one"),
+            "market-two": led.realized_pnl("market-two"),
+        })
+
+    def test_realized_by_market_is_empty_without_fill_history(self):
+        led = self.ledger()
+
+        self.assertEqual(led.realized_by_market(), {})
+
+    def test_realized_by_market_replays_old_basis_for_since_cutoff(self):
+        led = self.ledger()
+        before = datetime(2026, 8, 15, tzinfo=UTC)
+        after = before + timedelta(hours=1)
+        self.fill(led, "open", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.40", "5", event_at=before)
+        self.fill(led, "close", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.50", "5", fee="0.05", event_at=after)
+
+        self.assertEqual(
+            led.realized_by_market(since=after)["market-one"],
+            Decimal("0.45"))
+
+    def test_realized_by_market_keeps_an_all_reversed_market_at_zero(self):
+        led = self.ledger()
+        self.fill(led, "busted", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.40", "5", market="market-reversed")
+        with led.connection:
+            led.connection.execute(
+                "UPDATE execution_fills SET reversed=1 "
+                "WHERE execution_id='busted'")
+
+        self.assertEqual(
+            led.realized_by_market()["market-reversed"], Decimal("0"))
+
+    def test_realized_by_market_reads_the_fill_history_once(self):
+        led = self.ledger()
+        self.fill(led, "one", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.40", "5")
+        self.fill(led, "two", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.50", "5", market="market-two")
+        statements = []
+        led.connection.set_trace_callback(statements.append)
+        self.addCleanup(led.connection.set_trace_callback, None)
+
+        led.realized_by_market()
+
+        fill_reads = [statement for statement in statements
+                      if statement.lstrip().upper().startswith("SELECT")
+                      and "FROM EXECUTION_FILLS" in statement.upper()]
+        self.assertEqual(len(fill_reads), 1, fill_reads)
 
 
 class VenueBasisFallbackTests(unittest.TestCase):

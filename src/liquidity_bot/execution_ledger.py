@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS execution_fills (
     trade_state TEXT,
     reversed INTEGER NOT NULL DEFAULT 0,
     reversed_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_execution_fills_market
+    ON execution_fills(market_slug, reversed);
 CREATE TABLE IF NOT EXISTS execution_trade_states (
     trade_id TEXT PRIMARY KEY,
     market_slug TEXT NOT NULL,
@@ -1899,14 +1901,37 @@ class ExecutionLedger:
     def realized_by_market(
         self, *, since: datetime | None = None,
     ) -> dict[str, Decimal]:
-        """Realised P&L per market, for the per-market loss stop."""
+        """Realised P&L per market, for the per-market loss stop.
 
-        return {
-            str(row["market_slug"]): self.realized_pnl(
-                str(row["market_slug"]), since=since)
-            for row in self.query(
-                "SELECT DISTINCT market_slug FROM execution_fills")
-        }
+        Replay the ledger once for every market together.  Calling
+        ``realized_pnl(slug)`` for every historical slug scanned the complete
+        fill table once per market: the live ledger reached 1,048 markets and
+        3,697 fills, making each ten-second risk refresh read roughly 3.9
+        million rows.  One chronological pass is numerically identical because
+        inventory matching is market-local, while retaining zero-valued keys
+        for markets whose every fill was later reversed.
+        """
+
+        cutoff = _time(since, "since") if since is not None else None
+        inventories: dict[str, MatchedInventory] = {}
+        realized: dict[str, Decimal] = {}
+        for row in self.query(
+                "SELECT market_slug,price,qty,fee,intent,event_at,reversed "
+                "FROM execution_fills "
+                "ORDER BY event_at,received_at,execution_id"):
+            slug = str(row["market_slug"])
+            realized.setdefault(slug, Decimal("0"))
+            if int(row["reversed"] or 0) != 0:
+                continue
+            delta = inventories.setdefault(slug, MatchedInventory()).apply(
+                intent=str(row["intent"] or ""),
+                price=str(row["price"]),
+                quantity=str(row["qty"]),
+                fee=str(row["fee"] or 0),
+            )
+            if cutoff is None or str(row["event_at"]) >= cutoff:
+                realized[slug] += delta
+        return realized
 
     def fill_role_counts(self, *, since: datetime) -> tuple[int, int]:
         """Return owned (building fills, reducing fills) since a timestamp.

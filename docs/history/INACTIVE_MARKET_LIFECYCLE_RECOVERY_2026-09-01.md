@@ -82,3 +82,22 @@ failures do not masquerade as closure, and unrelated positions retain their
 ordinary deadline priority. Roll back on a dropped owner, unreserved exposure,
 mutation on confirmed non-open metadata, missed reopened exit, unknown-data slot
 release or lower unrelated resting coverage.
+
+## Deployment and initial acceptance
+
+Reviewed commit `13ecc441b` was pushed, fast-forwarded into the stopped laptop
+WSL checkout and passed all 1,038 exact deployed tests in 72.254 seconds. The
+deployed marker was advanced only after source/hash proof. Graceful stop had
+ended conservatively `flat=false`; that record was not treated as flat. A later
+independent authenticated read proved zero venue orders and positions, while
+the ledger proved zero unresolved intents and `UNKNOWN_ABSENT` orders, before
+one size-10/24 runner started.
+
+The loaded lifecycle path requested refill, released four ended owners and
+added viable replacements without producing the old recurring
+`market_incentive_refresh ... is not open` runtime-error loop. Authenticated
+acceptance at 16:02Z found 17 orders across 17 markets and zero positions while
+the runner published a 19-owner `RUNNING` scope during continued refill. The
+first post-mutation API window completed 187 attempts including 17 creates with
+zero failures, rate limits or cooldown. No exact inactive position existed, so
+mutation-free wait, reopening and flat-release acceptance remain natural-only.

@@ -82,3 +82,20 @@ owners refill, P&L/stop values remain consistent, and API windows show no new
 failure/rate-limit fan-out. Roll back on changed quote economics, dropped risk
 ownership, unknown-data release, missed legal exit, persistent lower resting
 coverage, increased `execution_state_unknown` or parity integrity disagreement.
+
+## Deployment and initial live result
+
+GitHub, WSL and the deployed marker now name `13ecc441b`. The exact deployed
+WSL suite passed 1,038/1,038 in 72.254 seconds. The restart gate used fresh
+authenticated zero-order/zero-position proof and zero unresolved/unknown
+ownership; it did not rely on the preceding conservative `flat=false` terminal
+record. Exactly one size-10/24 supervisor/runner pair started.
+
+Initial loaded evidence is consistent with the review: active scope was
+`RUNNING`; authenticated state showed 17 orders across 17 markets and zero
+positions during a 19-owner refill; exact lifecycle top-up released four ended
+owners; and the first post-mutation API window had 187 attempts, 17 creates,
+zero failures, zero 429s and zero cooldown. No change to healthy quote output or
+risk limits was observed. Positioned inactive wait, UI maintenance transition,
+one-sided recovery and steady-state performance remain natural acceptance items
+rather than induced tests.

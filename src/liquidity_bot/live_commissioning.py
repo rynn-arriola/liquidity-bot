@@ -156,6 +156,10 @@ DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
 # one market before that market is retired instead of retried forever.
 MAX_RECOVERY_ATTEMPTS = 12
 
+
+class _ConfirmedMarketNotOpen(CommissioningUnavailable):
+    """Exact fetched metadata says the owner cannot currently accept orders."""
+
 # Ordinary reconnects are bounded so a local/schema defect cannot hold a live
 # process dormant forever. Positively classified venue transport/5xx outages
 # cross into the maintenance coordinator below instead. Neither path infers
@@ -207,6 +211,7 @@ DECISION_SCHEDULER_LOG_SECONDS = 60.0
 # same eight owners as one private shard. A short look-ahead coalesces timers
 # that were previously staggered by serial REST completion.
 CONTRACT_REFRESH_SECONDS = 60.0
+CONTRACT_REFRESH_MAX_BACKOFF_SECONDS = 900.0
 SETTLEMENT_WAIT_BOOK_REFRESH_SECONDS = 60.0
 CONTRACT_REFRESH_BATCH_SIZE = 8
 CONTRACT_REFRESH_LOOKAHEAD_SECONDS = 5.0
@@ -541,6 +546,13 @@ class CommissioningRunner:
         # owner prevents it from disabling unrelated reward work without ever
         # pretending the position is flat.
         self._settlement_wait_slugs: set[str] = set()
+        # Exact bot-owned positions whose freshly fetched market metadata says
+        # closed, inactive or another explicit non-open state. The venue cannot
+        # accept even a reducing payload in that state. Keep the owner inside
+        # account/private monitoring and configured risk, but do not repeatedly
+        # manufacture locally rejected IOC intents while waiting for either an
+        # authoritative flat snapshot or fresh open metadata.
+        self._inactive_market_wait_slugs: set[str] = set()
         self._active_market_slugs: tuple[str, ...] = (
             () if config.auto_select_reward_markets
             else (config.market_slug,))
@@ -747,12 +759,12 @@ class CommissioningRunner:
             slug for slug in slugs
             if slug and slug != AUTO_REWARD_MARKET))
         stranded = sorted(
-            slug for slug in self._settlement_wait_slugs
+            slug for slug in self._isolated_unexecutable_slugs()
             if self.ledger.position(slug) != 0 and slug not in clean)
         if stranded:
             raise RuntimeInvariantViolation(
-                "settlement_wait_owner_dropped",
-                "active scope cannot drop a nonzero settlement-wait owner: "
+                "unexecutable_wait_owner_dropped",
+                "active scope cannot drop a nonzero unexecutable owner: "
                 + ", ".join(stranded))
         if len(clean) > self.config.max_markets:
             raise RuntimeInvariantViolation(
@@ -1033,6 +1045,43 @@ class CommissioningRunner:
             accept_bound_lifecycle_end=accept_bound_lifecycle_end,
         )
 
+    @staticmethod
+    def _market_metadata_proves_not_open(market: MarketMetadata | None) -> bool:
+        """Return true only for an explicit response-backed lifecycle state."""
+
+        if market is None:
+            return False
+        status = getattr(market, "status", None)
+        return (
+            getattr(market, "closed", False) is True
+            or getattr(market, "active", True) is False
+            or (bool(status) and status not in OPEN_MARKET_STATUSES)
+        )
+
+    def _request_lifecycle_top_up(self, now: datetime) -> None:
+        """Schedule one incremental scan without authorizing a slot release."""
+
+        if self._lifecycle_top_up_requested_at is not None:
+            return
+        self._lifecycle_top_up_requested_at = now
+        print(
+            f"[top-up-request] at={now.isoformat()} reason=lifecycle",
+            flush=True,
+        )
+
+    def _contract_refresh_delay(self, slug: str) -> float:
+        """Back off repeated unknown refresh failures without inferring closure."""
+
+        attempt = self._runtime_error_counts.get(
+            f"market_incentive_refresh:{slug}", 0)
+        if attempt < MAX_RECOVERY_ATTEMPTS:
+            return CONTRACT_REFRESH_SECONDS
+        exponent = min(attempt - MAX_RECOVERY_ATTEMPTS + 1, 4)
+        return min(
+            CONTRACT_REFRESH_SECONDS * (2 ** exponent),
+            CONTRACT_REFRESH_MAX_BACKOFF_SECONDS,
+        )
+
     def _apply_contracts(
         self,
         state: MarketState,
@@ -1051,14 +1100,23 @@ class CommissioningRunner:
                 f"contract batch returned {market.slug} for {slug}")
         state.market = market
         state.incentive = incentive
+        if self._market_metadata_proves_not_open(market):
+            state.incentive = None
+            state.reward_eligible = frozenset()
+            state.clear_economics()
+            if accept_bound_lifecycle_end:
+                self._request_lifecycle_top_up(now)
+            if self._enter_inactive_market_wait(slug, now):
+                return
+            if for_exit:
+                return
+            raise _ConfirmedMarketNotOpen(f"{slug} is not open")
+        self._leave_inactive_market_wait(slug, now, "market_open")
         if for_exit:
             return
         if state.incentive is None:
             raise CommissioningUnavailable(
                 f"{slug} has no liquidityProgram incentive")
-        if (not state.market.active or state.market.closed
-                or state.market.status not in OPEN_MARKET_STATUSES):
-            raise CommissioningUnavailable(f"{slug} is not open")
         if state.market.game_start is None:
             raise CommissioningUnavailable(
                 f"{slug} start clock is unavailable")
@@ -1067,13 +1125,7 @@ class CommissioningRunner:
                 state.incentive = None
                 state.reward_eligible = frozenset()
                 state.clear_economics()
-                if self._lifecycle_top_up_requested_at is None:
-                    self._lifecycle_top_up_requested_at = now
-                    print(
-                        f"[top-up-request] at={now.isoformat()} "
-                        "reason=lifecycle",
-                        flush=True,
-                    )
+                self._request_lifecycle_top_up(now)
                 return
             raise CommissioningUnavailable(f"{slug} is no longer pregame")
         try:
@@ -1153,7 +1205,7 @@ class CommissioningRunner:
                     await self._report_runtime_error(
                         f"market_incentive_refresh:{slug}", exc)
                     state.next_contract_refresh = self._now() + timedelta(
-                        seconds=CONTRACT_REFRESH_SECONDS)
+                        seconds=self._contract_refresh_delay(slug))
                 continue
             completed_at = self._now()
             for slug in chunk:
@@ -1173,13 +1225,25 @@ class CommissioningRunner:
                     )
                     self._runtime_error_counts.pop(
                         f"market_incentive_refresh:{slug}", None)
+                except _ConfirmedMarketNotOpen:
+                    # Positive lifecycle evidence schedules a top-up above. It
+                    # is not a failed API read and must not consume the error
+                    # budget or be labeled as a Discord runtime failure.
+                    state.incentive = None
+                    state.reward_eligible = frozenset()
+                    self._runtime_error_counts.pop(
+                        f"market_incentive_refresh:{slug}", None)
                 except Exception as exc:
                     state.incentive = None
                     state.reward_eligible = frozenset()
                     await self._report_runtime_error(
                         f"market_incentive_refresh:{slug}", exc)
                 state.next_contract_refresh = self._now() + timedelta(
-                    seconds=CONTRACT_REFRESH_SECONDS)
+                    seconds=(
+                        CONTRACT_REFRESH_SECONDS
+                        if f"market_incentive_refresh:{slug}"
+                        not in self._runtime_error_counts
+                        else self._contract_refresh_delay(slug)))
 
     async def _refresh_book(
         self, now: datetime, slug: str | None = None,
@@ -1548,6 +1612,7 @@ class CommissioningRunner:
         due_before = now + timedelta(
             seconds=CONTRACT_REFRESH_LOOKAHEAD_SECONDS)
         selected: list[str] = []
+        isolated = self._isolated_unexecutable_slugs()
         for slug in managed:
             if slug not in self._markets:
                 # Risk discovered outside selection is exit-only, but it still
@@ -1555,15 +1620,16 @@ class CommissioningRunner:
                 self.state_for(slug)
             state = self._markets[slug]
             due = slug in self._dirty_market_slugs or (
-                slug in positions and slug not in self._settlement_wait_slugs)
+                slug in positions and slug not in isolated)
             decision_at = self._next_decision_at.get(slug)
             due = due or (decision_at is not None and now >= decision_at)
             due = due or (
                 state.next_contract_refresh is None
                 or state.next_contract_refresh <= due_before)
-            due = due or (
-                state.next_book_refresh is None
-                or now >= state.next_book_refresh)
+            if slug not in self._inactive_market_wait_slugs:
+                due = due or (
+                    state.next_book_refresh is None
+                    or now >= state.next_book_refresh)
             retired = self._retired.get(slug)
             due = due or bool(
                 retired is not None
@@ -1585,7 +1651,7 @@ class CommissioningRunner:
             self._scheduler_markets_seen += len(managed)
             self._scheduler_markets_skipped += len(managed) - len(selected)
             self._scheduler_position_evaluations += sum(
-                slug in positions and slug not in self._settlement_wait_slugs
+                slug in positions and slug not in isolated
                 for slug in selected)
         return tuple(selected)
 
@@ -1999,6 +2065,8 @@ class CommissioningRunner:
             as_of=now, observed_at=now, complete_account=True)
         if self._settlement_wait_slugs:
             self._sync_settlement_wait_positions(self._now())
+        if self._inactive_market_wait_slugs:
+            self._sync_inactive_market_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
         self._record_resolved_intent_owners(unresolved_owners)
@@ -2091,6 +2159,8 @@ class CommissioningRunner:
         self.projector.apply(event, received_at=received_at)
         if self._settlement_wait_slugs:
             self._sync_settlement_wait_positions(self._now())
+        if self._inactive_market_wait_slugs:
+            self._sync_inactive_market_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
         self._record_resolved_intent_owners(unresolved_owners)
@@ -2205,6 +2275,64 @@ class CommissioningRunner:
             return False
         return bool(working or nonzero)
 
+    def _isolated_unexecutable_slugs(self) -> set[str]:
+        """Exact nonzero owners that currently have no legal mutation path."""
+
+        return set(self._settlement_wait_slugs) | set(
+            self._inactive_market_wait_slugs)
+
+    def _can_wait_for_inactive_market(self, slug: str) -> bool:
+        """Whether exact metadata and ownership justify mutation-free waiting."""
+
+        if slug not in set(self.active_slugs) or not self.ledger.risk_state_known():
+            return False
+        position = self.ledger.position(slug)
+        if position == 0:
+            return False
+        if (self.ledger.working_orders(slug)
+                or self.ledger.absent_orders(slug)
+                or self.ledger.market_has_unresolved_intent(slug)):
+            return False
+        basis = self.ledger.inventory_basis(slug)
+        if basis is None or basis.net_qty != position:
+            return False
+        state = self._markets.get(slug)
+        return self._market_metadata_proves_not_open(
+            getattr(state, "market", None))
+
+    def _enter_inactive_market_wait(self, slug: str, now: datetime) -> bool:
+        """Isolate one exact position while fresh metadata refuses all orders."""
+
+        if not self._can_wait_for_inactive_market(slug):
+            return False
+        state = self.state_for(slug)
+        state.incentive = None
+        state.reward_eligible = frozenset()
+        state.clear_economics()
+        first = slug not in self._inactive_market_wait_slugs
+        self._inactive_market_wait_slugs.add(slug)
+        if first:
+            print(
+                f"[inactive-market-wait] at={now.isoformat()} market={slug} "
+                f"position={self.ledger.position(slug)} state=entered "
+                "metadata=not_open capacity_reserved=1",
+                flush=True,
+            )
+        return True
+
+    def _leave_inactive_market_wait(
+        self, slug: str, now: datetime, reason: str,
+    ) -> None:
+        if slug not in self._inactive_market_wait_slugs:
+            return
+        self._inactive_market_wait_slugs.remove(slug)
+        self._mark_market_dirty(slug, now)
+        print(
+            f"[inactive-market-wait] at={now.isoformat()} market={slug} "
+            f"position={self.ledger.position(slug)} state=left reason={reason}",
+            flush=True,
+        )
+
     def _can_wait_for_settlement(self, slug: str, now: datetime) -> bool:
         """Whether one exact owner may be isolated without claiming flat.
 
@@ -2276,6 +2404,22 @@ class CommissioningRunner:
             if self._lifecycle_top_up_requested_at is None:
                 self._lifecycle_top_up_requested_at = now
 
+    def _sync_inactive_market_wait_positions(self, now: datetime) -> None:
+        """Release only owners whose authoritative position became zero."""
+
+        for slug in tuple(self._inactive_market_wait_slugs):
+            if self.ledger.position(slug) != 0:
+                continue
+            self._leave_inactive_market_wait(slug, now, "position_flat")
+            self._request_lifecycle_top_up(now)
+
+    def _can_wait_unexecutable(self, slug: str, now: datetime) -> bool:
+        if slug in self._settlement_wait_slugs:
+            return self._can_wait_for_settlement(slug, now)
+        if slug in self._inactive_market_wait_slugs:
+            return self._can_wait_for_inactive_market(slug)
+        return False
+
     def _startup_settlement_wait_is_scoped(
         self, blockers: tuple[str, ...], now: datetime,
     ) -> bool:
@@ -2291,9 +2435,9 @@ class CommissioningRunner:
         }
         return (
             bool(nonzero)
-            and nonzero == self._settlement_wait_slugs
+            and nonzero == self._isolated_unexecutable_slugs()
             and self.ledger.risk_state_known()
-            and all(self._can_wait_for_settlement(slug, now)
+            and all(self._can_wait_unexecutable(slug, now)
                     for slug in nonzero)
         )
 
@@ -2304,7 +2448,7 @@ class CommissioningRunner:
 
         if (not self.config.auto_select_reward_markets
                 or self.reward_selector is None
-                or not self._settlement_wait_slugs):
+                or not self._isolated_unexecutable_slugs()):
             return
         available = self.config.max_markets - len(self.active_slugs)
         if available <= 0:
@@ -2539,11 +2683,11 @@ class CommissioningRunner:
         # reporting set that now outlives the bar it used to imply, and a
         # control decision must not read from it.
         await self._refresh_bound_books(now)
-        if self._settlement_wait_slugs:
-            # A response-backed empty post-kickoff book has no price with
-            # which recovery could flatten. Keep that exact owner isolated,
-            # then use only the remaining configured slots. A failed/no-viable
-            # scan leaves the position monitor alive and is retried later.
+        if self._isolated_unexecutable_slugs():
+            # A response-backed empty book or exact non-open market has no
+            # legal mutation path. Keep each exact owner isolated, then use
+            # only the remaining configured slots. A failed/no-viable scan
+            # leaves every position monitor alive and is retried later.
             await self._add_startup_markets_around_settlement_wait(self._now())
             await self._refresh_bound_books(self._now())
         # A singleton private subscription makes the documented position
@@ -2643,11 +2787,21 @@ class CommissioningRunner:
                 f"{self._market_selection.unsupported_programs} programs used "
                 "an unsupported or undocumented lifecycle and remained read-only.")
         if settlement_wait_trade:
-            selection_note += (
-                f" {len(self._settlement_wait_slugs)} exact post-kickoff "
-                "position(s) have no executable book and remain quarantined "
-                "for settlement/book recovery; each reserves one configured "
-                "slot and its full portfolio exposure.")
+            empty_count = len(self._settlement_wait_slugs)
+            inactive_count = len(self._inactive_market_wait_slugs)
+            if inactive_count == 0:
+                selection_note += (
+                    f" {empty_count} exact post-kickoff position(s) have no "
+                    "executable book and remain quarantined for "
+                    "settlement/book recovery; each reserves one configured "
+                    "slot and its full portfolio exposure.")
+            else:
+                selection_note += (
+                    f" {empty_count + inactive_count} exact position(s) remain "
+                    "mutation-free while unexecutable "
+                    f"(empty_book={empty_count}, not_open={inactive_count}); "
+                    "each reserves one configured slot and its full portfolio "
+                    "exposure.")
         # Built from config, never from literals. This announced "one market,
         # one contract per quote, $5 soft stop, $15 hard stop" long after every
         # one of those had changed -- four wrong facts as the operator's first
@@ -4928,19 +5082,20 @@ class CommissioningRunner:
                 self._dirty_market_slugs.discard(slug)
                 self._dirty_market_since.pop(slug, None)
                 continue
-            if slug in self._settlement_wait_slugs:
+            if slug in self._isolated_unexecutable_slugs():
                 now = self._now()
-                if self._can_wait_for_settlement(slug, now):
-                    # No valid book means there is no priceable decision. The
-                    # owner is still serviced by complete account snapshots,
-                    # its private position subscription and the bounded book
-                    # timer; counting a no-book frame as planned would only
-                    # manufacture a recurring strategy failure.
+                if self._can_wait_unexecutable(slug, now):
+                    # No valid mutation path exists. The owner is still
+                    # serviced by complete account snapshots, its private
+                    # position subscription and one bounded recovery timer;
+                    # planning would only manufacture a recurring failure.
                     self._dirty_market_slugs.discard(slug)
                     self._dirty_market_since.pop(slug, None)
                     self._scheduler_markets_skipped += 1
                     continue
                 self._leave_settlement_wait(
+                    slug, now, "isolation_preconditions_changed")
+                self._leave_inactive_market_wait(
                     slug, now, "isolation_preconditions_changed")
             now = self._now()
             due_at = self._next_decision_at.get(slug)
@@ -5137,6 +5292,12 @@ class CommissioningRunner:
             try:
                 await self._refresh_contracts(
                     now, slug, for_exit=slug in recovering)
+                if slug in self._inactive_market_wait_slugs:
+                    # Fresh metadata already proved that no order payload can
+                    # be accepted. A book cannot change that authority; the
+                    # bounded contract refresh is the recovery probe.
+                    healthy.append(slug)
+                    continue
                 await self._refresh_book(now, slug)
                 if slug not in recovering:
                     self._validate_entry_book(slug)
@@ -5238,6 +5399,11 @@ class CommissioningRunner:
                 )
                 self._runtime_error_counts.pop(
                     f"market_incentive_refresh:{slug}", None)
+            except _ConfirmedMarketNotOpen:
+                state.incentive = None
+                state.reward_eligible = frozenset()
+                self._runtime_error_counts.pop(
+                    f"market_incentive_refresh:{slug}", None)
             except Exception as exc:
                 # Only this market stops quoting. The others are unaffected.
                 state.incentive = None
@@ -5245,7 +5411,19 @@ class CommissioningRunner:
                 await self._report_runtime_error(
                     f"market_incentive_refresh:{slug}", exc)
             state.next_contract_refresh = self._now() + timedelta(
-                seconds=CONTRACT_REFRESH_SECONDS)
+                seconds=(
+                    CONTRACT_REFRESH_SECONDS
+                    if f"market_incentive_refresh:{slug}"
+                    not in self._runtime_error_counts
+                    else self._contract_refresh_delay(slug)))
+        if (slug in self._inactive_market_wait_slugs
+                or (self._market_metadata_proves_not_open(state.market)
+                    and self._owner_is_flat_and_clear(slug))):
+            # Contract metadata, not book depth, is the missing authority. A
+            # flat clear owner is already queued for replacement; an exact
+            # positioned owner is isolated above. The next scheduled contract
+            # refresh is the only useful recovery read for either state.
+            return
         # Keep the book last among this market's REST work so metadata latency
         # cannot age the book before the decision that follows.
         try:
@@ -6007,13 +6185,8 @@ class CommissioningRunner:
         market = getattr(state, "market", None)
         if market is None:
             return False
-        status = getattr(market, "status", None)
-        positively_closed = (
-            getattr(market, "closed", False) is True
-            or getattr(market, "active", True) is False
-            or (bool(status) and status not in OPEN_MARKET_STATUSES)
-        )
-        return positively_closed and self._owner_is_flat_and_clear(slug)
+        return (self._market_metadata_proves_not_open(market)
+                and self._owner_is_flat_and_clear(slug))
 
     def _reward_authorization_lost_and_flat(
         self, slug: str, now: datetime,
@@ -6095,11 +6268,12 @@ class CommissioningRunner:
         for slug in self.active_slugs:
             if self.ledger.position(slug) == 0:
                 continue
-            if slug in self._settlement_wait_slugs:
-                # There is no executable price to miss. The top-up path keeps
+            if slug in self._isolated_unexecutable_slugs():
+                # There is no legal mutation to miss. The top-up path keeps
                 # the old streams open through discovery, then performs its
                 # normal complete account proof and fresh-stream handoff. A
-                # later book removes this exception before exit planning.
+                # later book/open status removes this exception before exit
+                # planning.
                 continue
             state = self._markets.get(slug)
             start = getattr(getattr(state, "market", None), "game_start", None)
@@ -7366,6 +7540,7 @@ class CommissioningRunner:
         moment = now or self._now()
         return (set(self._retired)
                 | set(self._recovery_slugs)
+                | set(self._inactive_market_wait_slugs)
                 | {slug for slug, until in self._retired_until.items()
                    if until > moment})
 
@@ -7831,7 +8006,7 @@ class CommissioningRunner:
     def _only_settlement_wait_positions_remain(self, now: datetime) -> bool:
         """Whether shutdown has isolated every remaining nonflat owner."""
 
-        waiting = set(self._settlement_wait_slugs)
+        waiting = self._isolated_unexecutable_slugs()
         if (not waiting
                 or self.ledger.unresolved_intents()
                 or self.ledger.absent_orders()):
@@ -7841,7 +8016,7 @@ class CommissioningRunner:
                 return False
             position = self.ledger.position(slug)
             if slug in waiting:
-                if position == 0 or not self._can_wait_for_settlement(slug, now):
+                if position == 0 or not self._can_wait_unexecutable(slug, now):
                     return False
             elif position != 0:
                 return False
@@ -7926,7 +8101,7 @@ class CommissioningRunner:
                 # events. Apply those before falling back to REST reads.
                 await self._drain_private_events()
                 await self._rest_reconcile(now)
-                if (self._settlement_wait_slugs
+                if (self._isolated_unexecutable_slugs()
                         and self._only_settlement_wait_positions_remain(
                             self._now())):
                     # All mutable state is gone and the remaining positions
@@ -7934,7 +8109,7 @@ class CommissioningRunner:
                     # minutes cannot improve safety; stop promptly while
                     # reporting nonflat truth. A later explicitly authorized
                     # start reconstructs and monitors the same exact owners.
-                    waiting = sorted(self._settlement_wait_slugs)
+                    waiting = sorted(self._isolated_unexecutable_slugs())
                     self._shutdown_proved_flat = False
                     await self._refresh_balance(now)
                     self._accrue_score(now)
@@ -7942,7 +8117,7 @@ class CommissioningRunner:
                     await self.notifier.send_async(
                         f"⚠️ Liquidity Bot LIVE stopped after {reason} with "
                         f"{len(waiting)} exact position(s) quarantined for "
-                        "book recovery or settlement: "
+                        "market reopening, book recovery or settlement: "
                         f"{', '.join(waiting)}. The account is not flat; no "
                         "order remains and no position was ignored.",
                         critical=True)

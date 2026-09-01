@@ -95,9 +95,9 @@ These are implementation requirements, not suggestions.
 26. A restart may mutate only persisted, identified orders/positions in the
     ledger-selected recovery markets inside configured capacity, and then only
     to reduce risk or recover flat. Unowned or out-of-scope state refuses
-    without mutation. Invariant 91's exact settlement-wait owner is monitored
-    but never mutated until an executable book returns it to this ordinary
-    recovery path.
+    without mutation. Invariants 91 and 93's exact unexecutable owners are
+    monitored but never mutated until a valid book or open market status
+    returns them to this ordinary recovery path.
 27. `SIGTERM` and `SIGINT` are graceful operator-stop requests. They enter
     market-scoped cancel/flatten/reconcile rather than terminate immediately.
 28. Only explicitly classified transport/adapter failures and transient stale
@@ -120,7 +120,7 @@ These are implementation requirements, not suggestions.
     exit 3 for immediate operator inspection. Until that deadline it keeps
     reconciling and uses any remaining exit attempt when a safe exact-position
     IOC is available; it never holds a position while silent. If every
-    remaining nonzero owner already satisfies invariant 91, a fresh complete
+    remaining nonzero owner already satisfies invariant 91 or 93, a fresh complete
     reconciliation proves no working/absent order or unresolved intent, and no
     executable price exists, shutdown may end promptly with explicit nonflat
     truth instead of repeating an impossible price search. Exit 3 and operator
@@ -669,7 +669,8 @@ These are implementation requirements, not suggestions.
     900-second clock, and this rule may not change entry selection, capacity,
     risk limits or API cadence.
 90. Decision scheduling may skip only a flat market whose decision inputs and
-    owned timers are unchanged, except invariant 91's exact unpriceable owner.
+    owned timers are unchanged, except invariants 91 and 93's exact
+    unexecutable owners.
     Every other nonzero position is serviced and planned every outer pass,
     including retired risk, so reducers, the durable inventory clock and
     pre-kickoff flatten are unconditional. Exact book,
@@ -711,3 +712,22 @@ These are implementation requirements, not suggestions.
     credential, makes no venue API call or mutation, is bounded and runs off
     the event loop. Neither signal may prove flatness, cancellation, ownership,
     settlement, account health or permission to restart.
+93. A freshly fetched exact market row that is closed, inactive or carries an
+    explicit non-open status is lifecycle evidence, not a failed incentive
+    read. A flat, working/absent-order-free and unresolved-intent-free owner may
+    only be released through invariant 76's complete incremental top-up
+    transaction and fresh exact pre-commit recheck; startup still rejects an
+    ordinary non-open candidate. A nonzero owner may enter inactive-market wait
+    only when it remains in the configured active scope, whole-account risk is
+    known, persisted bot-owned basis exactly matches the position, and no
+    working/absent order or unresolved intent exists. It remains barred from
+    quoting, reserves one configured slot and its full portfolio exposure,
+    retains private/account monitoring, and probes fresh contract metadata no
+    faster than the normal 60-second cadence. No book or order mutation can
+    override a non-open contract. Fresh open metadata returns the owner to the
+    unchanged reducer/IOC path; authoritative flat proof requests slot release;
+    any ambiguity removes the wait exception and returns to ordinary fail-closed
+    recovery. Transport, schema, missing-market and missing-incentive failures
+    never prove closure or authorize replacement. After twelve consecutive
+    unknown contract/incentive refresh failures, read retries back off from one
+    minute to a bounded fifteen-minute ceiling without releasing ownership.

@@ -5935,6 +5935,153 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         mode = await runner.preflight()
         return runner, client, notifier, selector, original_book, mode
 
+    async def _start_with_inactive_market_wait(self):
+        selector = FakeRewardSelector(
+            multi_selection("market-two", "market-three"))
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        original_market = client.markets.retrieve_by_slug
+
+        async def inactive_market(slug):
+            response = await original_market(slug)
+            if slug == "market-one":
+                response["market"].update({
+                    "active": False,
+                    "closed": True,
+                    "status": "MARKET_STATUS_CLOSED",
+                })
+            return response
+
+        client.markets.retrieve_by_slug = inactive_market
+        client.portfolio.rows["market-one"] = {
+            "netPosition": "1",
+            "netPositionDecimal": "1.0000",
+            "cost": {"value": "0.49", "currency": "USD"},
+            "cashValue": {"value": "0.48", "currency": "USD"},
+            "updateTime": NOW.isoformat(),
+        }
+        mode = await runner.preflight()
+        return runner, client, notifier, selector, original_market, mode
+
+    async def test_inactive_owned_position_waits_without_impossible_order(self):
+        """Exact non-open metadata isolates risk without dropping its owner."""
+
+        (runner, client, _notifier, selector, _market, mode) = (
+            await self._start_with_inactive_market_wait())
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner._inactive_market_wait_slugs, {"market-one"})
+        self.assertIn("market-one", runner.active_slugs)
+        with self.assertRaisesRegex(
+                RuntimeInvariantViolation,
+                "active scope cannot drop a nonzero unexecutable owner"):
+            runner._bind_markets(("market-two",))
+        self.assertEqual(len(selector.calls), 1)
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertFalse(
+            runner._position_near_its_flatten_deadline(runner._now()))
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        return_value=(None, 0.0))) as decide:
+            outcome = await runner._decision_sweep(
+                ("market-one", "market-two"))
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            [call.args[0] for call in decide.await_args_list], ["market-two"])
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_inactive_market_reopening_restores_the_exit_path(self):
+        runner, client, _notifier, _selector, original_market, _mode = (
+            await self._start_with_inactive_market_wait())
+        client.markets.retrieve_by_slug = original_market
+
+        await runner._refresh_contracts(
+            runner._now(), "market-one", for_exit=True)
+        await runner._refresh_book(runner._now(), "market-one")
+        actions = runner.reconciler.plan(
+            runner._frame(runner._now(), "market-one"))
+
+        self.assertNotIn("market-one", runner._inactive_market_wait_slugs)
+        self.assertTrue(actions)
+        self.assertTrue(all(action.side == "offer" for action in actions))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_inactive_market_wait_requires_clear_order_ownership(self):
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        runner.ledger.apply_execution(Execution(
+            execution_id="inactive-held",
+            client_order_id="liquidity-inactive-held",
+            exchange_order_id="inactive-held-order",
+            market_slug="market-one",
+            side="BUY",
+            price=Decimal("0.49"),
+            qty=Decimal("1"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=runner._now(),
+        ), received_at=runner._now())
+        runner.state_for("market-one").market = replace(
+            runner.market,
+            active=False,
+            closed=True,
+            status="MARKET_STATUS_CLOSED",
+        )
+        runner.ledger.prepare_intent(
+            "inactive-ambiguous", "PLACE", "market-one", "client-one", {},
+            created_at=runner._now())
+
+        self.assertFalse(runner._can_wait_for_inactive_market("market-one"))
+        self.assertFalse(
+            runner._enter_inactive_market_wait("market-one", runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_inactive_market_flat_snapshot_releases_reserved_slot(self):
+        runner, _client, _notifier, _selector, _market, _mode = (
+            await self._start_with_inactive_market_wait())
+        runner._lifecycle_top_up_requested_at = None
+        flattened_at = runner._now()
+
+        runner.ledger.apply_position_snapshot(
+            "inactive-flat",
+            (),
+            as_of=flattened_at,
+            observed_at=flattened_at,
+            complete_account=True,
+        )
+        runner._sync_inactive_market_wait_positions(flattened_at)
+
+        self.assertNotIn("market-one", runner._inactive_market_wait_slugs)
+        self.assertEqual(
+            runner._lifecycle_top_up_requested_at, flattened_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_inactive_market_wait_shutdown_reports_nonflat_without_mutation(self):
+        runner, client, notifier, _selector, _market, _mode = (
+            await self._start_with_inactive_market_wait())
+        runner._refresh_balance = AsyncMock()
+        runner._send_summary = AsyncMock()
+
+        await runner._shutdown("operator_sigterm")
+
+        self.assertFalse(runner._shutdown_proved_flat)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertTrue(any(
+            critical and "account is not flat" in message.lower()
+            for message, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_post_kickoff_empty_recovery_book_isolated_while_others_trade(self):
         """One exact unpriceable position must not disable every safe slot."""
 
@@ -10021,6 +10168,74 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_confirmed_not_open_refresh_requests_top_up_without_error(self):
+        """A lifecycle response is replacement evidence, not a failed read."""
+
+        runner = await self.armed(replacements=("market-two",))
+        slug = runner.market_slug
+        now = runner._now()
+        state = runner.state_for(slug)
+        state.next_contract_refresh = None
+        runner._lifecycle_top_up_requested_at = None
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.closed_metadata(slug, now))
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(return_value={
+            slug: self.closed_metadata(slug, now)})
+        runner.gateway.fetch_incentives = AsyncMock(return_value={
+            slug: state.incentive})
+
+        with self.assertRaisesRegex(
+                CommissioningUnavailable, "is not open"):
+            await runner._refresh_contracts(now, slug)
+        self.assertIsNone(runner._lifecycle_top_up_requested_at)
+
+        await runner._refresh_due_contract_batches(now, (slug,))
+
+        self.assertIsNotNone(runner._lifecycle_top_up_requested_at)
+        self.assertNotIn(
+            f"market_incentive_refresh:{slug}", runner._runtime_error_counts)
+        self.assertTrue(runner._incremental_top_up_due(
+            runner._now(), runner._now() + timedelta(hours=1)))
+        runner._refresh_quiet_book_if_due = AsyncMock()
+        await runner._service_market_state(slug, runner._now())
+        runner._refresh_quiet_book_if_due.assert_not_awaited()
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_unknown_contract_failures_back_off_without_releasing_owner(self):
+        """Repeated missing data saves REST budget but never proves closure."""
+
+        runner = await self.armed(replacements=("market-two",))
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.next_contract_refresh = None
+        key = f"market_incentive_refresh:{slug}"
+        runner._runtime_error_counts[key] = MAX_RECOVERY_ATTEMPTS - 1
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(
+            side_effect=AdapterError("temporary metadata failure"))
+        before = runner._now()
+
+        await runner._refresh_due_contract_batches(before, (slug,))
+
+        self.assertEqual(runner._runtime_error_counts[key], MAX_RECOVERY_ATTEMPTS)
+        self.assertGreaterEqual(
+            (state.next_contract_refresh - runner._now()).total_seconds(), 119)
+        self.assertIsNone(runner._lifecycle_top_up_requested_at)
+        self.assertIn(slug, runner.active_slugs)
+        expected_delays = {
+            MAX_RECOVERY_ATTEMPTS: 120.0,
+            MAX_RECOVERY_ATTEMPTS + 1: 240.0,
+            MAX_RECOVERY_ATTEMPTS + 2: 480.0,
+            MAX_RECOVERY_ATTEMPTS + 3: 900.0,
+            MAX_RECOVERY_ATTEMPTS + 20: 900.0,
+        }
+        for attempt, expected in expected_delays.items():
+            runner._runtime_error_counts[key] = attempt
+            self.assertEqual(
+                runner._contract_refresh_delay(slug), expected)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_closed_owner_with_position_is_never_released(self):
         from liquidity_bot.execution_ledger import PositionState
 
@@ -10034,6 +10249,53 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
             received_at=runner._now())
 
         self.assertFalse(runner._closed_and_flat(slug))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_inactive_position_wait_does_not_block_other_closed_slot(self):
+        """Only the exact unexecutable owner is exempt from the scan guard."""
+
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        held, dead = "market-one", "market-two"
+        runner._bind_markets((held, dead))
+        now = runner._now()
+        runner.state_for(held).market = replace(
+            self.closed_metadata(held, now),
+            game_start=now + timedelta(seconds=30),
+        )
+        runner.state_for(dead).market = self.closed_metadata(dead, now)
+        runner.ledger.apply_execution(Execution(
+            execution_id="inactive-top-up-fill",
+            client_order_id="liquidity-inactive-top-up",
+            exchange_order_id="inactive-top-up-order",
+            market_slug=held,
+            side="BUY",
+            price=Decimal("0.49"),
+            qty=Decimal("1"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=now,
+        ), received_at=now)
+        runner.client.portfolio.rows[held] = {
+            "netPosition": "1",
+            "netPositionDecimal": "1.0000",
+            "cost": {"value": "0.49", "currency": "USD"},
+            "cashValue": {"value": "0.48", "currency": "USD"},
+            "updateTime": now.isoformat(),
+        }
+        self.assertTrue(runner._enter_inactive_market_wait(held, now))
+        runner.gateway.fetch_market = AsyncMock(
+            return_value=self.closed_metadata(dead, now))
+
+        self.assertFalse(runner._position_near_its_flatten_deadline(now))
+        self.assertTrue(await runner._top_up_active_markets(now))
+
+        self.assertEqual(runner.active_slugs, (held, "market-three"))
+        self.assertIn(held, runner._inactive_market_wait_slugs)
+        self.assertEqual(runner.ledger.position(held), Decimal("1.0000"))
+        self.assertEqual(runner.client.orders.cancel_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
 

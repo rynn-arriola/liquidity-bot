@@ -28,6 +28,7 @@ show the operator the discrepancy.
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
 | Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary configured-capacity service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
 | Post-kickoff empty-book recovery | Do not let one exact unpriceable recovery owner disable unrelated markets. Only a persisted bot-owned, basis-matched, nonzero post-kickoff position with zero working/absent orders, zero unresolved intents and a response-backed empty book may enter settlement wait. It permanently cannot quote, reserves one configured slot and its full portfolio risk, keeps private/account monitoring and a 60-second read-only book probe, and returns to the unchanged exit path if depth reappears. Flat proof releases the slot. Every other unknown or failure remains fail-closed |
+| Inactive owned-market recovery | Fresh exact closed/inactive/non-open metadata may immediately request replacement of a flat, order-free, ambiguity-free owner through the existing fresh-recheck top-up. An exact bot-owned nonzero position with matching basis and no order ambiguity enters mutation-free inactive-market wait, reserves one slot/full risk and keeps account/private monitoring plus one-minute metadata probes. Fresh open metadata restores the normal exit path; flat proof permits replacement. Missing/failed metadata never proves closure, and repeated unknown refreshes only back off to 15 minutes after 12 failures |
 | Portfolio / market exposure | `(configured slots + 10) × / 9 × quote size`; loaded size 10 / 24 is $340 / $90 with a $100 breadth cushion |
 | Market loss stop | `4 × quote size`; $40 loaded at size 10 |
 | Account loss threshold | `8 × quote size × configured slots / 20`; $96 loaded at size 10 / 24 for both realized-session and marked-equity sensors. An open-position marked breach is provisional until a breach-time position closes |
@@ -115,6 +116,5 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
   old runner to be absent, known account state, a verified stopped-runtime
   ledger snapshot and explicit start authorization on the new owner.
 
-When the operator changes one of these choices, update this file and
-[STATUS.md](STATUS.md) in the same task and record the evidence or implementation
-handoff in the appropriate history file.
+When the operator changes one of these choices, update this file and [STATUS.md](STATUS.md)
+in the same task and record the evidence or implementation handoff in the appropriate history file.

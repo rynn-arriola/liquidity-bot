@@ -19,6 +19,7 @@ from liquidity_bot.adapters import (
     parse_book_response,
     parse_trade_response,
 )
+from liquidity_bot.errors import EmptyBookError
 from liquidity_bot.private_stream import PrivateEventKind, decode_private_message
 
 
@@ -1107,5 +1108,5 @@ class OneSidedBookTests(unittest.TestCase):
         self.assertEqual(book.best_offer.price, 0.55)
 
     def test_a_book_empty_on_both_sides_is_still_refused(self):
-        with self.assertRaises(AdapterError):
+        with self.assertRaises(EmptyBookError):
             parse_book_response(self.payload(bids=[], offers=[]))

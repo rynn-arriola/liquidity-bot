@@ -25,7 +25,8 @@ from liquidity_bot.commissioning import (
 )
 from liquidity_bot.discord_summary import GRAY, RED
 from liquidity_bot.errors import (
-    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation)
+    AdapterError, ApiAdmissionDeferred, EmptyBookError,
+    RuntimeInvariantViolation)
 from liquidity_bot.execution_ledger import (
     Execution, ExecutionLedger, LedgerConflict, OrderState, PositionState,
     TradeStateObservation)
@@ -5763,6 +5764,263 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner.book.bids)
         self.assertFalse(runner.book.offers)
         self.assertTrue(runner.market.closed)
+
+    async def _start_with_settlement_wait(
+        self, *, selection=None,
+    ):
+        selector = FakeRewardSelector(
+            selection or multi_selection("market-two", "market-three"))
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        client.markets.started.add("market-one")
+        original_book = client.markets.book
+
+        async def empty_recovery_book(slug):
+            if slug == "market-one":
+                client.markets.book_calls += 1
+                return {"marketData": {
+                    "marketSlug": slug,
+                    "state": "MARKET_STATE_OPEN",
+                    "bids": [],
+                    "offers": [],
+                    "transactTime": NOW.isoformat(),
+                }}
+            return await original_book(slug)
+
+        client.markets.book = empty_recovery_book
+        client.portfolio.rows["market-one"] = {
+            "netPosition": "1",
+            "netPositionDecimal": "1.0000",
+            "cost": {"value": "0.49", "currency": "USD"},
+            "cashValue": {"value": "0.48", "currency": "USD"},
+            "updateTime": NOW.isoformat(),
+        }
+        mode = await runner.preflight()
+        return runner, client, notifier, selector, original_book, mode
+
+    async def test_post_kickoff_empty_recovery_book_isolated_while_others_trade(self):
+        """One exact unpriceable position must not disable every safe slot."""
+
+        (runner, client, notifier, selector, _original_book, mode) = (
+            await self._start_with_settlement_wait())
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(
+            runner._settlement_wait_slugs, {"market-one"})
+        self.assertEqual(
+            runner.active_slugs,
+            ("market-one", "market-two", "market-three"))
+        self.assertEqual(selector.calls and len(selector.calls), 1)
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertAlmostEqual(
+            runner._portfolio_worst_loss(excluding="market-two"), .49)
+        self.assertFalse(
+            runner._position_near_its_flatten_deadline(runner._now()))
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertTrue(any(
+            "quarantined for settlement/book recovery" in message
+            for message, _critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_cannot_drop_its_nonzero_owner(self):
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+
+        with self.assertRaisesRegex(
+                RuntimeInvariantViolation, "cannot drop"):
+            runner._bind_markets(("market-two", "market-three"))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_book_recovery_resumes_exit_planning(self):
+        runner, client, _notifier, _selector, original_book, _mode = (
+            await self._start_with_settlement_wait())
+        client.markets.book = original_book
+
+        await runner._refresh_book(runner._now(), "market-one")
+        actions = runner.reconciler.plan(
+            runner._frame(runner._now(), "market-one"))
+
+        self.assertNotIn("market-one", runner._settlement_wait_slugs)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].market_slug, "market-one")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_flat_snapshot_releases_reserved_slot(self):
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+        runner._lifecycle_top_up_requested_at = None
+        flattened_at = runner._now()
+
+        runner.ledger.apply_position_snapshot(
+            "settlement-flat",
+            (),
+            as_of=flattened_at,
+            observed_at=flattened_at,
+            complete_account=True,
+        )
+        runner._sync_settlement_wait_positions(flattened_at)
+
+        self.assertNotIn("market-one", runner._settlement_wait_slugs)
+        self.assertEqual(
+            runner._lifecycle_top_up_requested_at, flattened_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_book_poll_is_bounded_by_its_timer(self):
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+        state = runner.state_for("market-one")
+        self.assertIsNotNone(state.next_book_refresh)
+        due_at = state.next_book_refresh
+        runner._dirty_market_slugs.clear()
+        runner._dirty_market_since.clear()
+        runner._next_decision_at.clear()
+        for slug in runner.active_slugs:
+            runner.state_for(slug).next_contract_refresh = (
+                due_at + timedelta(hours=1))
+            if slug != "market-one":
+                runner.state_for(slug).next_book_refresh = (
+                    due_at + timedelta(hours=1))
+        runner._scheduler_entry_signature = (
+            runner._entry_scheduler_signature(due_at))
+
+        before = runner._scheduled_market_slugs(
+            due_at - timedelta(microseconds=1), record_pass=False)
+        on_time = runner._scheduled_market_slugs(
+            due_at, record_pass=False)
+
+        self.assertNotIn("market-one", before)
+        self.assertIn("market-one", on_time)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_owner_never_reaches_the_action_planner(self):
+        runner, client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market", new=AsyncMock(
+                        return_value=(None, 0.0))) as decide:
+            outcome = await runner._decision_sweep(
+                ("market-one", "market-two"))
+
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            [call.args[0] for call in decide.await_args_list],
+            ["market-two"],
+        )
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_loses_isolation_if_order_state_is_ambiguous(self):
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+        runner.ledger.prepare_intent(
+            "settlement-ambiguous", "PLACE", "market-one", "client-one", {},
+            created_at=runner._now())
+
+        self.assertFalse(
+            runner._can_wait_for_settlement("market-one", runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_reserves_one_of_configured_market_slots(self):
+        slugs = tuple(f"market-{index}" for index in range(2, 40))
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait(
+                selection=multi_selection(*slugs)))
+
+        self.assertEqual(len(runner.active_slugs), runner.config.max_markets)
+        self.assertIn("market-one", runner.active_slugs)
+        self.assertEqual(
+            len(set(runner.active_slugs) - {"market-one"}),
+            runner.config.max_markets - 1,
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_selection_hides_only_expected_read_failures(self):
+        runner, _client, _notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+        expected = SimpleNamespace(
+            select=AsyncMock(side_effect=AdapterError("temporary read")))
+        runner.reward_selector = expected
+
+        await runner._add_startup_markets_around_settlement_wait(runner._now())
+
+        self.assertIn(
+            "startup_settlement_wait_selection",
+            runner._runtime_error_counts,
+        )
+        unexpected = SimpleNamespace(
+            select=AsyncMock(side_effect=ValueError("local defect")))
+        runner.reward_selector = unexpected
+        with self.assertRaisesRegex(ValueError, "local defect"):
+            await runner._add_startup_markets_around_settlement_wait(
+                runner._now())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_monitor_starts_even_when_selection_is_empty(self):
+        runner, client, _notifier, selector, _book, mode = (
+            await self._start_with_settlement_wait(
+                selection=no_viable_selection()))
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(runner.active_slugs, ("market-one",))
+        self.assertEqual(runner._settlement_wait_slugs, {"market-one"})
+        self.assertEqual(len(selector.calls), 1)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_settlement_wait_shutdown_stops_promptly_and_reports_nonflat(self):
+        runner, client, notifier, _selector, _book, _mode = (
+            await self._start_with_settlement_wait())
+        runner._refresh_balance = AsyncMock()
+        runner._send_summary = AsyncMock()
+
+        await runner._shutdown("operator_sigterm")
+
+        self.assertFalse(runner._shutdown_proved_flat)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertTrue(any(
+            critical and "account is not flat" in message.lower()
+            for message, critical in notifier.messages))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_empty_book_does_not_isolate_a_pregame_position(self):
+        runner, _client, _ = self.build_runner(clock=TickingClock())
+        runner._recovery_slugs = {"market-one"}
+        runner.ledger.apply_position_snapshot(
+            "pregame-position",
+            (PositionState(
+                market_slug="market-one",
+                net_qty=Decimal("1"),
+                event_at=NOW,
+                cost=Decimal("0.49"),
+                cash_value=Decimal("0.48")),),
+            as_of=NOW,
+            observed_at=NOW,
+            complete_account=True,
+        )
+        runner.market = await runner.gateway.fetch_market("market-one")
+
+        self.assertFalse(runner._enter_settlement_wait("market-one", NOW))
+        self.assertEqual(runner._settlement_wait_slugs, set())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_book_due_check_reads_clock_after_upstream_api_latency(self):
         after_slow_io = NOW + timedelta(seconds=6)

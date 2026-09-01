@@ -92,9 +92,12 @@ These are implementation requirements, not suggestions.
     across markets can reach the session stop. Buying power is never treated
     as P&L or marked equity. Derived properties prevent all three from drifting
     independently of the restart-scoped quote quantity.
-26. A restart may mutate only persisted, identified orders/positions in one
-    ledger-selected recovery market, and then only to recover flat. Unowned or cross-market
-    state refuses without mutation.
+26. A restart may mutate only persisted, identified orders/positions in the
+    ledger-selected recovery markets inside configured capacity, and then only
+    to reduce risk or recover flat. Unowned or out-of-scope state refuses
+    without mutation. Invariant 91's exact settlement-wait owner is monitored
+    but never mutated until an executable book returns it to this ordinary
+    recovery path.
 27. `SIGTERM` and `SIGINT` are graceful operator-stop requests. They enter
     market-scoped cancel/flatten/reconcile rather than terminate immediately.
 28. Only explicitly classified transport/adapter failures and transient stale
@@ -116,7 +119,12 @@ These are implementation requirements, not suggestions.
     seconds and ends the process non-flat after a 900-second window, reporting
     exit 3 for immediate operator inspection. Until that deadline it keeps
     reconciling and uses any remaining exit attempt when a safe exact-position
-    IOC is available; it never holds a position while silent.
+    IOC is available; it never holds a position while silent. If every
+    remaining nonzero owner already satisfies invariant 91, a fresh complete
+    reconciliation proves no working/absent order or unresolved intent, and no
+    executable price exists, shutdown may end promptly with explicit nonflat
+    truth instead of repeating an impossible price search. Exit 3 and operator
+    inspection remain required.
 33. Venue reward eligibility is necessary but not sufficient for entry. A live
     side must also pass current lifecycle, structure, spread, target
     depth/cutoff, freshness, exitability, exposure, ownership, and loss gates.
@@ -661,9 +669,10 @@ These are implementation requirements, not suggestions.
     900-second clock, and this rule may not change entry selection, capacity,
     risk limits or API cadence.
 90. Decision scheduling may skip only a flat market whose decision inputs and
-    owned timers are unchanged. Every nonzero position is serviced and planned
-    every outer pass, including retired risk, so reducers, the durable
-    inventory clock and pre-kickoff flatten are unconditional. Exact book,
+    owned timers are unchanged, except invariant 91's exact unpriceable owner.
+    Every other nonzero position is serviced and planned every outer pass,
+    including retired risk, so reducers, the durable inventory clock and
+    pre-kickoff flatten are unconditional. Exact book,
     fill, position, order/intention resolution and successful-mutation changes
     wake only their owner; global entry-authority transitions wake the active
     slate. Buying power remains an apply-time gate and may not dirty the slate.
@@ -672,3 +681,18 @@ These are implementation requirements, not suggestions.
     events remain in wire order. The scheduler may only choose which markets
     enter the existing service/reconciler/driver path; it has no mutation,
     pricing, quantity, selection, risk or venue authority of its own.
+91. One post-kickoff recovery position may enter settlement wait only after a
+    valid Retail book wrapper positively contains neither bids nor offers and
+    the persisted ledger proves exact bot-owned basis equal to the current
+    nonzero position, no working or `UNKNOWN_ABSENT` order, no unresolved
+    intent, known whole-account risk and membership in the configured active
+    scope. Transport, 5xx, schema, identity, missing-market and pregame failures
+    never qualify. The owner is permanently barred from quoting, reserves one
+    configured slot and its full basis-derived portfolio exposure, remains in
+    private/account reconciliation scope and receives a read-only book probe no
+    faster than every 60 seconds. It may not manufacture flatness, settlement,
+    a price or a mutation. A valid book immediately restores the unchanged
+    reducer/IOC recovery path; authoritative zero position releases the slot;
+    any ambiguity or ownership drift removes the exception and returns to
+    ordinary fail-closed recovery. Unrelated markets may use only the remaining
+    configured slots.

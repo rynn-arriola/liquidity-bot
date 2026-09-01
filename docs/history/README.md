@@ -23,6 +23,7 @@ history, not current instructions or runtime truth.
 | [Tiny residual cashout — 2026-08-31](TINY_RESIDUAL_CASHOUT_2026-08-31.md) | Exact fractional-quantity evidence, five-minute decision, cancel-confirm-IOC boundaries and deployment state |
 | [Daily execution-fee breadth scaling — 2026-08-31](DAILY_EXECUTION_FEE_BREADTH_SCALING_2026-08-31.md) | First 10/24 pause evidence, operator calibration, scaling rule and restart acceptance contract |
 | [Dirty-market decision scheduler — 2026-08-31](DIRTY_MARKET_SCHEDULER_2026-08-31.md) | Latency-first 32-slot preparation, unconditional position safety, exact dirty/timer triggers, telemetry, reversal and activation gates |
+| [Exact settlement-wait recovery — 2026-09-01](SETTLEMENT_WAIT_RECOVERY_2026-09-01.md) | Market-specific empty-book evidence, exact-owner isolation policy, risk/capacity boundaries, verification and activation gate |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

@@ -31,6 +31,16 @@ class ApiAdmissionDeferred(AdapterError):
     """
 
 
+class EmptyBookError(AdapterError):
+    """The venue returned a valid book wrapper with no executable side.
+
+    This is response-backed market state, not a transport failure.  Keeping it
+    distinct lets recovery quarantine one post-kickoff position for settlement
+    monitoring without treating an unavailable or malformed book as equivalent
+    evidence.
+    """
+
+
 class RuntimeInvariantViolation(RuntimeError):
     """A local ownership, identity, or exact-risk invariant was violated.
 

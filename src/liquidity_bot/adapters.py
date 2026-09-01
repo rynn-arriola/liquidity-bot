@@ -27,7 +27,7 @@ try:  # Production runs in WSL; tests/imports remain portable on Windows.
 except ImportError:  # pragma: no cover - exercised only by native Windows
     fcntl = None
 
-from .errors import AdapterError, ApiAdmissionDeferred
+from .errors import AdapterError, ApiAdmissionDeferred, EmptyBookError
 from .models import (
     BookLevel,
     BookSnapshot,
@@ -41,6 +41,7 @@ from .rewards import IncentivePeriod
 __all__ = [
     "AdapterError",
     "ApiAdmissionDeferred",
+    "EmptyBookError",
     "AsyncIntervalLimiter",
     "AsyncReadOnlyGateway",
     "LimiterTelemetry",
@@ -249,7 +250,7 @@ def parse_book_response(response: Any, *, expected_slug: str | None = None) -> B
     # Selling a long only needs the bid side; buying back a short only needs
     # the offer side. Callers that need both check `has_side` themselves.
     if not bids and not offers:
-        raise AdapterError("book is empty on both sides")
+        raise EmptyBookError("book is empty on both sides")
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
 
     def optional_stat(field: str) -> float | None:

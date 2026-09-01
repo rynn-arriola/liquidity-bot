@@ -235,10 +235,23 @@ alert every 300 seconds, and after 900 seconds it exits non-flat with code 3
 rather than holding a position silently.
 
 After a process death, a restart may enter recovery-only mode only when every
-working order and nonzero position belongs to this persisted ledger and one
-identified market. Automatic selection first follows that ledger market rather
-than selecting something new. It cancels/flattens and exits; it does not resume quoting.
-Unowned or cross-market state refuses without mutation.
+working order and nonzero position belongs to this persisted ledger and the
+identified recovery scope fits configured capacity. Automatic selection first
+follows those ledger owners rather than selecting something new. It
+cancels/flattens and exits; it does not resume quoting.
+
+There is one narrower availability exception. If a valid Retail response says
+that an exact bot-owned post-kickoff position has no bids and no offers, while
+the account is order-free and ambiguity-free and basis exactly matches the
+authoritative position, that owner enters settlement wait. It remains barred
+from quoting, reserves one configured slot and its full portfolio risk, stays
+inside private/account monitoring and retries the book read only every 60
+seconds. Remaining capacity may quote independently proven markets. A returned
+book resumes normal recovery immediately; positive zero-position proof releases
+the slot. Transport/schema errors, pregame positions, unknown basis, working or
+absent orders and unresolved intents never qualify. A stop with only these
+owners left reports nonflat and exits without pretending settlement occurred.
+Unowned or out-of-scope state refuses without mutation.
 
 ## Server commands
 

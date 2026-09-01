@@ -46,7 +46,8 @@ from .commissioning import (
 from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import (
-    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation)
+    AdapterError, ApiAdmissionDeferred, EmptyBookError,
+    RuntimeInvariantViolation)
 from .execution_ledger import (
     ACTIVE_ORDER_STATES,
     UNRESOLVED_INTENTS,
@@ -191,6 +192,7 @@ DECISION_SCHEDULER_LOG_SECONDS = 60.0
 # same eight owners as one private shard. A short look-ahead coalesces timers
 # that were previously staggered by serial REST completion.
 CONTRACT_REFRESH_SECONDS = 60.0
+SETTLEMENT_WAIT_BOOK_REFRESH_SECONDS = 60.0
 CONTRACT_REFRESH_BATCH_SIZE = 8
 CONTRACT_REFRESH_LOOKAHEAD_SECONDS = 5.0
 
@@ -502,6 +504,13 @@ class CommissioningRunner:
         # the whole session by `_barred_slugs`, never on a cooldown: their
         # games have already started, so they can never become quotable again.
         self._recovery_slugs: set[str] = set()
+        # Exact bot-owned post-kickoff positions whose venue book was
+        # positively returned empty on both sides. They stay inside the
+        # authorized/private-stream scope, count against capacity and
+        # portfolio risk, and are never quotable. Isolating the known empty
+        # owner prevents it from disabling unrelated reward work without ever
+        # pretending the position is flat.
+        self._settlement_wait_slugs: set[str] = set()
         self._active_market_slugs: tuple[str, ...] = (
             () if config.auto_select_reward_markets
             else (config.market_slug,))
@@ -707,6 +716,14 @@ class CommissioningRunner:
         clean = tuple(dict.fromkeys(
             slug for slug in slugs
             if slug and slug != AUTO_REWARD_MARKET))
+        stranded = sorted(
+            slug for slug in self._settlement_wait_slugs
+            if self.ledger.position(slug) != 0 and slug not in clean)
+        if stranded:
+            raise RuntimeInvariantViolation(
+                "settlement_wait_owner_dropped",
+                "active scope cannot drop a nonzero settlement-wait owner: "
+                + ", ".join(stranded))
         if len(clean) > self.config.max_markets:
             raise RuntimeInvariantViolation(
                 "market_count_exceeds_authorization",
@@ -1153,6 +1170,8 @@ class CommissioningRunner:
         state.book_observed_at = self._now()
         state.observe_book_touch(
             state.book, observed_at=state.book_observed_at)
+        self._leave_settlement_wait(
+            state.slug, state.book_observed_at, "book_available")
         self._mark_market_dirty(state.slug, state.book_observed_at)
         if state.market is None:
             # Entry validation is separate, but a book without matching
@@ -1204,6 +1223,8 @@ class CommissioningRunner:
         state.observe_book_touch(book, observed_at=observed_at)
         state.book = book
         state.book_observed_at = observed_at
+        self._leave_settlement_wait(
+            book.slug, observed_at, "stream_book_available")
         self._mark_market_dirty(book.slug, observed_at)
 
     def _mark_market_dirty(
@@ -1360,7 +1381,8 @@ class CommissioningRunner:
                 # needs metadata, books and the unchanged reconciler path.
                 self.state_for(slug)
             state = self._markets[slug]
-            due = slug in self._dirty_market_slugs or slug in positions
+            due = slug in self._dirty_market_slugs or (
+                slug in positions and slug not in self._settlement_wait_slugs)
             decision_at = self._next_decision_at.get(slug)
             due = due or (decision_at is not None and now >= decision_at)
             due = due or (
@@ -1390,7 +1412,8 @@ class CommissioningRunner:
             self._scheduler_markets_seen += len(managed)
             self._scheduler_markets_skipped += len(managed) - len(selected)
             self._scheduler_position_evaluations += sum(
-                slug in positions for slug in selected)
+                slug in positions and slug not in self._settlement_wait_slugs
+                for slug in selected)
         return tuple(selected)
 
     @staticmethod
@@ -1801,6 +1824,8 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        if self._settlement_wait_slugs:
+            self._sync_settlement_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
         self._record_resolved_intent_owners(unresolved_owners)
@@ -1891,6 +1916,8 @@ class CommissioningRunner:
             self._position_near_its_flatten_deadline(now))
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
+        if self._settlement_wait_slugs:
+            self._sync_settlement_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
         self._record_resolved_intent_owners(unresolved_owners)
@@ -2004,6 +2031,132 @@ class CommissioningRunner:
                or not row["exchange_order_id"] for row in unresolved):
             return False
         return bool(working or nonzero)
+
+    def _can_wait_for_settlement(self, slug: str, now: datetime) -> bool:
+        """Whether one exact owner may be isolated without claiming flat.
+
+        A valid empty-book response is checked by the caller; transport,
+        schema and missing-market failures never reach this predicate. The
+        position itself must be attributable, past kickoff, order-free and
+        ambiguity-free. Any later drift returns the owner to ordinary
+        fail-closed recovery.
+        """
+
+        if (slug not in self._recovery_slugs
+                or slug not in set(self.active_slugs)):
+            return False
+        position = self.ledger.position(slug)
+        if position == 0:
+            return False
+        if (self.ledger.working_orders(slug)
+                or self.ledger.absent_orders(slug)
+                or self.ledger.market_has_unresolved_intent(slug)):
+            return False
+        basis = self.ledger.inventory_basis(slug)
+        if basis is None or basis.net_qty != position:
+            return False
+        market = self.state_for(slug).market
+        if market is None or market.game_start is None:
+            return False
+        return market.game_start <= now
+
+    def _enter_settlement_wait(self, slug: str, now: datetime) -> bool:
+        """Quarantine one response-backed empty post-kickoff recovery book."""
+
+        if not self._can_wait_for_settlement(slug, now):
+            return False
+        state = self.state_for(slug)
+        state.book = None
+        state.book_observed_at = None
+        state.clear_economics()
+        state.next_book_refresh = now + timedelta(
+            seconds=SETTLEMENT_WAIT_BOOK_REFRESH_SECONDS)
+        first = slug not in self._settlement_wait_slugs
+        self._settlement_wait_slugs.add(slug)
+        if first:
+            print(
+                f"[settlement-wait] at={now.isoformat()} market={slug} "
+                f"position={self.ledger.position(slug)} state=entered "
+                "book=empty capacity_reserved=1",
+                flush=True,
+            )
+        return True
+
+    def _leave_settlement_wait(self, slug: str, now: datetime, reason: str) -> None:
+        if slug not in self._settlement_wait_slugs:
+            return
+        self._settlement_wait_slugs.remove(slug)
+        self._mark_market_dirty(slug, now)
+        print(
+            f"[settlement-wait] at={now.isoformat()} market={slug} "
+            f"position={self.ledger.position(slug)} state=left reason={reason}",
+            flush=True,
+        )
+
+    def _sync_settlement_wait_positions(self, now: datetime) -> None:
+        """Release only owners whose authoritative position became zero."""
+
+        for slug in tuple(self._settlement_wait_slugs):
+            if self.ledger.position(slug) != 0:
+                continue
+            self._leave_settlement_wait(slug, now, "position_flat")
+            if self._lifecycle_top_up_requested_at is None:
+                self._lifecycle_top_up_requested_at = now
+
+    def _startup_settlement_wait_is_scoped(
+        self, blockers: tuple[str, ...], now: datetime,
+    ) -> bool:
+        """Authorize unrelated entry while every nonflat owner is isolated."""
+
+        if set(blockers) != {"shared account has nonzero positions"}:
+            return False
+        nonzero = {
+            str(row["market_slug"])
+            for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0")
+        }
+        return (
+            bool(nonzero)
+            and nonzero == self._settlement_wait_slugs
+            and self.ledger.risk_state_known()
+            and all(self._can_wait_for_settlement(slug, now)
+                    for slug in nonzero)
+        )
+
+    async def _add_startup_markets_around_settlement_wait(
+        self, now: datetime,
+    ) -> None:
+        """Use remaining configured slots without delaying risk monitoring."""
+
+        if (not self.config.auto_select_reward_markets
+                or self.reward_selector is None
+                or not self._settlement_wait_slugs):
+            return
+        available = self.config.max_markets - len(self.active_slugs)
+        if available <= 0:
+            return
+        scan_started = time.monotonic()
+        try:
+            selection = await self.reward_selector.select(now=now)
+        except (ApiAdmissionDeferred, AdapterError) as exc:
+            # Discovery cannot improve or exit the quarantined position. A
+            # failed scan therefore leaves its monitor scope intact, and the
+            # ordinary bounded runtime top-up path can retry later.
+            self._selection_scan_seconds_last = time.monotonic() - scan_started
+            await self._report_runtime_error(
+                "startup_settlement_wait_selection", exc)
+            return
+        self._selection_scan_seconds_last = time.monotonic() - scan_started
+        self._market_selection = selection
+        self._market_selection_observed_at = self._now()
+        if selection.selected is None:
+            return
+        chosen = tuple(
+            item.market.slug for item in selection.top_viable(
+                available, exclude=self._barred_slugs()))
+        if chosen:
+            self._bind_markets((*self.active_slugs, *chosen))
 
     async def preflight_until_ready(self) -> str:
         """Retry startup while the only obstacle is a transient condition.
@@ -2213,6 +2366,13 @@ class CommissioningRunner:
         # reporting set that now outlives the bar it used to imply, and a
         # control decision must not read from it.
         await self._refresh_bound_books(now)
+        if self._settlement_wait_slugs:
+            # A response-backed empty post-kickoff book has no price with
+            # which recovery could flatten. Keep that exact owner isolated,
+            # then use only the remaining configured slots. A failed/no-viable
+            # scan leaves the position monitor alive and is retried later.
+            await self._add_startup_markets_around_settlement_wait(self._now())
+            await self._refresh_bound_books(self._now())
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
         # account REST reconciliation remains the authoritative safety check.
@@ -2255,10 +2415,15 @@ class CommissioningRunner:
             ("scale remains blocked until attributable paid rewards calibrate",))
         report = await ControlledTrialStartup(
             self.account, self.ledger).reconcile(accepted, observed_at=now)
+        settlement_wait_trade = (
+            not report.ready
+            and self._startup_settlement_wait_is_scoped(
+                report.blockers, self._now()))
         recovery_only = (
             not report.ready
+            and not settlement_wait_trade
             and self._startup_recovery_is_scoped(report.blockers))
-        if not report.ready and not recovery_only:
+        if not report.ready and not recovery_only and not settlement_wait_trade:
             raise CommissioningRefused("; ".join(report.blockers))
         # The startup proof can span several paginated REST calls. Start its
         # freshness window when that proof completed, just like periodic
@@ -2304,6 +2469,12 @@ class CommissioningRunner:
                 f"{self._market_selection.books_evaluated} books; "
                 f"{self._market_selection.unsupported_programs} programs used "
                 "an unsupported or undocumented lifecycle and remained read-only.")
+        if settlement_wait_trade:
+            selection_note += (
+                f" {len(self._settlement_wait_slugs)} exact post-kickoff "
+                "position(s) have no executable book and remain quarantined "
+                "for settlement/book recovery; each reserves one configured "
+                "slot and its full portfolio exposure.")
         # Built from config, never from literals. This announced "one market,
         # one contract per quote, $5 soft stop, $15 hard stop" long after every
         # one of those had changed -- four wrong facts as the operator's first
@@ -4576,6 +4747,20 @@ class CommissioningRunner:
                 self._dirty_market_slugs.discard(slug)
                 self._dirty_market_since.pop(slug, None)
                 continue
+            if slug in self._settlement_wait_slugs:
+                now = self._now()
+                if self._can_wait_for_settlement(slug, now):
+                    # No valid book means there is no priceable decision. The
+                    # owner is still serviced by complete account snapshots,
+                    # its private position subscription and the bounded book
+                    # timer; counting a no-book frame as planned would only
+                    # manufacture a recurring strategy failure.
+                    self._dirty_market_slugs.discard(slug)
+                    self._dirty_market_since.pop(slug, None)
+                    self._scheduler_markets_skipped += 1
+                    continue
+                self._leave_settlement_wait(
+                    slug, now, "isolation_preconditions_changed")
             now = self._now()
             due_at = self._next_decision_at.get(slug)
             if due_at is not None and now < due_at:
@@ -4762,6 +4947,12 @@ class CommissioningRunner:
         recovering = set(self._recovery_slugs) & set(self.active_slugs)
         healthy: list[str] = []
         for slug in self.active_slugs:
+            if slug in self._settlement_wait_slugs:
+                # The first pass already proved valid metadata plus an exact
+                # empty-book response. Preserve that evidence and avoid a
+                # duplicate request when normal startup candidates are added.
+                healthy.append(slug)
+                continue
             try:
                 await self._refresh_contracts(
                     now, slug, for_exit=slug in recovering)
@@ -4769,6 +4960,15 @@ class CommissioningRunner:
                 if slug not in recovering:
                     self._validate_entry_book(slug)
                 healthy.append(slug)
+            except EmptyBookError as exc:
+                if slug in recovering and self._enter_settlement_wait(
+                        slug, self._now()):
+                    healthy.append(slug)
+                    continue
+                if slug in recovering:
+                    raise
+                await self._report_runtime_error(
+                    f"startup_market_dropped:{slug}", exc)
             except Exception as exc:
                 if slug in recovering:
                     raise
@@ -4877,6 +5077,23 @@ class CommissioningRunner:
             if self._refreshed_book_this_call:
                 self._runtime_error_counts.pop(
                     f"quiet_book_rest_refresh:{slug}", None)
+        except EmptyBookError as exc:
+            if self._enter_settlement_wait(slug, self._now()):
+                self._runtime_error_counts.pop(
+                    f"quiet_book_rest_refresh:{slug}", None)
+                return
+            await self._report_runtime_error(
+                f"quiet_book_rest_refresh:{slug}", exc)
+            state.next_book_refresh = self._now() + timedelta(seconds=3)
+            if (self._runtime_error_counts.get(
+                    f"quiet_book_rest_refresh:{slug}", 0)
+                    >= MAX_RECOVERY_ATTEMPTS):
+                stop = await self._retire_market(
+                    slug, "unrecoverable_book_EmptyBookError",
+                    reset_exit_budget=False)
+                if stop:
+                    raise RuntimeInvariantViolation(
+                        "market_retirement_limit_exceeded", stop)
         except Exception as exc:
             await self._report_runtime_error(
                 f"quiet_book_rest_refresh:{slug}", exc)
@@ -5696,6 +5913,12 @@ class CommissioningRunner:
         margin = self.reconciler.policy.force_exit_before_start_seconds * 2
         for slug in self.active_slugs:
             if self.ledger.position(slug) == 0:
+                continue
+            if slug in self._settlement_wait_slugs:
+                # There is no executable price to miss. The top-up path keeps
+                # the old streams open through discovery, then performs its
+                # normal complete account proof and fresh-stream handoff. A
+                # later book removes this exception before exit planning.
                 continue
             state = self._markets.get(slug)
             start = getattr(getattr(state, "market", None), "game_start", None)
@@ -7423,6 +7646,25 @@ class CommissioningRunner:
                 return False
         return bool(parked_set)
 
+    def _only_settlement_wait_positions_remain(self, now: datetime) -> bool:
+        """Whether shutdown has isolated every remaining nonflat owner."""
+
+        waiting = set(self._settlement_wait_slugs)
+        if (not waiting
+                or self.ledger.unresolved_intents()
+                or self.ledger.absent_orders()):
+            return False
+        for slug in self._shutdown_slugs():
+            if self.ledger.working_orders(slug):
+                return False
+            position = self.ledger.position(slug)
+            if slug in waiting:
+                if position == 0 or not self._can_wait_for_settlement(slug, now):
+                    return False
+            elif position != 0:
+                return False
+        return True
+
     def _venue_proves_flat(self) -> bool:
         """True when the last venue snapshot showed no orders and no position.
 
@@ -7502,6 +7744,27 @@ class CommissioningRunner:
                 # events. Apply those before falling back to REST reads.
                 await self._drain_private_events()
                 await self._rest_reconcile(now)
+                if (self._settlement_wait_slugs
+                        and self._only_settlement_wait_positions_remain(
+                            self._now())):
+                    # All mutable state is gone and the remaining positions
+                    # have no venue price. Retrying the same empty book for 15
+                    # minutes cannot improve safety; stop promptly while
+                    # reporting nonflat truth. A later explicitly authorized
+                    # start reconstructs and monitors the same exact owners.
+                    waiting = sorted(self._settlement_wait_slugs)
+                    self._shutdown_proved_flat = False
+                    await self._refresh_balance(now)
+                    self._accrue_score(now)
+                    await self._send_summary(now)
+                    await self.notifier.send_async(
+                        f"⚠️ Liquidity Bot LIVE stopped after {reason} with "
+                        f"{len(waiting)} exact position(s) quarantined for "
+                        "book recovery or settlement: "
+                        f"{', '.join(waiting)}. The account is not flat; no "
+                        "order remains and no position was ignored.",
+                        critical=True)
+                    return
                 # Every market that ever held risk must be retired, not just
                 # the primary. A slug the session has already dropped can still
                 # own an order or a position, and leaving it behind is exactly

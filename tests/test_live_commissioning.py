@@ -51,7 +51,7 @@ from liquidity_bot.market_selector import (
     RewardMarketSelection,
     SideOpportunity,
 )
-from liquidity_bot.market_state import MarketState
+from liquidity_bot.market_state import MarketState, RetiredMarket
 from liquidity_bot.models import (
     AccountBalance, BookLevel, BookSnapshot, MarketIncentive, MarketMetadata,
 )
@@ -469,6 +469,20 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
+    @staticmethod
+    def quiet_scheduler(runner, now=NOW):
+        """Make every selected owner unchanged with no timer due."""
+
+        for slug in runner.managed_slugs():
+            state = runner.state_for(slug)
+            state.next_book_refresh = now + timedelta(hours=1)
+            state.next_contract_refresh = now + timedelta(hours=1)
+        runner._next_decision_at.clear()
+        runner._dirty_market_slugs.clear()
+        runner._dirty_market_since.clear()
+        runner._scheduler_entry_signature = (
+            runner._entry_scheduler_signature(now))
+
     async def test_api_budget_log_uses_limiter_evidence_without_network(self):
         runner, client, _ = self.build_runner()
         limiter = AsyncIntervalLimiter()
@@ -488,6 +502,36 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("categories=market_book:1", output.getvalue())
         self.assertNotIn("secret-market-slug", output.getvalue())
         self.assertEqual(limiter.telemetry().attempts, 0)
+
+    async def test_decision_scheduler_log_includes_total_cpu_and_loop_delay(self):
+        runner, _, _ = self.build_runner()
+        runner._scheduler_last_log_at = NOW
+        runner._scheduler_process_cpu_at_last_log = 10.0
+        runner._scheduler_passes = 2
+        runner._scheduler_markets_seen = 6
+        runner._scheduler_markets_evaluated = 2
+        runner._scheduler_markets_skipped = 4
+        runner._scheduler_service_cpu_seconds = .020
+        runner._scheduler_decision_cpu_seconds = .030
+        runner._scheduler_event_loop_delays.extend((.001, .003))
+        output = io.StringIO()
+
+        with patch(
+                "liquidity_bot.live_commissioning.time.process_time",
+                return_value=10.120), patch("sys.stdout", output):
+            runner._log_decision_scheduler(NOW + timedelta(seconds=60))
+
+        line = output.getvalue()
+        self.assertIn("[decision-scheduler]", line)
+        self.assertIn("markets_seen=6 evaluated=2 skipped=4", line)
+        self.assertIn("service_cpu_ms=20.0", line)
+        self.assertIn("decision_cpu_ms=30.0", line)
+        self.assertIn("total_cpu_ms=120.0", line)
+        self.assertIn("cpu_cores=0.002", line)
+        self.assertIn("event_loop_delay_p50=0.0010", line)
+        self.assertIn("event_loop_delay_p95=0.0030", line)
+        self.assertEqual(runner._scheduler_passes, 0)
+        self.assertEqual(runner._scheduler_event_loop_delays, [])
 
     async def test_preflight_waits_for_local_api_backpressure_without_alert(self):
         runner, _, _ = self.build_runner()
@@ -1346,6 +1390,344 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             received_at, NOW + timedelta(seconds=2))
 
         await runner._observe_private(event, NOW + timedelta(seconds=20))
+
+    async def test_scheduler_wakes_only_the_book_owner_that_changed(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two", "market-three"))
+        self.quiet_scheduler(runner)
+
+        self.assertEqual(runner._scheduled_market_slugs(NOW), ())
+        runner._accept_book(BookSnapshot(
+            "market-two",
+            (BookLevel(.49, 10),),
+            (BookLevel(.51, 10),),
+            received_at=NOW + timedelta(seconds=1),
+        ))
+
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW + timedelta(seconds=1)),
+            ("market-two",),
+        )
+        self.assertEqual(runner._dirty_market_slugs, {"market-two"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduler_preserves_selected_market_order(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-two", "market-one"))
+        self.quiet_scheduler(runner)
+        runner._mark_market_dirty("market-one", NOW)
+        runner._mark_market_dirty("market-two", NOW)
+
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW),
+            ("market-two", "market-one"),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduler_services_nonzero_position_every_pass(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.apply_position_event(
+            "ws", "scheduler-held",
+            PositionState("market-two", Decimal("1"), NOW),
+            received_at=NOW,
+        )
+        self.quiet_scheduler(runner)
+
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW), ("market-two",))
+        runner._dirty_market_slugs.clear()
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW + timedelta(milliseconds=500)),
+            ("market-two",),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduler_counts_evaluated_and_skipped_markets(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two", "market-three"))
+        self.quiet_scheduler(runner)
+        runner._mark_market_dirty("market-one", NOW)
+        runner._mark_market_dirty("market-three", NOW)
+
+        scheduled = runner._scheduled_market_slugs(NOW)
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market",
+                    new=AsyncMock(return_value=(None, 0.0))):
+            await runner._decision_sweep(scheduled)
+
+        self.assertEqual(scheduled, ("market-one", "market-three"))
+        self.assertEqual(runner._scheduler_passes, 1)
+        self.assertEqual(runner._scheduler_markets_seen, 3)
+        self.assertEqual(runner._scheduler_markets_evaluated, 2)
+        self.assertEqual(runner._scheduler_markets_skipped, 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_successful_mutation_schedules_exact_owner_for_follow_up(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self.quiet_scheduler(runner)
+        runner._mark_market_dirty("market-two", NOW)
+
+        async def mutate(slug, _now):
+            runner._last_action_at[slug] = NOW + timedelta(seconds=1)
+            runner._market_action_generation[slug] = (
+                runner._market_action_generation.get(slug, 0) + 1)
+            return None, 0.0
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market", side_effect=mutate):
+            await runner._decision_sweep(("market-two",))
+
+        self.assertEqual(runner._dirty_market_slugs, {"market-two"})
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW + timedelta(seconds=1)),
+            ("market-two",),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_position_open_private_event_enters_unconditional_set_immediately(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self.quiet_scheduler(runner)
+
+        event_at = NOW + timedelta(seconds=1)
+        await runner._observe_private(PrivateEvent(
+            PrivateEventKind.POSITION_UPDATE,
+            {
+                "marketSlug": "market-two",
+                "beforePosition": {"netPositionDecimal": "0"},
+                "afterPosition": {"netPositionDecimal": "1"},
+                "updateTime": event_at.isoformat(),
+            },
+            "scheduler-position-open",
+            received_at=event_at,
+        ), event_at)
+
+        self.assertEqual(runner.ledger.position("market-two"), Decimal("1"))
+        self.assertEqual(
+            runner._scheduled_market_slugs(event_at), ("market-two",))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_place_intent_resolution_redirties_only_exact_owner(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        runner.ledger.prepare_intent(
+            "scheduler-place", "PLACE", "market-two", "scheduler-client",
+            {
+                "marketSlug": "market-two",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "1",
+            },
+            created_at=NOW,
+        )
+        runner.ledger.transition_intent(
+            "scheduler-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "scheduler-place", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="scheduler-order")
+        unresolved = runner._unresolved_intent_owners()
+        self.quiet_scheduler(runner)
+
+        runner.ledger.apply_order_event(
+            "ws", "scheduler-open",
+            OrderState(
+                client_order_id="scheduler-client",
+                exchange_order_id="scheduler-order",
+                market_slug="market-two",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW + timedelta(seconds=1),
+            ),
+            received_at=NOW + timedelta(seconds=1),
+        )
+        runner._record_resolved_intent_owners(unresolved)
+
+        self.assertEqual(runner.ledger.unresolved_intents("market-two"), [])
+        self.assertEqual(runner._dirty_market_slugs, {"market-two"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_buying_power_change_does_not_dirty_the_slate(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self.quiet_scheduler(runner)
+
+        runner.balance = replace(
+            runner.balance,
+            buying_power=runner.balance.buying_power + Decimal("100"),
+        )
+
+        self.assertEqual(runner._scheduled_market_slugs(NOW), ())
+        self.assertEqual(runner._dirty_market_slugs, set())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_global_entry_authority_transition_wakes_all_active_markets(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self.quiet_scheduler(runner)
+
+        runner._provisional_hard_stop_at = NOW
+
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW),
+            ("market-one", "market-two"),
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_eligibility_dwell_is_an_exact_scheduler_timer(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.prepare_intent(
+            "scheduler-resting", "PLACE", "market-one", "resting-client",
+            {
+                "marketSlug": "market-one",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "1",
+            },
+            created_at=NOW,
+        )
+        runner.ledger.transition_intent(
+            "scheduler-resting", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "scheduler-resting", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="resting-order")
+        runner.ledger.apply_order_event(
+            "ws", "scheduler-resting-open",
+            OrderState(
+                client_order_id="resting-client",
+                exchange_order_id="resting-order",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        runner.reconciler._ineligible_since[("market-one", "bid")] = NOW
+        self.quiet_scheduler(runner)
+        runner._mark_market_dirty("market-one", NOW)
+
+        with patch.object(
+                runner, "_refresh_equity_for_decision",
+                new=AsyncMock()), patch.object(
+                    runner, "_decide_for_market",
+                    new=AsyncMock(return_value=(None, 0.0))):
+            await runner._decision_sweep(("market-one",))
+
+        self.assertEqual(
+            runner._next_decision_at["market-one"],
+            NOW + timedelta(seconds=90),
+        )
+
+        # Hold account-wide freshness constant so this test isolates the
+        # market-local dwell timer rather than its independent fail-closed
+        # transition.
+        with patch.object(runner, "_mark_global_scheduler_transitions"):
+            self.assertEqual(
+                runner._scheduled_market_slugs(
+                    NOW + timedelta(seconds=89)), ())
+            self.assertEqual(
+                runner._scheduled_market_slugs(
+                    NOW + timedelta(seconds=90)),
+                ("market-one",),
+            )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_pre_kickoff_flatten_deadline_wakes_resting_market(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.ledger.prepare_intent(
+            "scheduler-kickoff", "PLACE", "market-one", "kickoff-client",
+            {
+                "marketSlug": "market-one",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "1",
+            },
+            created_at=NOW,
+        )
+        runner.ledger.transition_intent(
+            "scheduler-kickoff", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "scheduler-kickoff", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="kickoff-order")
+        runner.ledger.apply_order_event(
+            "ws", "scheduler-kickoff-open",
+            OrderState(
+                client_order_id="kickoff-client",
+                exchange_order_id="kickoff-order",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("1"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        runner.state_for("market-one").market = replace(
+            runner.state_for("market-one").market,
+            game_start=NOW + timedelta(seconds=299),
+        )
+        self.quiet_scheduler(runner)
+
+        self.assertEqual(
+            runner._scheduled_market_slugs(NOW), ("market-one",))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_flat_abandoned_market_skips_but_its_position_never_does(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        slug = "market-one"
+        runner._retired[slug] = RetiredMarket(
+            slug, "abandoned", NOW,
+            rounds=MAX_RETIREMENT_ROUNDS,
+            next_retry_at=NOW + timedelta(hours=1),
+        )
+        self.quiet_scheduler(runner)
+
+        self.assertEqual(runner._scheduled_market_slugs(NOW), ())
+        runner.ledger.apply_position_event(
+            "ws", "abandoned-held",
+            PositionState(slug, Decimal("1"), NOW),
+            received_at=NOW,
+        )
+        self.assertEqual(runner._scheduled_market_slugs(NOW), (slug,))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_terminal_cancel_private_event_prioritizes_only_its_market(self):
         runner, _, _ = self.build_runner()

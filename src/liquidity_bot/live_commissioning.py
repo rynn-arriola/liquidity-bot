@@ -47,7 +47,13 @@ from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import (
     AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation)
-from .execution_ledger import ExecutionLedger, LedgerConflict, QuoteObservation
+from .execution_ledger import (
+    ACTIVE_ORDER_STATES,
+    UNRESOLVED_INTENTS,
+    ExecutionLedger,
+    LedgerConflict,
+    QuoteObservation,
+)
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
     AsyncTradingGateway,
@@ -176,6 +182,7 @@ MAINTENANCE_POLL_SECONDS = 60.0
 RUN_LOOP_COOPERATIVE_YIELD_SECONDS = 0.01
 NO_ID_REPAIR_IDLE_SECONDS = 0.25
 API_BUDGET_LOG_SECONDS = 60.0
+DECISION_SCHEDULER_LOG_SECONDS = 60.0
 
 # Bound-market metadata and incentive rows are both bulk-readable. Refresh one
 # private-shard-sized scope at a time: this replaces sixteen per-market calls
@@ -438,9 +445,32 @@ class CommissioningRunner:
         # stuck; without this it was counted as stuck and the alarm fired on
         # ordinary churn. See `_cycling_markets`.
         self._last_action_at: dict[str, datetime] = {}
+        self._market_action_generation: dict[str, int] = {}
         # Recovery delay belongs to the market that requested it. The old
         # sweep let one unhealthy slot pause the other nineteen.
         self._next_decision_at: dict[str, datetime] = {}
+        # Event-driven scheduler state.  This changes only which markets enter
+        # the existing service/plan/apply functions; it never changes a frame,
+        # action, price, quantity, risk gate or mutation path.  Positions stay
+        # outside this set because they are selected unconditionally every
+        # pass.  Flat markets enter after an exact input change or a due timer.
+        self._dirty_market_slugs: set[str] = set()
+        self._market_dirty_generation: dict[str, int] = {}
+        self._dirty_market_since: dict[str, datetime] = {}
+        self._market_last_input_at: dict[str, datetime] = {}
+        self._scheduler_last_log_at: datetime | None = None
+        self._scheduler_passes = 0
+        self._scheduler_markets_seen = 0
+        self._scheduler_markets_evaluated = 0
+        self._scheduler_markets_skipped = 0
+        self._scheduler_position_evaluations = 0
+        self._scheduler_service_cpu_seconds = 0.0
+        self._scheduler_decision_cpu_seconds = 0.0
+        self._scheduler_process_cpu_at_last_log: float | None = None
+        self._scheduler_event_loop_delays: list[float] = []
+        self._scheduler_decision_latencies: list[float] = []
+        self._scheduler_action_latencies: list[float] = []
+        self._scheduler_entry_signature: tuple[bool, ...] | None = None
         # Markets whose CANCEL intent became terminal on the private stream.
         # They are serviced and replanned before the next full bound-market
         # pass. Without this, a confirmed cancel waits behind REST service and
@@ -476,6 +506,8 @@ class CommissioningRunner:
             else (config.market_slug,))
         for slug in self._active_market_slugs:
             self._markets[slug] = MarketState(slug)
+        for slug in self._markets:
+            self._mark_market_dirty(slug)
         self._market_selection: RewardMarketSelection | None = None
         self._market_selection_observed_at: datetime | None = None
         self.balance: AccountBalance | None = None
@@ -691,7 +723,24 @@ class CommissioningRunner:
         self._next_decision_at = {
             slug: value for slug, value in self._next_decision_at.items()
             if slug in self._markets}
+        self._market_action_generation = {
+            slug: value
+            for slug, value in self._market_action_generation.items()
+            if slug in self._markets}
         self._priority_replan_slugs.intersection_update(self._markets)
+        self._dirty_market_slugs.intersection_update(self._markets)
+        self._market_dirty_generation = {
+            slug: value
+            for slug, value in self._market_dirty_generation.items()
+            if slug in self._markets}
+        for slug in self._markets:
+            self._mark_market_dirty(slug)
+        self._dirty_market_since = {
+            slug: value for slug, value in self._dirty_market_since.items()
+            if slug in self._markets}
+        self._market_last_input_at = {
+            slug: value for slug, value in self._market_last_input_at.items()
+            if slug in self._markets}
         self._publish_active_scope_snapshot()
 
     @property
@@ -1094,6 +1143,7 @@ class CommissioningRunner:
         state.book_observed_at = self._now()
         state.observe_book_touch(
             state.book, observed_at=state.book_observed_at)
+        self._mark_market_dirty(state.slug, state.book_observed_at)
         if state.market is None:
             raise RuntimeError("market metadata is unavailable")
         # Validate both possible passive wire payloads before the first
@@ -1122,6 +1172,276 @@ class CommissioningRunner:
         state.observe_book_touch(book, observed_at=observed_at)
         state.book = book
         state.book_observed_at = observed_at
+        self._mark_market_dirty(book.slug, observed_at)
+
+    def _mark_market_dirty(
+        self, slug: str, observed_at: datetime | None = None,
+    ) -> None:
+        """Schedule one owner after a decision input changed.
+
+        Timestamps are telemetry only. They never decide whether an owner is
+        authorized, and malformed/backward observations are simply excluded
+        from latency measurement rather than from trading.
+        """
+
+        slug = str(slug or "").strip()
+        if not slug:
+            return
+        self._dirty_market_slugs.add(slug)
+        self._market_dirty_generation[slug] = (
+            self._market_dirty_generation.get(slug, 0) + 1)
+        if observed_at is None:
+            return
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            return
+        previous = self._dirty_market_since.get(slug)
+        if previous is None or observed_at < previous:
+            self._dirty_market_since[slug] = observed_at
+        latest = self._market_last_input_at.get(slug)
+        if latest is None or observed_at > latest:
+            self._market_last_input_at[slug] = observed_at
+
+    @staticmethod
+    def _private_event_market_slugs(event: Any) -> frozenset[str]:
+        """Extract exact owners named by one already-decoded private event."""
+
+        slugs = {
+            str(slug).strip() for slug in (getattr(event, "market_scope", None)
+                                           or ())
+            if str(slug).strip()
+        }
+        payload = getattr(event, "payload", None)
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                for key in ("marketSlug", "market_slug"):
+                    slug = str(value.get(key) or "").strip()
+                    if slug:
+                        slugs.add(slug)
+                positions = value.get("positions")
+                if isinstance(positions, dict):
+                    slugs.update(
+                        str(slug).strip() for slug in positions
+                        if str(slug).strip())
+                for nested in value.values():
+                    visit(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    visit(nested)
+
+        visit(payload)
+        return frozenset(slugs)
+
+    def _execution_owner_slugs(self) -> frozenset[str]:
+        slugs = {
+            str(row["market_slug"])
+            for row in self.ledger.working_orders()
+        }
+        slugs.update(
+            str(row["market_slug"])
+            for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0")
+        )
+        slugs.discard("")
+        return frozenset(slugs)
+
+    def _entry_scheduler_signature(self, now: datetime) -> tuple[bool, ...]:
+        """Global entry authority, deliberately excluding buying power."""
+
+        today = date.fromisoformat(risk_day(now))
+        risk_allowed = False
+        if self.risk_guard is not None:
+            try:
+                risk_allowed = self.risk_guard.can_add_new_risk(now=now)
+            except Exception:
+                risk_allowed = False
+        try:
+            session_ready = self.gate.session_ready(self.ledger, now=now)
+        except Exception:
+            session_ready = False
+        return (
+            risk_allowed,
+            self._provisional_hard_stop_at is None,
+            self._baseline_day == today,
+            self._nontrading_cash is not None,
+            self._nontrading_cash_day == today,
+            session_ready,
+        )
+
+    def _scheduler_owner_sets(
+        self,
+    ) -> tuple[tuple[str, ...], frozenset[str], frozenset[str]]:
+        """Read all non-selection owners once, preserving selection order."""
+
+        active_order_states = tuple(sorted(ACTIVE_ORDER_STATES))
+        unresolved_states = tuple(sorted(UNRESOLVED_INTENTS))
+        active_marks = ",".join("?" for _ in active_order_states)
+        unresolved_marks = ",".join("?" for _ in unresolved_states)
+        rows = self.ledger.query(
+            "SELECT market_slug,'working' owner_kind "
+            "FROM execution_orders WHERE status IN "
+            f"({active_marks}) UNION ALL "
+            "SELECT market_slug,'unresolved' owner_kind "
+            "FROM execution_intents WHERE state IN "
+            f"({unresolved_marks}) UNION ALL "
+            "SELECT market_slug,'position' owner_kind "
+            "FROM execution_positions WHERE CAST(net_qty AS REAL)!=0",
+            (*active_order_states, *unresolved_states),
+        )
+        working = frozenset(
+            str(row["market_slug"]) for row in rows
+            if row["owner_kind"] == "working" and row["market_slug"])
+        positions = frozenset(
+            str(row["market_slug"]) for row in rows
+            if row["owner_kind"] == "position" and row["market_slug"])
+        nonselection = {
+            str(row["market_slug"]) for row in rows if row["market_slug"]}
+        active = self.active_slugs
+        extras = tuple(sorted(nonselection.difference(active)))
+        return (*active, *extras), positions, working
+
+    def _mark_global_scheduler_transitions(self, now: datetime) -> None:
+        """Wake flat owners only when global authorization changes state."""
+
+        signature = self._entry_scheduler_signature(now)
+        previous = self._scheduler_entry_signature
+        self._scheduler_entry_signature = signature
+        if previous is None or previous == signature:
+            return
+        for slug in self.active_slugs:
+            self._mark_market_dirty(slug, now)
+
+    def _scheduled_market_slugs(
+        self, now: datetime, *, record_pass: bool = True,
+    ) -> tuple[str, ...]:
+        """Return owners whose existing decision logic must run this pass."""
+
+        self._mark_global_scheduler_transitions(now)
+        managed, positions, working = self._scheduler_owner_sets()
+        due_before = now + timedelta(
+            seconds=CONTRACT_REFRESH_LOOKAHEAD_SECONDS)
+        selected: list[str] = []
+        for slug in managed:
+            if slug not in self._markets:
+                # Risk discovered outside selection is exit-only, but it still
+                # needs metadata, books and the unchanged reconciler path.
+                self.state_for(slug)
+            state = self._markets[slug]
+            due = slug in self._dirty_market_slugs or slug in positions
+            decision_at = self._next_decision_at.get(slug)
+            due = due or (decision_at is not None and now >= decision_at)
+            due = due or (
+                state.next_contract_refresh is None
+                or state.next_contract_refresh <= due_before)
+            due = due or (
+                state.next_book_refresh is None
+                or now >= state.next_book_refresh)
+            retired = self._retired.get(slug)
+            due = due or bool(
+                retired is not None
+                and retired.rounds < MAX_RETIREMENT_ROUNDS
+                and (retired.next_retry_at is None
+                     or now >= retired.next_retry_at))
+            if slug in working:
+                game_start = getattr(state.market, "game_start", None)
+                if game_start is not None:
+                    flatten_at = game_start - timedelta(
+                        seconds=(
+                            self.reconciler.policy
+                            .force_exit_before_start_seconds))
+                    due = due or now >= flatten_at
+            if due:
+                selected.append(slug)
+        if record_pass:
+            self._scheduler_passes += 1
+            self._scheduler_markets_seen += len(managed)
+            self._scheduler_markets_skipped += len(managed) - len(selected)
+            self._scheduler_position_evaluations += sum(
+                slug in positions for slug in selected)
+        return tuple(selected)
+
+    @staticmethod
+    def _scheduler_percentile(values: list[float], fraction: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        index = min(
+            len(ordered) - 1,
+            max(0, math.ceil(len(ordered) * fraction) - 1),
+        )
+        return ordered[index]
+
+    def _record_scheduler_decision(
+        self, slug: str, *, finished_at: datetime, action_at: datetime | None,
+    ) -> None:
+        started_at = self._dirty_market_since.pop(slug, None)
+        if started_at is not None:
+            latency = (finished_at - started_at).total_seconds()
+            if latency >= 0:
+                self._scheduler_decision_latencies.append(latency)
+        if action_at is not None:
+            input_at = self._market_last_input_at.get(slug)
+            if input_at is not None:
+                latency = (action_at - input_at).total_seconds()
+                if latency >= 0:
+                    self._scheduler_action_latencies.append(latency)
+        # A later timer-driven action must not be attributed to an old input
+        # that was already evaluated. A backoff path never reaches this method,
+        # so it deliberately keeps the triggering input until its retry.
+        self._market_last_input_at.pop(slug, None)
+        for values in (
+                self._scheduler_decision_latencies,
+                self._scheduler_action_latencies):
+            if len(values) > 512:
+                del values[:-512]
+
+    def _log_decision_scheduler(self, now: datetime) -> None:
+        last = self._scheduler_last_log_at
+        if (last is not None
+                and (now - last).total_seconds()
+                < DECISION_SCHEDULER_LOG_SECONDS):
+            return
+        process_cpu_now = time.process_time()
+        total_cpu_seconds = (
+            max(0.0, process_cpu_now - self._scheduler_process_cpu_at_last_log)
+            if self._scheduler_process_cpu_at_last_log is not None else 0.0)
+        window_seconds = (
+            max(0.0, (now - last).total_seconds())
+            if last is not None else 0.0)
+        cpu_cores = (
+            total_cpu_seconds / window_seconds if window_seconds > 0 else 0.0)
+        print(
+            f"[decision-scheduler] at={now.isoformat()} "
+            f"passes={self._scheduler_passes} "
+            f"markets_seen={self._scheduler_markets_seen} "
+            f"evaluated={self._scheduler_markets_evaluated} "
+            f"skipped={self._scheduler_markets_skipped} "
+            f"position_evaluated={self._scheduler_position_evaluations} "
+            f"service_cpu_ms={self._scheduler_service_cpu_seconds * 1000:.1f} "
+            f"decision_cpu_ms={self._scheduler_decision_cpu_seconds * 1000:.1f} "
+            f"total_cpu_ms={total_cpu_seconds * 1000:.1f} "
+            f"cpu_cores={cpu_cores:.3f} "
+            f"event_loop_delay_p50={self._scheduler_percentile(self._scheduler_event_loop_delays, .50):.4f} "
+            f"event_loop_delay_p95={self._scheduler_percentile(self._scheduler_event_loop_delays, .95):.4f} "
+            f"decision_latency_p50={self._scheduler_percentile(self._scheduler_decision_latencies, .50):.3f} "
+            f"decision_latency_p95={self._scheduler_percentile(self._scheduler_decision_latencies, .95):.3f} "
+            f"action_latency_p50={self._scheduler_percentile(self._scheduler_action_latencies, .50):.3f} "
+            f"action_latency_p95={self._scheduler_percentile(self._scheduler_action_latencies, .95):.3f}",
+            flush=True,
+        )
+        self._scheduler_last_log_at = now
+        self._scheduler_process_cpu_at_last_log = process_cpu_now
+        self._scheduler_passes = 0
+        self._scheduler_markets_seen = 0
+        self._scheduler_markets_evaluated = 0
+        self._scheduler_markets_skipped = 0
+        self._scheduler_position_evaluations = 0
+        self._scheduler_service_cpu_seconds = 0.0
+        self._scheduler_decision_cpu_seconds = 0.0
+        self._scheduler_event_loop_delays.clear()
+        self._scheduler_decision_latencies.clear()
+        self._scheduler_action_latencies.clear()
 
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
@@ -1253,7 +1573,8 @@ class CommissioningRunner:
         dormant. An unattributable order is always read strictly.
         """
 
-        unresolved_cancels = self._unresolved_cancel_owners()
+        unresolved_owners = self._unresolved_intent_owners()
+        execution_owners_before = self._execution_owner_slugs()
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
         exchange_markets: dict[str, set[str]] = {}
@@ -1450,7 +1771,10 @@ class CommissioningRunner:
             as_of=now, observed_at=now, complete_account=True)
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
-        self._record_resolved_cancel_owners(unresolved_cancels)
+        self._record_resolved_intent_owners(unresolved_owners)
+        for slug in execution_owners_before.symmetric_difference(
+                self._execution_owner_slugs()):
+            self._mark_market_dirty(slug, self._now())
         if blocking_reconcile_failures:
             raise AdapterError(
                 "could not re-read "
@@ -1473,28 +1797,63 @@ class CommissioningRunner:
         """Map unresolved CANCEL intents to their positively-known owner."""
 
         return {
-            str(row["intent_id"]): str(row["market_slug"] or "").strip()
-            for row in self.ledger.unresolved_intents()
-            if str(row["operation"]).upper() == "CANCEL"
+            intent_id: detail[1]
+            for intent_id, detail in self._unresolved_intent_owners().items()
+            if detail[0] == "CANCEL"
         }
+
+    def _unresolved_intent_owners(
+        self,
+    ) -> dict[str, tuple[str, str, str]]:
+        """Map exact unresolved intents to operation, owner and order id."""
+
+        return {
+            str(row["intent_id"]): (
+                str(row["operation"]).upper(),
+                str(row["market_slug"] or "").strip(),
+                str(row["exchange_order_id"] or "").strip(),
+            )
+            for row in self.ledger.unresolved_intents()
+        }
+
+    def _record_resolved_intent_owners(
+        self, unresolved: dict[str, tuple[str, str, str]],
+    ) -> None:
+        """Wake the exact owner after an intent gains terminal proof.
+
+        A CANCEL receives the existing priority path only when that exact
+        intent disappears from the unresolved set. A PLACE resolving OPEN,
+        rejected or terminal also wakes its owner so dirty scheduling cannot
+        leave the market idle until an unrelated book message.
+        """
+
+        if not unresolved:
+            return
+        still_unresolved = {
+            str(row["intent_id"])
+            for row in self.ledger.unresolved_intents()
+        }
+        for intent_id, (operation, slug, _order_id) in unresolved.items():
+            if intent_id in still_unresolved or not slug:
+                continue
+            self._mark_market_dirty(slug, self._now())
+            if operation == "CANCEL":
+                self._priority_replan_slugs.add(slug)
 
     def _record_resolved_cancel_owners(
         self, unresolved_cancels: dict[str, str],
     ) -> None:
         """Prioritize owners whose CANCEL gained terminal proof."""
 
-        if not unresolved_cancels:
-            return
-        still_unresolved = {
-            str(row["intent_id"])
-            for row in self.ledger.unresolved_intents()
-        }
-        self._priority_replan_slugs.update(
-            slug for intent_id, slug in unresolved_cancels.items()
-            if intent_id not in still_unresolved and slug in self._markets)
+        self._record_resolved_intent_owners({
+            intent_id: ("CANCEL", slug, "")
+            for intent_id, slug in unresolved_cancels.items()
+        })
 
     async def _observe_private(self, event: Any, now: datetime) -> None:
-        unresolved_cancels = self._unresolved_cancel_owners()
+        unresolved_owners = self._unresolved_intent_owners()
+        execution_owners_before = self._execution_owner_slugs()
+        affected_slugs = set(self._private_event_market_slugs(event))
         received_at = getattr(event, "received_at", None) or now
         had_near_deadline_position = (
             self._position_near_its_flatten_deadline(now))
@@ -1502,7 +1861,12 @@ class CommissioningRunner:
         self.projector.apply(event, received_at=received_at)
         self._request_post_flat_top_up_if_needed(
             had_near_deadline_position, self._now())
-        self._record_resolved_cancel_owners(unresolved_cancels)
+        self._record_resolved_intent_owners(unresolved_owners)
+        affected_slugs.update(
+            execution_owners_before.symmetric_difference(
+                self._execution_owner_slugs()))
+        for slug in affected_slugs:
+            self._mark_market_dirty(slug, received_at)
 
     async def _drain_private_events(self) -> int:
         """Apply private events already buffered by a connected stream.
@@ -1524,10 +1888,10 @@ class CommissioningRunner:
         return count
 
     def _take_priority_replans(self) -> tuple[str, ...]:
-        """Take cancel-confirmed markets in stable active-slot order."""
+        """Take exact cancel-confirmed owners in stable managed order."""
 
         selected = tuple(
-            slug for slug in self.active_slugs
+            slug for slug in self.managed_slugs()
             if slug in self._priority_replan_slugs)
         self._priority_replan_slugs.difference_update(selected)
         return selected
@@ -3477,7 +3841,7 @@ class CommissioningRunner:
             for row in unresolved_rows
             if str(row["market_slug"] or "").strip() in markets
         }
-        unresolved_cancels = self._unresolved_cancel_owners()
+        unresolved_owners = self._unresolved_intent_owners()
         exchange_ids = sorted({
             str(row["exchange_order_id"] or "").strip()
             for row in unresolved_rows
@@ -3499,7 +3863,7 @@ class CommissioningRunner:
         # A positive OPEN read may license retrying an uncertain cancel. This
         # still uses the normal per-owner throttle and mutation state machine.
         await self._retry_uncertain_cancels(now, markets=markets)
-        self._record_resolved_cancel_owners(unresolved_cancels)
+        self._record_resolved_intent_owners(unresolved_owners)
         failures = [result for result in results if result is not None]
         remaining_intent_ids = {
             str(row["intent_id"])
@@ -4151,6 +4515,8 @@ class CommissioningRunner:
         if actions:
             # Stamp a successful mutation, not an empty healthy plan.
             self._last_action_at[slug] = self._now()
+            self._market_action_generation[slug] = (
+                self._market_action_generation.get(slug, 0) + 1)
         return None, 0.0
 
     async def _decision_sweep(
@@ -4172,10 +4538,21 @@ class CommissioningRunner:
             if slug not in self._markets:
                 continue
             if self.ledger.market_has_unresolved_intent(slug):
+                # The exact intent-resolution path re-dirties this owner. Do
+                # not spend every outer pass rediscovering the same deliberate
+                # quarantine while its venue outcome is still unknown.
+                self._dirty_market_slugs.discard(slug)
+                self._dirty_market_since.pop(slug, None)
                 continue
             now = self._now()
             due_at = self._next_decision_at.get(slug)
             if due_at is not None and now < due_at:
+                # Preserve the deadline rather than the dirty bit. Any newer
+                # input is still represented by ``_market_last_input_at`` for
+                # telemetry, while the reviewed market-local backoff remains
+                # authoritative for behavior.
+                self._dirty_market_slugs.discard(slug)
+                self._dirty_market_since.pop(slug, None)
                 continue
             if not state_refresh_failed:
                 try:
@@ -4192,7 +4569,29 @@ class CommissioningRunner:
                 # Preserve the last observation until its 15-second bound;
                 # once stale, `_frame` removes entry eligibility fail-closed.
                 pass
+            previous_action_generation = self._market_action_generation.get(
+                slug, 0)
             outcome, delay = await self._decide_for_market(slug, self._now())
+            finished_at = self._now()
+            action_at = (
+                self._last_action_at.get(slug)
+                if self._market_action_generation.get(slug, 0)
+                != previous_action_generation else None)
+            self._scheduler_markets_evaluated += 1
+            self._record_scheduler_decision(
+                slug, finished_at=finished_at, action_at=action_at)
+            self._dirty_market_slugs.discard(slug)
+            if action_at is not None:
+                # A create response can carry an embedded OPEN/FILL and make
+                # its PLACE intent terminal before any later private event.
+                # The mutation itself is therefore a decision input: revisit
+                # this exact owner so the second side, reducer or next cancel
+                # is not forced to wait for an unrelated book/timer event.
+                self._dirty_market_slugs.add(slug)
+                self._market_dirty_generation[slug] = (
+                    self._market_dirty_generation.get(slug, 0) + 1)
+                self._dirty_market_since[slug] = action_at
+                self._market_last_input_at[slug] = action_at
             # A normal full sweep can reach a market whose REST terminal proof
             # queued priority earlier in this same loop. Its replan has now
             # happened, so do not service it again next iteration.
@@ -4203,7 +4602,16 @@ class CommissioningRunner:
                 self._next_decision_at[slug] = (
                     self._now() + timedelta(seconds=delay))
             else:
-                self._next_decision_at.pop(slug, None)
+                resting_sides = frozenset(
+                    order.side for order in self._working_orders(slug))
+                eligibility_at = (
+                    self.reconciler.next_reward_eligibility_deadline(
+                        slug, resting_sides=resting_sides))
+                if (eligibility_at is not None
+                        and eligibility_at > self._now()):
+                    self._next_decision_at[slug] = eligibility_at
+                else:
+                    self._next_decision_at.pop(slug, None)
         return None
 
     async def _consume_ready_stream_tasks(
@@ -4365,9 +4773,8 @@ class CommissioningRunner:
         serviced_slugs = self.managed_slugs() if slugs is None else slugs
         if slugs is None and self._post_flat_top_up_can_preempt(self._now()):
             return ""
-        if slugs is None:
-            await self._refresh_due_contract_batches(
-                self._now(), serviced_slugs)
+        await self._refresh_due_contract_batches(
+            self._now(), serviced_slugs)
         for slug in serviced_slugs:
             if slug not in self._markets:
                 continue
@@ -7307,6 +7714,10 @@ class CommissioningRunner:
             next_selection = self._initial_market_selection_due(now)
             next_api_budget_log = now + timedelta(
                 seconds=API_BUDGET_LOG_SECONDS)
+            # Start the first scheduler window after preflight so startup CPU
+            # and latency do not contaminate the 24-slot runtime baseline.
+            self._scheduler_last_log_at = now
+            self._scheduler_process_cpu_at_last_log = time.process_time()
             market_task = asyncio.create_task(self.market_stream.next_book())
             private_task = asyncio.create_task(self.private_stream.next_event())
             while True:
@@ -7315,7 +7726,16 @@ class CommissioningRunner:
                 # twenty-owner no-ID incident every repair gather was empty;
                 # the loop reached 67% CPU and did not run its SIGTERM callback
                 # inside the full 300-second graceful-stop window.
+                loop_yield_started = time.perf_counter()
                 await self.sleep(RUN_LOOP_COOPERATIVE_YIELD_SECONDS)
+                loop_delay = max(
+                    0.0,
+                    time.perf_counter() - loop_yield_started
+                    - RUN_LOOP_COOPERATIVE_YIELD_SECONDS,
+                )
+                self._scheduler_event_loop_delays.append(loop_delay)
+                if len(self._scheduler_event_loop_delays) > 8192:
+                    del self._scheduler_event_loop_delays[:-8192]
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
@@ -7441,12 +7861,25 @@ class CommissioningRunner:
                         f"markets={','.join(priority_replans)}",
                         flush=True,
                     )
-                # Service every bound market on its own cadence. Keep this
-                # last among periodic REST work so account latency cannot age a
-                # book before the decisions below.
-                stop_reason = await self._service_bound_markets()
+                # Select only owners whose inputs changed or whose own timer is
+                # due. Nonzero positions are included unconditionally; flat
+                # unchanged markets skip the existing service/decision work.
+                # The reconciler and action driver below are unchanged.
+                scheduler_preempted = self._post_flat_top_up_can_preempt(
+                    self._now())
+                scheduled = (
+                    () if scheduler_preempted
+                    else self._scheduled_market_slugs(self._now()))
+                service_cpu_started = time.process_time()
+                stop_reason = await self._service_bound_markets(scheduled)
+                self._scheduler_service_cpu_seconds += max(
+                    0.0, time.process_time() - service_cpu_started)
                 if stop_reason:
                     break
+                serviced_generations = {
+                    slug: self._market_dirty_generation.get(slug, 0)
+                    for slug in scheduled
+                }
                 # REST service yields to the event loop for every request. In
                 # a twenty-slot pass, stream tasks can complete early and hold
                 # one event while newer events queue behind them. Consume the
@@ -7458,6 +7891,29 @@ class CommissioningRunner:
                 if stream_stop:
                     stop_reason = stream_stop
                     break
+                # If service yielded while a book/fill/order event arrived,
+                # synchronize the exact affected owner once more before its
+                # decision. Existing book coalescing and private wire ordering
+                # remain the authority; this only notices their applied state.
+                latest_scheduled = (
+                    () if scheduler_preempted
+                    else self._scheduled_market_slugs(
+                        self._now(), record_pass=False))
+                resync = tuple(
+                    slug for slug in latest_scheduled
+                    if (slug not in serviced_generations
+                        or self._market_dirty_generation.get(slug, 0)
+                        != serviced_generations[slug])
+                )
+                if resync:
+                    service_cpu_started = time.process_time()
+                    stop_reason = await self._service_bound_markets(resync)
+                    self._scheduler_service_cpu_seconds += max(
+                        0.0, time.process_time() - service_cpu_started)
+                    if stop_reason:
+                        break
+                decision_slugs = tuple(dict.fromkeys(
+                    (*scheduled, *latest_scheduled)))
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_loss_stop_pause()
@@ -7653,7 +8109,12 @@ class CommissioningRunner:
                         # repair cadence on the next pass.
                         await self.sleep(NO_ID_REPAIR_IDLE_SECONDS)
                         continue
-                stop_reason = await self._decision_sweep() or ""
+                decision_cpu_started = time.process_time()
+                stop_reason = await self._decision_sweep(
+                    decision_slugs) or ""
+                self._scheduler_decision_cpu_seconds += max(
+                    0.0, time.process_time() - decision_cpu_started)
+                self._log_decision_scheduler(self._now())
                 if stop_reason:
                     break
                 if now >= next_summary:

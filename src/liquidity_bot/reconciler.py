@@ -7,7 +7,7 @@ required input and deliberately has no default selected for live use.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 import math
@@ -338,6 +338,26 @@ class DesiredStateReconciler:
             return False
         return (now - sent_at).total_seconds() >= (
             self.policy.hard_exit_confirmation_timeout_seconds)
+
+    def next_reward_eligibility_deadline(
+        self, market_slug: str, *, resting_sides: frozenset[str] | None = None,
+    ) -> datetime | None:
+        """Return the next time an ineligible resting side must be revisited.
+
+        The eligibility dwell is owned here, beside the exact timestamps used
+        by ``_flat_plan``. Exposing its deadline lets the runner skip unchanged
+        flat markets without duplicating or changing this strategy rule in the
+        scheduler.
+        """
+
+        deadlines = [
+            observed_at + timedelta(
+                seconds=self.policy.reward_eligibility_dwell_seconds)
+            for (slug, side), observed_at in self._ineligible_since.items()
+            if slug == str(market_slug)
+            and (resting_sides is None or side in resting_sides)
+        ]
+        return min(deadlines, default=None)
 
     def note_hard_exit_cancel_submitted(
         self, market_slug: str, order_id: str, *, submitted_at: datetime,

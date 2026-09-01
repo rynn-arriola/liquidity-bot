@@ -660,3 +660,15 @@ These are implementation requirements, not suggestions.
     positive flat/order/ambiguity proof. Positions at `0.10` or above keep the
     900-second clock, and this rule may not change entry selection, capacity,
     risk limits or API cadence.
+90. Decision scheduling may skip only a flat market whose decision inputs and
+    owned timers are unchanged. Every nonzero position is serviced and planned
+    every outer pass, including retired risk, so reducers, the durable
+    inventory clock and pre-kickoff flatten are unconditional. Exact book,
+    fill, position, order/intention resolution and successful-mutation changes
+    wake only their owner; global entry-authority transitions wake the active
+    slate. Buying power remains an apply-time gate and may not dirty the slate.
+    Reward dwell, contract/book refresh and kickoff deadlines remain exact,
+    selector order and mid-sweep freshness margins are preserved, and private
+    events remain in wire order. The scheduler may only choose which markets
+    enter the existing service/reconciler/driver path; it has no mutation,
+    pricing, quantity, selection, risk or venue authority of its own.

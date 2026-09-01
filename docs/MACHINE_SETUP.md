@@ -229,9 +229,13 @@ loaded-source marker and does not update automatically.
 
 The laptop timer keeps dated snapshots locally. Ordinary parity adds a current
 execution-ledger recovery copy to each reachable workstation using the online
-backup API, SHA-256 and `PRAGMA integrity_check`. A deliberate handoff still
-requires stopping the runtime, proving account state and explicitly activating
-a fresh stopped snapshot; parity never does that.
+backup API, SHA-256 and `PRAGMA integrity_check`. The full SQLite integrity walk
+runs on the native backup or received source; an identical copy is proven by
+manifest, size and SHA-256 instead of repeating random database reads across
+WSL `/mnt/c`. Capture has a separate 180-second execution deadline in addition
+to its SSH connection timeout. A deliberate handoff still requires stopping the
+runtime, proving account state and explicitly activating a fresh stopped
+snapshot; parity never does that.
 
 The separate weekly task creates the encrypted, versioned full recovery archive
 for Drive, including measurement data and a manifest. Drive is not parity, a

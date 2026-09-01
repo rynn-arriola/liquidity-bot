@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = (
@@ -72,6 +73,45 @@ class RuntimeParitySnapshotTests(unittest.TestCase):
             with self.assertRaises(runtime_snapshot.RuntimeSnapshotError):
                 runtime_snapshot.verify_snapshot(output)
 
+    def test_create_integrity_checks_native_backup_only_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self._repo_with_ledger(root)
+            output = root / "output"
+
+            with mock.patch.object(
+                runtime_snapshot,
+                "inspect_database",
+                wraps=runtime_snapshot.inspect_database,
+            ) as inspect:
+                runtime_snapshot.create_snapshot(repo, output)
+
+            self.assertEqual(inspect.call_count, 1)
+            inspected = Path(inspect.call_args.args[0])
+            self.assertNotEqual(inspected.parent, output)
+
+    def test_create_rejects_copy_corruption_without_destination_sqlite_walk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self._repo_with_ledger(root)
+            output = root / "output"
+            original_copy = runtime_snapshot.shutil.copy2
+
+            def corrupt_database_copy(source, destination):
+                copied = original_copy(source, destination)
+                if Path(destination).name.startswith(
+                    f".{runtime_snapshot.DATABASE_NAME}."
+                ):
+                    with Path(destination).open("ab") as target:
+                        target.write(b"corrupt")
+                return copied
+
+            with mock.patch.object(
+                runtime_snapshot.shutil, "copy2", side_effect=corrupt_database_copy
+            ):
+                with self.assertRaises(runtime_snapshot.RuntimeSnapshotError):
+                    runtime_snapshot.create_snapshot(repo, output)
+
     def test_install_verifies_before_replacing_destination(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -101,6 +141,26 @@ class RuntimeParitySnapshotTests(unittest.TestCase):
                     (destination / f"{runtime_snapshot.DATABASE_NAME}{suffix}").exists()
                     for suffix in ("-wal", "-shm", "-journal")
                 )
+            )
+
+    def test_install_integrity_checks_external_source_not_renamed_copies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "destination"
+            runtime_snapshot.create_snapshot(self._repo_with_ledger(root), source)
+
+            with mock.patch.object(
+                runtime_snapshot,
+                "inspect_database",
+                wraps=runtime_snapshot.inspect_database,
+            ) as inspect:
+                runtime_snapshot.install_snapshot(source, destination)
+
+            self.assertEqual(inspect.call_count, 1)
+            self.assertEqual(
+                Path(inspect.call_args.args[0]),
+                source / runtime_snapshot.DATABASE_NAME,
             )
 
     def test_source_must_remain_inside_repository(self):

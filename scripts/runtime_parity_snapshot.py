@@ -91,6 +91,55 @@ def inspect_database(path: Path) -> dict[str, object]:
     }
 
 
+def _read_manifest(directory: Path) -> dict[str, object]:
+    manifest_path = directory / MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise RuntimeSnapshotError(f"snapshot manifest is missing: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeSnapshotError(f"snapshot manifest is invalid: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT_VERSION:
+        raise RuntimeSnapshotError("snapshot manifest format is unsupported")
+    if manifest.get("capture_method") != "sqlite-online-backup":
+        raise RuntimeSnapshotError("snapshot was not made with SQLite online backup")
+    if not isinstance(manifest.get("database"), dict):
+        raise RuntimeSnapshotError("snapshot database evidence is missing")
+    return manifest
+
+
+def _verify_copied_snapshot(
+    directory: Path, expected_manifest: dict[str, object],
+) -> dict[str, object]:
+    """Prove an already-inspected snapshot survived a byte-for-byte copy.
+
+    The online backup is integrity-checked on native storage before copying.
+    Re-running SQLite's random-read integrity walk through WSL's ``/mnt`` bridge
+    adds no evidence once the destination size and SHA-256 match those inspected
+    bytes.  The destination hash is still read after the copy completes.
+    """
+
+    directory = directory.resolve()
+    manifest = _read_manifest(directory)
+    if manifest != expected_manifest:
+        raise RuntimeSnapshotError("copied snapshot manifest does not match source")
+    expected = manifest["database"]
+    assert isinstance(expected, dict)
+    database = directory / DATABASE_NAME
+    if not database.is_file():
+        raise RuntimeSnapshotError(f"SQLite snapshot is missing: {database}")
+    actual = {
+        "bytes": database.stat().st_size,
+        "sha256": _sha256(database),
+    }
+    for field in ("bytes", "sha256"):
+        if actual[field] != expected.get(field):
+            raise RuntimeSnapshotError(
+                f"copied snapshot {field} does not match inspected source"
+            )
+    return manifest
+
+
 def _remove_snapshot_sidecars(directory: Path) -> None:
     for suffix in ("-wal", "-shm", "-journal"):
         (directory / f"{DATABASE_NAME}{suffix}").unlink(missing_ok=True)
@@ -168,26 +217,15 @@ def create_snapshot(
         finally:
             staged_database.unlink(missing_ok=True)
             staged_manifest.unlink(missing_ok=True)
-    return verify_snapshot(output_dir)
+    return _verify_copied_snapshot(output_dir, manifest)
 
 
 def verify_snapshot(directory: Path) -> dict[str, object]:
     directory = directory.resolve()
     database = directory / DATABASE_NAME
-    manifest_path = directory / MANIFEST_NAME
-    if not manifest_path.is_file():
-        raise RuntimeSnapshotError(f"snapshot manifest is missing: {manifest_path}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeSnapshotError(f"snapshot manifest is invalid: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT_VERSION:
-        raise RuntimeSnapshotError("snapshot manifest format is unsupported")
-    if manifest.get("capture_method") != "sqlite-online-backup":
-        raise RuntimeSnapshotError("snapshot was not made with SQLite online backup")
+    manifest = _read_manifest(directory)
     expected = manifest.get("database")
-    if not isinstance(expected, dict):
-        raise RuntimeSnapshotError("snapshot database evidence is missing")
+    assert isinstance(expected, dict)
     actual = inspect_database(database)
     for field in ("bytes", "sha256", "integrity", "tables"):
         if actual[field] != expected.get(field):
@@ -203,11 +241,10 @@ def install_snapshot(source_dir: Path, output_dir: Path) -> dict[str, object]:
         temporary = Path(raw)
         shutil.copy2(source_dir / DATABASE_NAME, temporary / DATABASE_NAME)
         shutil.copy2(source_dir / MANIFEST_NAME, temporary / MANIFEST_NAME)
-        verify_snapshot(temporary)
+        _verify_copied_snapshot(temporary, manifest)
         os.replace(temporary / DATABASE_NAME, output_dir / DATABASE_NAME)
         os.replace(temporary / MANIFEST_NAME, output_dir / MANIFEST_NAME)
         _remove_snapshot_sidecars(output_dir)
-    verify_snapshot(output_dir)
     return manifest
 
 

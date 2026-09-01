@@ -91,9 +91,11 @@ three-way parity check"**, perform every applicable step below:
    it is offline, mark it pending; do not make its absence fail the available
    workstation or pretend the peer is current.
 3. Inspect laptop WSL HEAD, `DEPLOYED_COMMIT` and tracked state. Create its
-   execution-ledger copy through SQLite online backup, verify integrity/hash,
-   and install it under ignored `data/cold-backup/laptop-runtime/` on each
-   reachable workstation. It is a recovery copy, never writable authority.
+   execution-ledger copy through SQLite online backup, integrity-check the native backup, prove each copied destination by exact size/SHA-256, and
+   install it under ignored `data/cold-backup/laptop-runtime/` on each reachable
+   workstation. It is a recovery copy, never writable authority; do not repeat
+   SQLite's random-read integrity walk from WSL against an identical `/mnt/c`
+   copy.
 
 The phrase authorizes those git fast-forwards and verified private ledger-copy
 updates. GitHub receives tracked files only; databases, credentials, webhooks,

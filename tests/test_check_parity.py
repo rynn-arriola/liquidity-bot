@@ -203,6 +203,56 @@ class CheckParityTests(unittest.TestCase):
         self.assertIn("$windowsOutput.Substring(2).Replace", script)
         self.assertNotIn("wslpath", script)
 
+    def test_encoded_powershell_separates_connect_and_execution_timeouts(self):
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with mock.patch.object(
+            check_parity, "_run", return_value=completed
+        ) as run:
+            check_parity._encoded_powershell(
+                "Write-Output ok",
+                host="poly-laptop",
+                connect_timeout=7,
+                execution_timeout=19,
+            )
+
+        command = run.call_args.args[0]
+        self.assertIn("ConnectTimeout=7", command)
+        self.assertEqual(run.call_args.kwargs["timeout"], 19)
+
+    def test_runtime_capture_has_a_real_subprocess_deadline(self):
+        config = {
+            "host": "",
+            "windows_repo": r"C:\Users\operator\liquidity-bot",
+            "wsl_distro": "Ubuntu-24.04",
+            "wsl_repo": "/home/polybot/liquidity-bot",
+            "source_role": "ACTIVE-LAPTOP",
+        }
+        stopped = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="stop after capture"
+        )
+        with mock.patch.object(
+            check_parity, "_encoded_powershell", return_value=stopped
+        ) as powershell:
+            with self.assertRaises(check_parity.ParityUnavailable):
+                check_parity.capture_runtime_ledger(config)
+
+        self.assertEqual(
+            powershell.call_args.kwargs["execution_timeout"],
+            check_parity.RUNTIME_CAPTURE_TIMEOUT_SECONDS,
+        )
+
+    def test_subprocess_deadline_fails_parity_closed(self):
+        expired = subprocess.TimeoutExpired(["slow-command"], timeout=3)
+        with mock.patch.object(
+            check_parity.subprocess, "run", side_effect=expired
+        ):
+            with self.assertRaisesRegex(
+                check_parity.ParityUnavailable, "timed out after 3 seconds"
+            ):
+                check_parity._run(["slow-command"], timeout=3)
+
     def test_peer_command_is_encoded_safely_and_prevents_recursion(self):
         command = check_parity.peer_powershell_command(
             r"C:\Users\O'Brien\liquidity-bot",

@@ -1,6 +1,7 @@
 # Findings index
 Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.md) before theorizing: `rg -n -i "<term>" FINDINGS.md docs/history/FINDINGS_*.md`.
 ## Current high-value findings
+- **Parity slowness was SQLite random IO across the WSL/Windows bridge, not transfer bandwidth or the bot.** Capture fully inspected its native ext4 online backup, then repeated `PRAGMA integrity_check` on the identical `/mnt/c` copy. Measured integrity was 0.78 seconds on ext4 versus 73.79 seconds through 9p; sequential SHA remained 1.64 seconds. Destination size/SHA after native integrity is the equivalent proof. [Repair evidence](docs/history/PARITY_SNAPSHOT_PERFORMANCE_2026-09-01.md).
 - **Retail API health and customer UI participation can diverge.** On 2026-09-01 the official US application said `Maintenance Mode` / `Trading is paused right now` while public status and authenticated API reads remained healthy; one ordinary bot order filled during that overlap. API success therefore cannot prove customers can trade symmetrically. The reviewed remedy is reduce-only: cancel/block flat entries, preserve the live process and every position exit, and require three exact healthy UI observations before resuming. [Evidence](docs/history/UI_MAINTENANCE_ENTRY_PAUSE_2026-09-01.md).
 - **Global Polymarket health does not make every market executable.** After 31 bounded shutdown retries, the runner stopped truthfully `flat=false`; independent authenticated proof found zero orders and one exact 10-contract position in `aec-itfme-pathom-julbie-2026-09-01`. At 12:22-12:23Z public health/status and an authenticated account read were operational, yet the exact market still had a valid empty book and no settlement record. Treating that owner as an account-wide veto leaves every unrelated slot unavailable indefinitely. The bounded remedy is exact-owner settlement wait: no quote/mutation on that slug, one slot/full-risk reservation, private/account monitoring and 60-second read-only book polling, while independently proven markets may trade. Terminal record plus venue snapshot remain stop authority.
 - **Generic book refresh was incorrectly coupled to two-sided active-entry validation.** `_refresh_book` dereferenced both sides and called entry validation for inactive recovery owners. Reviewed `5f1ef3369` moves entry-only checks to startup, validates only present sides and preserves empty-book/missing-metadata/order-payload refusal. The current ITF owner still has 10 contracts in a closed market with no depth, so the code repair cannot force settlement and its repeated positioned-owner reads remain safety work.
@@ -86,8 +87,7 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
   feed spans three connections, so each shard and the market socket needs its
   own last-message clock. A complete REST snapshot can bridge a brief gap but
   cannot hide 180 seconds of stream silence.
-- **Buying power is an entry constraint, not an equity value or exit gate.** A
-  successful entry must reserve cached buying power within the same configured-capacity
+- **Buying power is an entry constraint, not an equity value or exit gate.** A successful entry must reserve cached buying power within the same configured-capacity
   sweep. Insufficient-power and validation rejections should pause only that
   market's new entries; reducers, cancels and IOC exits remain available.
 - **Official HTTP guidance is compatible with mutation safety.** Confirmed 429

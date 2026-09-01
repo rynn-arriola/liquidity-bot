@@ -33,6 +33,7 @@ LOCAL_PEER_CONFIG = REPO_ROOT / ".local-tools" / "parity_peer.json"
 LOCAL_RUNTIME_CONFIG = REPO_ROOT / ".local-tools" / "parity_runtime.json"
 RUNTIME_SNAPSHOT_SCRIPT = REPO_ROOT / "scripts" / "runtime_parity_snapshot.py"
 RUNTIME_BACKUP_DIR = REPO_ROOT / "data" / "cold-backup" / "laptop-runtime"
+RUNTIME_CAPTURE_TIMEOUT_SECONDS = 180
 SAFE_LIVE_RUNTIME_SYNC_PREFIXES = (
     "docs/",
     "tests/",
@@ -126,6 +127,7 @@ def _run(
     *,
     text: bool = True,
     check: bool = True,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
@@ -134,6 +136,7 @@ def _run(
             capture_output=True,
             text=text,
             check=check,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise ParityUnavailable(f"command not found: {command[0]}") from exc
@@ -143,6 +146,10 @@ def _run(
             stderr = stderr.decode("utf-8", errors="replace")
         detail = (stderr or "").strip() or f"exit {exc.returncode}"
         raise ParityUnavailable(f"{command[0]} failed: {detail}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ParityUnavailable(
+            f"{command[0]} timed out after {exc.timeout} seconds"
+        ) from exc
 
 
 def _git(*arguments: str) -> str:
@@ -417,7 +424,8 @@ def _encoded_powershell(
     script: str,
     *,
     host: str = "",
-    timeout: int = 15,
+    connect_timeout: int = 15,
+    execution_timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     command: list[str] = []
@@ -428,7 +436,7 @@ def _encoded_powershell(
                 "-o",
                 "BatchMode=yes",
                 "-o",
-                f"ConnectTimeout={timeout}",
+                f"ConnectTimeout={connect_timeout}",
                 host,
             )
         )
@@ -441,7 +449,7 @@ def _encoded_powershell(
             encoded,
         )
     )
-    return _run(command, check=False)
+    return _run(command, check=False, timeout=execution_timeout)
 
 
 def _runtime_inspection_script(config: Mapping[str, str], *, fetch: bool) -> str:
@@ -596,7 +604,10 @@ def capture_runtime_ledger(
 ) -> dict[str, object]:
     if create:
         result = _encoded_powershell(
-            _capture_runtime_script(config), host=config["host"], timeout=30
+            _capture_runtime_script(config),
+            host=config["host"],
+            connect_timeout=30,
+            execution_timeout=RUNTIME_CAPTURE_TIMEOUT_SECONDS,
         )
         assert isinstance(result.stdout, str)
         assert isinstance(result.stderr, str)

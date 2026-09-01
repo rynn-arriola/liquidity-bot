@@ -69,3 +69,9 @@ attempts at 2.460/s and 1.637/s, both with zero failures, 429s or cooldown and
 `max_waiting=1`.  This accepts the exact amplification repair.  Natural reopen
 and authoritative-flat release remain uninduced; the position must never be
 called flat or removed from the ledger merely to free its slot.
+
+By 19:04Z, a later legitimate lifecycle request released two expired flat
+owners and filled the exact 32-owner scope.  The runner then held 48 orders
+across 29 markets; only the known `+10.0000` position remained.  Four additional
+API windows kept failures/429s/cooldown at zero and `max_waiting=1`, confirming
+that ordinary refill remained live after suppressing the unreleasable trigger.

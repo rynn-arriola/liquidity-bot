@@ -55,8 +55,16 @@ standalone dashboard now uses the same adjusted account mark and renders only
 HARD; its redundant realized fill-history replay and obsolete session/market
 meters are gone.
 
-## Deployment state
+## Deployment and live acceptance
 
-Prepared in the Windows review checkout only. The production WSL checkout and
-`DEPLOYED_COMMIT` still contain the former ceiling. The bot remains stopped;
-no push, deployment, restart or venue mutation is part of this preparation.
+Commit `d3de7bd7756693f6f3d411bf2922eee388fe603f` was pushed, fast-forwarded
+into the clean WSL runtime and recorded in `DEPLOYED_COMMIT`. The native WSL
+checkout passed all 1,048 tests before the marker advanced. Authenticated
+pre-start proof found zero open orders and zero positions, after which the
+runner restarted at the persisted size 10 / 32-slot configuration.
+
+The runner rebuilt 35 authenticated orders across 30 markets and had one live
+managed position at the acceptance read. The first `[api-budget]` window
+covered 578 attempts in 267.2 seconds (`2.163/s`), including 63 mutations,
+with zero failures, zero confirmed 429s, zero cooldown and maximum queue depth
+one. No runtime-recovery or traceback appeared in the new-run log segment.

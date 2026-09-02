@@ -120,3 +120,27 @@ If acceptance fails, stop and remain flat; `d3782b00d` is not an operational
 rollback because its live startup contract is already disproved. The last
 earlier build also retains the now-overflowing global catalog scan, so this
 incident requires a fix-forward rather than an automatic code rollback.
+
+## Command 1 activation and live acceptance
+
+The reviewed repair was committed and pushed as `c741e7a97`. Windows, GitHub,
+the WSL checkout and `DEPLOYED_COMMIT` matched exactly, both complete suites
+passed 1,061/1,061, and the tracked runtime tree was clean. Immediately before
+startup at 15:33:48Z, authenticated venue reads proved zero open orders and
+zero nonzero positions; the ledger proved zero unresolved intents, zero
+working orders and zero `UNKNOWN_ABSENT` rows. The previously reported orphan
+therefore required no repair mutation.
+
+The persisted size-10 / 32-slot runner then remained alive. Its first new
+`[selection-scan]` reported `event_pages=2`, `event_page_ceiling=10`, 8,127
+nested event-market rows, 184 executable/rewarded markets, 69 books ranked and
+62 viable markets. It placed quotes instead of entering either prior pagination
+failure. A fresh authenticated read at 15:38:59Z found 56 open orders across 31
+markets and one position under the running manager.
+
+The first 194.7-second `[api-budget]` window recorded 456 attempts at 2.342/s:
+397 reads, 59 mutations, only two discovery calls, zero failures, zero
+confirmed 429s, zero cooldown and maximum limiter queue depth one. No new
+runtime-recovery line appeared. This accepts the corrected discovery mechanism
+and initial order refill without claiming that two pages is a permanent bound;
+future natural scans retain the new page-headroom telemetry.

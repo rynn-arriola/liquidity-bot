@@ -117,7 +117,7 @@ The following inventory was audited end to end again on 2026-09-01:
 | Bound-market metadata and rewards | The deployed batching uses one slug-filtered market read plus one symbol-filtered incentive read per bounded group of eight: `2 × ceil(N/8) / 60`. Startup validation still reads every bound book and has its own finite burst. | Stepwise by private-shard-sized group. |
 | Quiet-book REST fallback | A market with no recent streamed full book becomes due after 3 seconds, so demand is approximately `N × quiet_fraction / 3` requests/second. Its decision book is stale at 5 seconds. | The dominant degraded-feed term; a silent full slate cannot be made fresh by polling at scale. |
 | Mutations | Creates, cancels and IOC reductions share the governor. They are event-driven and never automatically retried. | Depends on fill/cancel/replace business activity, not slot count alone. |
-| Market selection | On the measured planning assumptions, 52 catalog pages, 4 incentive pages and up to 60 candidate books every 900 seconds: `116/900 = 0.129/s` on average, but a 116-request burst with a 29-second floor at 4 requests/second. | Catalog/page/book-sensitive burst. |
+| Market selection | Active liquidity programs are enumerated first, then exact reward-market metadata is fetched in batches of at most 100 and up to 100 ranked candidate books are inspected. With `P` incentive pages and `R` rewarded slugs, the fixed part is `P + ceil(R/100)` rather than every page of the account-wide active-market catalog. | Reward-program/page/book-sensitive burst. It remains background traffic and every failed complete scan establishes a shared 60-second top-up retry floor. |
 | Earnings | One earnings read every 900 seconds: about `0.0011/s`. | Fixed. |
 | Recovery and retry | Confirmed 429 read retries, private-stream handoff proof, missing-order repair, pagination and maintenance probes consume additional reads. Unknown mutations do not retry. | Failure- and page-sensitive; must be measured in tail windows. |
 | Hourly reward table | Worst bounded path is one earnings read, two cash-history walks of at most four pages each, two balance reads and one position read: at most 12 calls. It is outside the runner's process-local telemetry. | Fixed and independently scheduled. It now waits for spare shared allowance, is capped at `0.25/s`, has its own lane/cooldown and may use up to 45 minutes of the hourly interval. |
@@ -187,6 +187,25 @@ correct fix is earlier suppression: an exact positioned inactive wait does not
 request discovery; a flat non-open owner and a later authoritative position-
 zero transition still do. This removes calls without delaying a legal exit,
 weakening ownership or changing the normal under-capacity selection schedule.
+
+On 2026-09-02 the account-wide active market catalog grew past the selector's
+fixed 100-page by 500-row safety ceiling. The last successful scan observed
+47,377 catalog rows; later scans exhausted all 100 pages and failed closed at
+50,000. Twenty-two top-up failures accumulated from 13:16Z through 13:52Z.
+Each failed attempt consumed 100 background reads without reaching incentive,
+book or replacement selection, while owner signals restarted discovery after
+only a few seconds. The resulting order drop was local discovery starvation,
+not a confirmed 429 or exhaustion of the 4/s host budget.
+
+The prepared correction removes catalog size from live selection cost:
+enumerate active incentive programs, batch exact market metadata at the
+documented 100-slug request maximum, then apply the unchanged lifecycle,
+six-hour, V2-moneyline, minimum-quantity, spread, period, full-book and ranking
+gates. Missing metadata remains fail-closed. A separate runner-level
+retry-not-before deadline prevents lifecycle, reward-end and post-flat signals
+from bypassing the ordinary backoff after any complete top-up failure. This is
+admission/load control only; it does not change prices, quantity, ranking,
+ownership, exit priority or mutation authority.
 
 ### Measured live baseline and modeled scenarios
 

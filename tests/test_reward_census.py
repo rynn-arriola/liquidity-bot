@@ -53,7 +53,7 @@ class CensusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {row.side for row in result.rows}, {"bid", "offer"})
         self.assertTrue(result.coverage_complete)
-        self.assertEqual(gateway.metadata_calls, [])
+        self.assertEqual(gateway.metadata_calls, [("alpha", "beta")])
         self.assertEqual(result.catalog_markets, 2)
 
     async def test_gate_ratio_agrees_with_the_live_viability_decision(self):

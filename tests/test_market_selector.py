@@ -89,6 +89,7 @@ class FakeGateway:
         self.books = books
         self.metadata_calls = []
         self.catalog_calls = 0
+        self.incentive_universe_calls = []
         self.book_calls = []
         self.incentive_symbol_calls = []
         self.traffic_classes = []
@@ -110,6 +111,10 @@ class FakeGateway:
             for slug in symbols
             if slug in self.incentives
         }
+
+    async def list_incentives(self, *, statuses=("active",)):
+        self.incentive_universe_calls.append(tuple(statuses))
+        return dict(self.incentives)
 
     async def fetch_market(self, slug):
         self.metadata_calls.append(slug)
@@ -359,6 +364,21 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_reward_universe_returns_without_metadata_or_books(self):
+        gateway = FakeGateway(
+            {"non-rewarded": market("non-rewarded")},
+            {},
+            {"non-rewarded": book("non-rewarded")},
+        )
+
+        result = await RewardMarketSelector(gateway).select(now=NOW)
+
+        self.assertIsNone(result.selected)
+        self.assertEqual(result.catalog_markets, 0)
+        self.assertEqual(result.rewarded_executable_markets, 0)
+        self.assertEqual(gateway.metadata_calls, [])
+        self.assertEqual(gateway.book_calls, [])
+
     async def test_shared_cooldown_stops_scan_without_market_failures(self):
         deferred = ApiAdmissionDeferred(
             "background API cooldown active; request not sent",
@@ -377,6 +397,32 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
             await RewardMarketSelector(gateway).select(now=NOW)
 
         self.assertEqual(len(gateway.book_calls), 1)
+
+    async def test_shared_cooldown_stops_before_reward_metadata_fanout(self):
+        deferred = ApiAdmissionDeferred(
+            "background API cooldown active; request not sent",
+            operation="incentives.list",
+            error_code="LOCAL_API_COOLDOWN",
+            retry_after_seconds=30.0,
+        )
+        gateway = FakeGateway(
+            {"one": market("one")},
+            {"one": incentive("one", pool=1000)},
+            {"one": book("one")},
+        )
+
+        async def defer_incentives(*, statuses=("active",)):
+            gateway.incentive_universe_calls.append(tuple(statuses))
+            raise deferred
+
+        gateway.list_incentives = defer_incentives
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            await RewardMarketSelector(gateway).select(now=NOW)
+
+        self.assertEqual(gateway.incentive_universe_calls, [("active",)])
+        self.assertEqual(gateway.metadata_calls, [])
+        self.assertEqual(gateway.book_calls, [])
 
     async def test_real_book_failure_remains_one_market_failure(self):
         gateway = FakeGateway(
@@ -456,14 +502,14 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.rewarded_executable_markets, 2)
         self.assertEqual(result.unsupported_programs, 0)
-        self.assertEqual(gateway.metadata_calls, [])
+        self.assertEqual(gateway.metadata_calls, [("high", "low")])
         self.assertEqual(set(gateway.book_calls), {"high", "low"})
         self.assertEqual(set(reward_market_slugs(result)), {"high", "low"})
         self.assertEqual(result.selected.market.slug, "high")
         self.assertEqual(result.viable_markets, 2)
-        self.assertEqual(gateway.catalog_calls, 1)
-        self.assertEqual(
-            set(gateway.incentive_symbol_calls[0]), {"high", "low"})
+        self.assertEqual(gateway.catalog_calls, 0)
+        self.assertEqual(gateway.incentive_universe_calls, [("active",)])
+        self.assertEqual(gateway.incentive_symbol_calls, [])
 
     async def test_no_profitable_market_returns_no_execution_selection(self):
         markets = {slug: market(slug) for slug in ("smaller", "larger")}
@@ -555,7 +601,7 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.rewarded_executable_markets, 1)
         self.assertEqual(result.unsupported_programs, 1)
         self.assertEqual(result.eligible_pregame_markets, 0)
-        self.assertEqual(gateway.metadata_calls, [])
+        self.assertEqual(gateway.metadata_calls, [("tournament",)])
         self.assertEqual(gateway.book_calls, [])
 
     async def test_book_budget_defers_but_does_not_hide_discovery_count(self):
@@ -590,7 +636,7 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(set(gateway.book_calls), set(markets))
 
-    async def test_catalog_filter_precedes_incentive_and_book_fanout(self):
+    async def test_reward_program_filter_precedes_book_fanout(self):
         valid = market("valid")
         early = market("early", starts_in_hours=7)
         closed = MarketMetadata(
@@ -613,9 +659,13 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.catalog_markets, 4)
         self.assertEqual(result.executable_catalog_markets, 1)
-        self.assertEqual(gateway.incentive_symbol_calls, [("valid",)])
+        self.assertEqual(gateway.incentive_universe_calls, [("active",)])
+        self.assertEqual(
+            gateway.metadata_calls,
+            [("closed", "early", "missing-tick", "valid")],
+        )
+        self.assertEqual(gateway.incentive_symbol_calls, [])
         self.assertEqual(gateway.book_calls, ["valid"])
-        self.assertEqual(gateway.metadata_calls, [])
 
     async def test_structure_filter_uses_v2_not_two_way_side_count(self):
         moneyline = market("moneyline")
@@ -632,8 +682,51 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         result = await RewardMarketSelector(gateway).select(now=NOW)
 
         self.assertEqual(result.executable_catalog_markets, 1)
-        self.assertEqual(gateway.incentive_symbol_calls, [("moneyline",)])
+        self.assertEqual(gateway.incentive_universe_calls, [("active",)])
+        self.assertEqual(
+            gateway.metadata_calls, [("future", "moneyline", "prop")])
+        self.assertEqual(gateway.incentive_symbol_calls, [])
         self.assertEqual(gateway.book_calls, ["moneyline"])
+
+    async def test_reward_market_metadata_is_batched_without_full_catalog_scan(self):
+        markets = {
+            f"market-{index:03d}": market(f"market-{index:03d}")
+            for index in range(205)
+        }
+        gateway = FakeGateway(
+            markets,
+            {slug: incentive(slug, pool=20_000) for slug in markets},
+            {slug: book(slug) for slug in markets},
+        )
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(max_book_candidates=1))
+
+        result = await selector.select(now=NOW)
+
+        self.assertEqual(gateway.catalog_calls, 0)
+        self.assertEqual(gateway.incentive_universe_calls, [("active",)])
+        self.assertEqual([len(batch) for batch in gateway.metadata_calls],
+                         [100, 100, 5])
+        self.assertEqual(result.catalog_markets, 205)
+        self.assertEqual(result.rewarded_executable_markets, 205)
+        self.assertEqual(result.books_evaluated, 1)
+
+    async def test_missing_exact_market_metadata_never_authorizes_a_reward(self):
+        gateway = FakeGateway(
+            {"present": market("present")},
+            {
+                "missing": incentive("missing", pool=30_000),
+                "present": incentive("present", pool=20_000),
+            },
+            {"present": book("present")},
+        )
+
+        result = await RewardMarketSelector(gateway).select(now=NOW)
+
+        self.assertEqual(result.catalog_markets, 1)
+        self.assertEqual(result.rewarded_executable_markets, 1)
+        self.assertEqual(reward_market_slugs(result), ("present",))
+        self.assertEqual(gateway.book_calls, ["present"])
 
     async def test_catalog_bbo_skips_known_tight_market_before_book(self):
         markets = {

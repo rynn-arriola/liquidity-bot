@@ -43,6 +43,11 @@ SUPPORTED_EVENT_PERIODS = frozenset({
     "live",
 })
 
+# Retail accepts at most 100 slugs on one filtered market-list request.  Full
+# discovery batches exact reward-market metadata at that bound instead of
+# walking the ever-growing account-wide active catalog.
+MARKET_METADATA_BATCH_SIZE = 100
+
 
 @dataclass(frozen=True)
 class RewardSelectionPolicy:
@@ -423,7 +428,7 @@ def _opportunity_key(
 
 
 class RewardMarketSelector:
-    """Join the bulk sports catalog to rewards and score a bounded set."""
+    """Join active reward programs to exact market metadata and score them."""
 
     def __init__(
         self,
@@ -445,15 +450,24 @@ class RewardMarketSelector:
     async def _select(self, *, now: datetime) -> RewardMarketSelection:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("selection clock must be timezone-aware")
-        # Market list rows carry every immutable field needed for selection.
-        # Join one bulk catalog snapshot to batched incentive responses instead
-        # of retrieving metadata once for every rewarded slug.  Only the
-        # documented six-hour day-of window can authorize this executor, and
-        # `selection_horizon_seconds` narrows it further to the part of that
-        # window where reward is actually paid. Filter by that clock before
-        # asking for incentive rows, so a market we will not quote never costs
-        # an incentive row or a book fetch.
-        catalog = await self.gateway.list_sports_markets()
+        # Reward eligibility is required for every order, so enumerate that
+        # bounded universe first and retrieve only its exact market rows in
+        # documented batches.  The old catalog-first path walked every active
+        # market merely to discard the non-rewarded majority.  On 2026-09-02
+        # the venue crossed its fixed 50,000-row safety bound; each failed
+        # top-up spent 100 reads and never reached replacement selection.
+        #
+        # This changes discovery cost, not authorization: the same market,
+        # lifecycle, six-hour clock, structure, spread, incentive-period and
+        # full-book gates below still decide the candidate and its rank.
+        incentives = await self.gateway.list_incentives(statuses=("active",))
+        catalog_by_slug: dict[str, MarketMetadata] = {}
+        reward_slugs = sorted(incentives)
+        for offset in range(0, len(reward_slugs), MARKET_METADATA_BATCH_SIZE):
+            batch = reward_slugs[offset:offset + MARKET_METADATA_BATCH_SIZE]
+            catalog_by_slug.update(
+                await self.gateway.fetch_markets_by_slugs(batch))
+        catalog = tuple(catalog_by_slug[slug] for slug in sorted(catalog_by_slug))
         window_end = now + timedelta(
             seconds=self.policy.selection_horizon_seconds)
         executable_catalog = {
@@ -462,16 +476,19 @@ class RewardMarketSelector:
             if self._catalog_market_is_executable(
                 market, now=now, window_end=window_end)
         }
-        incentives = await self.gateway.fetch_incentives(
-            sorted(executable_catalog))
+        rewarded_executable = {
+            slug: incentives[slug]
+            for slug in executable_catalog
+            if slug in incentives
+        }
         candidates: list[
             tuple[MarketMetadata, MarketIncentive, IncentivePeriod]
         ] = []
         failures: list[str] = []
         unsupported = 0
         catalog_spread_filtered = 0
-        for slug in sorted(incentives):
-            incentive = incentives[slug]
+        for slug in sorted(rewarded_executable):
+            incentive = rewarded_executable[slug]
             if not any(
                     str(period.period).strip().lower()
                     in SUPPORTED_EVENT_PERIODS
@@ -526,7 +543,7 @@ class RewardMarketSelector:
                 None,
             ),
             opportunities=tuple(opportunities),
-            rewarded_executable_markets=len(incentives),
+            rewarded_executable_markets=len(rewarded_executable),
             catalog_markets=len(catalog),
             executable_catalog_markets=len(executable_catalog),
             unsupported_programs=unsupported,

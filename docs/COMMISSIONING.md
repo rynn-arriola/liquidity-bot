@@ -110,13 +110,14 @@ The command refuses before order entry unless all of these are true:
 9. Authenticated earnings for the active liquidity program can be read and
    persisted separately from execution P&L.
 
-Automatic discovery bulk-loads active sports metadata, filters open markets to
-the documented six-hour `day_of` window and the venue's V2 moneyline enum, then
-requests incentives only for those symbols in batches. It does not retrieve
-metadata once per reward slug. `marketSides=2` is not used as a structure test
-because rewarded futures are also two-sided. Catalog BBO can reject a
-known-tight row before a full-book request, but only a fresh full book can
-authorize entry.
+Automatic discovery enumerates active liquidity programs first, fetches exact
+market metadata for only those reward slugs in documented 100-market batches,
+then filters open markets to the six-hour `day_of` window and the venue's V2
+moneyline enum. It never walks the account-wide active market catalog and does
+not retrieve metadata one slug at a time. `marketSides=2` is not used as a
+structure test because rewarded futures are also two-sided. Metadata BBO can
+reject a known-tight row before a full-book request, but only a fresh full book
+can authorize entry.
 Only documented early/day-of/live lifecycle names enter validation, and only
 the currently applicable pregame `day_of` period can authorize this executor.
 Lifecycle names not implemented by the pregame executor—including documented
@@ -172,6 +173,10 @@ POSIX lock. Every executable gateway still requires an explicit limiter.
 Event-driven lifecycle, reward-end and post-flat top-ups first attempt bounded
 revalidation of a complete selection no older than 120 seconds, avoiding a new
 catalog scan immediately before stream-handoff position proof.
+If a complete top-up fails, every event-driven and ordinary trigger observes
+one shared retry-not-before deadline. The triggering state is delayed rather
+than converted into market failure, and order/position service continues
+between attempts.
 
 Structured entry rejections are also scoped rather than terminal: expected
 post-only races wait one second in that market, balance/risk failures wait 15
@@ -332,6 +337,17 @@ stored positive response proof, not snapshot absence. Every near-match still
 requires normal reconciliation or the stopped-only orphan resolver. Shutdown
 retains its independent exit attempts and never treats either circuit as
 flatness.
+
+A PLACE that becomes `UNCERTAIN` without an exchange order id is never resent:
+the local client id was not transmitted and cannot identify the possible venue
+order. The runner now keeps that market dormant and automatically abandons the
+mutation only after three complete open-order/position snapshots spanning at
+least ten seconds all show no live order or position in the market, no local
+order row exists, and no execution at or after the intent is recorded. Any
+contrary evidence resets the proof. Startup and market-stream recovery wait in
+the same process rather than spending a restart budget; operator stop and HARD
+remain terminal. `scripts/resolve_orphan_places.py` remains a stopped-runner
+manual fallback and dry-run check.
 
 ## Exit meanings
 

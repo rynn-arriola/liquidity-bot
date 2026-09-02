@@ -168,6 +168,19 @@ MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
 MAX_MARKET_STREAM_RECOVERY_ATTEMPTS = 12
 MAX_BOUND_STREAM_RECOVERY_ATTEMPTS = 12
 
+# A PLACE whose response carried no exchange order id must never be resent: the
+# venue may have accepted it even though the acknowledgement was lost.  It can,
+# however, stop being live risk once several complete account snapshots agree
+# that its market has neither an open order nor a position.  Requiring both
+# repetition and elapsed time protects against an eventually-consistent first
+# snapshot after a venue outage while keeping recovery in-process.
+ORPHAN_PLACE_CLEAR_PROOFS = 3
+ORPHAN_PLACE_CLEAR_MIN_SECONDS = 10.0
+
+
+class _OrphanPlaceEvidencePending(CommissioningUnavailable):
+    """A no-id PLACE remains dormant while repeated venue proof accumulates."""
+
 # The ordinary read gateway already retries a confirmed 429 three times. A
 # Cloudflare 1015 can outlive those short retries, and immediately converting
 # that temporary read throttle into global quarantine erased 34 healthy orders
@@ -204,6 +217,7 @@ RUN_LOOP_COOPERATIVE_YIELD_SECONDS = 0.01
 NO_ID_REPAIR_IDLE_SECONDS = 0.25
 API_BUDGET_LOG_SECONDS = 60.0
 DECISION_SCHEDULER_LOG_SECONDS = 60.0
+TOP_UP_FAILURE_RETRY_SECONDS = 60.0
 
 # Bound-market metadata and incentive rows are both bulk-readable. Refresh one
 # private-shard-sized scope at a time: this replaces sixteen per-market calls
@@ -461,6 +475,13 @@ class CommissioningRunner:
         # remain unchanged.
         self._post_flat_top_up_requested_at: datetime | None = None
         self._post_flat_underfilled_slots = 0
+        # A failed discovery must leave real service time before any lifecycle
+        # or post-flat signal can start another scan.  `next_selection` alone
+        # is insufficient because event-driven requests deliberately bypass
+        # that ordinary cadence; when a catalog scan itself took 60-90 seconds,
+        # they restarted it almost immediately and starved order decisions.
+        self._top_up_retry_not_before = datetime.min.replace(
+            tzinfo=timezone.utc)
         # "Up, healthy, and resting nothing" -- see `_alarm_if_quoting_nothing`.
         self._quiet_since: datetime | None = None
         self._quiet_alarm_sent = False
@@ -469,6 +490,10 @@ class CommissioningRunner:
         # exchange_order_id -> when we last re-issued a cancel the venue had
         # confirmed did not land. See `_retry_uncertain_cancels`.
         self._cancel_retried_at: dict[str, datetime] = {}
+        # intent id -> (consecutive clean account proofs, first proof time).
+        # This is deliberately process-local. A restart must collect fresh
+        # proofs rather than inheriting a confidence claim from a dead process.
+        self._orphan_place_clear_proofs: dict[str, tuple[int, datetime]] = {}
         # market -> when it last placed or cancelled. A market between a
         # cancel and its re-place holds no order for a few seconds and is not
         # stuck; without this it was counted as stuck and the alarm fired on
@@ -932,6 +957,98 @@ class CommissioningRunner:
             and str(row["state"]).upper() == "UNCERTAIN"
             and not str(row["exchange_order_id"] or "").strip()
         )
+
+    async def _advance_orphan_place_clear_proofs(
+        self,
+        *,
+        observed_at: datetime,
+        open_orders: tuple[Any, ...],
+        positions: tuple[Any, ...],
+    ) -> tuple[str, ...]:
+        """Terminalize no-id PLACE ambiguity only after repeated flat proof.
+
+        The retail create endpoint does not receive our local client id, so an
+        uncertain create has no order-specific lookup key and may never be
+        replayed.  Complete open-order and position snapshots can nevertheless
+        prove that no *live risk* survives in its market.  We require three
+        consecutive proofs spanning ten seconds, no local order row, and no
+        locally observed execution at or after the intent.  Any contrary fact
+        resets that intent's proof.  The terminal FAILED label means the
+        mutation is abandoned, not that its original HTTP outcome is known.
+        """
+
+        candidates = self._unresolved_places_without_exchange_id()
+        candidate_ids = {str(row["intent_id"]) for row in candidates}
+        self._orphan_place_clear_proofs = {
+            intent_id: proof
+            for intent_id, proof in self._orphan_place_clear_proofs.items()
+            if intent_id in candidate_ids
+        }
+        if not candidates:
+            return ()
+
+        live_order_markets = {
+            str(order.market_slug) for order in open_orders
+            if str(order.market_slug).strip()
+        }
+        held_markets = {
+            str(position.market_slug) for position in positions
+            if position.net_qty != 0
+        }
+        resolved: list[str] = []
+        for row in candidates:
+            intent_id = str(row["intent_id"])
+            market = str(row["market_slug"] or "").strip()
+            client_order_id = str(row["client_order_id"] or "").strip()
+            created_at = datetime.fromisoformat(str(row["created_at"]))
+            local_order = self.ledger.query(
+                "SELECT 1 FROM execution_orders WHERE client_order_id=? LIMIT 1",
+                (client_order_id,),
+            )
+            later_execution = self.ledger.query(
+                "SELECT 1 FROM execution_fills WHERE market_slug=? "
+                "AND event_at>=? LIMIT 1",
+                (market, created_at.isoformat()),
+            )
+            blocked = (
+                not market
+                or bool(local_order)
+                or market in live_order_markets
+                or market in held_markets
+                or bool(later_execution)
+            )
+            if blocked:
+                self._orphan_place_clear_proofs.pop(intent_id, None)
+                continue
+
+            count, first_at = self._orphan_place_clear_proofs.get(
+                intent_id, (0, observed_at))
+            count += 1
+            self._orphan_place_clear_proofs[intent_id] = (count, first_at)
+            if (count < ORPHAN_PLACE_CLEAR_PROOFS
+                    or (observed_at - first_at).total_seconds()
+                    < ORPHAN_PLACE_CLEAR_MIN_SECONDS):
+                continue
+
+            self.ledger.transition_intent(
+                intent_id,
+                "FAILED",
+                updated_at=observed_at,
+                error=(
+                    "automatic recovery abandoned no-id PLACE after repeated "
+                    "complete account proofs found no live order or position; "
+                    "the original create outcome remains unknown"),
+            )
+            self._orphan_place_clear_proofs.pop(intent_id, None)
+            resolved.append(intent_id)
+            self._mark_market_dirty(market, observed_at)
+            await self.notifier.send_async(
+                "Liquidity Bot safely retired an unresolved PLACE without an "
+                f"exchange order id in {market} after repeated complete "
+                "order/position proofs found no surviving venue risk. The "
+                "uncertain create was not retried."
+            )
+        return tuple(resolved)
 
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
@@ -2056,6 +2173,18 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        orphan_places_resolved = await self._advance_orphan_place_clear_proofs(
+            observed_at=now,
+            open_orders=orders,
+            positions=positions,
+        )
+        if orphan_places_resolved:
+            print(
+                f"[orphan-place-recovery] at={now.isoformat()} "
+                f"resolved={len(orphan_places_resolved)} "
+                f"intent_ids={','.join(orphan_places_resolved)}",
+                flush=True,
+            )
         if self._settlement_wait_slugs:
             self._sync_settlement_wait_positions(self._now())
         if self._inactive_market_wait_slugs:
@@ -2529,6 +2658,21 @@ class CommissioningRunner:
                     continue
                 await self.sleep(self._recovery_delay(
                     "startup_venue_unavailable", base=5.0, cap=30.0))
+            except _OrphanPlaceEvidencePending as exc:
+                # This is local ambiguity, not a stream/venue failure and not a
+                # condition that improves by restarting. Stay flat, repeat the
+                # complete account proof, and remain operator-interruptible.
+                attempt = 0
+                venue_failure_streak = 0
+                await self._report_runtime_error(
+                    "startup_orphan_place_evidence", exc)
+                await self._release_partial_startup()
+                if self._stop_requested:
+                    raise CommissioningRefused(
+                        f"operator stopped during orphan PLACE recovery: {exc}"
+                    ) from exc
+                await self.sleep(self._recovery_delay(
+                    "startup_orphan_place_evidence", base=5.0, cap=60.0))
             except CommissioningUnavailable as exc:
                 venue_failure_streak = 0
                 if attempt >= MAX_STARTUP_UNAVAILABLE_ATTEMPTS:
@@ -2557,10 +2701,15 @@ class CommissioningRunner:
         self.gate.on_disconnect()
         self.market_stream = self.market_stream_factory(self.client)
         self.private_stream = self.private_stream_factory(self.client)
-        self.market = None
-        self.incentive = None
-        self.book = None
-        self.book_observed_at = None
+        # A retry can fail before automatic selection binds its first market
+        # (notably while proving a startup orphan). The compatibility
+        # properties require a primary slug, so clear them only when one exists;
+        # `_bind_markets(())` below discards every per-market state either way.
+        if self.active_slugs:
+            self.market = None
+            self.incentive = None
+            self.book = None
+            self.book_observed_at = None
         if self.config.auto_select_reward_markets:
             self._bind_markets(())
 
@@ -2623,20 +2772,19 @@ class CommissioningRunner:
                 # position: an empty book then becomes a retryable transport
                 # failure and the supervisor performs three pointless fast
                 # restarts. It is also unsafe to clear the intent from one
-                # absence snapshot. Stop once and direct the operator to the
-                # reviewed, stopped-only path, which takes its own fresh
-                # account proof before writing anything.
+                # absence snapshot. Keep this process alive and flat while the
+                # repeated complete-account proof in `_rest_reconcile`
+                # accumulates; the uncertain create is never retried.
                 markets = sorted({
                     str(row["market_slug"] or "").strip()
                     for row in orphan_places
                     if str(row["market_slug"] or "").strip()
                 })
-                raise CommissioningRefused(
+                raise _OrphanPlaceEvidencePending(
                     "startup found "
                     f"{len(orphan_places)} unresolved PLACE intent(s) without "
-                    "an exchange order id; keep the runner stopped and run "
-                    "scripts/resolve_orphan_places.py (dry run, then --apply "
-                    "only after its venue proof)"
+                    "an exchange order id; waiting in-process for repeated "
+                    "complete account proof with no surviving venue risk"
                     + (f"; markets={','.join(markets)}" if markets else ""))
         if self.config.auto_select_reward_markets:
             recovery_slugs = self._identified_recovery_markets()
@@ -2773,7 +2921,8 @@ class CommissioningRunner:
                 f" Auto-selected {self.market_slug} from "
                 f"{self._market_selection.rewarded_executable_markets} rewarded "
                 f"executable markets joined from "
-                f"{self._market_selection.catalog_markets} catalog rows after evaluating "
+                f"{self._market_selection.catalog_markets} exact reward-market "
+                "metadata rows after evaluating "
                 f"{self._market_selection.books_evaluated} books; "
                 f"{self._market_selection.unsupported_programs} programs used "
                 "an unsupported or undocumented lifecycle and remained read-only.")
@@ -5635,7 +5784,7 @@ class CommissioningRunner:
             f"earnings_paid={paid_observed:.2f} "
             f"earnings_pending={pending_observed:.2f} "
             f"retired={len(self._retired_ever)}"
-            + (f" catalog={self._market_selection.catalog_markets}"
+            + (f" reward_metadata={self._market_selection.catalog_markets}"
                f" executable={self._market_selection.executable_catalog_markets}"
                f" rewarded={self._market_selection.rewarded_executable_markets}"
                f" books_ranked={self._market_selection.books_evaluated}"
@@ -5894,9 +6043,20 @@ class CommissioningRunner:
         if not require_terminal:
             return
         for market in slugs:
-            if self.ledger.market_has_unresolved_intent(market):
+            unresolved = self.ledger.unresolved_intents(market)
+            if unresolved and all(
+                    str(row["operation"]).upper() == "PLACE"
+                    and str(row["state"]).upper() == "UNCERTAIN"
+                    and not str(row["exchange_order_id"] or "").strip()
+                    for row in unresolved):
+                raise _OrphanPlaceEvidencePending(
+                    "runtime recovery is waiting for repeated complete account "
+                    f"proof for a no-id PLACE in {market}")
+            if unresolved:
+                operation = str(unresolved[0]["operation"]).upper()
                 raise AdapterError(
-                    f"runtime recovery cancel is not yet reconciled in {market}")
+                    "runtime recovery "
+                    f"{operation.lower()} is not yet reconciled in {market}")
             if self.ledger.working_orders(market):
                 raise AdapterError(
                     f"runtime recovery order is still working in {market}")
@@ -6281,6 +6441,7 @@ class CommissioningRunner:
         return (
             self.config.auto_select_reward_markets
             and not self._entry_pause_active()
+            and now >= self._top_up_retry_not_before
             and (now >= next_selection
                  or self._reward_end_top_up_requested
                  or self._lifecycle_top_up_requested_at is not None
@@ -6724,7 +6885,7 @@ class CommissioningRunner:
             "🔄 Liquidity Bot rotated while flat from "
             f"[{', '.join(previous) or 'none'}] to "
             f"[{', '.join(chosen)}]. "
-            f"Joined {selection.catalog_markets} catalog markets to "
+            f"Joined {selection.catalog_markets} exact reward-market rows to "
             f"{selection.rewarded_executable_markets} executable reward programs, "
             f"evaluated {selection.books_evaluated} books, and "
             f"found {selection.viable_markets} economically viable markets; "
@@ -7006,6 +7167,25 @@ class CommissioningRunner:
                 await self._report_runtime_error(
                     "market_stream_terminal", invariant)
                 return f"critical:{invariant.code}"
+            except _OrphanPlaceEvidencePending as pending:
+                # An uncertain no-id create is neither a failed stream attempt
+                # nor permission to resend. Complete reconciliation above keeps
+                # proving account state; wait in-process until the conservative
+                # proof terminalizes it. HARD/operator stop checks still run on
+                # every pass, and this wait never creates venue risk.
+                exc = pending
+                attempt = 0
+                venue_failure_streak = 0
+                await self._report_runtime_error(
+                    "market_stream_orphan_place_evidence", pending)
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self.sleep(self._recovery_delay(
+                    "market_stream_orphan_place_evidence",
+                    base=5.0,
+                    cap=60.0,
+                ))
             except Exception as recovery_exc:
                 exc = recovery_exc
                 venue_failure_streak = (
@@ -8500,6 +8680,8 @@ class CommissioningRunner:
                         )
                         self._clear_incremental_top_up_requests(
                             consumed_post_flat_at)
+                        self._top_up_retry_not_before = datetime.min.replace(
+                            tzinfo=timezone.utc)
                         next_selection = self._now() + timedelta(
                             seconds=self.config.market_selection_refresh_seconds)
                     except ApiAdmissionDeferred as exc:
@@ -8507,18 +8689,25 @@ class CommissioningRunner:
                             consumed_post_flat_at)
                         delay = self._api_admission_delay(exc)
                         self._log_api_backpressure("market_top_up", delay)
-                        next_selection = self._now() + timedelta(seconds=delay)
+                        retry_at = self._now() + timedelta(seconds=delay)
+                        self._top_up_retry_not_before = max(
+                            self._top_up_retry_not_before, retry_at)
+                        next_selection = retry_at
                     except Exception as exc:
                         self._clear_incremental_top_up_requests(
                             consumed_post_flat_at)
                         await self._report_runtime_error(
                             "market_top_up", exc)
-                        # Back off exactly as the rotation path does. Without
-                        # this `next_selection` stays in the past, the branch
-                        # re-enters on the very next iteration, and a failing
-                        # scan retries forever -- cancelling and rebuilding
-                        # both stream tasks every pass.
-                        next_selection = self._now() + timedelta(seconds=60)
+                        # Event-driven lifecycle/post-flat requests bypass the
+                        # ordinary selection time, so guard their admission too.
+                        # On 2026-09-02 each failed 100-page catalog scan took
+                        # about a minute and the next owner signal restarted it
+                        # seconds later, leaving no useful decision time.
+                        retry_at = self._now() + timedelta(
+                            seconds=TOP_UP_FAILURE_RETRY_SECONDS)
+                        self._top_up_retry_not_before = max(
+                            self._top_up_retry_not_before, retry_at)
+                        next_selection = retry_at
                     market_task = asyncio.create_task(
                         self.market_stream.next_book())
                     private_task = asyncio.create_task(

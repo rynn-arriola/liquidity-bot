@@ -3230,10 +3230,23 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_startup_refuses_no_id_place_once_before_loading_its_book(self):
-        """A no-id create needs stopped-only proof, not a recovery-book loop."""
+    async def test_startup_self_resolves_no_id_place_before_loading_its_book(self):
+        """A no-id create stays flat until repeated account proof clears it."""
 
-        runner, _, _ = self.build_runner(auto=True, clock=TickingClock())
+        current = [NOW]
+        sleeps = []
+
+        async def advance(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) > 4:
+                raise AssertionError(
+                    "startup orphan recovery did not converge in-process")
+            current[0] += timedelta(seconds=seconds)
+
+        selector = FakeRewardSelector(fake_selection("market-one"))
+        runner, client, _ = self.build_runner(
+            auto=True, clock=lambda: current[0], reward_selector=selector)
+        runner.sleep = advance
         stale = "aec-finished-orphan-2026-08-28"
         runner.ledger.prepare_intent(
             "orphan-place", "PLACE", stale, "local-only-client",
@@ -3246,16 +3259,137 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         refresh = AsyncMock()
         runner._refresh_bound_books = refresh
 
-        with self.assertRaisesRegex(
-                CommissioningRefused, "resolve_orphan_places.py"):
-            await runner.preflight()
+        mode = await runner.preflight_until_ready()
 
-        refresh.assert_not_awaited()
-        self.assertEqual(runner.active_slugs, ())
+        self.assertEqual(mode, "TRADE")
+        self.assertGreaterEqual(sum(sleeps), 10)
+        self.assertEqual(runner.ledger.unresolved_intents(), [])
+        state = runner.ledger.query(
+            "SELECT state,error FROM execution_intents WHERE intent_id=?",
+            ("orphan-place",),
+        )[0]
+        self.assertEqual(state["state"], "FAILED")
+        self.assertIn("original create outcome remains unknown", state["error"])
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertEqual(refresh.await_count, 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_orphan_place_proof_resets_on_any_surviving_risk(self):
+        runner, client, _ = self.build_runner()
+        slug = "market-one"
+        runner.ledger.prepare_intent(
+            "orphan-place", "PLACE", slug, "local-only-client",
+            {"marketSlug": slug}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "UNCERTAIN", updated_at=NOW,
+            error="POST /v1/orders returned 504 without an id")
+
+        await runner._advance_orphan_place_clear_proofs(
+            observed_at=NOW, open_orders=(), positions=())
+        self.assertIn("orphan-place", runner._orphan_place_clear_proofs)
+
+        open_order = OrderState(
+            client_order_id="different-client",
+            market_slug=slug,
+            side="BUY",
+            price=Decimal("0.49"),
+            original_qty=Decimal("1"),
+            filled_qty=Decimal("0"),
+            status="OPEN",
+            event_at=NOW + timedelta(seconds=2),
+            exchange_order_id="possible-orphan-order",
+        )
+        await runner._advance_orphan_place_clear_proofs(
+            observed_at=NOW + timedelta(seconds=2),
+            open_orders=(open_order,), positions=())
+        self.assertNotIn("orphan-place", runner._orphan_place_clear_proofs)
+
+        await runner._advance_orphan_place_clear_proofs(
+            observed_at=NOW + timedelta(seconds=3),
+            open_orders=(), positions=())
+        self.assertIn("orphan-place", runner._orphan_place_clear_proofs)
+
+        position = PositionState(
+            market_slug=slug,
+            net_qty=Decimal("1"),
+            event_at=NOW + timedelta(seconds=5),
+            cost=Decimal("0.5"),
+            cash_value=Decimal("0.5"),
+        )
+        await runner._advance_orphan_place_clear_proofs(
+            observed_at=NOW + timedelta(seconds=5),
+            open_orders=(), positions=(position,))
+
+        self.assertNotIn("orphan-place", runner._orphan_place_clear_proofs)
         self.assertEqual(
             [row["intent_id"] for row in runner.ledger.unresolved_intents()],
-            ["orphan-place"],
-            "startup must diagnose the ambiguity, never clear it")
+            ["orphan-place"])
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_orphan_place_with_observed_execution_is_never_failed(self):
+        runner, client, _ = self.build_runner()
+        slug = "market-one"
+        runner.ledger.prepare_intent(
+            "orphan-place", "PLACE", slug, "local-only-client",
+            {"marketSlug": slug}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "orphan-place", "UNCERTAIN", updated_at=NOW,
+            error="POST /v1/orders returned 504 without an id")
+        runner.ledger.apply_execution(Execution(
+            execution_id="possible-orphan-fill",
+            client_order_id="venue:unknown",
+            exchange_order_id="unknown-order",
+            market_slug=slug,
+            side="BUY",
+            price=Decimal("0.50"),
+            qty=Decimal("1"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=NOW + timedelta(seconds=1),
+        ), received_at=NOW + timedelta(seconds=1))
+
+        for offset in (0, 10, 20, 30):
+            await runner._advance_orphan_place_clear_proofs(
+                observed_at=NOW + timedelta(seconds=offset),
+                open_orders=(), positions=())
+
+        self.assertEqual(
+            [row["intent_id"] for row in runner.ledger.unresolved_intents()],
+            ["orphan-place"])
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_no_id_cancel_is_never_treated_as_orphan_place(self):
+        runner, client, _ = self.build_runner()
+        runner.ledger.prepare_intent(
+            "uncertain-cancel", "CANCEL", "market-one", "cancel-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "uncertain-cancel", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "uncertain-cancel", "UNCERTAIN", updated_at=NOW,
+            error="cancel outcome unknown")
+
+        for offset in (0, 10, 20):
+            await runner._advance_orphan_place_clear_proofs(
+                observed_at=NOW + timedelta(seconds=offset),
+                open_orders=(), positions=())
+
+        self.assertEqual(
+            [row["intent_id"] for row in runner.ledger.unresolved_intents()],
+            ["uncertain-cancel"])
+        self.assertEqual(runner._orphan_place_clear_proofs, {})
+        self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7226,6 +7360,48 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_market_recovery_waits_for_orphan_proof_without_exhausting(self):
+        current = [NOW]
+
+        async def advance(seconds):
+            current[0] += timedelta(seconds=seconds)
+
+        class RecoveringMarketStream(FakeMarketStream):
+            async def next_book(self, *, timeout=None):
+                return fake_selection("market-one").selected.book
+
+        runner, client, _ = self.build_runner(clock=lambda: current[0])
+        runner.sleep = advance
+        await runner.preflight()
+        runner.market_stream_factory = RecoveringMarketStream
+        runner.ledger.prepare_intent(
+            "runtime-orphan", "PLACE", "market-one", "local-only-client",
+            {"marketSlug": "market-one"}, created_at=NOW)
+        runner.ledger.transition_intent(
+            "runtime-orphan", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "runtime-orphan", "UNCERTAIN", updated_at=NOW,
+            error="POST /v1/orders returned 503 without an id")
+
+        stop = await runner._recover_market_stream(
+            AdapterError("market WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(runner.ledger.unresolved_intents(), [])
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        self.assertGreaterEqual(
+            runner._runtime_error_counts.get(
+                "market_stream_orphan_place_evidence", 0),
+            1,
+        )
+        self.assertNotEqual(
+            runner._runtime_error_counts.get("market_stream"),
+            MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_hard_stop_remains_terminal_during_stream_recovery(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -10376,6 +10552,23 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         runner._reward_end_top_up_requested = True
         self.assertTrue(runner._incremental_top_up_due(
             now, next_selection))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_top_up_retry_floor_cannot_be_bypassed_by_owner_signal(self):
+        runner = await self.armed()
+        now = runner._now()
+        retry_at = now + timedelta(seconds=60)
+        runner._reward_end_top_up_requested = True
+        runner._top_up_retry_not_before = retry_at
+
+        self.assertFalse(runner._incremental_top_up_due(
+            now, now - timedelta(seconds=1)))
+        self.assertTrue(
+            runner._reward_end_top_up_requested,
+            "retry suppression must delay, not erase, the owner signal",
+        )
+        self.assertTrue(runner._incremental_top_up_due(retry_at, retry_at))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

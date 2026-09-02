@@ -1333,8 +1333,8 @@ class AsyncReadOnlyGateway:
         """Enumerate liquidity programs without scanning the market catalog.
 
         The official incentive endpoint permits an omitted ``symbols`` filter
-        and paginates the complete program universe. This diagnostic path is
-        intentionally separate from the faster catalog-first live selector;
+        and paginates the complete program universe. The live selector uses
+        that bounded reward universe before fetching exact market metadata;
         one shared REST governor still owns every request.
         """
 

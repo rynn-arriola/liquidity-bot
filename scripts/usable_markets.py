@@ -77,10 +77,10 @@ async def main() -> int:
           f"min entry spread {policy.minimum_entry_spread}")
     print("")
     print("SELECTION FUNNEL")
-    print(f"  catalog markets            {selection.catalog_markets:6d}")
+    print(f"  exact reward metadata      {selection.catalog_markets:6d}")
     print(f"  in the {horizon_h:.0f}h horizon         "
           f"{selection.executable_catalog_markets:6d}")
-    print(f"  carrying rewards           "
+    print(f"  reward-authorized          "
           f"{selection.rewarded_executable_markets:6d}")
     print(f"  - unsupported program      "
           f"{selection.unsupported_programs:6d}")

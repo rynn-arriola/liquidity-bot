@@ -11,8 +11,10 @@ the next startup with "execution ledger has unresolved intents".
 
 Observed twice on 2026-08-18 (15:16Z and 20:53Z). See FINDINGS.md.
 
-This is a stopgap for an operator, NOT the fix. The runner should reach the
-same conclusion by itself; see NEXT.md.
+This is the stopped-runner fallback. The live runner reaches the same
+conservative no-surviving-risk conclusion by itself only after repeated
+complete account proofs; use this utility when automatic recovery cannot make
+that proof or an operator needs an independent dry run.
 
 Note what the fix CANNOT be: looking the order up by our client order id.
 Polymarket retail order entry exposes no client-order-id field, so the id in
@@ -31,9 +33,10 @@ Safety. It refuses unless ALL of these hold, per intent:
 
 The last three are what make this safe rather than a guess: an order that was
 actually created would appear as an open order, or as a position if it filled
-instantly. Absence from both, with no id ever returned, is positive evidence
-the create did not happen -- which is a different thing from reading absence
-as cancellation, and is why this is limited to PLACE.
+instantly. Absence from both, with no id ever returned, proves there is no
+surviving live risk from the create. It does not prove the original HTTP
+outcome, which is why this abandons the mutation instead of retrying it and is
+limited to PLACE.
 
     python3 scripts/resolve_orphan_places.py            # report only
     python3 scripts/resolve_orphan_places.py --apply    # write
@@ -185,7 +188,7 @@ def main() -> int:
             continue
 
         print("    venue has no live order in this market and no position -- "
-              "the create did not happen")
+              "no surviving live risk is present")
         if not args.apply:
             print("    would set state FAILED (dry run)")
             continue
@@ -195,7 +198,8 @@ def main() -> int:
                 "error=? WHERE intent_id=? AND state='UNCERTAIN'",
                 (datetime.now(timezone.utc).isoformat(),
                  "operator: venue 500 returned no exchange id; venue "
-                 "confirmed no such order and no position",
+                 "confirmed no surviving live order or position; original "
+                 "create outcome remains unknown",
                  row["intent_id"]))
         resolved += 1
         print("    -> FAILED")

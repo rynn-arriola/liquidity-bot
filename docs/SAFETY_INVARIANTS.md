@@ -143,12 +143,14 @@ These are implementation requirements, not suggestions.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.
-37. Automatic discovery bulk-loads the active sports catalog, applies open,
-    tick, minimum-quantity, and proven six-hour pregame clock gates in memory,
-    then requests incentives only for those symbols. It must never retrieve
-    metadata once per reward slug. All reads share the 4 requests/second
-    governor; books are capped at 100 per pass and a rotating window eventually
-    inspects lower-ranked eligible pools.
+37. Automatic discovery enumerates active liquidity programs first, retrieves
+    exact market metadata for only those reward slugs in batches of at most
+    100, then applies open, tick, minimum-quantity, and proven six-hour pregame
+    clock gates in memory. It must neither walk the account-wide active market
+    catalog nor retrieve metadata once per reward slug. All reads share the 4
+    requests/second governor; books are capped at 100 per pass and a rotating
+    window eventually inspects lower-ranked eligible pools. Missing exact
+    metadata cannot authorize entry.
 38. A market rotation is allowed only after bot quotes are canceled and a
     whole-account REST snapshot proves zero working orders, zero nonzero
     positions, no unresolved intent, and known ownership. Only then may the
@@ -584,8 +586,9 @@ These are implementation requirements, not suggestions.
     fresh full book and every normal selector gate for each candidate; stale,
     failed or insufficient validation falls back to the bounded complete scan.
     The urgent path may not accelerate invariant 82's economic-idle eviction.
-    A failed attempt clears only the request it consumed and uses the ordinary
-    bounded retry cadence; a newer post-flat transition must survive. Timing
+    A failed attempt clears only the request it consumed and establishes one
+    retry-not-before deadline honored by every ordinary and event-driven top-up
+    trigger; a newer post-flat transition must survive. Timing
     telemetry is evidence only and cannot authorize a slot or order.
 84. A response-backed mutation rejection is not a transport ambiguity. An
     authenticated HTTP 403 may move that exact durable intent to `FAILED`; it
@@ -606,9 +609,11 @@ These are implementation requirements, not suggestions.
     candidates and no request may bypass near-deadline inventory priority,
     flat/order/ambiguity proof, complete account reconciliation, fresh
     replacement viability, release revalidation, stream handoff or the
-    validated restart ceiling. Retained orders are never cancelled for discovery. A failed refill
-    uses the ordinary bounded retry cadence, and lifecycle timing telemetry is
-    evidence only rather than entry authorization.
+    validated restart ceiling. Retained orders are never cancelled for
+    discovery. A failed refill establishes the same bounded retry-not-before
+    deadline for ordinary, lifecycle, reward-end and post-flat triggers, and
+    lifecycle timing telemetry is evidence only rather than entry
+    authorization.
 86. Retained executable value is a prospective shadow, never an entry gate.
     The 60%, 70% and 80% labels are written only on a building post-only PLACE
     observation in the same pre-mutation intent transaction. They may not

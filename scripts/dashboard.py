@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import collections
 import re
 import sqlite3
 import subprocess
@@ -46,7 +45,6 @@ from _bot_era import ACCOUNT_WIDE_NOTE, BOT_ERA_START  # noqa: E402
 from liquidity_bot.adapters import (  # noqa: E402
     AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
-from liquidity_bot.pnl import economic_contract_cost  # noqa: E402
 from liquidity_bot.sqlite_compat import active_fills_predicate  # noqa: E402
 from reward_table import account_realized_today  # noqa: E402
 
@@ -62,14 +60,10 @@ W = 70
 STALE_ACTION_SECONDS = 600.0
 
 
-def _risk_caps(config: CommissioningConfig = CONFIG) -> tuple[float, float, float]:
-    """Read scaled caps from one configured instance, never class defaults."""
+def _hard_stop_cap(config: CommissioningConfig = CONFIG) -> float:
+    """Read the sole money-loss stop from the configured instance."""
 
-    return (
-        float(config.max_session_loss_usd),
-        float(config.max_market_loss_usd),
-        float(config.hard_stop_loss_usd),
-    )
+    return float(config.hard_stop_loss_usd)
 
 C = {"g": "\033[32m", "y": "\033[33m", "r": "\033[31m",
      "d": "\033[90m", "b": "\033[1m", "x": "\033[0m"}
@@ -234,8 +228,8 @@ def _money(value) -> Decimal:
 
 
 def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
-           free, positions, orders, fills_today, fills_all, session_loss,
-           session_cap, viable, tight, rewarded, reward_paid, reward_pending,
+           free, positions, orders, fills_today, fills_all, hard_stop_pnl,
+           hard_stop_cap, viable, tight, rewarded, reward_paid, reward_pending,
            uptime):
     """A Discord embed in the house style the runner already uses.
 
@@ -317,17 +311,18 @@ def _embed(*, now, failures, health, today_pnl, total_pnl, quoted, idle_bound,
                        + row("rewarded <2h", rewarded, 5)
                        + row("refused, tight", tight, 5))
 
-    headroom = session_cap - session_loss
+    hard_loss = None if hard_stop_pnl is None else max(0.0, -float(hard_stop_pnl))
     risk_text = (row("positions", "unknown" if positions is None else positions)
                  + row("resting orders", "unknown" if orders is None else orders)
                  + row("trades today", fills_today)
-                 + row("trades lifetime", "{:,}".format(fills_all))
-                 + "\n"
-                 + "used      {}  {}\n".format(
-                     meter(session_loss, session_cap), plain(session_loss))
-                 + "remaining {}  {}\n".format(
-                     meter(headroom, session_cap), plain(headroom))
-                 + "stop at   {}\n".format(plain(session_cap)))
+                 + row("trades lifetime", "{:,}".format(fills_all)))
+    if hard_loss is None:
+        risk_text += "\nHARD     unknown\n"
+    else:
+        risk_text += (
+            "\nHARD     {}  {} / {}\n".format(
+                meter(hard_loss, hard_stop_cap), plain(hard_loss),
+                plain(hard_stop_cap)))
 
     reward_text = (row("paid", plain(reward_paid))
                    + row("pending", plain(reward_pending)))
@@ -663,71 +658,18 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                    + f"      resting  {orders}        trades  {fills_today} today"))
     print(line(" " * 46 + f"{fills_all:,} lifetime"))
     print(line())
-    session_cap, market_cap, hard_cap = _risk_caps()
-    # Realised P&L for today, matched-pair priced: one YES plus one NO settles
-    # at exactly 1.0000, so a completed pair realises `1.00 - paid`. This is an
-    # INDEPENDENT estimate, not what the runner's stop reads -- the stop uses
-    # `realized_pnl` minus a baseline it re-snapshots at startup and daily, and
-    # that baseline lives in the process. Shown so the headroom is directional;
-    # never treat it as the exact trigger distance.
-    session_loss = worst_market = 0.0
-    try:
-        conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-        books: dict[str, dict[str, Decimal]] = collections.defaultdict(
-            lambda: {"lq": Decimal(0), "lc": Decimal(0),
-                     "sq": Decimal(0), "sc": Decimal(0)})
-        active_fills = active_fills_predicate(conn)
-        for slug, intent, price, qty in conn.execute(
-                "SELECT market_slug,intent,price,qty FROM execution_fills "
-                f"WHERE {active_fills} AND event_at LIKE ?",
-                (now.strftime("%Y-%m-%d") + "%",)):
-            q, p_ = Decimal(str(qty)), Decimal(str(price))
-            book = books[slug]
-            if intent == "ORDER_INTENT_BUY_LONG":
-                book["lq"] += q
-                book["lc"] += q * economic_contract_cost(intent, p_)
-            elif intent == "ORDER_INTENT_BUY_SHORT":
-                book["sq"] += q
-                book["sc"] += q * economic_contract_cost(intent, p_)
-        conn.close()
-        # NET across every market, winners included. This summed only the
-        # losing markets and discarded the winning ones, which is a gross
-        # loss total and not what any stop reads: `runtime_safety.blockers`
-        # trips on `-realized_pnl >= max_session_loss`, a net figure.
-        #
-        # Measured 2026-08-18: the bar showed $36.34 of a $40 cap -- "$3.66
-        # left" -- on a day whose net realised was -$7.88, so roughly $32 was
-        # actually left. It overstated by 4.6x in the direction that makes a
-        # healthy bot look one fill from a hard stop, which is exactly the
-        # reading that gets a working bot shut off by hand.
-        #
-        # `worst_market` stays per-market and negative-only, because that IS
-        # the shape of its stop: `any(value <= -max_market_loss for value in
-        # realized_by_market.values())`.
-        net = 0.0
-        for book in books.values():
-            pairs = min(book["lq"], book["sq"])
-            if pairs <= 0:
-                continue
-            lc = book["lc"] / book["lq"] * pairs if book["lq"] else Decimal(0)
-            sc = book["sc"] / book["sq"] * pairs if book["sq"] else Decimal(0)
-            realised = float(pairs - lc - sc)
-            net += realised
-            if realised < 0:
-                worst_market = max(worst_market, -realised)
-        # A profitable day consumes none of the stop, never a negative bar.
-        session_loss = max(0.0, -net)
-    except Exception:
-        session_loss = worst_market = 0.0
-    for label, used, cap in (("session loss", session_loss, session_cap),
-                             ("worst market", worst_market, market_cap),
-                             ("hard stop", session_loss, hard_cap)):
-        level = "g" if used < cap * 0.5 else ("y" if used < cap * 0.8 else "r")
-        print(line(f"{label:<14}{bar(used, cap, 24, level)}   "
-                   f"${used:,.2f} / ${cap:,.0f}"
-                   + paint("d", f"   ${cap - used:,.2f} left")))
-    print(line(paint("d", "  today's realised loss, matched-pair priced — the runner's")))
-    print(line(paint("d", "  own stop re-baselines daily, so treat this as directional")))
+    hard_cap = _hard_stop_cap()
+    hard_loss = None if today_pnl is None else max(0.0, -float(today_pnl))
+    if hard_loss is None:
+        print(line(f"{'hard stop':<14}unknown"))
+    else:
+        level = "g" if hard_loss < hard_cap * 0.5 else (
+            "y" if hard_loss < hard_cap * 0.8 else "r")
+        print(line(f"{'hard stop':<14}{bar(hard_loss, hard_cap, 24, level)}   "
+                   f"${hard_loss:,.2f} / ${hard_cap:,.0f}"
+                   + paint("d", f"   ${hard_cap - hard_loss:,.2f} left")))
+    print(line(paint("d", "  marked account trading since 00:00 ET; proven rewards and")))
+    print(line(paint("d", "  deposits are excluded, matching the runner's HARD sensor")))
     print(box_bottom())
     print("")
 
@@ -756,7 +698,7 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                        quoted=quoted, idle_bound=idle_bound, free=free,
                        positions=positions, orders=orders,
                        fills_today=fills_today, fills_all=fills_all,
-                       session_loss=session_loss, session_cap=session_cap,
+                       hard_stop_pnl=today_pnl, hard_stop_cap=hard_cap,
                        viable=viable, tight=tight, rewarded=rewarded,
                        reward_paid=reward_paid, reward_pending=reward_pending,
                        uptime=_uptime()),

@@ -28,11 +28,11 @@ Current verdict: **`DO_NOT_START_TRIAL`**. See `docs/SCALE_REVIEW.md`.
 Operator exception, **as configured and running** (corrected 2026-08-16; this
 previously read one market, one contract, 30-second inventory age and
 $2/$5/$15 stops, none of which had been true for some time): automatically
-selected rewarded markets, up to 20 bound at once, 5 contracts per quote by
+selected rewarded markets, up to 32 bound at once, 5 contracts per quote by
 default with live size 10 (restart-scoped whole values 5-30 are allowed), 900s
-inventory age, 300s pre-kickoff flatten, a $40 market soft limit, and one $80
-threshold for both realized session loss and emergency marked-equity loss,
-with a graceful operator-controlled stop.
+inventory age, 300s pre-kickoff flatten, a size-scaled stressed-exit entry gate,
+and one marked-equity HARD loss threshold, with a graceful operator-controlled
+stop. Realized session/market loss, taker count and fees are evidence only.
 `commissioning.py` validates these at startup and refuses to arm if changed. Startup still requires the whole account flat, exclusive
 key ownership, maker-lab stopped, fresh private state, and a current applicable
 liquidity program. See `docs/COMMISSIONING.md`.

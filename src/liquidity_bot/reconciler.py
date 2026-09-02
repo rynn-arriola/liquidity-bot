@@ -58,10 +58,10 @@ class ReconcilerPolicy:
     # What an EARLY cross may cost, before the kickoff deadline makes it
     # mandatory. Separate from `max_exit_loss` above, which is the ENTRY gate
     # -- do not open a side whose stressed close would cost more than this.
-    # Both read the same number until 2026-08-16, and it was wired to the $40
-    # session stop, so the exit half could never fire: five contracts cannot
+    # Both read the same number until 2026-08-16, and it was wired to the old
+    # $40 shared loss value, so the exit half could never fire: five contracts cannot
     # lose $40. It was harmless at the original 1 contract / 1 market / $2 and
-    # became meaningless as size grew, exactly as the loss stops and the
+    # became meaningless as size grew, exactly as the old loss controls and the
     # exposure budgets did before they were split.
     #
     # $4.00 chosen from the 17 observed crossed losses: 0.10 0.36 0.64 0.70

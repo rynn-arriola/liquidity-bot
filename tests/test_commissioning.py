@@ -51,8 +51,8 @@ class CommissioningTests(unittest.TestCase):
         # The safe missing-file fallback remains size 5, so every quantity-linked
         # risk control is half of its live size-10 baseline.
         self.assertEqual(str(self.authorized().hard_stop_loss_usd), "40")
-        self.assertEqual(str(self.authorized().max_session_loss_usd), "40")
-        self.assertEqual(str(self.authorized().max_market_loss_usd), "20")
+        self.assertEqual(
+            str(self.authorized().max_stressed_exit_loss_usd), "20")
         self.assertEqual(
             str(self.authorized().max_market_exposure_usd), "45")
         self.assertEqual(
@@ -76,7 +76,6 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().reward_projection_haircut, Decimal("0.5"))
         self.assertEqual(
             self.authorized().aggregate_reward_payout_floor_usd, Decimal("1"))
-        self.assertEqual(self.authorized().max_taker_exit_orders, 20)
         self.assertEqual(
             self.authorized().execution_fee_observation_usd, Decimal("4.17"))
         self.assertEqual(self.authorized().max_inventory_age_seconds, 900)
@@ -108,10 +107,6 @@ class CommissioningTests(unittest.TestCase):
             self.authorized(
                 reward_projection_haircut=Decimal("0.75")).assert_authorized(
                     now=overnight)
-        with self.assertRaisesRegex(CommissioningRefused, "loss learning"):
-            self.authorized(
-                max_taker_exit_orders_per_contract=2).assert_authorized(
-                now=overnight)
         with self.assertRaisesRegex(CommissioningRefused, "inventory limits"):
             self.authorized(max_inventory_age_seconds=30).assert_authorized(
                 now=overnight)
@@ -208,7 +203,6 @@ class CommissioningTests(unittest.TestCase):
                     config.execution_fee_observation_usd,
                     (Decimal(size) * Decimal("20") / Decimal("24")).quantize(
                         Decimal("0.01")))
-                self.assertEqual(config.max_taker_exit_orders, size * 4)
                 self.assertEqual(
                     config.reward_selection_policy().quote_size, float(size))
                 self.assertEqual(config.max_markets, 20)
@@ -216,19 +210,17 @@ class CommissioningTests(unittest.TestCase):
                     config.max_portfolio_exposure_usd,
                     Decimal(size) * Decimal("30"))
                 self.assertEqual(
-                    config.max_market_loss_usd, Decimal(size) * Decimal("4"))
-                self.assertEqual(
-                    config.max_session_loss_usd, Decimal(size) * Decimal("8"))
+                    config.max_stressed_exit_loss_usd,
+                    Decimal(size) * Decimal("4"))
                 self.assertEqual(
                     config.hard_stop_loss_usd, Decimal(size) * Decimal("8"))
                 self.assertEqual(
                     config.weekly_operating_reserve_usd,
                     Decimal(size) * Decimal("56"))
 
-    def test_size_thirteen_default_width_scales_both_fee_and_count_guards(self):
+    def test_size_thirteen_default_width_scales_fee_observation(self):
         config = self.authorized(quote_size=Decimal("13"))
 
-        self.assertEqual(config.max_taker_exit_orders, 52)
         self.assertEqual(
             config.execution_fee_observation_usd, Decimal("10.83"))
 
@@ -258,16 +250,15 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(
                     config.max_portfolio_exposure_usd, Decimal(expected))
 
-        # Per-market appetite stays quantity-linked; account appetite follows
-        # the operator-selected breadth relative to the 20-slot baseline.
+        # The stressed-exit entry check stays quantity-linked; HARD follows the
+        # operator-selected breadth relative to the 20-slot baseline.
         config = self.authorized(
             quote_size=Decimal("13"), max_markets=24)
-        self.assertEqual(config.max_market_loss_usd, Decimal("52"))
-        self.assertEqual(config.max_session_loss_usd, Decimal("124.8"))
+        self.assertEqual(config.max_stressed_exit_loss_usd, Decimal("52"))
         self.assertEqual(config.hard_stop_loss_usd, Decimal("124.8"))
         self.assertEqual(config.rest_requests_per_second, Decimal("4"))
 
-    def test_account_stops_scale_with_quantity_and_slot_width(self):
+    def test_hard_stop_scales_with_quantity_and_slot_width(self):
         expected = {
             (10, 20): "80",
             (10, 22): "88",
@@ -282,15 +273,14 @@ class CommissioningTests(unittest.TestCase):
             with self.subTest(size=size, slots=slots):
                 config = self.authorized(
                     quote_size=Decimal(size), max_markets=slots)
-                self.assertEqual(
-                    config.max_session_loss_usd, Decimal(limit))
                 self.assertEqual(config.hard_stop_loss_usd, Decimal(limit))
                 self.assertEqual(
                     config.weekly_operating_reserve_usd,
                     Decimal(limit) * Decimal("7"),
                 )
                 self.assertEqual(
-                    config.max_market_loss_usd, Decimal(size) * Decimal("4"))
+                    config.max_stressed_exit_loss_usd,
+                    Decimal(size) * Decimal("4"))
 
     def test_size_ten_thirty_two_canary_derives_every_breadth_control(self):
         config = self.authorized(
@@ -298,27 +288,24 @@ class CommissioningTests(unittest.TestCase):
 
         self.assertEqual(config.max_portfolio_exposure_usd, Decimal("420"))
         self.assertEqual(config.max_market_exposure_usd, Decimal("90"))
-        self.assertEqual(config.max_market_loss_usd, Decimal("40"))
-        self.assertEqual(config.max_session_loss_usd, Decimal("128"))
+        self.assertEqual(config.max_stressed_exit_loss_usd, Decimal("40"))
         self.assertEqual(config.hard_stop_loss_usd, Decimal("128"))
         self.assertEqual(config.weekly_operating_reserve_usd, Decimal("896"))
         self.assertEqual(
             config.execution_fee_observation_usd, Decimal("13.33"))
-        self.assertEqual(config.max_taker_exit_orders, 40)
         self.assertEqual(config.rest_requests_per_second, Decimal("4"))
 
     def test_size_ten_and_twenty_match_operator_risk_profiles(self):
         expected = {
-            10: ("300", "40", "80", "80"),
-            20: ("600", "80", "160", "160"),
+            10: ("300", "40", "80"),
+            20: ("600", "80", "160"),
         }
         for size, values in expected.items():
             with self.subTest(size=size):
                 config = self.authorized(quote_size=Decimal(size))
                 actual = tuple(str(value) for value in (
                     config.max_portfolio_exposure_usd,
-                    config.max_market_loss_usd,
-                    config.max_session_loss_usd,
+                    config.max_stressed_exit_loss_usd,
                     config.hard_stop_loss_usd,
                 ))
                 self.assertEqual(actual, values)

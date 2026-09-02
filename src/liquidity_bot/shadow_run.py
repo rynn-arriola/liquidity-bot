@@ -352,7 +352,6 @@ class ShadowRunner:
             unknown_orders=0,
             attributable_paid_rewards_usd=Decimal(str(paid or 0)),
             pending_rewards_usd=Decimal(str(pending or 0)),
-            session_loss_limit_usd=Decimal("0"),
             rest_requests_per_second=self.config.rest_requests_per_second,
             market_stream_age_seconds=market_age,
             private_stream_age_seconds=None,

@@ -48,8 +48,8 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 - persist an order intent before any mutation and never retry ambiguous creates;
 - reconcile exact-decimal orders, fills, and positions from private WebSocket
   state plus REST snapshots;
-- enforce single-process ownership, stream freshness, session/market loss
-  limits, and market-scoped shutdown.
+- enforce single-process ownership, stream freshness, marked-equity HARD,
+  exposure limits, and market-scoped shutdown.
 
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
 paid-reward evidence are not satisfied. An explicit operator-risk override now
@@ -65,21 +65,20 @@ hard-locked by `CommissioningConfig`:
 | quote size | 10 contracts (restart-scoped, allowed whole values 5-30) |
 | concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
-| market loss stop | $40 at size 10 (`4 × size`) |
-| session loss stop | `8 × size × slots / 20`; $80 at size 10 / 20 slots, $96 at 24, $128 at 32 |
-| emergency hard stop | same breadth-scaled threshold on adjusted marked equity; provisional with open inventory |
+| stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
+| emergency HARD stop | `8 × size × slots / 20` on adjusted marked equity; $80 at 20 slots, $96 at 24, $128 at 32; provisional with open inventory |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
 | per-market open exposure | $90 at size 10 (`9 × size`) |
 | REST budget | 4 requests/second |
 
-The daily loss budget resets at midnight `America/New_York`, including DST.
-The two account-stop rows share one quantity/breadth-scaled threshold but use different sensors
-and responses. A marked breach blocks new entries immediately.
+The sole money-loss budget resets at midnight `America/New_York`, including DST.
+A marked HARD breach blocks new entries immediately.
 With open inventory it waits for a breach-time position to close and a newer
-balance before it can clear or confirm the hard stop; realized loss can still
-pause trading while another position remains open.
+balance before it can clear or confirm the hard stop. Realized session P&L,
+per-market realized P&L, taker-exit count and taker fees remain reporting
+evidence and have no independent pause or stop authority.
 
 Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —
@@ -87,7 +86,7 @@ one contract, eight markets, a 30-second inventory age, and $2/$5/$15 or
 $30/$35 stops are all stale. `quote_size.py` owns the quantity range and
 `CommissioningConfig` owns the remaining envelope; startup refuses drift. Live
 entry is nevertheless fail-closed on lifecycle, structure, spread, target
-depth/cutoff, fresh state, exitability, exposure, ownership, and loss limits.
+depth/cutoff, fresh state, exitability, exposure, ownership, and HARD.
 The 30-second reward/no-fill/stressed-exit model is still calculated and logged,
 but its expected-value result is advisory and does not veto entry. The
 $1 venue payout floor is aggregate reporting policy and never a per-market
@@ -104,11 +103,10 @@ minutes. A passive reducer rests the exact quantity at the active touch with no
 cost-basis floor. An exact, venue-aligned `0.01`–`0.09` contract residue gets
 five passive minutes before the bounded IOC path may cross; positions at
 `0.10` or above retain the 900-second inventory clock. The separate
-300-seconds-before-kickoff deadline still overrides both. The session still ends after
-`4 × quote size` confirmed taker exits. Gross owned taker fees instead pause
-new trading for the ET risk day at the cent-rounded equivalent of
-`$10 × (quote size / 10) × (slots / 24)`; the process and exits remain alive and normal gates
-may authorize entry again the next ET day.
+300-seconds-before-kickoff deadline still overrides both. Taker-exit count and
+gross owned taker fees are evidence only: neither can pause or stop trading.
+Fees are reported once per ET risk day at the cent-rounded reference
+`$10 × (quote size / 10) × (slots / 24)`.
 
 Recoverable market/private adapter failures no longer terminate the process.
 The runner logs the stack, disables new risk, cancels known working quotes,
@@ -364,8 +362,8 @@ The server launcher remains deliberately explicit and also retains a static
 market diagnostic mode. Quote size is a restart-scoped whole number from 5 to
 30; when supplied as the second argument it is persisted under `data/` so the
 supervisor and read-only diagnostics use the same value. Size never changes
-under live orders. The early-exit cap, per-market and portfolio exposure, loss
-stops and daily fee telemetry reference derive automatically from it. Fees do
+under live orders. The early-exit cap, per-market and portfolio exposure, HARD
+stop and daily fee telemetry reference derive automatically from it. Fees do
 not gate trading. Portfolio exposure is
 `(configured slots + 10) × size`: every slot plus a proportional ten-notional cushion:
 
@@ -414,9 +412,8 @@ quarantine cancels, so their terminal events are observable. The launcher
 refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
 orders enter recovery-only mode, where no new risk is allowed. Operator stop,
-startup refusal, caught terminal failure, and non-flat exit are never
-restarted. First- and second-consecutive ET loss-stop days pause in-process;
-the third becomes terminal. See [commissioning operations](docs/COMMISSIONING.md).
+startup refusal, caught terminal failure, HARD, and non-flat exit are never
+restarted. See [commissioning operations](docs/COMMISSIONING.md).
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md),
 [safety invariants](docs/SAFETY_INVARIANTS.md), and

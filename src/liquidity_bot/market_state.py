@@ -3,7 +3,7 @@
 The runner was built around a single bound market: one metadata record, one
 book, one set of per-side economics. Quoting several markets at once needs one
 of these per slug, held in a dict, while genuinely session-wide state (marked
-equity, the risk guard, score-seconds, the taker-exit budget) stays single.
+equity, the risk guard and score-seconds) stays single.
 
 Nothing here reaches the network or the ledger. It is a container plus the
 small amount of freshness logic that belongs with the data it guards, so the

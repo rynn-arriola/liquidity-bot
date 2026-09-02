@@ -51,20 +51,17 @@ strategy is profitable and not permission to scale.
   and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
-- allow at most `4 × quote size` taker exits (40 at size 10), which remains a
-  terminal session evidence budget; independently, measure gross owned taker
-  fees against the cent-rounded reference
+- count risk-reducing taker exits as evidence only, with no session ceiling;
+  independently, measure gross owned taker fees against the cent-rounded reference
   `$10 × (quote size / 10) × (slots / 24)` ($10 at size 10 / 24 slots).
-  Crossing that reference is telemetry only: it logs/reports once and cannot
-  block or cancel quotes, pause/stop trading or change any exit path;
-- $40 per-market realized-loss stop and one $80 account threshold measured by
-  two sensors: realized session loss pauses new risk, while marked-account-
-  equity loss is the emergency hard stop. The daily risk day resets at
-  midnight `America/New_York`, including DST. These account-level loss limits
-  do not scale down with quote size. The session sensor subtracts positively
+  Neither count nor fee observation can block/cancel quotes, pause/stop trading
+  or change an exit path. Crossing the fee reference logs/reports once;
+- one breadth-scaled marked-account-equity HARD stop is the sole money-loss
+  authority. It is $80 at size 10 / 20 slots, $96 at 24 and $128 at 32. The ET
+  risk day resets at midnight `America/New_York`, including DST. Positively
   classified completed rewards, deposits, withdrawals, bonuses and transfers
-  from settled-cash change; its bounded cash-only snapshot must be current and
-  proven or risk freshness expires and new risk fails closed;
+  are subtracted from the adjusted mark; the bounded cash-only snapshot must
+  be current and proven or risk freshness expires and new risk fails closed;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account
@@ -148,12 +145,9 @@ replacement liveness is checked and no decision or cancel can run. All-shard
 silence, non-429/stale/exhausted proof, and other private recovery establishes
 replacement visibility, cancels known quotes, applies buffered terminal events,
 reconciles the whole account, backs off exponentially, and only then permits
-new risk. Unknown
-strategy conditions default to terminal. Ownership, cross-market identity,
+new risk. Unknown strategy conditions default to terminal. Ownership, cross-market identity,
 exact-position, planning, and unexitable-inventory failures end maker quoting
-and enter cancel/flatten shutdown; they are not downgraded to warnings. A
-first- or second-consecutive ET loss-stop day pauses new risk in-process while
-exits remain active; the third consecutive day is terminal.
+and enter cancel/flatten shutdown; they are not downgraded to warnings.
 
 Every cooperating WSL API client uses `data/api-rate-limiter.state`, so the
 runner, dashboard and scheduled reports cannot each spend an independent REST
@@ -349,9 +343,8 @@ flatness.
   restart, because restarting would re-enter a known-bad state;
 - `5`: unexpected runtime failure that still proved the whole account flat;
   the supervisor restarts it, since a fresh process re-runs the entire
-  flat/ownership preflight before any order. Daily loss stops never reach this
-  path: the first two consecutive ET days pause in-process, and the third is a
-  terminal flat-proved exit rather than an automatic restart;
+  flat/ownership preflight before any order. The HARD stop is terminal and
+  never reaches this automatic-restart path;
 - any other unexpected process death: bounded supervisor restart so the
   persistent ledger can recover identified state, with at most three fast
   deaths before the supervisor gives up.

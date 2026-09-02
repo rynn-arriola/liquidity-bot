@@ -16,7 +16,7 @@ from scripts import dashboard
 
 
 class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
-    def test_risk_caps_follow_restart_scoped_quantity_and_breadth(self):
+    def test_hard_stop_cap_follows_restart_scoped_quantity_and_breadth(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             quote_size = root / "quote_size"
@@ -29,7 +29,7 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.quote_size, Decimal("10"))
         self.assertEqual(config.max_markets, 24)
-        self.assertEqual(dashboard._risk_caps(config), (96.0, 40.0, 96.0))
+        self.assertEqual(dashboard._hard_stop_cap(config), 96.0)
 
     async def _render_with_failure(self, fail_at: str) -> str:
         class FailingAccount:
@@ -90,12 +90,16 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             failures=[], health=[("warn", "venue", "unreachable")],
             today_pnl=None, total_pnl=None, quoted=None, idle_bound=[],
             free=None, positions=None, orders=None, fills_today=0, fills_all=0,
-            session_loss=0, session_cap=80, viable=None, tight=0, rewarded=0,
+            hard_stop_pnl=Decimal("0"), hard_stop_cap=80,
+            viable=None, tight=0, rewarded=0,
             reward_paid=None, reward_pending=None, uptime="1h")
 
         rendered = str(payload)
         self.assertIn("venue state unavailable", rendered)
         self.assertGreaterEqual(rendered.count("unknown"), 5)
+        self.assertIn("HARD", rendered)
+        self.assertNotIn("session loss", rendered)
+        self.assertNotIn("worst market", rendered)
         self.assertNotIn("positions          0", rendered)
         self.assertNotIn("resting orders     0", rendered)
 

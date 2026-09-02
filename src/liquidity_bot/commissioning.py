@@ -62,17 +62,9 @@ def next_six_am_new_york(now: datetime) -> datetime:
 class CommissioningConfig:
     """Bounded experimental authorization derived from one quote quantity.
 
-    Three loss limits. ``max_market_loss_usd`` and ``max_session_loss_usd``
-    are both stops -- they appear in ``runtime_safety.blockers()`` and halt
-    quoting. ``hard_stop_loss_usd`` is the emergency ceiling on marked account
-    equity. It may share the session stop's dollar threshold because the two
-    sensors still cover different losses and trigger different responses.
-
-    The size-10/20-slot baseline is $40 per market and one $80 threshold for
-    both the realized-session and marked-equity sensors. Per-market loss stays
-    at 4x quote quantity. The two account sensors scale as 8x quantity times
-    configured breadth / 20, preserving the baseline allowance per slot. They
-    remain independent even though their thresholds match.
+    ``hard_stop_loss_usd`` is the sole money-loss stop. Its size-10/20-slot
+    baseline is $80 and it scales as 8x quantity times configured breadth / 20.
+    The stressed-exit entry cap is an economic eligibility check, not a stop.
     """
 
     market_slug: str
@@ -149,16 +141,15 @@ class CommissioningConfig:
     # exit on the same "holding is cheaper" evidence and the residue reached
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
-    # Loss limits are computed properties below. At size 10 they remain the
-    # accepted $40 market and $80 session/hard values. Proportional scaling
-    # preserves the same risk per contract at every authorized whole size.
+    # Risk values are computed properties below. At size 10 the stressed-exit
+    # entry cap is $40 and the size-10/20-slot HARD baseline is $80.
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
-    # `max_market_loss_usd` and so could never fire, because five contracts
+    # the old shared $40 loss value and so could never fire, because five contracts
     # cannot lose $40. "Stop the session after losing $40" and "do not pay
     # more than $4 to leave one position ahead of the deadline" are different
     # statements, and the entry gate is a third thing again -- it keeps
-    # `max_market_loss_usd`, so entry behaviour is unchanged by this.
+    # the stressed-exit cap, so entry behaviour is unchanged by this.
     #
     # Chosen from the 17 crossed losses measured 2026-08-16 (median $2.32,
     # p75 $3.23, p90 $6.15): $4 blocks the three worst and defers $16.96 of
@@ -178,25 +169,7 @@ class CommissioningConfig:
     # cost taken by accident rather than by decision. It returned to $4 with
     # quote size 5, then back to $8 when the operator restored size 10 later
     # on 2026-08-24.
-    # How many CONSECUTIVE ET risk days may hit a loss stop before it stops being
-    # a pause and becomes terminal.
-    #
-    # A loss stop used to flatten, prove flat and exit 0 -- which the
-    # supervisor never restarts, so a bad day cost every subsequent hour until
-    # a human noticed. Operator decision 2026-08-22: the loss stops now PAUSE
-    # instead. New risk is blocked, exits and the pre-kickoff flatten keep
-    # working, and the day baseline reset at midnight clears the blocker on its
-    # own, so the bot resumes without anyone touching it.
-    #
-    # That is unbounded on its own, and this is the bound. The budget resets
-    # every midnight, so a systematically wrong strategy could lose its full
-    # session budget daily forever with nothing forcing attention -- and the
-    # emergency ceiling cannot catch it either, because that re-baselines each
-    # morning too. One bad day is variance; three in a row is a broken model.
-    # At size 10 / 20 slots the $80 baseline bounds three days near $240;
-    # wider configured breadth scales that bound proportionally.
-    max_consecutive_loss_stop_days: int = 3
-    # Exposure budgets remain distinct from realized-loss stops. Per-market
+    # Exposure budgets remain distinct from the HARD stop. Per-market
     # exposure has nine-times headroom. Portfolio exposure funds 20 fully
     # two-sided slots plus the operator-approved 50% proportional cushion.
     rest_requests_per_second: Decimal = Decimal("4")
@@ -256,12 +229,6 @@ class CommissioningConfig:
     # forces shutdown through equity and stream-freshness checks.
     unresolved_mutation_timeout_seconds: float = 60.0
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
-    # The size-5 evidence budget is 20 distinct taker exits. Keep the same
-    # four-exit allowance per configured contract so the order-count guard
-    # moves with every other quantity-linked commissioning control. The
-    # independent execution-fee ceiling below remains the dollar backstop and
-    # may stop a high-fee session before the count is exhausted.
-    max_taker_exit_orders_per_contract: int = 4
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
@@ -286,28 +253,10 @@ class CommissioningConfig:
         return self.quote_size * Decimal("0.8")
 
     @property
-    def max_taker_exit_orders(self) -> int:
-        """Scale the size-5 twenty-exit budget with quote quantity."""
-
-        return int(
-            self.quote_size * Decimal(self.max_taker_exit_orders_per_contract))
-
-    @property
-    def max_market_loss_usd(self) -> Decimal:
-        """Keep the size-10 $40 per-market loss policy proportional."""
+    def max_stressed_exit_loss_usd(self) -> Decimal:
+        """Keep the size-10 $40 stressed-exit entry check proportional."""
 
         return self.quote_size * Decimal("4")
-
-    @property
-    def max_session_loss_usd(self) -> Decimal:
-        """Scale the size-10/20-slot $80 session policy with breadth."""
-
-        return (
-            self.quote_size
-            * Decimal("8")
-            * Decimal(self.max_markets)
-            / Decimal(DEFAULT_SLOT_CAPACITY)
-        )
 
     @property
     def hard_stop_loss_usd(self) -> Decimal:
@@ -431,12 +380,6 @@ class CommissioningConfig:
                 "the portfolio exposure budget must cover a single market")
         if not self.manual_stop_only:
             problems.append("commissioning must remain armed for operator stop")
-        if self.max_consecutive_loss_stop_days != 3:
-            problems.append(
-                "a paused loss stop must become terminal after three "
-                "consecutive days")
-        if self.hard_stop_loss_usd < self.max_session_loss_usd:
-            problems.append("hard stop cannot be below the normal session stop")
         if self.rest_requests_per_second > 4:
             problems.append("commissioning REST budget cannot exceed 4 requests/second")
         if (self.max_hard_exit_attempts != 3
@@ -459,11 +402,9 @@ class CommissioningConfig:
                 "commissioning reward economics must remain a 30-second "
                 "projection, 50% haircut, 1x probability-weighted cost "
                 "margin, and $1 aggregate reporting floor")
-        if (self.max_taker_exit_orders_per_contract != 4
-                or self.earnings_refresh_seconds != 900):
+        if self.earnings_refresh_seconds != 900:
             problems.append(
-                "commissioning loss learning must allow four taker exits per "
-                "configured contract and refresh earnings every 900 seconds")
+                "commissioning earnings must refresh every 900 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300
                 or self.small_residual_min_qty != Decimal("0.01")

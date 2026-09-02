@@ -3,7 +3,7 @@
 The economic evidence gate remains red. This runner exists only for the
 operator-accepted experiment and is mechanically constrained to 20 selected
 rewarded markets, a restart-scoped whole quote size from 5 to 30 contracts, an
-operator-controlled stop, an $80 normal session stop, and an $80 emergency hard
+operator-controlled stop and an $80 emergency hard
 stop.
 
 Importing this module has no side effect. Exchange access is possible only
@@ -329,15 +329,6 @@ class CommissioningRunner:
     # gets roughly six attempts inside a 60s budget. Not faster, because each
     # attempt is a venue mutation sharing one 4 req/s governor with quoting,
     # and a cancel that keeps failing will not start working in 2s.
-    # The two blockers that mean "this day lost too much", as opposed to
-    # something being wrong with the account. Only these pause; ownership
-    # violations, clock failures and named criticals stay terminal, and the
-    # $80 emergency equity ceiling is checked earlier and never reaches here.
-    LOSS_STOP_BLOCKERS = frozenset({
-        "session loss limit reached",
-        "market loss limit reached",
-    })
-
     CANCEL_RETRY_SECONDS = 10.0
 
     # Async rejection is a terminal state, but immediately recreating the same
@@ -580,7 +571,7 @@ class CommissioningRunner:
         # test losses on startup and halted in 73 seconds.
         self._realized_baseline: Decimal = Decimal("0")
         self._baseline_day: date | None = None
-        # Settled cash at session start. The session stop measures the change
+        # Settled cash at the ET-day baseline. Reporting measures the change
         # in this rather than a total rebuilt from fills: cash moves only when
         # a trade actually executes, so there is no price frame to decode and
         # no fill that can be missed. Every P&L defect found 2026-08-15 --
@@ -602,15 +593,11 @@ class CommissioningRunner:
         self._nontrading_cash_day: date | None = None
         self._cash_activity_boundary: datetime | None = None
         self._day_opening_equity: Decimal | None = None
-        # (ET risk date, blockers, streak) set by `_stop_reason` when a loss stop
-        # pauses, consumed once by `_announce_loss_stop_pause`.
-        self._loss_pause_pending: tuple[str, list[str], int] | None = None
-        self._loss_pause_announced_day: str | None = None
         # Gross taker fees remain ET-day telemetry. The operator removed fee
         # enforcement after the $10 reference canceled an otherwise healthy
         # 24-slot slate on 2026-08-31. Durable fills reconstruct the notice
-        # after restart, but only the loss and exit-count guards authorize a
-        # trading pause/stop.
+        # after restart, but only the loss guards authorize a trading
+        # pause/stop.
         self._execution_fee_observation_day: str | None = None
         self._execution_fee_observation_pending: (
             tuple[str, Decimal] | None
@@ -636,18 +623,17 @@ class CommissioningRunner:
                     encoding="utf-8").splitlines()[0].strip() or None)
         except Exception:
             self._deployed_commit = None
-        self._realized_baseline_by_market: dict[str, Decimal] = {}
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
             quote_size=config.quote_size,
             max_inventory_age_seconds=config.max_inventory_age_seconds,
-            # Exposure budgets, not the loss stops. The stops live in
-            # SessionRiskGuard and fire on realised P&L; these bound how much
-            # open worst case may exist at once.
+            # Exposure budgets, not loss stops. These bound how much open worst
+            # case may exist at once; the stressed-exit value is a pre-entry
+            # economics check and HARD remains in SessionRiskGuard.
             max_market_worst_loss=float(config.max_market_exposure_usd),
             max_portfolio_worst_loss=float(config.max_portfolio_exposure_usd),
-            max_exit_loss=float(config.max_market_loss_usd),
+            max_exit_loss=float(config.max_stressed_exit_loss_usd),
             max_early_exit_loss=float(config.max_early_exit_loss_usd),
             exit_depth_haircut=.5,
             max_book_age_seconds=5,
@@ -957,7 +943,7 @@ class CommissioningRunner:
         noticed. Waiting costs nothing, because a runner with no bound market
         holds no orders, no position and no stream subscription.
 
-        Only an operator stop, a loss stop, or a genuine adapter failure ends
+        Only an operator stop, HARD, or a genuine adapter failure ends
         the wait. Every scan is read-only and paced by the shared governor.
         """
 
@@ -2759,8 +2745,6 @@ class CommissioningRunner:
         self.risk_guard = SessionRiskGuard(
             started_at=now,
             starting_equity=self._equity_snapshot.marked_equity,
-            max_session_loss=self.config.max_session_loss_usd,
-            max_market_loss=self.config.max_market_loss_usd,
             max_duration_seconds=float("inf"),
             max_equity_age_seconds=15,
             hard_stop_loss=self.config.hard_stop_loss_usd,
@@ -2820,10 +2804,7 @@ class CommissioningRunner:
             f"🟠 Liquidity Bot LIVE commissioning started: up to "
             f"{self.config.max_markets} markets, {self.config.quote_size} "
             f"contracts per quote, reward-versus-exit economics {gate}, "
-            f"${self.config.max_session_loss_usd} session stop, "
-            f"${self.config.max_market_loss_usd} per-market stop, "
             f"${self.config.hard_stop_loss_usd} hard stop, "
-            f"{self.config.max_taker_exit_orders} taker-exit count cap, "
             f"${self.config.execution_fee_observation_usd} ET-day "
             "execution-fee telemetry reference, "
             "operator-controlled stop; pregame and loss gates remain active."
@@ -3746,17 +3727,6 @@ class CommissioningRunner:
         adjusted_equity = snapshot.marked_equity - self._nontrading_cash
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=observed_at)
-        self.risk_guard.observe_realized(self._session_realized())
-        if self._cash_activity_boundary is not None:
-            market_realized = self.ledger.realized_by_market(
-                since=self._cash_activity_boundary)
-        else:
-            market_realized = {
-                slug: value - self._realized_baseline_by_market.get(
-                    slug, Decimal("0"))
-                for slug, value in self.ledger.realized_by_market().items()
-            }
-        self.risk_guard.observe_market_realized(market_realized)
         self._publish_live_pnl_snapshot()
 
     def _publish_active_scope_snapshot(
@@ -3942,9 +3912,10 @@ class CommissioningRunner:
     def _roll_realized_baseline(self) -> None:
         """Adopt the ET risk day's opening marks from the durable ledger.
 
-        Both stops used to baseline per PROCESS, which is what "a restart
-        forgives the day's drawdown" means. Ten sessions ran on 2026-08-18, so
-        the $40 budget was handed back ten times; the $45 hard stop was worse,
+        The former session stop and HARD used to baseline per PROCESS, which is
+        what "a restart forgives the day's drawdown" means. Ten sessions ran on
+        2026-08-18, so the $40 budget was handed back ten times; the $45 HARD
+        was worse,
         because re-stamping `starting_equity` at a lower equity ratchets the
         floor down and every step stays inside the limit while the account
         walks away.
@@ -4017,8 +3988,6 @@ class CommissioningRunner:
             raise RuntimeError(f"unknown ET baseline source: {source}")
         self._baseline_day = today
         self._realized_baseline = opening_realized
-        self._realized_baseline_by_market = dict(
-            self.ledger.realized_by_market())
         self._cash_baseline = opening_cash
         self._cash_activity_boundary = cash_boundary
         self._nontrading_cash = None
@@ -4099,27 +4068,6 @@ class CommissioningRunner:
                     "reason=adjusted_equity_recovered_after_position_close",
                     flush=True,
                 )
-        if self.started_at is not None:
-            # Live venue intents do not distinguish building from reducing:
-            # both directions use BUY_* because SELL_* inverts the price
-            # frame (live_orders._intent). Liquidity and ownership are the
-            # durable exit evidence instead. Every bot-generated IOC is
-            # risk-reducing; entries are post-only. The order-count learning
-            # guard remains session-scoped and terminal.
-            session_rows = self.ledger.query(
-                "SELECT f.client_order_id,f.fee FROM execution_fills f "
-                "WHERE f.received_at>=? AND f.reversed=0 "
-                "AND f.liquidity='TAKER' "
-                "AND EXISTS (SELECT 1 FROM execution_intents i "
-                "WHERE i.operation='PLACE' "
-                "AND i.client_order_id=f.client_order_id)",
-                (self.started_at.astimezone(timezone.utc).isoformat(),),
-            )
-            taker_exit_orders = {
-                str(row["client_order_id"] or "") for row in session_rows
-            }
-            if len(taker_exit_orders) >= self.config.max_taker_exit_orders:
-                return "commissioning_taker_exit_limit"
         today = risk_day(now)
         if (self._execution_fee_observation_day is not None
                 and self._execution_fee_observation_day != today):
@@ -4160,74 +4108,10 @@ class CommissioningRunner:
             "marked account equity is unknown",
             "marked account equity is stale",
         }
-        # A loss stop PAUSES rather than ending the session -- operator
-        # decision 2026-08-22. It used to flatten, prove flat and exit 0, which
-        # the supervisor never restarts, so one bad day cost every hour after
-        # it until a human noticed.
-        #
-        # Pausing works only because the stops now baseline on the ET day. New
-        # risk is blocked while the blocker stands, exits and the pre-kickoff
-        # flatten keep working so nothing rides to settlement, and at midnight
-        # `_roll_realized_baseline` writes a fresh day and the blocker clears
-        # by itself. Nothing has to be restarted.
-        #
-        # Bounded, because on its own it is not: the budget resets every
-        # midnight, so a strategy that is systematically wrong rather than
-        # unlucky would lose its full allowance daily forever, and the
-        # emergency ceiling cannot catch that either since it re-baselines each
-        # morning too. After `max_consecutive_loss_stop_days` the pause becomes
-        # terminal and a human is required.
-        loss_hit = self.LOSS_STOP_BLOCKERS.intersection(blockers)
-        if loss_hit:
-            today = risk_day(now)
-            self.ledger.record_loss_stop(today, at=now)
-            streak = self.ledger.consecutive_loss_stop_days(today)
-            if streak < self.config.max_consecutive_loss_stop_days:
-                transient = transient | self.LOSS_STOP_BLOCKERS
-                print(f"[loss-stop-pause] at={now.isoformat()} "
-                      f"blockers={sorted(loss_hit)} day={today} "
-                      f"consecutive={streak} "
-                      f"resumes=next ET day", flush=True)
-                # Announced from an async caller: this method is sync, and a
-                # pause that nobody is told about is the failure mode the
-                # whole change risks -- the bot sits flat and silent instead
-                # of stopping loudly.
-                self._loss_pause_pending = (today, sorted(loss_hit), streak)
         terminal = tuple(item for item in blockers if item not in transient)
         if terminal:
             return "risk_stop:" + ",".join(terminal)
         return None
-
-    async def _announce_loss_stop_pause(self) -> None:
-        """Tell Discord once per day that a loss stop paused trading.
-
-        The old behaviour ended the process, which was at least loud. A pause
-        is silent by construction -- the bot stays up, stays flat and simply
-        stops quoting -- so without this the first anyone would know is a
-        day of missing reward. Sent critical: it is money, and it means the
-        day's budget is spent.
-
-        Once per ET day. The blocker stands for the rest of the day by
-        design, and `_stop_reason` runs every pass, so an unguarded send would
-        be thousands of messages.
-        """
-
-        pending, self._loss_pause_pending = self._loss_pause_pending, None
-        if pending is None:
-            return
-        day, blockers, streak = pending
-        if self._loss_pause_announced_day == day:
-            return
-        self._loss_pause_announced_day = day
-        remaining = self.config.max_consecutive_loss_stop_days - streak
-        await self.notifier.send_async(
-            f"🛑 Liquidity Bot hit a loss stop and has PAUSED trading "
-            f"for {day} ({', '.join(blockers)}). New risk is blocked; exits "
-            f"and the pre-kickoff flatten still run, so nothing rides to "
-            f"settlement. It resumes on its own at the next ET midnight. "
-            f"Consecutive loss-stop days: {streak} -- "
-            f"{remaining} more and it stops for good and needs a human.",
-            critical=True)
 
     async def _announce_execution_fee_observation(self) -> None:
         """Tell Discord once per ET day that fees crossed the reference."""
@@ -4243,8 +4127,8 @@ class CommissioningRunner:
         await self.notifier.send_async(
             f"ℹ️ Liquidity Bot gross taker fees reached ${fees} for {day}, "
             f"above the ${self.config.execution_fee_observation_usd} "
-            "telemetry reference. This does not pause trading; account-loss, "
-            "market-loss and taker-exit-count protections remain enforced.")
+            "telemetry reference. This does not pause trading; the hard-stop "
+            "protection remains enforced.")
 
     async def _announce_provisional_hard_stop(self) -> None:
         """Announce a paper breach once, then its position-close recovery."""
@@ -5590,16 +5474,7 @@ class CommissioningRunner:
             unknown_orders=unknown,
             trading_realized_usd=equity_change,
             open_marked_usd=Decimal("0"),
-            session_loss_limit_usd=self.config.max_session_loss_usd,
             hard_stop_loss_usd=self.config.hard_stop_loss_usd,
-            # The stop's own input, so the meter measures the thing that
-            # actually fires. `trading_realized_usd` above is marked equity
-            # and swings with unrealised ticks -- 320 open contracts move $38
-            # on twelve cents -- so a bar drawn from it would show the bot
-            # walking into a limit nothing is walking into.
-            session_realized_pnl_usd=(
-                self.risk_guard.realized_pnl if self.risk_guard is not None
-                else Decimal("0")),
             # Supply, straight off the last selection scan. These counters
             # already exist on the selection object and were never reported
             # anywhere -- which is why "is it quoting 3 because 3 is all
@@ -5712,10 +5587,6 @@ class CommissioningRunner:
                 "PAID", Decimal("0")),
             pending_rewards_usd=self._bot_era_rewards.get(
                 "PENDING", Decimal("0")),
-            worst_market_realized_pnl_usd=(
-                min(self.risk_guard.realized_by_market.values(),
-                    default=Decimal("0"))
-                if self.risk_guard is not None else Decimal("0")),
             pnl_label="marked account equity Δ",
             rest_requests_per_second=float(self.config.rest_requests_per_second),
             market_stream_age_seconds=market_age,
@@ -5913,7 +5784,7 @@ class CommissioningRunner:
         # real alert gets missed.
         #
         # Critical is reserved for what needs a human: a terminal condition, a
-        # market retired or abandoned, an ownership violation, a loss stop, or
+        # market retired or abandoned, an ownership violation, HARD, or
         # a runner failure. Those are raised by their own call sites.
         routine = not (component.endswith("_terminal")
                        or component.startswith("unowned")
@@ -7580,15 +7451,16 @@ class CommissioningRunner:
         exit budget is reset so the retry happens on a slow cadence rather
         than never.
 
-        Returns a session stop reason only when retirement itself is no longer
+        Returns a terminal reason only when retirement itself is no longer
         a proportionate response -- a whole slate of failures is systemic.
         """
 
         state = self.state_for(slug)
         state.clear_economics()
         # A fresh budget, not an unlimited one: the attempt and window caps
-        # still bound each round, and max_taker_exit_orders still bounds the
-        # session's crossing overall.
+        # still bound each round. The marked-equity HARD guard bounds aggregate
+        # financial harm without turning a routine exit count into a
+        # process-lifetime limit.
         #
         # Not always, though. Clearing the budget also clears the sent marker,
         # which is the only evidence that a confirmation is stuck. Reset it
@@ -8405,7 +8277,6 @@ class CommissioningRunner:
                 now = self._now()
                 await self._refresh_entry_pause(now)
                 stop_reason = self._stop_reason(now) or ""
-                await self._announce_loss_stop_pause()
                 await self._announce_execution_fee_observation()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
@@ -8589,7 +8460,6 @@ class CommissioningRunner:
                     (*scheduled, *latest_scheduled)))
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
-                await self._announce_loss_stop_pause()
                 await self._announce_execution_fee_observation()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
@@ -9002,7 +8872,7 @@ def main() -> int:
         #
         # The comma test keeps this to the single-blocker case. `blockers()`
         # are joined with "," by `_risk_stop_reason`, so a comma means
-        # something else tripped in the same breath -- a loss stop, the session
+        # something else tripped in the same breath -- HARD, the session
         # duration limit -- and those must stay terminal. Any unexpected shape
         # falls through to 0 and does not restart, which is the safe direction.
         return 5

@@ -32,16 +32,15 @@ These are implementation requirements, not suggestions.
     32 remains a measured canary, not a durable default or proof that the
     whole slate can fall back to REST. A bare restart must return to 20. The
     six-hour selection horizon does not
-    change. Early-exit loss
-    (`0.8 × size`), per-market exposure (`9 × size`), portfolio exposure
-    (`(slots + 10) × size`), market loss (`4 × size`), both account sensors
-    (`8 × size × slots / 20`),
-    taker-exit count (`4 × size`) and the cent-rounded ET-day gross taker-fee
-    telemetry reference (`$10 × size / 10 × slots / 24`) are computed
-    properties. Crossing the fee reference must not alter trading. Portfolio
+    change. Early-exit loss (`0.8 × size`), stressed-exit entry cap (`4 × size`),
+    per-market exposure (`9 × size`), portfolio exposure
+    (`(slots + 10) × size`), HARD (`8 × size × slots / 20`),
+    and the cent-rounded ET-day gross taker-fee telemetry reference
+    (`$10 × size / 10 × slots / 24`) are computed properties. Taker-exit count
+    and crossing the fee reference must not alter trading. Portfolio
     exposure funds every restart-configured slot-notional plus a ten-notional
-    cushion. Breadth scales portfolio exposure, the two account-wide stops and
-    the fee observation; per-market loss/exposure, exit-count and REST retain
+    cushion. Breadth scales portfolio exposure, HARD and the fee observation;
+    stressed-exit eligibility, per-market exposure and REST retain
     their quantity or policy meanings.
 
     The old "eight is the measured WebSocket ceiling" reasoning is retained in
@@ -49,8 +48,8 @@ These are implementation requirements, not suggestions.
     (FINDINGS section 9). Eight was a real measurement of one connection's
     cap, not of the account's.
 14. `cancel-all` and account-wide close operations are forbidden on a shared account.
-15. A realized-P&L breaker does not replace open-exposure and worst-case-loss limits.
-16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its per-market loss and slippage budgets.
+15. The marked-equity HARD stop does not replace open-exposure and worst-case-loss limits.
+16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its stressed-exit and slippage budgets.
 17. A WebSocket reconnect has no replay guarantee: new risk remains disabled
     until REST reconciliation and complete, fresh private snapshots succeed.
 18. A create or cancel with an ambiguous response is never retried. Its market
@@ -72,13 +71,8 @@ These are implementation requirements, not suggestions.
     quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. Losses have a **4 × size** per-market threshold and one
-    **8 × size × slots / 20** account threshold observed by two independent sensors: realized session
-    loss pauses new risk for the ET day, immediately makes flat-state building
-    quotes undesired, keeps the process and every reducing path alive, and may
-    resume only after the next ET midnight plus fresh ordinary gates. Three
-    consecutive loss-stop days remain a terminal human-review breaker. Adjusted
-    marked-account-equity loss
+25. The sole money-loss authority is the **8 × size × slots / 20** adjusted
+    marked-account-equity HARD stop
     (`currentBalance` plus every open position's Retail `cashValue`, less
     proven non-trading cash) is the emergency sensor. Every complete mark is
     bracketed by equal settled-cash reads; `assetNotional` is not used because
@@ -89,11 +83,11 @@ These are implementation requirements, not suggestions.
     recovered mark cannot clear until a breach-time position is positively
     closed, and the decision requires a complete reconciliation followed by a
     newer balance. A confirmed hard loss may stop while a different position
-    remains open. The
-    market stop remains the first bound for one bad market; only losses spread
-    across markets can reach the session stop. Buying power is never treated
-    as P&L or marked equity. Derived properties prevent all three from drifting
-    independently of the restart-scoped quote quantity.
+    remains open. Realized session P&L, per-market realized P&L, taker-exit
+    count and taker fees may be reported but cannot block/cancel quotes, pause
+    or stop trading, or alter exits. Buying power is never treated as P&L or
+    marked equity. The derived HARD property cannot drift independently of the
+    restart-scoped quote quantity and width.
 26. A restart may mutate only persisted, identified orders/positions in the
     ledger-selected recovery markets inside configured capacity, and then only
     to reduce risk or recover flat. Unowned or out-of-scope state refuses
@@ -138,18 +132,14 @@ These are implementation requirements, not suggestions.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published
     pool size is never substituted for the bot's proportional share.
-35. A session stops after `4 × quote size` confirmed taker exits (52 at the
-    persisted live size 13), then cancels, reconciles and proves flat. The
-    independent gross owned taker-fee budget is scoped to the ET risk day and
-    equals the cent-rounded value of `$10 × (quote size / 10) × (slots / 24)`
-    ($10 at size 10 / 24 slots).
-    Reaching it immediately makes every flat-state building quote undesired,
-    but never terminates the process or disables a passive reducer, IOC exit,
-    cancel, state monitor or pre-kickoff flatten. Durable same-day fills
-    reconstruct the pause after a restart; negative rebates never offset
-    positive taker fees. The pause clears only on a new ET day and a fresh
-    account/risk-day baseline plus all ordinary entry gates. Both budgets are
-    ceilings, not targets.
+35. Taker-exit count and gross owned taker fees are evidence, not trading
+    authority. Neither may block or cancel quotes, pause or stop trading, or
+    change a passive reducer, IOC exit, state monitor or pre-kickoff flatten.
+    The fee observation is scoped to the ET risk day and equals the
+    cent-rounded value of `$10 × (quote size / 10) × (slots / 24)` ($10 at
+    size 10 / 24 slots). Durable same-day fills reconstruct its one-time notice
+    after a restart; negative rebates never offset positive taker fees. The
+    adjusted marked-equity HARD sensor is the sole money-loss authority.
 36. Authenticated incentive earnings for the active market are sampled every 15
     minutes and stored in a table separate from executions. Paid, pending, and
     skipped observations do not alter inventory basis or trading P&L.
@@ -230,8 +220,8 @@ These are implementation requirements, not suggestions.
 53. Staying down is itself a failure mode. An unexpected runtime failure that
     proved the whole account flat exits `5` and is restarted, because a fresh
     process re-runs the entire flat and ownership preflight before any order.
-    Loss stops, unowned or cross-market state, unproven flat state, and every
-    named critical remain terminal and are never restarted.
+    HARD, unowned or cross-market state, unproven flat state, and every named
+    critical remain terminal and are never restarted.
 54. An empty viable universe is a wait, not a refusal. With no bound market the
     runner holds no orders, no position and no stream subscription, so waiting
     carries no risk. Only an operator stop or a genuine adapter failure ends

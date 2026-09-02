@@ -230,13 +230,12 @@ class LiveSessionTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "cancel_order_not_owned")
 
-    def test_tripped_runtime_guard_blocks_building_but_allows_reducing(self):
+    def test_critical_runtime_guard_blocks_building_but_allows_reducing(self):
         guard = SessionRiskGuard(
             started_at=NOW, starting_equity=Decimal("100"),
-            max_session_loss=Decimal("5"), max_market_loss=Decimal("2"),
             max_duration_seconds=1800)
-        guard.observe_equity("95", observed_at=NOW)
-        guard.observe_realized(Decimal("-5"))
+        guard.observe_equity("100", observed_at=NOW)
+        guard.trip_critical("test critical state")
         executor = Executor()
         driver = ControlledActionDriver(executor, self.ledger, guard)
         building = PlanAction(

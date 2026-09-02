@@ -4641,15 +4641,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_live_buy_intent_taker_exits_reach_the_evidence_budget(self):
+    async def test_taker_exit_count_does_not_stop_the_session(self):
         runner, _, _ = self.build_runner()
-        runner.config = replace(
-            runner.config, quote_size=Decimal("13"))
         await runner.preflight()
-        budget = runner.config.max_taker_exit_orders
-        self.assertEqual(budget, 52)
         at = NOW
-        for index in range(budget):
+        # The removed size-10 ceiling was 40. Exceed it substantially so a
+        # reintroduced count guard cannot hide behind an off-by-one error.
+        for index in range(80):
             at = NOW + timedelta(seconds=index + 1)
             runner.ledger.prepare_intent(
                 f"exit-intent-{index}", "PLACE", "market-one",
@@ -4664,20 +4662,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 Decimal("0.49"), Decimal("1"), Decimal("0.01"), at,
                 client_order_id=f"liquidity-exit-{index}", liquidity="TAKER",
                 intent="ORDER_INTENT_BUY_SHORT"), received_at=at)
-            if index < budget - 1:
-                # One crossed exit used to end the session, which capped exit
-                # evidence at a single sample. SCALE_REVIEW asks for 100.
-                self.assertIsNone(
-                    runner._stop_reason(at),
-                    "session must survive taker exit %d of %d" % (
-                        index + 1, budget))
-
-        self.assertEqual(
-            runner._stop_reason(at), "commissioning_taker_exit_limit")
+        self.assertIsNone(runner._stop_reason(at))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_taker_exit_budget_counts_orders_not_partial_fills(self):
+    async def test_taker_partial_fills_do_not_create_a_hidden_count_stop(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()
         at = NOW + timedelta(seconds=1)
@@ -4693,7 +4682,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(runner._stop_reason(at))
 
-        for index in range(runner.config.max_taker_exit_orders - 1):
+        for index in range(79):
             runner.ledger.prepare_intent(
                 f"other-exit-intent-{index}", "PLACE", "market-one",
                 f"liquidity-other-exit-{index}", {}, created_at=at)
@@ -4703,8 +4692,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 client_order_id=f"liquidity-other-exit-{index}",
                 liquidity="TAKER", intent="ORDER_INTENT_BUY_LONG"),
                 received_at=at)
-        self.assertEqual(
-            runner._stop_reason(at), "commissioning_taker_exit_limit")
+        self.assertIsNone(runner._stop_reason(at))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -4915,10 +4903,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(f"{runner.config.max_markets} markets", banner)
         self.assertIn(f"{runner.config.quote_size} contracts", banner)
-        self.assertIn(f"${runner.config.max_session_loss_usd} session", banner)
         self.assertIn(f"${runner.config.hard_stop_loss_usd} hard", banner)
-        self.assertIn(
-            f"{runner.config.max_taker_exit_orders} taker-exit", banner)
+        self.assertNotIn("session stop", banner)
+        self.assertNotIn("per-market stop", banner)
+        self.assertNotIn("taker-exit count cap", banner)
         self.assertIn(
             f"${runner.config.execution_fee_observation_usd} ET-day "
             "execution-fee telemetry reference",
@@ -5027,9 +5015,6 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         tomorrow = NOW + timedelta(days=1)
         runner._now = lambda: tomorrow
         runner._roll_realized_baseline()
-        runner.risk_guard.observe_realized(
-            runner.ledger.realized_pnl() - runner._realized_baseline)
-
         self.assertIsNone(runner._stop_reason(tomorrow))
 
     async def test_a_baseline_is_never_written_without_a_balance(self):
@@ -5183,30 +5168,6 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_a_loss_stop_in_the_utc_midnight_gap_uses_the_et_date(self):
-        """The pause streak and baseline must never disagree on their day."""
-
-        runner, _client, _ = self.build_runner()
-        await runner.preflight()
-        # 00:30Z on August 14 is still August 13 in New York. A future refactor
-        # that changes only the stop-streak key back to UTC would make the
-        # pause persist across the ET baseline reset or corrupt the three-day
-        # consecutive-stop bound.
-        after_utc_midnight = datetime(
-            2026, 8, 14, 0, 30, tzinfo=timezone.utc)
-        runner.risk_guard.observe_equity(
-            runner.balance.marked_equity, observed_at=after_utc_midnight)
-        runner.risk_guard.observe_realized(
-            -runner.config.max_session_loss_usd)
-
-        self.assertIsNone(runner._stop_reason(after_utc_midnight))
-        rows = runner.ledger.query(
-            "SELECT risk_date FROM execution_risk_loss_stop_days")
-        self.assertEqual([row["risk_date"] for row in rows], ["2026-08-13"])
-        self.assertEqual(runner._loss_pause_pending[0], "2026-08-13")
-        await runner.private_stream.close()
-        await runner.market_stream.close()
-
     async def test_a_restart_inside_the_same_day_inherits_its_drawdown(self):
         """A restart must not hand the day's budget back.
 
@@ -5254,173 +5215,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await restarted.private_stream.close()
         await restarted.market_stream.close()
 
-    async def test_a_loss_taken_this_session_still_stops(self):
-        """Re-baselining must not blind the stop to real losses.
-
-        Since 2026-08-22 the loss stop PAUSES rather than ending the session --
-        it blocks new risk and clears itself at the next ET day. What this
-        test guards is unchanged: the loss must still be SEEN. A re-baseline
-        that hid it would leave the bot quoting straight through the budget.
-        """
+    async def test_realized_loss_has_no_separate_pause_or_terminal_path(self):
         runner, _client, _ = self.build_runner()
         await runner.preflight()
-        runner.ledger.realized_pnl = (
-            lambda slug=None, since=None: Decimal("0"))
-        runner.ledger.realized_by_market = lambda: {}
-        runner._baseline_day = None
-        runner._roll_realized_baseline()
+        runner.ledger.realized_pnl = lambda slug=None, since=None: Decimal("-999")
+        runner.ledger.realized_by_market = lambda since=None: {
+            runner.market_slug: Decimal("-999")}
 
-        # Now lose the whole session budget, after the baseline was taken.
-        loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
-        runner.risk_guard.observe_realized(
-            runner.ledger.realized_pnl() - runner._realized_baseline)
-
-        # Seen, and recorded against the day, but not terminal on day one.
         self.assertIsNone(runner._stop_reason(NOW))
-        self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
-        self.assertFalse(
-            runner._frame(NOW).new_risk_allowed,
-            "a loss pause must make resting building quotes immediately "
-            "undesired while the process remains alive")
-        self.assertIn("loss limit",
-                      " ".join(runner.risk_guard.blockers(now=NOW)))
+        self.assertTrue(runner.risk_guard.can_add_new_risk(now=NOW))
+        self.assertTrue(runner._frame(NOW).new_risk_allowed)
+        self.assertNotIn(
+            "loss limit", " ".join(runner.risk_guard.blockers(now=NOW)))
         self.assertEqual(
-            runner.ledger.consecutive_loss_stop_days(NOW.date().isoformat()), 1)
+            runner.ledger.query(
+                "SELECT * FROM execution_risk_loss_stop_days"), [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
-    async def test_a_paused_loss_stop_announces_itself_once(self):
-        """A pause is silent by construction, so it has to say so.
-
-        The old behaviour ended the process, which was at least loud. Pausing
-        leaves the bot up, flat and quiet -- without an alert the first anyone
-        would know is a day of missing reward. Once per ET day, because the
-        blocker stands all day and `_stop_reason` runs every pass.
-        """
-        runner, _client, notifier = self.build_runner()
-        await runner.preflight()
-        loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
-        runner.ledger.realized_by_market = lambda: {}
-        runner.risk_guard.observe_realized(loss)
-
-        before = len(notifier.messages)
-        runner._stop_reason(NOW)
-        await runner._announce_loss_stop_pause()
-        sent = notifier.messages[before:]
-
-        self.assertEqual(len(sent), 1, "exactly one alert on the first trip")
-        body = str(sent[0])
-        self.assertIn("PAUSED", body)
-        self.assertIn("loss limit", body)
-        self.assertIn("next ET midnight", body)
-
-        # Every later pass on the same day is silent.
-        runner._stop_reason(NOW + timedelta(seconds=5))
-        await runner._announce_loss_stop_pause()
-        self.assertEqual(len(notifier.messages[before:]), 1,
-                         "the blocker stands all day; do not repeat it")
-
-    async def test_a_loss_stop_becomes_terminal_after_three_days(self):
-        """Pausing is convenient and, alone, unbounded.
-
-        The day baseline resets at midnight, so a strategy that is
-        systematically wrong rather than unlucky would lose its full budget
-        every day forever with nothing forcing anyone to look -- and the $80
-        emergency ceiling cannot catch it either, because that re-baselines
-        each morning too. One bad day is variance; three in a row is a broken
-        model.
-        """
-        runner, _client, _ = self.build_runner()
-        await runner.preflight()
-        loss = -runner.config.max_session_loss_usd
-        runner.ledger.realized_pnl = lambda slug=None, since=None: loss
-        runner.ledger.realized_by_market = lambda: {}
-        runner.risk_guard.observe_realized(loss)
-
-        # Two prior days already tripped; today is the third.
-        today = NOW.date()
-        for back in (2, 1):
-            runner.ledger.record_loss_stop(
-                (today - timedelta(days=back)).isoformat(),
-                at=NOW - timedelta(days=back))
-
-        reason = runner._stop_reason(NOW)
-
-        self.assertEqual(
-            runner.ledger.consecutive_loss_stop_days(today.isoformat()), 3)
-        self.assertIsNotNone(
-            reason, "three consecutive loss-stop days must stop the session")
-        self.assertIn("loss limit", str(reason))
-
-    async def test_a_gap_day_resets_the_loss_stop_streak(self):
-        """Three days in a row, not three days ever.
-
-        Counting cumulatively would turn three unrelated bad days across a
-        month into a terminal stop, which is the same 'lifetime counter on a
-        churning system' error FINDINGS records for retirement bounds.
-        """
-        runner, _client, _ = self.build_runner()
-        await runner.preflight()
-        today = NOW.date()
-        # Yesterday clean, the two days before it tripped.
-        for back in (3, 2):
-            runner.ledger.record_loss_stop(
-                (today - timedelta(days=back)).isoformat(), at=NOW)
-
-        self.assertEqual(
-            runner.ledger.consecutive_loss_stop_days(today.isoformat()), 0)
-
-    async def test_one_eighty_dollar_threshold_keeps_both_sensors(self):
+    async def test_only_hard_stop_has_money_loss_authority(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         start = Decimal("100")
 
-        # Paper movement is NOT the session stop. Use the documented position
-        # cashValue rather than assetNotional: production returned the latter
-        # as zero while positions were open.
-        await runner._refresh_balance(NOW)
-        client.account.current_balance = (
-            start - runner.config.hard_stop_loss_usd)
-        client.portfolio.rows = {runner.config.market_slug: {
-            "netPosition": "100", "netPositionDecimal": "100.0000",
-            "cost": {
-                "value": str(runner.config.hard_stop_loss_usd),
-                "currency": "USD"},
-            "cashValue": {"value": "1", "currency": "USD"},
-            "updateTime": NOW.isoformat(),
-        }}
-        await runner._refresh_balance(NOW)
-        self.assertIsNone(runner._stop_reason(NOW))
-
-        # A drop in settled CASH is a realised loss, and does stop. Cash moves
-        # only when a trade executes, which is why the session stop reads it
-        # rather than a total rebuilt from fills.
-        client.account.current_balance = (
-            start - runner.config.max_session_loss_usd)
-        # Keep marked equity $1 inside the equally-sized hard stop. This
-        # proves the realized sensor still pauses independently even though
-        # both protections now use the same $80 threshold.
-        client.portfolio.rows = {runner.config.market_slug: {
-            "netPosition": "1", "netPositionDecimal": "1.0000",
-            "cost": {"value": "0", "currency": "USD"},
-            "cashValue": {"value": "1", "currency": "USD"},
-            "updateTime": NOW.isoformat(),
-        }}
-        await runner._refresh_balance(NOW)
-        # Since 2026-08-22 a first-day loss stop PAUSES: it blocks new risk and
-        # clears at the next ET day rather than ending the session. What must
-        # still hold is that the loss is seen and quoting stops.
-        self.assertIsNone(runner._stop_reason(NOW))
-        self.assertFalse(runner.risk_guard.can_add_new_risk(now=NOW))
-        self.assertIn("loss limit",
-                      " ".join(runner.risk_guard.blockers(now=NOW)))
-        client.account.current_balance = start
-        client.portfolio.rows = {}
-
-        # The ceiling is the one thing that still reads marked equity, because
-        # its job is to catch what the ledger cannot explain.
+        # A very large realized ledger loss is reporting evidence only. Keep
+        # marked account equity one dollar inside HARD: entries remain allowed.
         runner.ledger.realized_pnl = (
-            lambda slug=None, since=None: Decimal("0"))
+            lambda slug=None, since=None: Decimal("-999"))
+        client.account.current_balance = (
+            start - runner.config.hard_stop_loss_usd + Decimal("1"))
+        client.portfolio.rows = {}
+        await runner._refresh_balance(NOW)
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertTrue(runner.risk_guard.can_add_new_risk(now=NOW))
+
+        # One dollar beyond HARD is terminal. This is the sole money-loss stop.
         client.account.current_balance = (
             start - runner.config.hard_stop_loss_usd - Decimal("1"))
         await runner._refresh_balance(NOW)
@@ -6808,31 +6637,6 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_realized_stop_can_pause_with_another_position_open(self):
-        runner, client, _ = self.build_runner()
-        await runner.preflight()
-        slug = runner.config.market_slug
-        client.portfolio.rows = {slug: {
-            "netPosition": "100", "netPositionDecimal": "100.0000",
-            "cost": {"value": "90", "currency": "USD"},
-            "cashValue": {"value": "9", "currency": "USD"},
-            "updateTime": NOW.isoformat(),
-        }}
-        await runner._rest_reconcile(NOW)
-        client.account.current_balance = Decimal("10")
-        await runner._refresh_balance(NOW)
-        self.assertIsNone(runner._stop_reason(NOW))
-
-        # Closed trades can independently consume the realized budget even
-        # while this unrelated position remains open.
-        runner.risk_guard.observe_realized(
-            -runner.config.max_session_loss_usd)
-        self.assertIsNone(runner._stop_reason(NOW))
-        self.assertIn(
-            "session loss limit reached", runner.risk_guard.blockers(now=NOW))
-        await runner.private_stream.close()
-        await runner.market_stream.close()
-
     async def test_hard_equity_excludes_proven_nontrading_cash(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -6931,8 +6735,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_reward_cash_cannot_mask_the_session_loss_stop(self):
-        """Non-trading credits must not buy back the trading-loss budget."""
+    async def test_reward_cash_cannot_mask_the_hard_stop(self):
+        """Non-trading credits must not buy back the HARD budget."""
 
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -6954,7 +6758,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         await runner._refresh_balance(later)
 
-        self.assertEqual(runner.risk_guard.realized_pnl, Decimal("-80"))
+        self.assertEqual(runner.risk_guard.current_equity, Decimal("20"))
+        self.assertTrue(runner.risk_guard.hard_stop_reached(now=later))
         self.assertFalse(runner.risk_guard.can_add_new_risk(now=later))
         self.assertEqual(runner._nontrading_cash, Decimal("100"))
         await runner.private_stream.close()
@@ -8168,8 +7973,6 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         adjusted_loss = runner.config.hard_stop_loss_usd - Decimal("1")
         runner.risk_guard.observe_equity(
             Decimal("100") - adjusted_loss, observed_at=now)
-        runner.risk_guard.observe_realized(Decimal("-7.25"))
-
         await runner._send_summary(now)
 
         embed = notifier.payloads[-1][0]["embeds"][0]
@@ -8210,7 +8013,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             value for name, value in fields.items() if "Capital guidance" in name)
         self.assertIn(f"{'Quoting':<19}{'0/24':>10}", slots)
         self.assertIn("$0.00 / $96.00", risk)
-        self.assertEqual(risk.count("$0.00 / $96.00"), 2)
+        self.assertEqual(risk.count("$0.00 / $96.00"), 1)
+        self.assertNotIn("Session", risk)
+        self.assertNotIn("Worst", risk)
         for expected in (
                 "10 / 24", "$240.00", "$100.00", "$672.00", "$1,012.00"):
             self.assertIn(expected, capital)
@@ -9929,16 +9734,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # Still never restarts while inventory is unproven.
         self.assertEqual(self._exit_code_for(unresolved, flat=False), 3)
 
-        # A loss stop in the same breath makes it terminal again. `blockers()`
-        # are comma-joined, so a comma means something else tripped too, and
-        # restarting into a loss stop is the one thing this must never do.
-        self.assertEqual(
-            self._exit_code_for(unresolved + ",session loss limit reached"), 0)
-
-        # Neighbouring risk stops are untouched.
-        for reason in ("risk_stop:session loss limit reached",
-                       "risk_stop:market loss limit reached",
-                       "risk_stop:session duration limit reached",
+        # Neighbouring integrity stops are untouched.
+        for reason in ("risk_stop:session duration limit reached",
                        "risk_stop:critical failure: something else entirely"):
             self.assertEqual(
                 self._exit_code_for(reason), 0,

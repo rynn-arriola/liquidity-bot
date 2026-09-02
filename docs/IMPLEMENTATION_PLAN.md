@@ -51,7 +51,7 @@ Gate: crash, timeout, duplicate fill, stale snapshot, partial fill, and reconnec
 - Inventory-aware quote state machine
 - Shadow-selected maximum inventory age with a soft passive exit and a hard,
   price-capped IOC exit
-- Per-market and portfolio worst-case-loss breakers
+- Per-market and portfolio worst-case exposure gates
 
 Gate: a multi-hour dry run produces no path where unmatched inventory can outlive its timeout without an explicit critical failure.
 
@@ -63,12 +63,12 @@ Gate: a multi-hour dry run produces no path where unmatched inventory can outliv
 - All executable sports markets joined to their rewards; one selected market at a time for commissioning
 - 5 contracts per quote by default across at most 20 bound markets for
   commissioning. Size is restart-scoped and bounded to whole values 5-30;
-  its early-exit and market-exposure caps plus execution-fee telemetry
+  its stressed-exit entry gate and market-exposure cap plus execution-fee telemetry
   reference derive automatically. Fee telemetry never gates trading.
 - Pregame only
 - Detached supervision, persisted recovery-only restart, and graceful operator
   stop
-- Per-market/session loss breakers and market-scoped kill switch
+- Marked-equity HARD loss stop and market-scoped kill switch
 
 Gate: the readiness evaluator must first permit a trial. Scaling then requires
 paid rewards plus rebates plus trading P&L to be positive over enough independent

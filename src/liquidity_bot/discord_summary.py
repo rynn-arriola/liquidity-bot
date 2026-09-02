@@ -84,18 +84,7 @@ class LiquiditySummary:
     open_marked_usd: Decimal = Decimal("0")
     attributable_paid_rewards_usd: Decimal = Decimal("0")
     pending_rewards_usd: Decimal = Decimal("0")
-    session_loss_limit_usd: Decimal = Decimal("0")
     hard_stop_loss_usd: Decimal = Decimal("0")
-    # The number the session stop actually reads, not marked equity. Negative
-    # is a loss. `trading_realized_usd` above is the equity delta and moves
-    # with every unrealised tick -- drawing the stop meter from it would show
-    # the bot approaching a limit that nothing is approaching. See
-    # `runtime_safety.blockers`, which trips on `-realized_pnl`.
-    session_realized_pnl_usd: Decimal = Decimal("0")
-    # Worst single market, same sign convention. The per-market stop fires
-    # independently of the session one, so a meter for the session alone can
-    # read comfortable while a market is one fill from stopping.
-    worst_market_realized_pnl_usd: Decimal = Decimal("0")
     # Account-wide marked TRADING P&L against the ET opening equity, after
     # proven rewards/deposits/withdrawals are removed. It includes the current
     # cashValue of every open venue position; Retail assetNotional is not used.
@@ -190,9 +179,7 @@ class LiquiditySummary:
         for value in (
                 self.trading_realized_usd, self.open_marked_usd,
                 self.attributable_paid_rewards_usd, self.pending_rewards_usd,
-                self.session_loss_limit_usd, self.hard_stop_loss_usd,
-                self.session_realized_pnl_usd,
-                self.worst_market_realized_pnl_usd,
+                self.hard_stop_loss_usd,
                 self.quote_size, self.portfolio_exposure_cap_usd,
                 self.weekly_reserve_usd):
             _money(value)
@@ -432,10 +419,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             + _row("Refused, tight book", summary.spread_filtered_markets)
             + _row("Lost to errors", summary.selection_failures))
 
-    session_cap = _money(summary.session_loss_limit_usd)
     hard_cap = _money(summary.hard_stop_loss_usd)
-    session_loss = max(Decimal("0"), -_money(summary.session_realized_pnl_usd))
-    worst_loss = max(Decimal("0"), -_money(summary.worst_market_realized_pnl_usd))
     # The HARD meter must read exactly what its own stop fires on. Live callers
     # provide the adjusted equity delta; the fallback keeps historical/offline
     # summaries compatible without changing their display.
@@ -451,18 +435,10 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         + _row("Exit samples", summary.exit_samples)
         + _row("Exit complete", f"{100 * summary.exit_completion_rate:.1f}%")
         + _row("Oldest age", f"{summary.max_inventory_age_seconds:.1f}s"))
-    if session_cap > 0:
+    if hard_cap > 0:
         risk_text += (
-            "\nsession  " + _meter(float(session_loss), float(session_cap))
-            + f"  ${float(session_loss):,.2f} / ${float(session_cap):,.2f}\n")
-        if summary.worst_market_realized_pnl_usd:
-            risk_text += (
-                "worst    " + _meter(float(worst_loss), float(session_cap))
-                + f"  ${float(worst_loss):,.2f}\n")
-        if hard_cap > 0:
-            risk_text += (
-                "HARD     " + _meter(float(hard_loss), float(hard_cap))
-                + f"  ${float(hard_loss):,.2f} / ${float(hard_cap):,.2f}\n")
+            "\nHARD     " + _meter(float(hard_loss), float(hard_cap))
+            + f"  ${float(hard_loss):,.2f} / ${float(hard_cap):,.2f}\n")
 
     reward_text = (_row("PAID attributed", f"{float(paid):,.2f}")
                    + _row("Pending", f"{float(pending):,.2f}"))

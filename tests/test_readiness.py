@@ -12,8 +12,8 @@ from liquidity_bot.readiness import (
 def config() -> ControlledTrialConfig:
     return ControlledTrialConfig(
         max_markets=1, quote_size=1, session_minutes=30,
-        max_inventory_age_seconds=30, max_market_loss_usd=2,
-        max_session_loss_usd=5, rest_requests_per_second=4,
+        max_inventory_age_seconds=30, hard_stop_loss_usd=5,
+        rest_requests_per_second=4,
         pregame_only=True)
 
 

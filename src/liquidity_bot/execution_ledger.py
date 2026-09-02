@@ -676,12 +676,11 @@ class ExecutionLedger:
         return total
 
     def record_loss_stop(self, risk_date: str, *, at: datetime) -> None:
-        """Note that a loss stop tripped on this ET risk day. Idempotent.
+        """Retain a legacy loss-stop day for historical analysis. Idempotent.
 
-        Kept in its own table rather than a column on the baseline table
-        so a loss stop can never disturb the equity marks the stops themselves
-        read. Only the FIRST trip of a day is stored: the guard re-evaluates
-        every pass while tripped, and what matters is the day, not the count.
+        Current live policy does not call this method: marked-equity HARD is
+        the sole money-loss authority. The old evidence remains in its own
+        table so reading it cannot disturb durable equity baselines.
         """
 
         with self.connection:
@@ -691,17 +690,10 @@ class ExecutionLedger:
                 (str(risk_date), _time(at, "at")))
 
     def consecutive_loss_stop_days(self, risk_date: str) -> int:
-        """How many ET risk days in a row hit a loss stop.
+        """Read the legacy consecutive loss-stop streak for analysis.
 
-        A loss stop that pauses until the next day is convenient and, on its
-        own, unbounded: the day baseline resets at midnight, so a strategy that
-        is systematically wrong rather than merely unlucky would lose its full
-        budget every day forever with nothing forcing anyone to look. The
-        emergency equity ceiling does not catch it either, because that
-        re-baselines each morning too.
-
-        One bad day is variance. Several in a row is a broken model, and the
-        caller escalates to a terminal stop at that point.
+        Retained for old evidence compatibility. Current live policy neither
+        records this state nor escalates it into trading authority.
         """
 
         rows = {str(row["risk_date"]) for row in self.connection.execute(
@@ -738,7 +730,7 @@ class ExecutionLedger:
         `INSERT OR IGNORE` is the whole mechanism: the first process of the
         day writes the marks and every later one reads them back, so a restart
         inherits the day's drawdown instead of being handed a fresh budget. A
-        A new ET date has no row and therefore gets a fresh one, which is the
+        new ET date has no row and therefore gets a fresh one, which is the
         intended reset.
 
         The first ET-aware process must not grant a fresh budget merely because
@@ -1901,7 +1893,7 @@ class ExecutionLedger:
     def realized_by_market(
         self, *, since: datetime | None = None,
     ) -> dict[str, Decimal]:
-        """Realised P&L per market, for the per-market loss stop.
+        """Realised P&L per market for reporting and historical analysis.
 
         Replay the ledger once for every market together.  Calling
         ``realized_pnl(slug)`` for every historical slug scanned the complete

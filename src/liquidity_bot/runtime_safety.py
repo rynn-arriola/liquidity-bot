@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import BinaryIO, Mapping
+from typing import BinaryIO
 
 
 class LeaseHeld(RuntimeError):
@@ -78,7 +78,7 @@ def _decimal(value: Decimal | str | int | float, field_name: str) -> Decimal:
 
 @dataclass
 class SessionRiskGuard:
-    """Block new exposure after time, loss, stale equity, or critical state.
+    """Block new exposure after time, stale equity, or critical state.
 
     ``equity`` must include marked open positions; raw cash or buying power is
     not a valid substitute. Exits and cancels remain allowed after the guard
@@ -87,31 +87,22 @@ class SessionRiskGuard:
 
     started_at: datetime
     starting_equity: Decimal
-    max_session_loss: Decimal
-    max_market_loss: Decimal
     max_duration_seconds: float
     hard_stop_loss: Decimal | None = None
     max_equity_age_seconds: float = 10.0
     current_equity: Decimal | None = None
     equity_observed_at: datetime | None = None
-    realized_by_market: dict[str, Decimal] = field(default_factory=dict)
-    realized_pnl: Decimal = Decimal("0")
     critical_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
             raise ValueError("started_at must be timezone-aware")
         self.starting_equity = _decimal(self.starting_equity, "starting_equity")
-        self.max_session_loss = _decimal(self.max_session_loss, "max_session_loss")
-        self.max_market_loss = _decimal(self.max_market_loss, "max_market_loss")
         if self.hard_stop_loss is not None:
             self.hard_stop_loss = _decimal(
                 self.hard_stop_loss, "hard_stop_loss")
-        if min(self.max_session_loss, self.max_market_loss) <= 0:
-            raise ValueError("loss limits must be positive")
-        if (self.hard_stop_loss is not None
-                and self.hard_stop_loss < self.max_session_loss):
-            raise ValueError("hard stop cannot be below the session loss limit")
+        if self.hard_stop_loss is not None and self.hard_stop_loss <= 0:
+            raise ValueError("hard stop must be positive")
         if self.max_duration_seconds <= 0 or self.max_equity_age_seconds <= 0:
             raise ValueError("duration and equity freshness must be positive")
 
@@ -141,19 +132,6 @@ class SessionRiskGuard:
         self.current_equity = _decimal(equity, "equity")
         self.equity_observed_at = observed_at
 
-    def observe_realized(self, value: Decimal | str | int | float) -> None:
-        """Record realised session P&L, which is what the session stop reads."""
-
-        self.realized_pnl = _decimal(value, "realized_pnl")
-
-    def observe_market_realized(
-        self, values: Mapping[str, Decimal | str | int | float],
-    ) -> None:
-        self.realized_by_market = {
-            str(slug): _decimal(value, f"realized P&L for {slug}")
-            for slug, value in values.items()
-        }
-
     def trip_critical(self, reason: str) -> None:
         self.critical_reason = str(reason or "unspecified critical failure")
 
@@ -174,16 +152,6 @@ class SessionRiskGuard:
             age = (now - self.equity_observed_at).total_seconds()
             if age < 0 or age > self.max_equity_age_seconds:
                 result.append("marked account equity is stale")
-        # The session stop fires on REALISED trading loss, not on marked
-        # equity. Marked equity moves with every unrealised tick: 320 open
-        # contracts swing $38 on twelve cents, so an equity-based stop trips on
-        # paper movement with nothing traded. Marked equity still backs the
-        # emergency hard stop below, which is what it is for.
-        if -self.realized_pnl >= self.max_session_loss:
-            result.append("session loss limit reached")
-        if any(value <= -self.max_market_loss
-               for value in self.realized_by_market.values()):
-            result.append("market loss limit reached")
         return tuple(result)
 
     def can_add_new_risk(self, *, now: datetime) -> bool:

@@ -490,7 +490,6 @@ class DiscordTests(unittest.TestCase):
             active_markets=3, resting_markets=3, slot_capacity=20,
             viable_markets=3, rewarded_markets=26, spread_filtered_markets=23,
             selection_failures=0,
-            session_loss_limit_usd=Decimal("40"),
             hard_stop_loss_usd=Decimal("45"))
         base.update(overrides)
         return LiquiditySummary(**base)
@@ -498,21 +497,15 @@ class DiscordTests(unittest.TestCase):
     def test_the_hard_meter_reads_equity_not_the_session_number(self):
         """The HARD bar drew the SESSION stop's number against the hard cap.
 
-        They are different quantities and they diverge in the DANGEROUS
-        direction. `runtime_safety.blockers` trips the session stop on
-        `-realized_pnl`, which is matched-pair only and cannot see a position
-        that settles worthless; `hard_stop_reached` compares marked equity
-        against the day's opening equity and does see it. So the bar could sit
-        near zero while the stop it is labelled for was one tick from firing.
+        Historical session P&L could not see a position that settled worthless;
+        `hard_stop_reached` compares adjusted marked equity against the day's
+        opening equity and does see it. HARD is now the only displayed meter.
         """
-        summary = self._stop_summary(
-            session_realized_pnl_usd=Decimal("0"),   # matched pairs: flat
-            today_pnl_usd=Decimal("-44"))            # equity: nearly stopped
+        summary = self._stop_summary(today_pnl_usd=Decimal("-44"))
         risk = [f for f in build_liquidity_summary(summary)["embeds"][0]["fields"]
                 if "stop loss" in f["name"]][0]["value"]
         self.assertIn("$44.00 / $45.00", risk)
-        # ...and the session bar still reads its own, unchanged, number.
-        self.assertIn("$0.00 / $40.00", risk)
+        self.assertNotIn("session", risk.lower())
 
     def test_reward_cannot_make_the_hard_meter_look_safer(self):
         """Non-trading cash cannot inflate the headline or HARD meter.
@@ -521,7 +514,6 @@ class DiscordTests(unittest.TestCase):
         hard stop. Both trading displays exclude it; HARD reads its own input.
         """
         summary = self._stop_summary(
-            session_realized_pnl_usd=Decimal("0"),
             today_pnl_usd=Decimal("0"),
             hard_stop_pnl_usd=Decimal("-44"))
         embed = build_liquidity_summary(summary)["embeds"][0]
@@ -530,7 +522,6 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("TRADING TODAY  $+0.00", embed["description"])
         self.assertIn("rewards/deposits excluded", embed["description"])
         self.assertIn("$44.00 / $45.00", risk)
-        self.assertIn("$0.00 / $40.00", risk)
 
     def test_discord_headline_uses_closed_plus_open_mark(self):
         """Reproduce the corrected live 2026-08-30 account mark exactly.
@@ -541,7 +532,6 @@ class DiscordTests(unittest.TestCase):
         """
 
         summary = self._stop_summary(
-            session_realized_pnl_usd=Decimal("-21.0368"),
             today_pnl_usd=Decimal("-21.1368"),
             today_realized_pnl_usd=Decimal("-21.0368"),
             today_unrealized_pnl_usd=Decimal("-0.1000"),
@@ -558,16 +548,12 @@ class DiscordTests(unittest.TestCase):
         """The strip is the first thing read on a phone, so it answers the
         first question. Operational state keeps the title icon."""
 
-        losing = self._stop_summary(
-            session_realized_pnl_usd=Decimal("-12.34"),
-            today_pnl_usd=Decimal("-12.34"))
+        losing = self._stop_summary(today_pnl_usd=Decimal("-12.34"))
         embed = build_liquidity_summary(losing)["embeds"][0]
         self.assertEqual(embed["color"], RED)
         self.assertIn("TRADING TODAY  $-12.34", embed["description"])
 
-        winning = self._stop_summary(
-            session_realized_pnl_usd=Decimal("8.90"),
-            today_pnl_usd=Decimal("8.90"))
+        winning = self._stop_summary(today_pnl_usd=Decimal("8.90"))
         embed = build_liquidity_summary(winning)["embeds"][0]
         self.assertEqual(embed["color"], GREEN)
         self.assertIn("TRADING TODAY  $+8.90", embed["description"])
@@ -581,7 +567,6 @@ class DiscordTests(unittest.TestCase):
         stuck = self._stop_summary(
             active_markets=14, resting_markets=7, viable_markets=7,
             spread_filtered_markets=12,
-            session_realized_pnl_usd=Decimal("50"),
             today_pnl_usd=Decimal("50"),
             idle_market_reasons=(("book_stale", 5),))
         embed = build_liquidity_summary(stuck)["embeds"][0]
@@ -594,7 +579,6 @@ class DiscordTests(unittest.TestCase):
         ledger's bot-overall result must keep their scopes explicit."""
 
         summary = self._stop_summary(
-            session_realized_pnl_usd=Decimal("3.00"),
             today_pnl_usd=Decimal("3.00"),
             today_realized_pnl_usd=Decimal("2.00"),
             today_unrealized_pnl_usd=Decimal("1.00"),
@@ -648,15 +632,11 @@ class DiscordTests(unittest.TestCase):
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
         self.assertNotIn("Viable now", slots)
 
-    def test_stop_meter_draws_from_the_stop_input_not_marked_equity(self):
+    def test_stop_meter_draws_only_from_the_hard_stop_input(self):
         """The bar has to measure the thing that actually fires.
 
-        `blockers()` trips on realised P&L, never on marked equity -- marked
-        equity swings with every unrealised tick (320 open contracts move $38
-        on twelve cents), so a bar drawn from it shows the bot walking into a
-        limit nothing is walking into. These two are deliberately opposite
-        here: equity is up $30, realised is down $20, and the meter must
-        follow the realised number.
+        The headline and HARD input can differ after non-trading cash. The meter
+        must follow the adjusted value that actually fires the sole loss stop.
         """
 
         summary = LiquiditySummary(
@@ -664,29 +644,26 @@ class DiscordTests(unittest.TestCase):
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
             active_markets=2, resting_markets=2,
             trading_realized_usd=Decimal("30"),
-            session_realized_pnl_usd=Decimal("-20"),
-            worst_market_realized_pnl_usd=Decimal("-8"),
-            session_loss_limit_usd=Decimal("40"),
+            hard_stop_pnl_usd=Decimal("-22.5"),
             hard_stop_loss_usd=Decimal("45"))
         risk = [field for field in build_liquidity_summary(summary)["embeds"][0]
                 ["fields"] if "stop loss" in field["name"]][0]["value"]
 
-        self.assertIn("$20.00 / $40.00", risk)
-        self.assertIn("$8.00", risk)
+        self.assertIn("$22.50 / $45.00", risk)
         # Half the cap, so half the bar. Catches an off-by-one or an inverted
         # meter, which a "does it contain a block character" check would not.
         self.assertIn("██████░░░░░░", risk)
         self.assertNotIn("$30.00", risk)
 
-    def test_a_profitable_session_shows_an_empty_stop_meter(self):
+    def test_a_profitable_hard_input_shows_an_empty_stop_meter(self):
         """Profit is not negative loss. Clamped, or the bar renders inverted."""
 
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",
             observed_at=NOW, session_started_at=NOW - timedelta(minutes=30),
             active_markets=2, resting_markets=2,
-            session_realized_pnl_usd=Decimal("12.50"),
-            session_loss_limit_usd=Decimal("40"))
+            hard_stop_pnl_usd=Decimal("12.50"),
+            hard_stop_loss_usd=Decimal("40"))
         risk = [field for field in build_liquidity_summary(summary)["embeds"][0]
                 ["fields"] if "stop loss" in field["name"]][0]["value"]
 
@@ -706,7 +683,6 @@ class DiscordTests(unittest.TestCase):
             overall_pnl_usd=Decimal("1"),
             trading_realized_usd=Decimal("-1"),
             open_marked_usd=Decimal("-0.5"),
-            session_loss_limit_usd=Decimal("5"),
             integrity_problems=("private stream stale",))
         payload = build_liquidity_summary(summary)
         embed = payload["embeds"][0]

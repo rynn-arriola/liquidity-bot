@@ -19,8 +19,7 @@ class ControlledTrialConfig:
     quote_size: float
     session_minutes: int
     max_inventory_age_seconds: int
-    max_market_loss_usd: float
-    max_session_loss_usd: float
+    hard_stop_loss_usd: float
     rest_requests_per_second: float = 4.0
     pregame_only: bool = True
 
@@ -76,10 +75,8 @@ def evaluate_readiness(
         trial.append("controlled trial session must be at most 60 minutes")
     if config.max_inventory_age_seconds <= 0:
         trial.append("a measured positive inventory timeout is required")
-    if min(config.max_market_loss_usd, config.max_session_loss_usd) <= 0:
-        trial.append("positive market and session loss limits are required")
-    if config.max_session_loss_usd < config.max_market_loss_usd:
-        trial.append("session loss limit must cover one market")
+    if config.hard_stop_loss_usd <= 0:
+        trial.append("a positive marked-equity hard stop is required")
     if not 0 < config.rest_requests_per_second <= 4:
         trial.append("initial trial REST budget must be in (0, 4] requests/second")
     if not config.pregame_only:

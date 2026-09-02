@@ -43,10 +43,14 @@ SUPPORTED_EVENT_PERIODS = frozenset({
     "live",
 })
 
-# Retail accepts at most 100 slugs on one filtered market-list request.  Full
-# discovery batches exact reward-market metadata at that bound instead of
-# walking the ever-growing account-wide active catalog.
-MARKET_METADATA_BATCH_SIZE = 100
+# Event and nested market clocks can temporarily disagree when a sporting
+# event is postponed.  Discovery uses a one-day superset on both sides of the
+# strategy horizon, then the existing market-level game_start gate below
+# remains authoritative.  A 2026-09-02 live comparison found seven otherwise
+# executable delayed markets outside the exact event-time window and none
+# outside this buffered window.
+EVENT_DISCOVERY_CLOCK_SKEW_SECONDS = 24 * 60 * 60
+EVENT_DISCOVERY_PAGE_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -221,6 +225,7 @@ class RewardMarketSelection:
     deferred_markets: tuple[str, ...]
     failures: tuple[str, ...]
     catalog_spread_filtered_markets: int = 0
+    event_pages_used: int = 0
 
     def top_viable(
         self, limit: int, *, exclude: frozenset[str] | set[str] = frozenset(),
@@ -428,7 +433,7 @@ def _opportunity_key(
 
 
 class RewardMarketSelector:
-    """Join active reward programs to exact market metadata and score them."""
+    """Join bounded sports-event markets to exact rewards and score them."""
 
     def __init__(
         self,
@@ -450,32 +455,38 @@ class RewardMarketSelector:
     async def _select(self, *, now: datetime) -> RewardMarketSelection:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("selection clock must be timezone-aware")
-        # Reward eligibility is required for every order, so enumerate that
-        # bounded universe first and retrieve only its exact market rows in
-        # documented batches.  The old catalog-first path walked every active
-        # market merely to discard the non-rewarded majority.  On 2026-09-02
-        # the venue crossed its fixed 50,000-row safety bound; each failed
-        # top-up spent 100 reads and never reached replacement selection.
+        # Discover only active sports events near the six-hour strategy
+        # horizon, filter their nested markets by the unchanged market-level
+        # execution gates, then request rewards only for that exact set.  The
+        # old catalog-first path walked every active market merely to discard
+        # the non-sports and non-moneyline majority.  On 2026-09-02 the venue
+        # crossed its fixed 50,000-row safety bound; each failed top-up spent
+        # 100 reads and never reached replacement selection.  Enumerating all
+        # nominally active rewards also failed because the venue returned more
+        # than 20,000 programs despite the documented active-status filter.
         #
-        # This changes discovery cost, not authorization: the same market,
-        # lifecycle, six-hour clock, structure, spread, incentive-period and
-        # full-book gates below still decide the candidate and its rank.
-        incentives = await self.gateway.list_incentives(statuses=("active",))
-        catalog_by_slug: dict[str, MarketMetadata] = {}
-        reward_slugs = sorted(incentives)
-        for offset in range(0, len(reward_slugs), MARKET_METADATA_BATCH_SIZE):
-            batch = reward_slugs[offset:offset + MARKET_METADATA_BATCH_SIZE]
-            catalog_by_slug.update(
-                await self.gateway.fetch_markets_by_slugs(batch))
-        catalog = tuple(catalog_by_slug[slug] for slug in sorted(catalog_by_slug))
+        # Event clocks are discovery hints only.  The one-day superset retains
+        # delayed/rescheduled events; market.game_start remains the execution
+        # authority, so no horizon or lifecycle policy changes here.
         window_end = now + timedelta(
             seconds=self.policy.selection_horizon_seconds)
+        clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
+        catalog = await self.gateway.list_upcoming_sports_markets(
+            start=now - clock_skew,
+            end=window_end + clock_skew,
+            limit=EVENT_DISCOVERY_PAGE_SIZE,
+            require_complete=True,
+        )
+        event_pages_used = int(getattr(
+            self.gateway, "last_upcoming_event_pages", 0))
         executable_catalog = {
             market.slug: market
             for market in catalog
             if self._catalog_market_is_executable(
                 market, now=now, window_end=window_end)
         }
+        incentives = await self.gateway.fetch_incentives(
+            sorted(executable_catalog))
         rewarded_executable = {
             slug: incentives[slug]
             for slug in executable_catalog
@@ -552,6 +563,7 @@ class RewardMarketSelector:
             deferred_markets=deferred,
             failures=tuple(failures),
             catalog_spread_filtered_markets=catalog_spread_filtered,
+            event_pages_used=event_pages_used,
         )
         if result.selected is not None:
             self._last_selected_slug = result.selected.market.slug

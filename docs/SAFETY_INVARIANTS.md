@@ -738,3 +738,14 @@ These are implementation requirements, not suggestions.
     cached five-minute Discord summary and TV dashboard snapshot add no venue
     request. Cancels, reducers, exits, account proof, reconciliation and
     ambiguity recovery must never be demoted to report traffic.
+95. Automatic selection may not depend on an unbounded account-wide market or
+    incentive enumeration. Discovery must page active/open sports events only
+    inside the six-hour strategy horizon plus the reviewed one-day event-clock
+    skew buffer, fail closed at the explicit event-page ceiling, and apply the
+    authoritative market-level lifecycle, `game_start`, V2-moneyline, tick and
+    minimum-quantity gates before any symbol-filtered incentive fan-out. Event
+    time is a discovery hint and cannot widen the strategy horizon. A missing,
+    malformed, truncated or failed event/incentive response authorizes no new
+    risk. This routing may reduce API work only; it cannot alter quote price,
+    quantity, reward period, economics, ranking, ownership, risk or exit
+    authority.

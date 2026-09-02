@@ -117,7 +117,7 @@ The following inventory was audited end to end again on 2026-09-01:
 | Bound-market metadata and rewards | The deployed batching uses one slug-filtered market read plus one symbol-filtered incentive read per bounded group of eight: `2 × ceil(N/8) / 60`. Startup validation still reads every bound book and has its own finite burst. | Stepwise by private-shard-sized group. |
 | Quiet-book REST fallback | A market with no recent streamed full book becomes due after 3 seconds, so demand is approximately `N × quiet_fraction / 3` requests/second. Its decision book is stale at 5 seconds. | The dominant degraded-feed term; a silent full slate cannot be made fresh by polling at scale. |
 | Mutations | Creates, cancels and IOC reductions share the governor. They are event-driven and never automatically retried. | Depends on fill/cancel/replace business activity, not slot count alone. |
-| Market selection | Active liquidity programs are enumerated first, then exact reward-market metadata is fetched in batches of at most 100 and up to 100 ranked candidate books are inspected. With `P` incentive pages and `R` rewarded slugs, the fixed part is `P + ceil(R/100)` rather than every page of the account-wide active-market catalog. | Reward-program/page/book-sensitive burst. It remains background traffic and every failed complete scan establishes a shared 60-second top-up retry floor. |
+| Market selection | Active/open sports events are offset-paged over the strategy horizon plus a one-day clock-skew buffer. Nested markets pass the unchanged market-level execution gates before symbol-filtered incentive reads and up to 100 ranked books. On the 2026-09-02 live contract this was two event pages plus six incentive pages, instead of 100 global catalog reads or more than 200 global incentive pages. | Buffered-event/executable-market/book-sensitive burst. It remains background traffic, fails closed after ten event pages, and every failed complete scan establishes a shared 60-second top-up retry floor. |
 | Earnings | One earnings read every 900 seconds: about `0.0011/s`. | Fixed. |
 | Recovery and retry | Confirmed 429 read retries, private-stream handoff proof, missing-order repair, pagination and maintenance probes consume additional reads. Unknown mutations do not retry. | Failure- and page-sensitive; must be measured in tail windows. |
 | Hourly reward table | Worst bounded path is one earnings read, two cash-history walks of at most four pages each, two balance reads and one position read: at most 12 calls. It is outside the runner's process-local telemetry. | Fixed and independently scheduled. It now waits for spare shared allowance, is capped at `0.25/s`, has its own lane/cooldown and may use up to 45 minutes of the hourly interval. |
@@ -197,15 +197,39 @@ book or replacement selection, while owner signals restarted discovery after
 only a few seconds. The resulting order drop was local discovery starvation,
 not a confirmed 429 or exhaustion of the 4/s host budget.
 
-The prepared correction removes catalog size from live selection cost:
-enumerate active incentive programs, batch exact market metadata at the
-documented 100-slug request maximum, then apply the unchanged lifecycle,
-six-hour, V2-moneyline, minimum-quantity, spread, period, full-book and ranking
-gates. Missing metadata remains fail-closed. A separate runner-level
-retry-not-before deadline prevents lifecycle, reward-end and post-flat signals
-from bypassing the ordinary backoff after any complete top-up failure. This is
-admission/load control only; it does not change prices, quantity, ranking,
-ownership, exit priority or mutation authority.
+The first correction tried to remove catalog size from live selection cost by
+enumerating nominally active incentives. Live acceptance rejected that design:
+even with `statuses=active`, the endpoint exceeded the separate 200-page by
+100-row ceiling and the runner failed closed before placing an order. Raising
+that ceiling would only move the same unbounded-growth failure.
+
+The corrected path uses the documented event `startTimeMin`/`startTimeMax` and
+offset pagination. It requests active/open sports events within one day on
+either side of the six-hour strategy window, flattens nested markets, applies
+the unchanged market-level lifecycle, clock, V2-moneyline, tick and minimum-
+quantity gates, then requests incentives only for those exact symbols before
+the unchanged spread, period, full-book and ranking gates. The buffer matters:
+an exact-six-hour event window missed seven executable delayed/rescheduled
+markets because event `startTime` and nested `gameStartTime` disagreed. A live
+comparison found the one-day-buffered set and the complete all-active-sports-
+event census produced the same 228 executable markets, while the buffered path
+used 736 rather than 2,148 events. Ten event pages are a hard ceiling and a
+full final page fails closed rather than silently accepting truncation. Every
+successful selector scan reports `event_pages` beside `event_page_ceiling`, so
+headroom and growth are visible without reconstructing pagination afterward.
+
+Two other documented market filters were not used as substitutes because the
+2026-09-02 wire did not honor them usefully: `categories=sports` still returned
+60,000 market rows without completing, while combining the documented
+moneyline type filter returned only one row despite hundreds of locally parsed
+open moneylines. These are observed API contracts, not assumptions from the
+documentation.
+
+A separate runner-level retry-not-before deadline prevents lifecycle,
+reward-end and post-flat signals from bypassing the ordinary backoff after any
+complete top-up failure. This is admission/load control only; it does not
+change prices, quantity, ranking, ownership, exit priority or mutation
+authority.
 
 ### Measured live baseline and modeled scenarios
 

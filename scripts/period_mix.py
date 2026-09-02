@@ -26,8 +26,9 @@ has earned, while atp and mlb -- still carrying day_of -- paid one cent each.
 tell a program change from a transient. If `day_of` returns to setka and itf,
 the collapse was a blip and the bot recovers on its own.
 
-Costs one catalog read plus batched incentives (~3 venue calls). Cheap enough
-to run daily; still shares the 4 req/s governor, so do not loop it.
+Costs bounded, paginated event discovery plus exact-symbol incentives (eight
+calls on the 2026-09-02 live contract). Cheap enough to run daily; still
+shares the 4 req/s governor, so do not loop it.
 """
 
 from __future__ import annotations
@@ -44,6 +45,10 @@ sys.path.insert(0, "/root/liquidity-bot/src")
 from liquidity_bot.adapters import (  # noqa: E402
     AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
+from liquidity_bot.market_selector import (  # noqa: E402
+    EVENT_DISCOVERY_CLOCK_SKEW_SECONDS,
+    EVENT_DISCOVERY_PAGE_SIZE,
+)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 
 LEAGUE = re.compile(r"^aec-([a-z0-9]+)-")
@@ -67,7 +72,13 @@ async def main() -> int:
     now = datetime.now(timezone.utc)
     window = now + timedelta(seconds=policy.selection_horizon_seconds)
 
-    catalog = await gateway.list_sports_markets()
+    clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
+    catalog = await gateway.list_upcoming_sports_markets(
+        start=now - clock_skew,
+        end=window + clock_skew,
+        limit=EVENT_DISCOVERY_PAGE_SIZE,
+        require_complete=True,
+    )
     in_window = [
         m for m in catalog
         if m.active and not m.closed and m.game_start

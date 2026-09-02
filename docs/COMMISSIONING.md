@@ -110,14 +110,21 @@ The command refuses before order entry unless all of these are true:
 9. Authenticated earnings for the active liquidity program can be read and
    persisted separately from execution P&L.
 
-Automatic discovery enumerates active liquidity programs first, fetches exact
-market metadata for only those reward slugs in documented 100-market batches,
-then filters open markets to the six-hour `day_of` window and the venue's V2
-moneyline enum. It never walks the account-wide active market catalog and does
-not retrieve metadata one slug at a time. `marketSides=2` is not used as a
-structure test because rewarded futures are also two-sided. Metadata BBO can
-reject a known-tight row before a full-book request, but only a fresh full book
-can authorize entry.
+Automatic discovery pages active/open sports events over the six-hour strategy
+horizon plus a one-day clock-skew buffer, flattens their nested market metadata,
+and applies the market-level clock and V2-moneyline gates before requesting
+rewards only for those exact symbols. The wider event window retains delayed
+or rescheduled games whose event `startTime` lags their market
+`gameStartTime`; the exact market clock remains authoritative. It never walks
+the account-wide active market or incentive universe, and a full tenth event
+page fails closed rather than silently truncating discovery.
+Each successful full selection emits `[selection-scan]` with event pages used,
+the configured page ceiling and the event/executable/rewarded/book/viable
+counts. Treat rising page usage as capacity evidence; the metric is
+observational and never authorizes entry or blocks order service.
+`marketSides=2` is not used as a structure test because rewarded futures are
+also two-sided. Metadata BBO can reject a known-tight row before a full-book
+request, but only a fresh full book can authorize entry.
 Only documented early/day-of/live lifecycle names enter validation, and only
 the currently applicable pregame `day_of` period can authorize this executor.
 Lifecycle names not implemented by the pregame executor—including documented

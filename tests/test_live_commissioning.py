@@ -476,6 +476,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
+    def test_selection_scan_log_exposes_event_page_headroom(self):
+        runner, _, _ = self.build_runner()
+        runner._selection_scan_seconds_last = 8.75
+        selection = replace(
+            fake_selection("market-one", discovered=228),
+            catalog_markets=7_961,
+            executable_catalog_markets=228,
+            rewarded_executable_markets=228,
+            event_pages_used=2,
+        )
+
+        with patch("builtins.print") as emitted:
+            runner._log_selection_scan(selection)
+
+        line = emitted.call_args.args[0]
+        self.assertIn("event_pages=2", line)
+        self.assertIn("event_page_ceiling=10", line)
+        self.assertIn("event_markets=7961", line)
+        self.assertIn("executable=228", line)
+        self.assertIn("scan_seconds=8.8", line)
+
     async def test_ui_maintenance_pauses_only_new_risk(self):
         runner, _, notifier = self.build_runner()
         await runner.preflight()

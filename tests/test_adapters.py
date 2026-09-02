@@ -1009,6 +1009,65 @@ class GatewayTests(unittest.TestCase):
             "limit": 50, "offset": 0,
         }])
 
+    def test_upcoming_event_discovery_paginates_until_a_short_page(self):
+        client = FakeClient()
+        one = fixture("market.json")["market"]
+        client.events.list_responses = [
+            {"events": [
+                {"markets": [one]},
+                {"markets": [dict(one, slug="market-two")]},
+            ]},
+            {"events": [
+                {"markets": [dict(one, slug="market-three")]},
+            ]},
+        ]
+        start = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        gateway = AsyncReadOnlyGateway(client)
+        markets = self.run_async(gateway.list_upcoming_sports_markets(
+            start=start, end=end, limit=2, require_complete=True))
+
+        self.assertEqual(
+            [market.slug for market in markets],
+            ["market-one", "market-two", "market-three"],
+        )
+        self.assertEqual(
+            [call["offset"] for call in client.events.list_calls], [0, 2])
+        self.assertEqual(gateway.last_upcoming_event_pages, 2)
+
+    def test_upcoming_event_measurement_retains_one_page_default(self):
+        client = FakeClient()
+        one = fixture("market.json")["market"]
+        client.events.list_responses = [
+            {"events": [{"markets": [one]}]},
+        ]
+        start = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        gateway = AsyncReadOnlyGateway(client)
+        markets = self.run_async(gateway.list_upcoming_sports_markets(
+            start=start, end=end, limit=1))
+
+        self.assertEqual([market.slug for market in markets], ["market-one"])
+        self.assertEqual(
+            [call["offset"] for call in client.events.list_calls], [0])
+        self.assertEqual(gateway.last_upcoming_event_pages, 1)
+
+    def test_upcoming_event_discovery_fails_closed_at_page_ceiling(self):
+        client = FakeClient()
+        one = fixture("market.json")["market"]
+        client.events.list_responses = [
+            {"events": [{"markets": [one]}]},
+        ]
+        start = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(AdapterError, "event_max_pages"):
+            self.run_async(AsyncReadOnlyGateway(
+                client, event_max_pages=1).list_upcoming_sports_markets(
+                    start=start, end=end, limit=1, require_complete=True))
+
     def test_measurement_can_batch_fetch_reward_markets_by_slug(self):
         client = FakeClient()
         one = fixture("market.json")["market"]

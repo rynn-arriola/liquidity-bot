@@ -1104,6 +1104,7 @@ class AsyncReadOnlyGateway:
         incentive_batch_size: int = 40,
         catalog_page_size: int = 500,
         max_pages: int = 100,
+        event_max_pages: int = 10,
         incentive_max_pages: int = 200,
         retry_attempts: int = 3,
         retry_base_seconds: float = 1.0,
@@ -1117,6 +1118,8 @@ class AsyncReadOnlyGateway:
             raise ValueError("catalog_page_size must be in [1, 500]")
         if max_pages <= 0:
             raise ValueError("max_pages must be positive")
+        if event_max_pages <= 0:
+            raise ValueError("event_max_pages must be positive")
         if incentive_max_pages <= 0:
             raise ValueError("incentive_max_pages must be positive")
         if (retry_attempts <= 0 or retry_base_seconds < 0
@@ -1133,11 +1136,13 @@ class AsyncReadOnlyGateway:
         self.incentive_batch_size = incentive_batch_size
         self.catalog_page_size = catalog_page_size
         self.max_pages = max_pages
+        self.event_max_pages = event_max_pages
         self.incentive_max_pages = incentive_max_pages
         self.retry_attempts = retry_attempts
         self.retry_base_seconds = retry_base_seconds
         self.max_retry_after_seconds = max_retry_after_seconds
         self.default_traffic_class = default_traffic_class
+        self.last_upcoming_event_pages = 0
         self._traffic_class_override: ContextVar[str | None] = ContextVar(
             f"api_traffic_class_{id(self)}", default=None)
         self._sleep = sleep
@@ -1330,12 +1335,15 @@ class AsyncReadOnlyGateway:
         *,
         statuses: Iterable[str] = ("active",),
     ) -> dict[str, MarketIncentive]:
-        """Enumerate liquidity programs without scanning the market catalog.
+        """Enumerate liquidity programs for bounded diagnostics only.
 
         The official incentive endpoint permits an omitted ``symbols`` filter
-        and paginates the complete program universe. The live selector uses
-        that bounded reward universe before fetching exact market metadata;
-        one shared REST governor still owns every request.
+        and paginates the complete program universe. On 2026-09-02,
+        ``statuses=active`` still exceeded 20,000 returned market groups and
+        the live startup safety ceiling. The live selector therefore must use
+        event-bounded discovery plus :meth:`fetch_incentives` with exact
+        symbols; this method is not a live-selection source. One shared REST
+        governor still owns every request.
         """
 
         clean_statuses = list(dict.fromkeys(
@@ -1543,48 +1551,67 @@ class AsyncReadOnlyGateway:
 
     async def list_upcoming_sports_markets(
         self, *, start: datetime, end: datetime, limit: int = 500,
+        require_complete: bool = False,
     ) -> tuple[MarketMetadata, ...]:
-        """One bounded event page, flattened to upcoming market metadata.
+        """Bounded event pages flattened to upcoming market metadata.
 
         The observed 2026-08-28 Retail market/event list wire shape omits the
         documented volume fields even when ordered by volume.  This method is
         therefore only a low-cost discovery read.  The scalp collector ranks
         candidates later from book ``sharesTraded``/``notionalTraded`` stats.
+
+        The stopped-only scalp measurement deliberately retains its original
+        one-page bound by default.  Live selection passes
+        ``require_complete=True``: a full page is not complete evidence, so
+        that path keeps paging until a short page and fails closed at the
+        explicit event ceiling instead of silently selecting from a truncated
+        window.
         """
 
         if not 1 <= int(limit) <= 500:
             raise ValueError("upcoming event limit must be within [1, 500]")
         if start.tzinfo is None or end.tzinfo is None or end <= start:
             raise ValueError("upcoming event bounds must be aware and increasing")
-        params = {
-            "categories": ["sports"],
-            "active": True,
-            "closed": False,
-            "startTimeMin": start.isoformat(),
-            "startTimeMax": end.isoformat(),
-            "limit": int(limit),
-            "offset": 0,
-        }
-        response = await self._call(
-            "events.list(upcoming-sports)",
-            lambda: self.client.events.list(params),
-        )
-        if not isinstance(response, dict) or not isinstance(response.get("events"), list):
-            raise AdapterError("upcoming sports response has no events list")
+        self.last_upcoming_event_pages = 0
         out: list[MarketMetadata] = []
         seen: set[str] = set()
-        for event in response["events"]:
-            if not isinstance(event, dict) or not isinstance(event.get("markets"), list):
-                continue
-            for row in event["markets"]:
-                try:
-                    market = _market(row, require_clock=False)
-                except AdapterError:
+        page_size = int(limit)
+        page_ceiling = self.event_max_pages if require_complete else 1
+        for page_number in range(page_ceiling):
+            params = {
+                "categories": ["sports"],
+                "active": True,
+                "closed": False,
+                "startTimeMin": start.isoformat(),
+                "startTimeMax": end.isoformat(),
+                "limit": page_size,
+                "offset": page_number * page_size,
+            }
+            response = await self._call(
+                "events.list(upcoming-sports)",
+                lambda params=params: self.client.events.list(params),
+            )
+            if (not isinstance(response, dict)
+                    or not isinstance(response.get("events"), list)):
+                raise AdapterError("upcoming sports response has no events list")
+            self.last_upcoming_event_pages = page_number + 1
+            page = response["events"]
+            for event in page:
+                if (not isinstance(event, dict)
+                        or not isinstance(event.get("markets"), list)):
                     continue
-                if market.slug not in seen:
-                    seen.add(market.slug)
-                    out.append(market)
-        return tuple(out)
+                for row in event["markets"]:
+                    try:
+                        market = _market(row, require_clock=False)
+                    except AdapterError:
+                        continue
+                    if market.slug not in seen:
+                        seen.add(market.slug)
+                        out.append(market)
+            if len(page) < page_size or not require_complete:
+                return tuple(out)
+        raise AdapterError(
+            "upcoming sports pagination exceeded event_max_pages")
 
     async def fetch_markets_by_slugs(
         self, slugs: Iterable[str],

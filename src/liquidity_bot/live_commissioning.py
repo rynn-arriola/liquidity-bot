@@ -1050,6 +1050,25 @@ class CommissioningRunner:
             )
         return tuple(resolved)
 
+    def _log_selection_scan(self, selection: RewardMarketSelection) -> None:
+        """Expose discovery headroom once for every successful full scan."""
+
+        elapsed = (
+            f"{self._selection_scan_seconds_last:.1f}"
+            if self._selection_scan_seconds_last is not None else "unknown")
+        print(
+            f"[selection-scan] at={self._now().isoformat()} "
+            f"event_pages={getattr(selection, 'event_pages_used', 0)} "
+            f"event_page_ceiling={getattr(self.gateway, 'event_max_pages', 0)} "
+            f"event_markets={getattr(selection, 'catalog_markets', 0)} "
+            f"executable={getattr(selection, 'executable_catalog_markets', 0)} "
+            f"rewarded={getattr(selection, 'rewarded_executable_markets', 0)} "
+            f"books_ranked={getattr(selection, 'books_evaluated', 0)} "
+            f"viable={getattr(selection, 'viable_markets', 0)} "
+            f"scan_seconds={elapsed}",
+            flush=True,
+        )
+
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
 
@@ -1075,6 +1094,7 @@ class CommissioningRunner:
             finally:
                 self._selection_scan_seconds_last = (
                     time.monotonic() - scan_started)
+            self._log_selection_scan(selection)
             if selection.selected is not None:
                 self._market_selection = selection
                 self._market_selection_observed_at = self._now()
@@ -2587,6 +2607,7 @@ class CommissioningRunner:
                 "startup_settlement_wait_selection", exc)
             return
         self._selection_scan_seconds_last = time.monotonic() - scan_started
+        self._log_selection_scan(selection)
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
         if selection.selected is None:
@@ -2921,8 +2942,8 @@ class CommissioningRunner:
                 f" Auto-selected {self.market_slug} from "
                 f"{self._market_selection.rewarded_executable_markets} rewarded "
                 f"executable markets joined from "
-                f"{self._market_selection.catalog_markets} exact reward-market "
-                "metadata rows after evaluating "
+                f"{self._market_selection.catalog_markets} buffered event-market "
+                "rows after evaluating "
                 f"{self._market_selection.books_evaluated} books; "
                 f"{self._market_selection.unsupported_programs} programs used "
                 "an unsupported or undocumented lifecycle and remained read-only.")
@@ -5784,7 +5805,8 @@ class CommissioningRunner:
             f"earnings_paid={paid_observed:.2f} "
             f"earnings_pending={pending_observed:.2f} "
             f"retired={len(self._retired_ever)}"
-            + (f" reward_metadata={self._market_selection.catalog_markets}"
+            + (f" event_pages={getattr(self._market_selection, 'event_pages_used', 0)}"
+               f" event_markets={self._market_selection.catalog_markets}"
                f" executable={self._market_selection.executable_catalog_markets}"
                f" rewarded={self._market_selection.rewarded_executable_markets}"
                f" books_ranked={self._market_selection.books_evaluated}"
@@ -6527,6 +6549,7 @@ class CommissioningRunner:
             selection = await self.reward_selector.select(now=self._now())
         finally:
             self._selection_scan_seconds_last = time.monotonic() - scan_started
+        self._log_selection_scan(selection)
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
         return (
@@ -6798,6 +6821,7 @@ class CommissioningRunner:
         finally:
             self._selection_scan_seconds_last = (
                 time.monotonic() - scan_started)
+        self._log_selection_scan(selection)
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
         if selection.selected is None:
@@ -6885,7 +6909,7 @@ class CommissioningRunner:
             "🔄 Liquidity Bot rotated while flat from "
             f"[{', '.join(previous) or 'none'}] to "
             f"[{', '.join(chosen)}]. "
-            f"Joined {selection.catalog_markets} exact reward-market rows to "
+            f"Joined {selection.catalog_markets} buffered event-market rows to "
             f"{selection.rewarded_executable_markets} executable reward programs, "
             f"evaluated {selection.books_evaluated} books, and "
             f"found {selection.viable_markets} economically viable markets; "

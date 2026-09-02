@@ -15,8 +15,8 @@ of the two it is.
     python3 scripts/usable_markets.py            # funnel + verdict
     python3 scripts/usable_markets.py --rejects  # also list why each dropped
 
-**It costs venue calls** -- one catalog read, batched incentives, and one book
-per detailed candidate (~50 total), plus a second catalog and incentive read
+**It costs venue calls** -- bounded event pages, exact-symbol incentives, and
+one book per detailed candidate (~50 total), plus a second event/incentive read
 with `--rejects`. That shares the 4 req/s governor with the live runner, so do
 not put it in a loop.
 """
@@ -37,7 +37,12 @@ from liquidity_bot.adapters import (  # noqa: E402
     AsyncReadOnlyGateway, shared_api_limiter)
 from liquidity_bot.commissioning import CommissioningConfig  # noqa: E402
 from liquidity_bot.market_selector import (  # noqa: E402
-    SUPPORTED_EVENT_PERIODS, RewardMarketSelector, RewardSelectionPolicy)
+    EVENT_DISCOVERY_CLOCK_SKEW_SECONDS,
+    EVENT_DISCOVERY_PAGE_SIZE,
+    SUPPORTED_EVENT_PERIODS,
+    RewardMarketSelector,
+    RewardSelectionPolicy,
+)
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.rewards import select_applicable_period  # noqa: E402
 
@@ -77,7 +82,7 @@ async def main() -> int:
           f"min entry spread {policy.minimum_entry_spread}")
     print("")
     print("SELECTION FUNNEL")
-    print(f"  exact reward metadata      {selection.catalog_markets:6d}")
+    print(f"  buffered event markets     {selection.catalog_markets:6d}")
     print(f"  in the {horizon_h:.0f}h horizon         "
           f"{selection.executable_catalog_markets:6d}")
     print(f"  reward-authorized          "
@@ -201,7 +206,13 @@ async def _print_rejects(
 
     selector = RewardMarketSelector(gateway, policy=policy)
     window_end = now + timedelta(seconds=policy.selection_horizon_seconds)
-    catalog = await gateway.list_sports_markets()
+    clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
+    catalog = await gateway.list_upcoming_sports_markets(
+        start=now - clock_skew,
+        end=window_end + clock_skew,
+        limit=EVENT_DISCOVERY_PAGE_SIZE,
+        require_complete=True,
+    )
     in_horizon = {
         market.slug: market
         for market in catalog

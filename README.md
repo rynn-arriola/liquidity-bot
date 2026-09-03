@@ -352,10 +352,13 @@ implemented by the pregame executor—including documented `daily` and observed
 but undocumented `tournament_with_cutoff`—are counted and reported but cannot
 authorize orders until their timing and pool allocation are modeled.
 
-New building quotes require a current full-book spread of at least 2 cents.
-An already-resting building quote is retained down to 1.5 cents to avoid
-touch-noise churn and is canceled below that threshold. This rule never blocks
-an inventory-reducing quote or emergency exit. Catalog best bid/ask values are
+Fresh market selection requires a current full-book spread of at least 2
+cents. If a selected market's live book later tightens to exactly one tick, the
+bot quotes both best prices instead of putting only the offer one tick behind;
+on a 49/50 book it quotes 49/50. A locked 50/50 book still backs off safely to
+49/51 because equal post-only prices would cross. An already-resting building
+quote retains the separate 1.5-cent hysteresis. None of these rules blocks an
+inventory-reducing quote or emergency exit. Catalog best bid/ask values are
 only a read-saving prefilter; the fresh full book is authoritative.
 
 The server launcher remains deliberately explicit and also retains a static

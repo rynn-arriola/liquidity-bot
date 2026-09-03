@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -845,22 +846,47 @@ class ReconcilerTests(unittest.TestCase):
                     Decimal(str(price)) % Decimal("0.01"), Decimal("0"),
                     f"{side} price {price!r} off the tick grid at {cents}c")
 
-    def test_a_tight_book_is_priced_back_to_two_cents_not_refused(self):
-        """50/50 is quoted 49/49, not skipped.
-
-        The venue publishes bids only, so `best_offer - best_bid` is the gap an
-        operator reads between the two outcomes' best bids. Both outcomes bid
-        at 50 leaves nothing in the middle; backing each side off one tick
-        leaves the two cents the rule asks for, and still earns.
-        """
+    def test_a_one_tick_book_quotes_both_touches(self):
+        """49/50 stays 49/50 instead of putting only the offer behind."""
         actions = DesiredStateReconciler(policy()).plan(
-            frame(snapshot=book(bid=.50, offer=.50)))
+            frame(snapshot=book(bid=.49, offer=.50)))
 
         prices = {action.side: action.price for action in actions}
         self.assertTrue(all(action.kind == ActionKind.PLACE_POST_ONLY
                             for action in actions))
         self.assertAlmostEqual(prices["bid"], .49, places=6)
+        self.assertAlmostEqual(prices["offer"], .50, places=6)
+
+    def test_a_locked_book_keeps_the_two_cent_non_crossing_window(self):
+        """50/50 cannot quote both touches without crossing."""
+        actions = DesiredStateReconciler(policy()).plan(
+            frame(snapshot=book(bid=.50, offer=.50)))
+
+        prices = {action.side: action.price for action in actions}
+        self.assertAlmostEqual(prices["bid"], .49, places=6)
         self.assertAlmostEqual(prices["offer"], .51, places=6)
+
+    def test_one_tick_touch_exception_uses_the_market_tick(self):
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            snapshot=book(bid=.495, offer=.50),
+            metadata=replace(market(), tick_size=.005)))
+
+        prices = {action.side: action.price for action in actions}
+        self.assertAlmostEqual(prices["bid"], .495, places=6)
+        self.assertAlmostEqual(prices["offer"], .50, places=6)
+
+    def test_one_tick_book_replaces_only_the_backed_offer(self):
+        orders = (
+            WorkingOrder("bid-one", "bid", .49, Decimal("2")),
+            WorkingOrder("offer-one", "offer", .51, Decimal("2")),
+        )
+
+        actions = DesiredStateReconciler(policy()).plan(frame(
+            snapshot=book(bid=.49, offer=.50), orders=orders))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertEqual(actions[0].order_id, "offer-one")
 
     def test_a_book_already_wider_than_two_cents_is_quoted_at_the_touch(self):
         """A 7c book stays where it is -- no stepping inside the touch."""

@@ -4618,45 +4618,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_a_tight_book_is_priced_back_rather_than_blocked(self):
-        """1c in the middle is quoted at 2c, and scored at that same price."""
-        runner, _client, _ = self.build_runner()
-        await runner.preflight()
-        # Depth sits at the backed-off level, so the reward cutoff still
-        # reaches it -- see the companion test for the case where it does not.
-        runner.book = BookSnapshot(
-            "market-one",
-            (BookLevel(.49, 1), BookLevel(.48, 100)),
-            (BookLevel(.50, 1), BookLevel(.51, 100)),
-            "MARKET_STATE_OPEN",
-            NOW,
-        )
-        runner.book_observed_at = NOW
-
-        runner._evaluate_rewards(NOW)
-        actions = runner.reconciler.plan(runner._frame(NOW))
-
-        self.assertNotIn(
-            "spread_below_entry_minimum",
-            set(runner._economic_blocker_by_side.values()))
-        places = [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY]
-        self.assertTrue(places)
-        prices = {a.side: a.price for a in places}
-        # 0.49/0.50 is 1c. The 2c window lands on the grid keeping the bid at
-        # the touch, so the offer alone gives up the odd tick.
-        self.assertAlmostEqual(prices["bid"], .49, places=6)
-        self.assertAlmostEqual(prices["offer"], .51, places=6)
-        await runner.private_stream.close()
-        await runner.market_stream.close()
-
-    async def test_backing_off_outside_the_reward_band_blocks_the_side(self):
-        """Pricing back to 2c must not buy fill risk for zero reward.
-
-        The reward cutoff is depth-based: it walks levels until the programme's
-        target size is met. If all of that depth sits at the touch, an order
-        one tick behind earns nothing, and quoting it would be pure downside.
-        The reward gate catches this on its own -- this test pins that it does.
-        """
+    async def test_a_one_tick_book_quotes_and_scores_both_touches(self):
+        """A selected 1c book uses 1c touches in economics and placement."""
         runner, _client, _ = self.build_runner()
         await runner.preflight()
         runner.book = BookSnapshot(
@@ -4671,15 +4634,45 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._evaluate_rewards(NOW)
         actions = runner.reconciler.plan(runner._frame(NOW))
 
-        # The bid keeps the touch and stays eligible; the offer is the side
-        # that moves, and one tick past a cutoff fed entirely by touch depth
-        # earns nothing -- so it is blocked rather than quoted for free risk.
-        self.assertEqual(
-            runner._economic_blocker_by_side.get("offer"),
-            "outside_reward_cutoff")
+        self.assertNotIn(
+            "spread_below_entry_minimum",
+            set(runner._economic_blocker_by_side.values()))
+        places = [a for a in actions if a.kind == ActionKind.PLACE_POST_ONLY]
+        self.assertTrue(places)
+        prices = {a.side: a.price for a in places}
+        # Neither side gives up the odd tick. This is the exact strategy
+        # exception; fresh selection still requires the configured 2c spread.
+        self.assertAlmostEqual(prices["bid"], .49, places=6)
+        self.assertAlmostEqual(prices["offer"], .50, places=6)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_locked_book_backoff_outside_reward_band_blocks_both_sides(self):
+        """Locked-book backoff must not buy fill risk for zero reward.
+
+        The reward cutoff is depth-based: it walks levels until the programme's
+        target size is met. If all depth sits at the locked touch, both safe
+        non-crossing quotes are one tick behind and earn nothing.
+        """
+        runner, _client, _ = self.build_runner()
+        await runner.preflight()
+        runner.book = BookSnapshot(
+            "market-one",
+            (BookLevel(.50, 100000), BookLevel(.49, 100000)),
+            (BookLevel(.50, 100000), BookLevel(.51, 100000)),
+            "MARKET_STATE_OPEN",
+            NOW,
+        )
+        runner.book_observed_at = NOW
+
+        runner._evaluate_rewards(NOW)
+        actions = runner.reconciler.plan(runner._frame(NOW))
+
+        self.assertEqual(set(runner._economic_blocker_by_side.values()),
+                         {"outside_reward_cutoff"})
         self.assertEqual(
             {a.side for a in actions if a.kind == ActionKind.PLACE_POST_ONLY},
-            {"bid"})
+            set())
         await runner.private_stream.close()
         await runner.market_stream.close()
 

@@ -191,10 +191,10 @@ class CommissioningConfig:
     # Operator-approved 2026-08-14. The haircut stays: projected reward is the
     # least-padded quantity in the expression.
     reward_cost_safety_multiple: Decimal = Decimal("1")
-    # maker-lab's entry rule, adopted 2026-08-14 by operator decision. It asks
-    # two things before quoting: is the spread at least 2c, and do the risk and
-    # capital caps allow it. It never asks whether the quote is expected to be
-    # profitable, and it collected 201 fills and $70.92 of rewards.
+    # maker-lab's entry rule, adopted 2026-08-14 by operator decision. Fresh
+    # selection still asks whether the spread is at least 2c. The operator's
+    # 2026-09-03 one-tick touch exception applies only after selection when a
+    # bound live book tightens; risk and capital caps remain unchanged.
     #
     # Ours asked a third question -- does projected reward beat the
     # probability-weighted exit cost -- and the 2026-08-14 census measured that
@@ -419,8 +419,8 @@ class CommissioningConfig:
                 "the pre-kickoff flatten must fire before the inventory clock")
         if self.minimum_entry_spread != Decimal("0.02"):
             problems.append(
-                "commissioning must keep two cents in the middle between the "
-                "two outcomes' quotes")
+                "commissioning fresh selection and locked-book fallback must "
+                "retain the two-cent threshold")
         if self.minimum_entry_spread <= 0:
             problems.append("commissioning spread threshold is invalid")
         if self.minimum_entry_price != Decimal("0.10"):

@@ -23,7 +23,7 @@ show the operator the discrepancy.
 | Concurrent market capacity | 32 slots is the loaded direct canary; 24 is the first rollback target and 20 remains the bare-launcher default. Reviewed values 20-32 are accepted, while 33 remains refused. Reduce on a capacity-linked breach; peak-band acceptance at actual 32-owner occupancy remains required before calling 32 durable |
 | Entry horizon | Six hours before the modeled pregame boundary |
 | League selection | No league filter |
-| New-entry spread | Keep the 2-cent minimum; 1.5-cent retention hysteresis |
+| New-entry spread | Keep the 2-cent fresh-selection minimum. If a selected market's live book tightens to exactly one tick, quote both touches rather than backing only the offer away; a locked book keeps the safe 2-cent non-crossing back-off. Keep the separate 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
 | Post-flat slot recovery | Keep the near-deadline exit safety pause. Once positive position evidence proves the final urgent position flat, mandatory empty/finished capacity may request an immediate refill before the ordinary configured-capacity service sweep. A cached selection may be used only within 120 seconds and only after fresh metadata, incentive and full-book validation of every replacement; economic-idle replacement remains on its normal 15-minute cadence |
 | Post-kickoff empty-book recovery | Do not let one exact unpriceable recovery owner disable unrelated markets. Only a persisted bot-owned, basis-matched, nonzero post-kickoff position with zero working/absent orders, zero unresolved intents and a response-backed empty book may enter settlement wait. It permanently cannot quote, reserves one configured slot and its full portfolio risk, keeps private/account monitoring and a 60-second read-only book probe, and returns to the unchanged exit path if depth reappears. Flat proof releases the slot. Every other unknown or failure remains fail-closed |
@@ -104,7 +104,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
   in the queue.
 - The maximum-30 validator is dormant capability, not permission to change the
   live size. Size 20 remains measurement-only until separately selected.
-- No removal of the 2-cent spread gate.
+- No removal of the 2-cent fresh-selection gate beyond the explicit one-tick touch behavior for a market already selected on a qualifying book.
 - No live spread-scalping orders or automatic early-exit rule; collected scalp
   evidence must be reviewed before any separate strategy proposal.
 - No league-based reward-market filter.

@@ -3293,10 +3293,9 @@ class CommissioningRunner:
             for side in ("bid", "offer")}
         spread = state.book.best_offer.price - state.book.best_bid.price
         for side in ("bid", "offer"):
-            # Score the price we will actually rest at. A tight book is priced
-            # back to the two-cent gap rather than refused, so pricing the raw
-            # touch here would project a score for an order the planner is
-            # never going to place.
+            # Score the price we will actually rest at. An exact one-tick book
+            # joins both touches; a locked book is priced back to a two-cent
+            # gap. The economics and planner must use the same price.
             price = entry_quote_price(
                 state.book, side,
                 float(self.config.minimum_entry_spread),

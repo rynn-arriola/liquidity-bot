@@ -26,9 +26,11 @@ strategy is profitable and not permission to scale.
   quantity authority; `slot_capacity.py`
   independently validates breadth, and a bare launcher invocation always
   restores the 20-slot baseline rather than inheriting a prior canary;
-- require at least a 2-cent full-book spread before a new building quote;
-  retain an already-resting quote down to 1.5 cents and pull it below that
-  hysteresis boundary, while never spread-gating inventory reduction;
+- require at least a 2-cent full-book spread for fresh market selection; if a
+  selected market's live book later tightens to exactly one tick, quote both
+  touches (49/50 stays 49/50) instead of backing only the offer away; keep the
+  non-crossing 49/51 back-off for a locked 50/50 book; retain the separate
+  1.5-cent resting hysteresis and never spread-gate inventory reduction;
 - continue computing the 30-second normalized-score reward model with a 50%
   haircut and conservative first-fill probability, but do not enforce that
   experimental cost gate for entry;

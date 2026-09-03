@@ -81,9 +81,9 @@ class ReconcilerPolicy:
     max_hard_exit_attempts: int = 3
     max_hard_exit_retry_seconds: float = 30.0
     hard_exit_confirmation_timeout_seconds: float = 10.0
-    # The gap kept in the middle: at least this much between our bid and our
-    # offer. See entry_quote_price -- a tighter book is priced back to exactly
-    # this, not refused.
+    # Fresh selection threshold and locked-book fallback gap. See
+    # entry_quote_price: an exact one-tick live book is the explicit operator-
+    # selected touch exception; a locked book is priced back to this gap.
     minimum_entry_spread: float = 0.02
     # How close to 0.00 or 1.00 a BUILDING quote may rest. Entry only; exits
     # are unaffected (invariant 42). See the measurement at the use site.
@@ -178,13 +178,18 @@ def entry_quote_price(
     in those terms: keep at least two cents in the middle.
 
     Join the touch whenever the book already leaves that much -- a 7c book
-    quoted at 50 and 43 stays at 50 and 43, with no stepping inside. When the
-    book is tighter, the two-cent window is placed as a unit, as close to the
-    book's mid as the tick grid allows: a 50/50 book and a 49/50 book are both
-    quoted 49/49. The gap lands on exactly two cents rather than overshooting,
-    so when an odd cent has to go somewhere the bid keeps the touch and the
-    offer gives up the tick. Returns None when the two sides overlap, which is
-    stale or bad data rather than a tradeable book.
+    quoted at 50 and 43 stays at 50 and 43, with no stepping inside. An exact
+    one-tick book also joins both touches. Previously a 49/50 book kept the bid
+    at 49 but moved the offer to 51, systematically putting only the offer
+    behind the queue. The operator chose the symmetric 49/50 quote instead:
+    it gives up one cent of possible paired spread in exchange for a better
+    chance that the second side balances the first fill and for touch-level
+    reward score.
+
+    A locked 50/50 book cannot join both touches without crossing, so it still
+    places the two-cent window as a unit at 49/51. The gap lands on exactly two
+    cents rather than overshooting. Returns None when the two sides overlap,
+    which is stale or bad data rather than a tradeable book.
 
     Both the runner's economics and the planner's placement call this, so the
     reward projection is computed for the price we will actually rest at.
@@ -197,6 +202,13 @@ def entry_quote_price(
     spread = book.best_offer.price - book.best_bid.price
     if spread < -1e-9:
         return None
+    # An exact one-tick book is the only narrow-book touch exception. Fresh
+    # market selection still requires the configured two-cent spread; this
+    # path governs a selected market whose live book tightens afterward. Do
+    # not widen the exception to a locked book: equal touches would make the
+    # two post-only orders cross one another.
+    if abs(spread - step_size) <= 1e-9:
+        return book.best_bid.price if side == "bid" else book.best_offer.price
     if spread + 1e-9 >= minimum_gap:
         return book.best_bid.price if side == "bid" else book.best_offer.price
     # Place the whole window at once so the gap comes out *exactly* at the
@@ -738,12 +750,12 @@ class DesiredStateReconciler:
                 drop_cause[side] = "expected_net_not_positive"
                 desired_sides.discard(side)
 
-        # A tight book is priced, not refused: _entry_price backs the quote off
-        # until two cents sit in the middle. Only an overlapping book -- the
-        # two outcomes' best bids summing past one -- drops the side, because
-        # that is stale or bad data rather than a tradeable market. Inventory
-        # reduction is handled exclusively by _inventory_plan and is never
-        # spread-gated.
+        # A tight book is priced, not refused. An exact one-tick book joins
+        # both touches; a locked book backs off until two cents sit in the
+        # middle. Only an overlapping book -- the two outcomes' best bids
+        # summing past one -- drops the side, because that is stale or bad data
+        # rather than a tradeable market. Inventory reduction is handled
+        # exclusively by _inventory_plan and is never spread-gated.
         tick = frame.market.tick_size
         entry_prices = {
             side: self._entry_price(frame.book, side, tick)

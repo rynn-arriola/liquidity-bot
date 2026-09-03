@@ -165,11 +165,12 @@ These are implementation requirements, not suggestions.
 40. New risk is limited to markets whose normalized `sportsMarketTypeV2` is
     exactly `SPORTS_MARKET_TYPE_MONEYLINE`. A two-side count is never accepted
     as a substitute because futures and props are also two-sided.
-41. A building quote keeps at least 2 cents between our bid and our offer. A
-    book already leaving that much is quoted at the touch, unquoted; a tighter
-    book is priced back symmetrically until exactly 2 cents remain. Overlapping
-    sides are never quoted. Runtime economics and the planner call one function
-    for this, so the projection scores the price that is actually placed.
+41. Fresh market selection keeps its 2-cent full-book threshold. In an already
+    selected market, an exact one-tick live book quotes both touches so one
+    side is not systematically left behind. A locked book still backs off to
+    a non-crossing 2-cent window, and overlapping sides are never quoted.
+    Runtime economics and the planner call one function for this, so the
+    projection scores the price that is actually placed.
 42. Spread and structure gates apply only to building risk. Once inventory is
     nonzero, passive reduction and bounded hard exit remain available at every
     spread and market structure so the gate cannot strand a position.

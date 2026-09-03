@@ -750,3 +750,17 @@ These are implementation requirements, not suggestions.
     risk. This routing may reduce API work only; it cannot alter quote price,
     quantity, reward period, economics, ranking, ownership, risk or exit
     authority.
+96. Loss-scaled order capacity is a new-risk ceiling driven only by the same
+    complete adjusted ET-day marked-equity evidence as HARD. At 50%, 70%, 80%,
+    90% and 95% HARD utilization, no more than 40, 30, 20, 10 and zero
+    flat-market entry orders respectively may be working or unresolved. The
+    tightest tier reached is durable for that ET date and cannot loosen after a
+    mark recovery or process restart; only the following ET day restores full
+    configured two-sided capacity. A tier transition blocks a new entry at the
+    mutation boundary and drains only positively owned overflow orders, one
+    cancel per driver pass, lowest-ranked market first and preserving complete
+    pairs where possible. Unknown state cannot authorize a cap-driven cancel.
+    Any nonzero position excludes that market's orders from the count, and
+    passive reducers, IOC exits, recovery and shutdown must never be blocked,
+    cancelled or counted by this ceiling. It adds no venue read or stream and
+    does not replace exposure, stressed-exit, buying-power or HARD enforcement.

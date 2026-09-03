@@ -67,6 +67,7 @@ hard-locked by `CommissioningConfig`:
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
 | emergency HARD stop | `8 × size × slots / 20` on adjusted marked equity; $80 at 20 slots, $96 at 24, $128 at 32; provisional with open inventory |
+| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 40, 70% → 30, 80% → 20, 90% → 10, 95% → 0; never counts position-market orders or reducers |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -74,7 +75,13 @@ hard-locked by `CommissioningConfig`:
 | REST budget | 4 requests/second |
 
 The sole money-loss budget resets at midnight `America/New_York`, including DST.
-A marked HARD breach blocks new entries immediately.
+A marked HARD breach blocks new entries immediately. Before that breach, the
+flat-market entry-order ceiling ratchets downward as the same marked loss uses
+50%, 70%, 80%, 90% and 95% of HARD. A recovering mark cannot widen it until
+the next ET day. Excess owned entry orders are cancelled one at a time from
+the lowest-ranked markets; uncertain creates reserve capacity. Orders in a
+market with an open position, passive reducers, IOC exits and shutdown are
+outside this ceiling.
 With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop. Realized session P&L,
 per-market realized P&L, taker-exit count and taker fees remain reporting

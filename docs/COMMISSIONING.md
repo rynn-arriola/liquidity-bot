@@ -64,6 +64,13 @@ strategy is profitable and not permission to scale.
   classified completed rewards, deposits, withdrawals, bonuses and transfers
   are subtracted from the adjusted mark; the bounded cash-only snapshot must
   be current and proven or risk freshness expires and new risk fails closed;
+- use that same adjusted ET-day marked loss to ratchet the account-wide
+  flat-entry order ceiling: 40 at 50% of HARD, 30 at 70%, 20 at 80%, 10 at
+  90%, and exit-only (zero new entry orders) at 95%. The tightest reached tier
+  survives restart and cannot loosen until the next ET day. Unresolved creates
+  reserve capacity; excess owned entries drain one cancellation at a time from
+  the lowest-ranked markets. Position-market orders, reducers, IOC exits and
+  shutdown never consume or obey this entry ceiling;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account

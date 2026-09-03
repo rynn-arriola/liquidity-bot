@@ -1,13 +1,13 @@
-# One-tick touch entry preparation — 2026-09-03
+# One-tick touch entry — 2026-09-03
 
 ## Operator decision and deployment boundary
 
-The operator chose the recommended one-tick entry behavior and explicitly said
-not to restart the bot yet. When a market already selected on the unchanged
-2-cent fresh-selection gate later has a live book exactly one market tick wide,
-both building quotes use the touch. A 49/50 book therefore quotes 49/50 rather
-than 49/51. This source is prepared for a later flat-gated deployment; it is not
-copied into the live WSL checkout and the running process is not restarted.
+The operator chose the recommended one-tick entry behavior, initially asked that
+the bot not restart, and later explicitly authorized restart with the change.
+When a market already selected on the unchanged 2-cent fresh-selection gate
+later has a live book exactly one market tick wide, both building quotes use the
+touch. A 49/50 book therefore quotes 49/50 rather than 49/51. The reviewed
+behavior is now loaded on the laptop.
 
 This is a strategy choice, not a defect correction. At size 10 it gives up at
 most `$0.10` of gross matched-pair spread when the moved offer also fills. The
@@ -70,12 +70,33 @@ replace behavior, and unchanged reducer/timeout paths. The change adds no API
 call, worker, slot or order per market. It can increase fills and therefore
 inventory activity; that is the business tradeoff requiring live measurement.
 
-## Later deployment acceptance
+## Deployment and initial live acceptance
 
-Use the normal stopped, authenticated flat/order-free and exact-parity gates.
-After restart, require quote observations on natural exact-one-tick books to
-show both sides at `ticks_from_best=0`, no post-only rejection or mutation
-ambiguity, and unchanged reducer availability. Compare matched-pair completion,
+The old supervisor/runner stopped gracefully at 11:24:25Z with terminal
+`flat=true`. Fresh authenticated proof then found zero open orders and zero
+positions; the ledger had zero unresolved intents, working orders or unknown
+absences. Commit `001a7faa7` was pushed before deployment. The first native WSL
+suite exposed a wording-only regression: the refusal still said `two-cent`,
+while the existing assertion required `two cents`. Commit `2c3ce0e54` corrected
+that message. The focused test failed under a deliberate reversal and passed
+after restoration; the broader 474-test commissioning/reconciler set and the
+complete 1,078-test native production suite passed.
+
+Immediately before restart, WSL HEAD and `DEPLOYED_COMMIT` both resolved to
+`2c3ce0e5417c1a46594f247e9156d96392731458`; repeated authenticated and ledger
+proof was again completely empty and known. The bot restarted at the unchanged
+size 10 / 32 under supervisor `2751977` and runner `2751986`.
+
+The first 221.4-second API window ended at 11:35:19Z with 474 attempts at
+`2.141/s`: 416 reads, 58 mutations, zero failures, zero rate limits, zero
+cooldown and maximum queue depth one. The acceptance read found 58 authenticated
+open orders across 31 markets, zero positions, and an exact ledger match with
+58 working orders, zero unresolved intents and zero unknown absences.
+
+No exact-one-tick book appeared among the new run's quote observations during
+this initial window. Natural strategy-path acceptance therefore remains: require
+both sides at `ticks_from_best=0`, no post-only rejection or mutation ambiguity,
+and unchanged reducer availability. Compare matched-pair completion,
 taker-reduction rate, reward side-hours and marked trading P&L against the
-baseline above. Do not attribute an improvement to this change from one fill
-or one quiet window.
+baseline above. Do not attribute an improvement to this change from one fill or
+one quiet window.

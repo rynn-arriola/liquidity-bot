@@ -903,6 +903,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_selection_rank_measurement_uses_recent_complete_slate(self):
+        runner, client, _ = self.build_runner()
+        slugs = tuple(f"market-{number:02d}" for number in range(1, 27))
+        runner._market_selection = multi_selection(*slugs)
+        runner._market_selection_observed_at = NOW
+        prior_book_reads = client.markets.book_calls
+
+        self.assertEqual(
+            runner._selection_rank_for_market(NOW, "market-24"), 24)
+        self.assertEqual(
+            runner._selection_rank_for_market(NOW, "market-25"), 25)
+        self.assertIsNone(
+            runner._selection_rank_for_market(NOW, "not-in-slate"))
+        self.assertEqual(client.markets.book_calls, prior_book_reads)
+
+        runner._market_selection_observed_at = (
+            NOW - timedelta(
+                seconds=runner.config.market_selection_refresh_seconds + 1))
+        self.assertIsNone(
+            runner._selection_rank_for_market(NOW, "market-24"))
+
     async def test_stale_shadow_selection_is_not_claimed_as_replacement(self):
         runner, _, _ = self.build_runner()
         runner._market_selection = multi_selection(

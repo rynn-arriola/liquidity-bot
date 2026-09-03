@@ -536,6 +536,10 @@ class QuoteObservation:
     replacement_selection_age_seconds: float | None = None
     replacement_reason: str | None = None
     slot_would_go_dark: bool | None = None
+    # Evidence-only rank in the most recent complete viable selector slate.
+    # It is persisted only inside observation_json, so this adds no migration
+    # and no execution component can consume it accidentally.
+    selection_rank: int | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug or self.side not in {"bid", "offer"}:
@@ -553,6 +557,8 @@ class QuoteObservation:
                 raise ValueError(f"{name} must be finite")
         if min(self.touch_changes_30s, self.touch_changes_120s) < 0:
             raise ValueError("touch change counts cannot be negative")
+        if self.selection_rank is not None and self.selection_rank <= 0:
+            raise ValueError("selection rank must be positive")
 
 
 class ExecutionLedger:

@@ -128,6 +128,12 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertIn("SEARCH execution_fills", details)
         self.assertIn("idx_execution_fills_market", details)
 
+    def test_quote_observation_rejects_nonpositive_selection_rank(self):
+        with self.assertRaisesRegex(ValueError, "selection rank"):
+            quote_observation(selection_rank=0)
+        with self.assertRaisesRegex(ValueError, "selection rank"):
+            quote_observation(selection_rank=-1)
+
     def test_pre_submit_intent_survives_crash_and_is_idempotent(self):
         created = self.ledger.prepare_intent(
             "intent-one", "PLACE", "market-one", "client-one",

@@ -3750,6 +3750,7 @@ class CommissioningRunner:
                 replacement_selection_age_seconds=replacement[4],
                 replacement_reason=replacement[5],
                 slot_would_go_dark=replacement[6],
+                selection_rank=self._selection_rank_for_market(now, state.slug),
             )
         except Exception as exc:
             # Observation is reporting.  It must never turn a valid action
@@ -3761,6 +3762,30 @@ class CommissioningRunner:
                 flush=True,
             )
             return None
+
+    def _selection_rank_for_market(
+        self, now: datetime, market_slug: str,
+    ) -> int | None:
+        """Return evidence-only rank from the recent in-memory selector slate.
+
+        This helper is synchronous, makes no venue call and cannot alter the
+        selected market set. Missing, future-dated or stale evidence remains
+        NULL rather than assigning a market a guessed cohort.
+        """
+
+        selection = self._market_selection
+        observed_at = self._market_selection_observed_at
+        if selection is None or observed_at is None:
+            return None
+        age = (now - observed_at).total_seconds()
+        if age < 0 or age > self.config.market_selection_refresh_seconds:
+            return None
+        candidates = selection.top_viable(
+            max(1, len(selection.opportunities)))
+        for rank, candidate in enumerate(candidates, start=1):
+            if candidate.market.slug == market_slug:
+                return rank
+        return None
 
     def _retained_value_replacement_snapshot(
         self, now: datetime, *, current_projected_reward: float,

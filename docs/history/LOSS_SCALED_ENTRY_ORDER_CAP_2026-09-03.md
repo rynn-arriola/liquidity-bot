@@ -84,12 +84,34 @@ The final audit covered:
   market or worker. It adds small local indexed-ledger reads and one row only
   when a day first tightens; rollback leaves that inert table harmless.
 
-## Deployment boundary
+## Deployment and initial live acceptance
 
-Source commit `6dd8e1aba` contains the reviewed implementation and regressions.
-At 2026-09-03 13:55 UTC the laptop bot remained running at size 10 / 32 under
-supervisor `2751977` and runner `2751986`, with loaded `DEPLOYED_COMMIT`
-`2c3ce0e54`. This candidate was reviewed and prepared for GitHub but was not
-copied into the production checkout, deployed or restarted. A later authorized
-restart must repeat parity, hash/test, known-account-state and normal live
-acceptance gates before claiming the policy is active.
+Source commit `6dd8e1aba` contains the reviewed implementation and regressions;
+documentation commit `d2d57d35ca` carries the same `src/` and `tests/`. Both
+were pushed before deployment. Command 1 stopped supervisor `2751977` and
+runner `2751986`; the terminal record said `flat=true`. Independent
+authenticated reads at 14:11Z and 14:18Z each proved zero open orders and zero
+nonzero positions. The ledger separately held zero working orders, unresolved
+intents, `UNKNOWN_ABSENT` rows and nonzero positions.
+
+The laptop WSL checkout fast-forwarded to `d2d57d35ca`. Its tracked worktree
+was clean, `DEPLOYED_COMMIT` and HEAD matched exactly, and the changed runtime
+files were hash-verified. The complete native production suite passed all
+1,092 tests in 75.749 seconds.
+
+The unchanged size 10 / 32 launcher started supervisor `2794091` and runner
+`2794101`. Its first complete mark reconstructed `$100.3322` of the `$128`
+ET-day HARD budget, or 78.38%, and emitted an exact `from=64 to=30` transition.
+The durable row records risk date `2026-09-03`, cap 30 and trigger fraction
+`0.7838453125`. At 14:24:12Z an independent authenticated snapshot found
+exactly 30 open orders across 30 flat markets and zero nonzero positions; the
+ledger also had zero unresolved intents or unknown/nonterminal states outside
+those open orders.
+
+The first 192.6-second API window completed 413 attempts at `2.144/s`: 383
+reads and 30 mutations, with zero failures, zero 429s, zero cooldown, and
+maximum queue depth one. This accepts startup inheritance and enforcement of
+the 70% tier. Later downward transitions, lowest-ranked sequential overflow
+cancels, same-day restart persistence and reducer/exit bypass remain natural
+acceptance paths; do not induce a loss, fill or restart merely to exercise
+them.

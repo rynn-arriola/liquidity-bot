@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .execution_ledger import ExecutionLedger, QuoteObservation
@@ -185,10 +185,12 @@ class ControlledActionDriver:
     """Execute at most one reconciler mutation per pass."""
 
     def __init__(self, executor: LiveOrderExecutor, ledger: ExecutionLedger,
-                 risk_guard: SessionRiskGuard | None = None):
+                 risk_guard: SessionRiskGuard | None = None,
+                 new_entry_allowed: Callable[[], bool] | None = None):
         self.executor = executor
         self.ledger = ledger
         self.risk_guard = risk_guard
+        self.new_entry_allowed = new_entry_allowed
 
     def _owned_order(self, exchange_order_id: str):
         rows = self.ledger.query(
@@ -254,6 +256,15 @@ class ControlledActionDriver:
                 return ActionResult(PlanAction(
                     ActionKind.HALT_NEW_RISK, market.slug,
                     "runtime_session_or_market_loss_limit"))
+            if (not reducing and self.new_entry_allowed is not None
+                    and not self.new_entry_allowed()):
+                # Recheck at the mutation boundary. The runner normally
+                # suppresses an over-cap plan earlier, but a balance update or
+                # unresolved create can tighten/consume the budget after a
+                # plan was formed. Reducers deliberately bypass this gate.
+                return ActionResult(PlanAction(
+                    ActionKind.HALT_NEW_RISK, market.slug,
+                    "runtime_loss_scaled_entry_order_cap"))
             if reducing:
                 expected = "offer" if position > 0 else "bid"
                 if action.side != expected or action.qty != abs(position):

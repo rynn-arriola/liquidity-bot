@@ -21,6 +21,16 @@ NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
 RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
 RUNTIME_SLOT_CAPACITY_PATH = Path("data/commissioning_slot_capacity")
+# Percentage of the ET-day marked-equity HARD budget consumed -> maximum
+# resting building orders.  These are account-wide entry ceilings, not market
+# exposure limits: reducers for a nonzero position never consume them.
+LOSS_ENTRY_ORDER_CAP_TIERS: tuple[tuple[Decimal, int], ...] = (
+    (Decimal("0.50"), 40),
+    (Decimal("0.70"), 30),
+    (Decimal("0.80"), 20),
+    (Decimal("0.90"), 10),
+    (Decimal("0.95"), 0),
+)
 
 
 class CommissioningRefused(RuntimeError):
@@ -268,6 +278,28 @@ class CommissioningConfig:
             * Decimal(self.max_markets)
             / Decimal(DEFAULT_SLOT_CAPACITY)
         )
+
+    @property
+    def full_entry_order_capacity(self) -> int:
+        """Maximum two-sided building orders at configured market breadth."""
+
+        return self.max_markets * 2
+
+    def entry_order_cap_for_loss(self, loss_usd: Decimal) -> int:
+        """Return the operator-selected cap at the current HARD utilization.
+
+        The runtime persists only downward transitions for an ET risk day, so
+        this pure calculation may safely return a looser cap after a mark
+        recovers.  The durable ratchet decides whether that recovery can widen
+        the live order budget (it cannot until the next ET day).
+        """
+
+        loss = max(Decimal("0"), Decimal(loss_usd))
+        cap = self.full_entry_order_capacity
+        for fraction, tier_cap in LOSS_ENTRY_ORDER_CAP_TIERS:
+            if loss >= self.hard_stop_loss_usd * fraction:
+                cap = min(cap, tier_cap)
+        return cap
 
     @property
     def max_market_exposure_usd(self) -> Decimal:

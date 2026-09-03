@@ -168,6 +168,13 @@ CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
     created_at TEXT NOT NULL,
     source TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_entry_order_cap_days (
+    risk_date TEXT PRIMARY KEY,
+    entry_order_cap INTEGER NOT NULL,
+    trigger_loss_fraction TEXT NOT NULL,
+    first_reduced_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_quote_observations (
     intent_id TEXT PRIMARY KEY,
     client_order_id TEXT NOT NULL UNIQUE,
@@ -794,6 +801,72 @@ class ExecutionLedger:
             Decimal(str(row["opening_equity"])),
             Decimal(str(row["opening_realized"])),
             None if stored_cash is None else Decimal(str(stored_cash)))
+
+    def ratchet_entry_order_cap(
+        self,
+        risk_date: str,
+        *,
+        candidate_cap: int,
+        full_cap: int,
+        loss_fraction: Decimal,
+        observed_at: datetime,
+    ) -> int:
+        """Persist and return the tightest entry-order cap for one ET day.
+
+        A recovering mark must not recreate orders that were deliberately
+        removed near HARD.  The first lower tier is therefore durable across
+        process restarts, and only a new ``risk_date`` receives ``full_cap``.
+        """
+
+        try:
+            date.fromisoformat(str(risk_date))
+        except ValueError as exc:
+            raise ValueError("risk_date must be an ISO date") from exc
+        if isinstance(candidate_cap, bool) or isinstance(full_cap, bool):
+            raise ValueError("entry order caps must be integers")
+        if not isinstance(candidate_cap, int) or not isinstance(full_cap, int):
+            raise ValueError("entry order caps must be integers")
+        if full_cap <= 0 or not 0 <= candidate_cap <= full_cap:
+            raise ValueError("entry order cap is outside full capacity")
+        fraction = _decimal(loss_fraction, "loss_fraction")
+        if fraction < 0:
+            raise ValueError("loss fraction cannot be negative")
+        at = _time(observed_at, "observed_at")
+        date_key = str(risk_date)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT entry_order_cap FROM execution_entry_order_cap_days "
+                "WHERE risk_date=?", (date_key,)).fetchone()
+            if row is None and candidate_cap < full_cap:
+                self.connection.execute(
+                    "INSERT INTO execution_entry_order_cap_days"
+                    "(risk_date,entry_order_cap,trigger_loss_fraction,"
+                    "first_reduced_at,updated_at) VALUES (?,?,?,?,?)",
+                    (date_key, candidate_cap, str(fraction), at, at),
+                )
+                stored = candidate_cap
+            elif row is not None and candidate_cap < int(row["entry_order_cap"]):
+                self.connection.execute(
+                    "UPDATE execution_entry_order_cap_days SET "
+                    "entry_order_cap=?,trigger_loss_fraction=?,updated_at=? "
+                    "WHERE risk_date=?",
+                    (candidate_cap, str(fraction), at, date_key),
+                )
+                stored = candidate_cap
+            else:
+                stored = full_cap if row is None else int(row["entry_order_cap"])
+        return min(full_cap, stored)
+
+    def entry_order_cap_for_day(self, risk_date: str, *, full_cap: int) -> int:
+        """Read the durable ET-day cap, defaulting to configured capacity."""
+
+        if isinstance(full_cap, bool) or not isinstance(full_cap, int) \
+                or full_cap <= 0:
+            raise ValueError("full entry order cap must be a positive integer")
+        row = self.connection.execute(
+            "SELECT entry_order_cap FROM execution_entry_order_cap_days "
+            "WHERE risk_date=?", (str(risk_date),)).fetchone()
+        return full_cap if row is None else min(full_cap, int(row[0]))
 
     def record_reward_earnings(
         self, earnings: Iterable[Any], *, observed_at: datetime,

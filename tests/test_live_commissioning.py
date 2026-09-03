@@ -476,6 +476,242 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.gateway.limiter = ImmediateLimiter()
         return runner, client, notifier
 
+    def seed_working_order(
+        self, runner, *, slug: str, side: str, suffix: str,
+    ) -> None:
+        """Add one positively owned OPEN order to a test runner ledger."""
+
+        intent = f"intent-{suffix}"
+        client = f"client-{suffix}"
+        exchange = f"exchange-{suffix}"
+        wire_side = "BUY" if side == "bid" else "SELL"
+        intent_name = (
+            "ORDER_INTENT_BUY_LONG" if side == "bid"
+            else "ORDER_INTENT_SELL_LONG")
+        runner.ledger.prepare_intent(
+            intent, "PLACE", slug, client,
+            {
+                "marketSlug": slug,
+                "intent": intent_name,
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "10",
+            },
+            created_at=NOW)
+        runner.ledger.transition_intent(
+            intent, "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            intent, "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id=exchange)
+        runner.ledger.apply_order_event(
+            "test", f"event-{suffix}", OrderState(
+                client_order_id=client,
+                exchange_order_id=exchange,
+                market_slug=slug,
+                side=wire_side,
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW)
+
+    async def test_loss_entry_cap_ratchets_until_next_et_day_and_notifies(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        guard = runner.risk_guard
+        self.assertIsNotNone(guard)
+        self.assertEqual(runner._loss_entry_order_cap, 40)
+
+        guard.observe_equity(
+            guard.starting_equity - Decimal("28"), observed_at=NOW)
+        runner._refresh_loss_entry_order_cap(NOW)
+
+        self.assertEqual(runner._loss_entry_order_cap, 30)
+        await runner._announce_loss_entry_order_cap()
+        self.assertIn("reduced from 40 to 30", notifier.messages[-1][0])
+        guard.observe_equity(
+            guard.starting_equity - Decimal("1"),
+            observed_at=NOW + timedelta(minutes=1))
+        runner._refresh_loss_entry_order_cap(NOW + timedelta(minutes=1))
+        self.assertEqual(runner._loss_entry_order_cap, 30)
+
+        tomorrow = NOW + timedelta(days=1)
+        runner._baseline_day = date.fromisoformat(risk_day(tomorrow))
+        guard.adopt_day_baseline(guard.current_equity)
+        guard.observe_equity(guard.starting_equity, observed_at=tomorrow)
+        runner._refresh_loss_entry_order_cap(tomorrow)
+        self.assertEqual(runner._loss_entry_order_cap, 40)
+        await runner._announce_loss_entry_order_cap()
+        self.assertIn("reset from 30 to 40", notifier.messages[-1][0])
+
+    async def test_loss_entry_cap_restart_inherits_tightest_same_day_tier(self):
+        runner, _, notifier = self.build_runner()
+        runner.ledger.ratchet_entry_order_cap(
+            risk_day(NOW), candidate_cap=20, full_cap=40,
+            loss_fraction=Decimal("0.80"), observed_at=NOW)
+
+        await runner.preflight()
+
+        self.assertEqual(runner._loss_entry_order_cap, 20)
+        self.assertIsNone(runner._loss_entry_order_cap_notice)
+        self.assertFalse(any(
+            "entry-order cap" in message for message, _ in notifier.messages))
+
+    async def test_loss_entry_cap_cancels_lower_value_order_one_at_a_time(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        state = runner.state_for("market-one")
+        state.expected_net_by_side = {"bid": 0.2, "offer": 0.1}
+        self.seed_working_order(
+            runner, slug="market-one", side="bid", suffix="best")
+        self.seed_working_order(
+            runner, slug="market-one", side="offer", suffix="worst")
+        runner._loss_entry_order_cap = 1
+
+        self.assertEqual(
+            runner._loss_cap_overflow_order_ids(),
+            frozenset({"exchange-worst"}))
+        action = runner._loss_cap_cancel_action(runner._frame(NOW))
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action.kind, ActionKind.CANCEL)
+        self.assertEqual(action.order_id, "exchange-worst")
+        self.assertEqual(action.reason, "loss_scaled_entry_order_cap")
+
+        runner._loss_entry_order_cap = 2
+        self.assertIsNone(runner._loss_cap_cancel_action(runner._frame(NOW)))
+
+    async def test_loss_entry_cap_keeps_higher_ranked_market_pair(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        for slug, label in (("market-one", "higher"),
+                            ("market-two", "lower")):
+            self.seed_working_order(
+                runner, slug=slug, side="bid", suffix=f"{label}-bid")
+            self.seed_working_order(
+                runner, slug=slug, side="offer", suffix=f"{label}-offer")
+        runner._loss_entry_order_cap = 2
+
+        self.assertEqual(
+            runner._loss_cap_overflow_order_ids(),
+            frozenset({"exchange-lower-bid", "exchange-lower-offer"}))
+
+    async def test_loss_entry_cap_prefers_complete_pair_over_ranked_orphan(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        self.seed_working_order(
+            runner, slug="market-one", side="bid", suffix="higher-orphan")
+        self.seed_working_order(
+            runner, slug="market-two", side="bid", suffix="lower-pair-bid")
+        self.seed_working_order(
+            runner, slug="market-two", side="offer", suffix="lower-pair-offer")
+        runner._loss_entry_order_cap = 2
+
+        self.assertEqual(
+            runner._loss_cap_overflow_order_ids(),
+            frozenset({"exchange-higher-orphan"}))
+
+    async def test_unresolved_flat_place_reserves_cap_without_double_counting(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._loss_entry_order_cap = 1
+        runner.ledger.prepare_intent(
+            "intent-reserved", "PLACE", "market-one", "client-reserved",
+            {
+                "marketSlug": "market-one",
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": "10",
+            },
+            created_at=NOW)
+
+        working, reservations = runner._flat_entry_orders_and_reservations()
+        self.assertEqual(working, ())
+        self.assertEqual(reservations, 1)
+        self.assertTrue(runner._loss_cap_blocks_new_entry())
+
+        runner.ledger.transition_intent(
+            "intent-reserved", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(
+            "intent-reserved", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="exchange-reserved")
+        runner.ledger.apply_order_event(
+            "test", "event-reserved", OrderState(
+                client_order_id="client-reserved",
+                exchange_order_id="exchange-reserved",
+                market_slug="market-one",
+                side="BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("10"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW)
+
+        working, reservations = runner._flat_entry_orders_and_reservations()
+        self.assertEqual(len(working), 1)
+        self.assertEqual(reservations, 0)
+        self.assertTrue(runner._loss_cap_blocks_new_entry())
+
+    async def test_loss_cap_does_not_cancel_from_unknown_market_state(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        self.seed_working_order(
+            runner, slug="market-one", side="bid", suffix="unknown")
+        runner._loss_entry_order_cap = 0
+        unknown = replace(runner._frame(NOW), state_known=False)
+
+        self.assertIsNone(runner._loss_cap_cancel_action(unknown))
+
+    async def test_exit_only_tier_blocks_building_place(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner._loss_entry_order_cap = 0
+
+        stop, _ = await runner._decide_for_market("market-one", NOW)
+
+        self.assertIsNone(stop)
+        self.assertEqual(client.orders.create_calls, [])
+
+    async def test_position_orders_and_reducers_do_not_consume_entry_cap(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        self.seed_working_order(
+            runner, slug="market-one", side="bid", suffix="held-builder")
+        runner.ledger.apply_execution(Execution(
+            execution_id="held-fill",
+            client_order_id="client-held-builder",
+            exchange_order_id="exchange-held-builder",
+            market_slug="market-one",
+            side="BUY",
+            price=Decimal("0.49"),
+            qty=Decimal("10"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=NOW,
+        ), received_at=NOW)
+        runner._loss_entry_order_cap = 0
+        frame = runner._frame(NOW)
+
+        working, reservations = runner._flat_entry_orders_and_reservations()
+        self.assertEqual(working, ())
+        self.assertEqual(reservations, 0)
+        self.assertIsNone(runner._loss_cap_cancel_action(frame))
+        actions = runner.reconciler.plan(frame)
+        self.assertTrue(any(
+            action.kind == ActionKind.PLACE_POST_ONLY
+            and action.side == "offer"
+            for action in actions))
+
     def test_selection_scan_log_exposes_event_page_headroom(self):
         runner, _, _ = self.build_runner()
         runner._selection_scan_seconds_last = 8.75

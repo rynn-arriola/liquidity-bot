@@ -254,6 +254,30 @@ class LiveSessionTests(unittest.TestCase):
         self.assertIsNotNone(result.submitted)
         self.assertTrue(executor.places[0][0].reducing)
 
+    def test_entry_order_cap_rechecks_building_but_never_blocks_reducing(self):
+        executor = Executor()
+        driver = ControlledActionDriver(
+            executor, self.ledger, new_entry_allowed=lambda: False)
+        building = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one", "reward",
+            side="bid", price=.50, qty=Decimal("1"))
+
+        result = self.run_async(driver.apply_one(
+            [building], market=market(), position=Decimal("0"), now=NOW))
+
+        self.assertEqual(result.action.kind, ActionKind.HALT_NEW_RISK)
+        self.assertEqual(
+            result.action.reason, "runtime_loss_scaled_entry_order_cap")
+        self.assertEqual(executor.places, [])
+
+        reducing = PlanAction(
+            ActionKind.PLACE_POST_ONLY, "market-one", "reduce",
+            side="offer", price=.51, qty=Decimal("1"))
+        result = self.run_async(driver.apply_one(
+            [reducing], market=market(), position=Decimal("1"), now=NOW))
+        self.assertIsNotNone(result.submitted)
+        self.assertTrue(executor.places[0][0].reducing)
+
     def test_driver_attaches_observation_only_to_building_quote(self):
         executor = Executor()
         driver = ControlledActionDriver(executor, self.ledger)

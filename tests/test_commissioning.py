@@ -282,6 +282,41 @@ class CommissioningTests(unittest.TestCase):
                     config.max_stressed_exit_loss_usd,
                     Decimal(size) * Decimal("4"))
 
+    def test_loss_scaled_entry_order_caps_use_hard_stop_percentages(self):
+        config = self.authorized(
+            quote_size=Decimal("10"), max_markets=32)
+
+        expected = {
+            "0": 64,
+            "63.99": 64,
+            "64": 40,
+            "89.59": 40,
+            "89.60": 30,
+            "102.39": 30,
+            "102.40": 20,
+            "115.19": 20,
+            "115.20": 10,
+            "121.59": 10,
+            "121.60": 0,
+            "128": 0,
+        }
+        for loss, cap in expected.items():
+            with self.subTest(loss=loss):
+                self.assertEqual(
+                    config.entry_order_cap_for_loss(Decimal(loss)), cap)
+
+    def test_loss_scaled_cap_never_exceeds_configured_two_sided_capacity(self):
+        config = self.authorized(
+            quote_size=Decimal("10"), max_markets=20)
+
+        self.assertEqual(config.full_entry_order_capacity, 40)
+        self.assertEqual(
+            config.entry_order_cap_for_loss(Decimal("0")), 40)
+        self.assertEqual(
+            config.entry_order_cap_for_loss(Decimal("40")), 40)
+        self.assertEqual(
+            config.entry_order_cap_for_loss(Decimal("56")), 30)
+
     def test_size_ten_thirty_two_canary_derives_every_breadth_control(self):
         config = self.authorized(
             quote_size=Decimal("10"), max_markets=32)

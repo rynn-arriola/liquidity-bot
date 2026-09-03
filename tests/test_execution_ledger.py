@@ -1163,3 +1163,40 @@ class RiskDayBaselineTests(unittest.TestCase):
         source = led.query(
             "SELECT source FROM execution_risk_day_baselines")[0]["source"]
         self.assertEqual(source, "legacy_utc_cutover")
+
+    def test_entry_order_cap_ratchets_for_day_and_survives_restart(self):
+        led = self.ledger()
+        first = datetime(2026, 8, 25, 15, tzinfo=UTC)
+
+        self.assertEqual(led.ratchet_entry_order_cap(
+            "2026-08-25", candidate_cap=40, full_cap=64,
+            loss_fraction=Decimal("0.50"), observed_at=first), 40)
+        self.assertEqual(led.ratchet_entry_order_cap(
+            "2026-08-25", candidate_cap=64, full_cap=64,
+            loss_fraction=Decimal("0.20"),
+            observed_at=first + timedelta(minutes=1)), 40)
+        self.assertEqual(led.ratchet_entry_order_cap(
+            "2026-08-25", candidate_cap=20, full_cap=64,
+            loss_fraction=Decimal("0.80"),
+            observed_at=first + timedelta(minutes=2)), 20)
+
+        path = led.path
+        led.close()
+        restarted = ExecutionLedger(path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.ratchet_entry_order_cap(
+            "2026-08-25", candidate_cap=64, full_cap=64,
+            loss_fraction=Decimal("0.10"),
+            observed_at=first + timedelta(minutes=3)), 20)
+
+    def test_new_et_day_restores_full_entry_order_capacity(self):
+        led = self.ledger()
+        first = datetime(2026, 8, 25, 15, tzinfo=UTC)
+        led.ratchet_entry_order_cap(
+            "2026-08-25", candidate_cap=0, full_cap=64,
+            loss_fraction=Decimal("0.95"), observed_at=first)
+
+        self.assertEqual(led.ratchet_entry_order_cap(
+            "2026-08-26", candidate_cap=64, full_cap=64,
+            loss_fraction=Decimal("0"),
+            observed_at=first + timedelta(days=1)), 64)

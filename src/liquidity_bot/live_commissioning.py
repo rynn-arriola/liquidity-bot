@@ -524,7 +524,7 @@ class CommissioningRunner:
         self._scheduler_event_loop_delays: list[float] = []
         self._scheduler_decision_latencies: list[float] = []
         self._scheduler_action_latencies: list[float] = []
-        self._scheduler_entry_signature: tuple[bool, ...] | None = None
+        self._scheduler_entry_signature: tuple[bool | int, ...] | None = None
         # Markets whose CANCEL intent became terminal on the private stream.
         # They are serviced and replanned before the next full bound-market
         # pass. Without this, a confirmed cancel waits behind REST service and
@@ -650,6 +650,15 @@ class CommissioningRunner:
             self._deployed_commit = None
         self.cutoff_at: datetime | None = None
         self.risk_guard: SessionRiskGuard | None = None
+        # The operator wants progressively fewer flat-market entry orders as
+        # the ET-day marked loss consumes HARD. This ratchets only downward
+        # within one risk day; reducers and all position-owned orders are
+        # deliberately outside the count.
+        self._loss_entry_order_cap_day: date | None = None
+        self._loss_entry_order_cap = config.full_entry_order_capacity
+        self._loss_entry_order_cap_notice: (
+            tuple[date, int, int, Decimal] | None
+        ) = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
             quote_size=config.quote_size,
             max_inventory_age_seconds=config.max_inventory_age_seconds,
@@ -1523,7 +1532,9 @@ class CommissioningRunner:
         slugs.discard("")
         return frozenset(slugs)
 
-    def _entry_scheduler_signature(self, now: datetime) -> tuple[bool, ...]:
+    def _entry_scheduler_signature(
+        self, now: datetime,
+    ) -> tuple[bool | int, ...]:
         """Global entry authority, deliberately excluding buying power."""
 
         today = date.fromisoformat(risk_day(now))
@@ -1545,6 +1556,7 @@ class CommissioningRunner:
             self._nontrading_cash_day == today,
             session_ready,
             not self._entry_pause_active(),
+            self._loss_entry_order_cap,
         )
 
     def _entry_pause_active(self) -> bool:
@@ -2930,7 +2942,8 @@ class CommissioningRunner:
         # risk with a reward-masked session-loss sensor.
         await self._refresh_balance(self._now())
         self.driver = ControlledActionDriver(
-            self.executor, self.ledger, self.risk_guard)
+            self.executor, self.ledger, self.risk_guard,
+            new_entry_allowed=lambda: not self._loss_cap_blocks_new_entry())
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         if recovery_only:
@@ -3921,6 +3934,7 @@ class CommissioningRunner:
         adjusted_equity = snapshot.marked_equity - self._nontrading_cash
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=observed_at)
+        self._refresh_loss_entry_order_cap(observed_at)
         self._publish_live_pnl_snapshot()
 
     def _publish_active_scope_snapshot(
@@ -4023,6 +4037,169 @@ class CommissioningRunner:
         )
         if age < 0 or age >= refresh_at:
             await self._refresh_balance(now)
+
+    def _refresh_loss_entry_order_cap(self, observed_at: datetime) -> None:
+        """Tighten the durable ET-day entry-order budget from marked HARD use."""
+
+        guard = self.risk_guard
+        day = self._baseline_day
+        if (guard is None or day is None or guard.current_equity is None
+                or guard.hard_stop_loss is None):
+            return
+        if date.fromisoformat(risk_day(observed_at)) != day:
+            return
+        loss = max(
+            Decimal("0"), guard.starting_equity - guard.current_equity)
+        fraction = loss / guard.hard_stop_loss
+        full_cap = self.config.full_entry_order_capacity
+        candidate = self.config.entry_order_cap_for_loss(loss)
+        stored_before = self.ledger.entry_order_cap_for_day(
+            day.isoformat(), full_cap=full_cap)
+        effective = self.ledger.ratchet_entry_order_cap(
+            day.isoformat(), candidate_cap=candidate, full_cap=full_cap,
+            loss_fraction=fraction, observed_at=observed_at)
+
+        previous_day = self._loss_entry_order_cap_day
+        previous = self._loss_entry_order_cap
+        transition_from = (
+            stored_before if previous_day is None
+            else previous)
+        self._loss_entry_order_cap_day = day
+        self._loss_entry_order_cap = effective
+        if transition_from == effective:
+            return
+
+        action = "et_day_reset" if effective > transition_from else "reduce"
+        print(
+            f"[loss-entry-order-cap] at={observed_at.isoformat()} "
+            f"day={day.isoformat()} marked_loss={loss} "
+            f"hard={guard.hard_stop_loss} "
+            f"utilization={fraction:.4f} from={transition_from} "
+            f"to={effective} action={action} "
+            "positions_and_reducers=excluded",
+            flush=True,
+        )
+        self._loss_entry_order_cap_notice = (
+            day, transition_from, effective, fraction)
+        # Wake every flat owner so an over-cap slate starts draining without
+        # waiting for a book/timer event. The existing single-mutation driver
+        # keeps cancellation bounded and serial.
+        self._dirty_market_slugs.update(
+            slug for slug in self.active_slugs
+            if self.ledger.position(slug) == 0)
+
+    def _flat_entry_orders_and_reservations(
+        self,
+    ) -> tuple[tuple[Any, ...], int]:
+        """Return working flat entry orders and unmatched PLACE reservations."""
+
+        positioned = {
+            str(row["market_slug"])
+            for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0")
+        }
+        working = tuple(
+            row for row in self.ledger.working_orders(owned_only=True)
+            if str(row["market_slug"]) not in positioned)
+        active_clients = {str(row["client_order_id"]) for row in working}
+        reservations = {
+            str(row["client_order_id"])
+            for row in self.ledger.unresolved_intents()
+            if str(row["operation"]) == "PLACE"
+            and str(row["market_slug"]) not in positioned
+            and str(row["client_order_id"]) not in active_clients
+        }
+        return working, len(reservations)
+
+    def _loss_cap_overflow_order_ids(self) -> frozenset[str]:
+        """Choose lowest-ranked flat entry orders beyond the current ceiling."""
+
+        working, reservations = self._flat_entry_orders_and_reservations()
+        keep_count = max(0, self._loss_entry_order_cap - reservations)
+        if len(working) <= keep_count:
+            return frozenset()
+        rank = {slug: index for index, slug in enumerate(self.active_slugs)}
+
+        def priority(row: Any) -> tuple[int, float, str, str]:
+            slug = str(row["market_slug"])
+            raw_side = str(row["side"] or "").lower()
+            side = "bid" if raw_side in {"buy", "bid"} else "offer"
+            expected = self.state_for(slug).expected_net_by_side.get(
+                side, float("-inf"))
+            return (
+                rank.get(slug, len(rank)),
+                -expected,
+                str(row["event_at"]),
+                str(row["exchange_order_id"]),
+            )
+
+        ordered = sorted(working, key=priority)
+
+        # Allocate complete market pairs before one-sided leftovers. This
+        # avoids keeping one higher-ranked orphan and breaking a complete pair
+        # immediately below it when an even cap can retain the pair instead.
+        # Within each class, active selection rank and expected value still
+        # decide priority.
+        by_market: dict[str, list[Any]] = {}
+        for row in ordered:
+            by_market.setdefault(str(row["market_slug"]), []).append(row)
+        retained_ids: set[str] = set()
+        remaining = keep_count
+        ranked_slugs = tuple(dict.fromkeys(
+            (*self.active_slugs, *(str(row["market_slug"]) for row in ordered))))
+        for slug in ranked_slugs:
+            rows = by_market.get(slug, [])
+            bids = [row for row in rows
+                    if str(row["side"] or "").lower() in {"buy", "bid"}]
+            offers = [row for row in rows
+                      if str(row["side"] or "").lower()
+                      not in {"buy", "bid"}]
+            if not bids or not offers:
+                continue
+            pair = (min(bids, key=priority), min(offers, key=priority))
+            pair_ids = {
+                str(row["exchange_order_id"]) for row in pair
+                if row["exchange_order_id"]
+            }
+            if remaining >= len(pair_ids):
+                retained_ids.update(pair_ids)
+                remaining -= len(pair_ids)
+        for row in ordered:
+            order_id = str(row["exchange_order_id"] or "")
+            if (remaining <= 0 or not order_id
+                    or order_id in retained_ids):
+                continue
+            retained_ids.add(order_id)
+            remaining -= 1
+        return frozenset(
+            str(row["exchange_order_id"])
+            for row in ordered
+            if row["exchange_order_id"]
+            and str(row["exchange_order_id"]) not in retained_ids)
+
+    def _loss_cap_cancel_action(
+        self, frame: MarketFrame,
+    ) -> PlanAction | None:
+        """Return one owned overflow cancel without touching position markets."""
+
+        if frame.position != 0 or not frame.state_known:
+            return None
+        overflow = self._loss_cap_overflow_order_ids()
+        for order in reversed(frame.working_orders):
+            if order.order_id in overflow:
+                return PlanAction(
+                    ActionKind.CANCEL,
+                    frame.market.slug,
+                    "loss_scaled_entry_order_cap",
+                    side=order.side,
+                    order_id=order.order_id,
+                )
+        return None
+
+    def _loss_cap_blocks_new_entry(self) -> bool:
+        working, reservations = self._flat_entry_orders_and_reservations()
+        return len(working) + reservations >= self._loss_entry_order_cap
 
     async def _refresh_execution_state_for_decision(
         self, now: datetime,
@@ -4323,6 +4500,25 @@ class CommissioningRunner:
             f"above the ${self.config.execution_fee_observation_usd} "
             "telemetry reference. This does not pause trading; the hard-stop "
             "protection remains enforced.")
+
+    async def _announce_loss_entry_order_cap(self) -> None:
+        """Notify once for each in-process ET-day order-cap transition."""
+
+        notice, self._loss_entry_order_cap_notice = (
+            self._loss_entry_order_cap_notice, None)
+        if notice is None:
+            return
+        day, previous, current, fraction = notice
+        if current < previous:
+            detail = (
+                f"reduced from {previous} to {current} after marked loss "
+                f"reached {fraction:.1%} of HARD. This cap remains through "
+                "the ET day")
+        else:
+            detail = f"reset from {previous} to {current} for the new ET day"
+        await self.notifier.send_async(
+            f"⚠️ Liquidity Bot entry-order cap {detail} ({day}). "
+            "Open-position reducers and exits are excluded.")
 
     async def _announce_provisional_hard_stop(self) -> None:
         """Announce a paper breach once, then its position-close recovery."""
@@ -4910,7 +5106,20 @@ class CommissioningRunner:
             # replanning here would re-fire the same condition immediately.
             return None, 0.0
         try:
-            actions = self.reconciler.plan(self._frame(now, slug))
+            frame = self._frame(now, slug)
+            overflow_cancel = self._loss_cap_cancel_action(frame)
+            actions = (
+                [overflow_cancel] if overflow_cancel is not None
+                else self.reconciler.plan(frame))
+            if (actions
+                    and actions[0].kind == ActionKind.PLACE_POST_ONLY
+                    and frame.position == 0
+                    and self._loss_cap_blocks_new_entry()):
+                # A cap is a ceiling, not a target. Existing normal cancels
+                # still flow through the reconciler; only a building PLACE is
+                # suppressed. The next ledger/private input dirties the owner
+                # and retries after real capacity exists.
+                actions = []
         except RuntimeInvariantViolation as invariant:
             # A violated runtime invariant is about the process, not this
             # market. It stays terminal.
@@ -8506,6 +8715,7 @@ class CommissioningRunner:
                 await self._refresh_entry_pause(now)
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_execution_fee_observation()
+                await self._announce_loss_entry_order_cap()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
@@ -8689,6 +8899,7 @@ class CommissioningRunner:
                 now = self._now()
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_execution_fee_observation()
+                await self._announce_loss_entry_order_cap()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break

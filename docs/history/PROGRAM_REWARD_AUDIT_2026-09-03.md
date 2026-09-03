@@ -88,3 +88,22 @@ cross-day regression failed exactly when that grouping was deliberately
 reversed, then passed after restoration. All 12 audit tests passed, the focused
 native suite passed 470/470, and the exact isolated production-matching WSL
 candidate passed 1,075/1,075 tests in 79.639 seconds.
+
+## Deployment and live acceptance
+
+Commit `38eb71500` was pushed to GitHub, fast-forwarded into the laptop WSL
+checkout and passed all 1,075 exact-checkout tests in 77.305 seconds. Command 1
+stopped supervisor `2178752` / runner `2305937`; its terminal record proved
+flat, and independent authenticated reads proved zero orders and positions
+while the ledger had zero unresolved, working or unknown state.
+
+The first restart omitted the slot argument and the launcher selected its bare
+20-slot default rather than the prior persisted 32-slot canary. It was stopped
+immediately, proved flat with zero authenticated orders/positions, and was
+restarted explicitly at the authorized size 10 / 32. The accepted supervisor
+`2699329` / runner `2699338` loaded the exact commit. Its first 212.0-second API
+window completed 475 attempts at 2.240/s, including 62 mutations, with zero
+failures, 429s or cooldown and queue depth one. The subsequent authenticated
+snapshot found 60 open orders and zero positions; the ledger had zero unresolved
+intents and zero `UNKNOWN_ABSENT` rows, and 62 recent observations carried the
+new selector rank.

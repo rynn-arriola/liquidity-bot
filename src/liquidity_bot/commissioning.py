@@ -420,7 +420,7 @@ class CommissioningConfig:
         if self.minimum_entry_spread != Decimal("0.02"):
             problems.append(
                 "commissioning fresh selection and locked-book fallback must "
-                "retain the two-cent threshold")
+                "retain the two cents threshold")
         if self.minimum_entry_spread <= 0:
             problems.append("commissioning spread threshold is invalid")
         if self.minimum_entry_price != Decimal("0.10"):

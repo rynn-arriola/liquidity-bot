@@ -63,17 +63,27 @@ timestamps fail closed, an unavailable first read blocks entries without
 inventing a forced exit, cached boundaries survive later feed failure and a
 stale pre-boundary feed cannot start the post-hold health gate.
 
-## Activation boundary
+## Deployment and startup acceptance
 
-This source is local and not loaded by the current runner. Push, reviewed WSL
-deployment and a flat-gated restart require separate operator authorization.
-Natural acceptance must prove the exact schedule marker, entry withdrawal,
-authenticated flatness before outage, no entries during the hold and health-
-gated recovery. No fill, outage or maintenance condition should be induced.
-
-Command 1 was subsequently authorized. The old runner stopped with two parked
+Command 1 was authorized. The old runner stopped with two parked
 short positions and two matching passive reducers; both filled naturally. At
 2026-09-04 20:45:34Z an authenticated gate proved zero venue orders and zero
 positions, while the ledger proved zero unresolved intents and zero
 `UNKNOWN_ABSENT` or working rows. Deployment and restart could therefore
 continue without a forced exit or safety-gate exception.
+
+GitHub, the WSL checkout and `DEPLOYED_COMMIT` advanced to exact commit
+`a348dbc1f`; the production checkout passed all 1,115 tests. A bare launcher
+invocation initially selected its documented 20-slot default, so that process
+was stopped flat before acceptance. The corrected explicit size-10/32 start
+launched supervisor `3232223` and runner `3232232`. It logged the official feed
+`HEALTHY` in `NORMAL`, wrote a mode-600 cache containing both announced IDs and
+produced 29 authenticated orders across 18 markets with zero positions. The
+first 140.3-second API window had 266 attempts and zero failures, 429s or
+cooldown. One transient `UNKNOWN_ABSENT` during live repricing resolved through
+ordinary positive proof; a later exact ledger sample had zero unresolved and
+zero unknown rows.
+
+Natural acceptance must still prove entry withdrawal, authenticated flatness
+before the outage, no entries during the hold and health-gated recovery. No
+fill, outage or maintenance condition should be induced.

@@ -50,11 +50,31 @@ Source commit `44c35078c` passed all 1,098 tests in 103.039 seconds under the
 production WSL Python/runtime while importing directly from the edited Windows
 checkout. The documentation audit also passed after this record was added.
 
-## Deployment boundary
+## Deployment and initial live acceptance
 
-This change was prepared and pushed without touching the live WSL checkout, deployment
-marker, supervisor or runner. It requires the ordinary reviewed push, exact
-parity check, authenticated flat/order-free gate and Command 1 restart before it
-can affect venue orders. Natural acceptance should confirm the first midnight
-or 09:00 transition, no cap overshoot, unchanged rank preference, and continued
-position/reducer/exit service. Do not induce a loss or fill for acceptance.
+Command 1 stopped supervisor `2794091` / runner `2794101`. The terminal record
+reported `operator_sigterm` and `flat=true` at `03:13:20Z`. An independent
+authenticated account read at `03:16:31Z` proved zero open orders and zero
+nonzero positions; the stopped ledger independently held zero working orders,
+unresolved intents, `UNKNOWN_ABSENT` rows and nonzero positions.
+
+The WSL checkout fast-forwarded through a fresh verified Git bundle after its
+direct GitHub fetch stalled without changing the checkout. Exact HEAD
+`4c08551a62d1be2bdd9e6370afab8da240983321` passed all 1,098 tests in 78.615
+seconds. `DEPLOYED_COMMIT` was advanced to that exact hash with mode 600. A
+second authenticated start gate at `03:20:53Z` again proved zero orders and
+positions plus the same zero-ambiguity ledger state.
+
+The persisted size 10 / 32 configuration started supervisor `2979414` and
+runner `2979422`. Its first 138.4-second API window completed 349 reads at
+`2.522/s`, with zero failures, zero 429s/cooldown and queue depth one. The
+bounded selector found 57 viable markets from two event pages. An authenticated
+`03:24:05Z` snapshot still found zero orders and positions, matching the ledger.
+
+That zero-order result is expected existing safety behavior, not an overnight-
+cap failure: the durable 2026-09-03 loss row had already reached cap zero at
+95.25109375% of HARD at `00:47:41Z`. Deployment did not reset or loosen it. The
+first natural midnight ET transition should begin the new risk day with the
+20-order clock ceiling active. Natural acceptance still needs that transition,
+no overshoot, unchanged rank preference, and continued position/reducer/exit
+service; do not induce a loss or fill for acceptance.

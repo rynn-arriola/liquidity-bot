@@ -764,3 +764,11 @@ These are implementation requirements, not suggestions.
     passive reducers, IOC exits, recovery and shutdown must never be blocked,
     cancelled or counted by this ceiling. It adds no venue read or stream and
     does not replace exposure, stressed-exit, buying-power or HARD enforcement.
+97. A separate deterministic clock ceiling permits no more than 20 working or
+    unresolved flat-market entry orders from 00:00 inclusive through 09:00
+    exclusive `America/New_York`, including DST. The effective ceiling is the
+    smaller of 20 and the current durable loss-scaled ceiling. Reaching 09:00
+    removes only the clock ceiling and cannot reset or widen the loss ratchet.
+    It uses invariant 96's reservations, ownership proof, one-cancel driver,
+    ranking/pair preservation and mutation-boundary recheck. Nonzero-position
+    markets, reducers, IOC exits, recovery and shutdown remain excluded.

@@ -68,6 +68,7 @@ hard-locked by `CommissioningConfig`:
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
 | emergency HARD stop | `8 × size × slots / 20` on adjusted marked equity; $80 at 20 slots, $96 at 24, $128 at 32; provisional with open inventory |
 | loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 40, 70% → 30, 80% → 20, 90% → 10, 95% → 0; never counts position-market orders or reducers |
+| overnight flat-entry orders | midnight through 8:59:59 AM `America/New_York` → maximum 20 pending entries; combines with loss tiers by taking the smaller cap |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -82,6 +83,9 @@ the next ET day. Excess owned entry orders are cancelled one at a time from
 the lowest-ranked markets; uncertain creates reserve capacity. Orders in a
 market with an open position, passive reducers, IOC exits and shutdown are
 outside this ceiling.
+Independently, midnight through 8:59:59 AM Eastern has a 20-pending-entry
+ceiling. At 9:00 AM that clock ceiling lifts, but any tighter durable loss tier
+remains. It uses the same exclusions and does not change market ranking.
 With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop. Realized session P&L,
 per-market realized P&L, taker-exit count and taker fees remain reporting

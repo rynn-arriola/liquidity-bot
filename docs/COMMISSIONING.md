@@ -71,6 +71,11 @@ strategy is profitable and not permission to scale.
   reserve capacity; excess owned entries drain one cancellation at a time from
   the lowest-ranked markets. Position-market orders, reducers, IOC exits and
   shutdown never consume or obey this entry ceiling;
+- independently cap pending flat-market entries at 20 from 00:00 inclusive to
+  09:00 exclusive `America/New_York`. Combine it with the durable loss tier by
+  taking the smaller cap. At 09:00 only the clock cap lifts; it never resets a
+  loss tier or changes selection priority. Position markets, reducers, IOC
+  exits, recovery and shutdown retain the same exclusions;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account

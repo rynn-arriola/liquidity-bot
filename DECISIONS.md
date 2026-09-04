@@ -32,6 +32,7 @@ show the operator the discrepancy.
 | Stressed-exit entry cap | `4 × quote size`; $40 at size 10. This is economic eligibility for a proposed entry, not a realized-loss stop |
 | Sole money-loss stop | Marked-equity HARD at `8 × quote size × configured slots / 20`; $128 at loaded size 10 / 32. An open-position breach is provisional until a breach-time position closes |
 | Loss-scaled entry-order ceiling | Use the same ET-day adjusted marked loss and HARD meter. Maximum flat-market pending entries are 40 at 50% HARD, 30 at 70%, 20 at 80%, 10 at 90%, and 0 at 95%. The tightest reached tier persists through restart and cannot loosen until the next ET day. Unresolved creates reserve capacity; cancel excess owned entries one at a time from lowest-ranked markets, preserving pairs where possible. Orders in open-position markets, reducers, IOC exits and shutdown are excluded |
+| Midnight–9 AM entry-order ceiling | Separately allow at most 20 pending flat-market entries from 00:00 inclusive to 09:00 exclusive `America/New_York`. Apply the smaller of this clock cap and the durable loss tier. At 09:00 the clock cap lifts without resetting loss state. Keep reward/rank and pair-preserving retention unchanged; position-market orders, reducers, IOC exits, recovery and shutdown are excluded |
 | Risk-day clock | America/New_York, DST-aware |
 | Queue position study | Closed and retired; preserve its historical rows/report, never cancel/repost automatically, and do not restart its public-trade collector without a new operator decision |
 | Adverse-fill/cliff study | Collect 60%, 70% and 80% retained-value `WOULD_REFUSE` labels plus recent-selector/reward/no-candidate/unknown cost with zero extra venue calls; no live refusal gate is authorized |
@@ -116,5 +117,4 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 - No unattended or automatic desktop/laptop failover. A handoff requires the
   old runner to be absent, known account state, a verified stopped-runtime
   ledger snapshot and explicit start authorization on the new owner.
-
 When the operator changes one of these choices, update this file and [STATUS.md](STATUS.md) in the same task and record the evidence or implementation handoff in the appropriate history file.

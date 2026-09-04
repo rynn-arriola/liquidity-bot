@@ -157,6 +157,11 @@ class MarketFrame:
     # building quotes immediately, without passing through reward hysteresis;
     # inventory planning ignores it and therefore keeps every exit available.
     new_risk_allowed: bool = True
+    # A positively scheduled production-maintenance window is an account-wide
+    # flatten deadline. It changes only held-inventory timing: cancellation,
+    # exact terminal proof, IOC bounds, ownership and displayed-depth checks
+    # remain the ordinary hard-exit path.
+    maintenance_flatten_required: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (("now", self.now),
@@ -480,6 +485,7 @@ class DesiredStateReconciler:
         pre_kickoff_due = (
             seconds_to_event is not None
             and seconds_to_event <= self.policy.force_exit_before_start_seconds)
+        maintenance_due = frame.maintenance_flatten_required
         # Use the durable position-open clock. An initially tiny partial fill
         # gets the full grace period; a position already held for five minutes
         # that later shrinks into the tiny band exits the remainder at once
@@ -497,7 +503,8 @@ class DesiredStateReconciler:
             <= qty <= self.policy.small_residual_max_qty
             and small_residual_exactly_tradable
             and inventory_age >= self.policy.small_residual_timeout_seconds)
-        normal_exit_due = inventory_age >= deadline or pre_kickoff_due
+        normal_exit_due = (
+            inventory_age >= deadline or pre_kickoff_due or maintenance_due)
 
         if normal_exit_due or small_residual_due:
             if frame.working_orders:
@@ -562,7 +569,8 @@ class DesiredStateReconciler:
                 depth_haircut=self.policy.exit_depth_haircut,
                 taker_theta=self.policy.taker_theta)
             if ((not exit_result.complete or exit_result.worst_price is None)
-                    and (pre_kickoff_due or small_residual_due)):
+                    and (pre_kickoff_due or small_residual_due
+                         or maintenance_due)):
                 # The stress haircut exists to pick a price we could still get
                 # if half the displayed depth vanished. At the kickoff deadline
                 # the alternative is no longer a better fill later, it is
@@ -579,7 +587,7 @@ class DesiredStateReconciler:
                     depth_haircut=1.0,
                     taker_theta=self.policy.taker_theta)
             if not exit_result.complete or exit_result.worst_price is None:
-                if not pre_kickoff_due:
+                if not pre_kickoff_due and not maintenance_due:
                     # A book too thin to absorb the exit is not a reason to end
                     # the session. The inventory clock is a preference for
                     # leaving early; the pre-kickoff flatten is the deadline
@@ -592,7 +600,7 @@ class DesiredStateReconciler:
                     return self._critical(frame, "hard_exit_deferred_thin_book")
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
             if (exit_result.pnl < -self.policy.max_early_exit_loss
-                    and not pre_kickoff_due):
+                    and not pre_kickoff_due and not maintenance_due):
                 # Before the kickoff deadline a too-expensive exit can wait for
                 # a better book. At the deadline it cannot: refusing here holds
                 # the position into the game, and settlement is unbounded up to
@@ -601,10 +609,12 @@ class DesiredStateReconciler:
             self._hard_exit_started_at.setdefault(slug, frame.now)
             self._hard_exit_attempts[slug] = attempts + 1
             self._hard_exit_sent[slug] = frame.now
-            reason = (
-                "tiny_residual_timeout"
-                if small_residual_due and not normal_exit_due
-                else "hard_inventory_timeout")
+            if maintenance_due:
+                reason = "scheduled_maintenance_evacuation"
+            elif small_residual_due and not normal_exit_due:
+                reason = "tiny_residual_timeout"
+            else:
+                reason = "hard_inventory_timeout"
             return [PlanAction(
                 ActionKind.PLACE_IOC, slug, reason,
                 side=reducing, price=exit_result.worst_price, qty=qty)]

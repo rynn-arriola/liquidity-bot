@@ -28,6 +28,7 @@ history, not current instructions or runtime truth.
 | [Positioned inactive-owner top-up amplification — 2026-09-01](INACTIVE_POSITION_TOP_UP_AMPLIFICATION_2026-09-01.md) | Repeated lifecycle-discovery trigger, reserved-position suppression, transition tests and live acceptance gate |
 | [Combined release review — 2026-09-01](RELEASE_REVIEW_2026-09-01.md) | Cumulative business-output audit, cross-change interactions, exact WSL verification and deployment gates |
 | [Direct 32-slot canary preparation — 2026-09-01](SLOT_CAPACITY_CANARY_32_PREPARATION_2026-09-01.md) | Complete API-consumer inventory, empirical 24→32 projection, opportunistic reporting lane, derived risk and rollback gates |
+| [Scheduled maintenance automation — 2026-09-04](SCHEDULED_MAINTENANCE_AUTOMATION_2026-09-04.md) | Official production feed contract, cached timing, pre-window evacuation, post-window health gate and deployment boundary |
 
 Search archives with `rg`; do not load all of them into an AI context. New
 current facts go to the compact root files and are periodically archived by a

@@ -90,6 +90,19 @@ from .market_selector import (
     RewardMarketSelection,
     RewardMarketSelector,
 )
+from .maintenance_schedule import (
+    MAINTENANCE_CACHE_PATH,
+    MAINTENANCE_SCHEDULE_POLL_SECONDS,
+    MaintenanceDecision,
+    MaintenanceFeedState,
+    MaintenancePhase,
+    MaintenanceScheduleProbe,
+    MaintenanceWindow,
+    load_maintenance_cache,
+    maintenance_decision,
+    probe_polymarket_us_maintenance_schedule,
+    write_maintenance_cache,
+)
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
 from .notifications import DiscordNotifier
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
@@ -415,6 +428,9 @@ class CommissioningRunner:
         limiter: AsyncIntervalLimiter | None = None,
         ui_availability_probe: Callable[[], UiTradingProbe] | None = None,
         operator_entry_pause_path: Path = OPERATOR_ENTRY_PAUSE_PATH,
+        maintenance_schedule_probe: Callable[..., MaintenanceScheduleProbe]
+        | None = None,
+        maintenance_cache_path: Path = MAINTENANCE_CACHE_PATH,
     ):
         self.client = client
         self.config = config
@@ -435,6 +451,22 @@ class CommissioningRunner:
         self._ui_availability_task: asyncio.Task | None = None
         self._entry_pause_reason: str | None = None
         self._entry_pause_cancel_requested = False
+        self._maintenance_schedule_probe = (
+            maintenance_schedule_probe
+            or probe_polymarket_us_maintenance_schedule)
+        self._maintenance_cache_path = maintenance_cache_path
+        self._maintenance_windows: tuple[MaintenanceWindow, ...] = (
+            load_maintenance_cache(maintenance_cache_path))
+        self._maintenance_decision = MaintenanceDecision(
+            MaintenancePhase.NORMAL)
+        self._maintenance_feed_initialized = False
+        self._maintenance_feed_state = MaintenanceFeedState.UNKNOWN
+        self._maintenance_feed_detail = "not_checked"
+        self._maintenance_feed_observed_at: datetime | None = None
+        self._next_maintenance_schedule_check_at: datetime | None = None
+        self._maintenance_schedule_task: asyncio.Task | None = None
+        self._maintenance_health_required_for: str | None = None
+        self._maintenance_schedule_signature: tuple[object, ...] | None = None
         limiter = limiter or AsyncIntervalLimiter.from_rate(
             float(config.rest_requests_per_second))
         self.gateway = AsyncReadOnlyGateway(client, limiter=limiter)
@@ -1574,12 +1606,59 @@ class CommissioningRunner:
     def _entry_pause_active(self) -> bool:
         """Whether new risk is blocked without affecting reducers or exits."""
 
-        return self._manual_entry_paused or (
-            self._ui_availability_initialized and self._ui_entry_paused)
+        return (
+            self._manual_entry_paused
+            or self._scheduled_maintenance_pause_active()
+            or (self._ui_availability_initialized and self._ui_entry_paused)
+        )
+
+    def _scheduled_maintenance_pause_active(self) -> bool:
+        """Fail closed until the official schedule has initialized."""
+
+        return (
+            not self._maintenance_feed_initialized
+            or self._maintenance_decision.paused
+            or self._maintenance_health_required_for is not None
+        )
+
+    def _scheduled_maintenance_flatten_required(self) -> bool:
+        """Flatten only for a positively identified current window."""
+
+        return (
+            self._maintenance_decision.paused
+            or self._maintenance_health_required_for is not None
+        )
+
+    def _maintenance_resume_feed_is_fresh(self) -> bool:
+        """Require a successful schedule read at or after the hold boundary."""
+
+        if (self._maintenance_feed_state is not MaintenanceFeedState.HEALTHY
+                or self._maintenance_feed_observed_at is None
+                or self._maintenance_health_required_for is None):
+            return False
+        window = next((
+            item for item in self._maintenance_windows
+            if item.maintenance_id == self._maintenance_health_required_for
+        ), None)
+        resume_at = window.resume_at if window is not None else None
+        return (
+            resume_at is not None
+            and self._maintenance_feed_observed_at >= resume_at
+        )
 
     def _current_entry_pause_reason(self) -> str | None:
         if self._manual_entry_paused:
             return "operator"
+        if self._maintenance_decision.phase == MaintenancePhase.EVACUATE:
+            return "scheduled_maintenance_evacuation"
+        if self._maintenance_decision.phase == MaintenancePhase.MAINTENANCE:
+            return "scheduled_maintenance"
+        if self._maintenance_decision.phase == MaintenancePhase.RESUME_HOLD:
+            return "scheduled_maintenance_resume_hold"
+        if self._maintenance_health_required_for is not None:
+            return "scheduled_maintenance_health_gate"
+        if not self._maintenance_feed_initialized:
+            return "polymarket_status_schedule_unavailable"
         if self._ui_availability_initialized and self._ui_entry_paused:
             if self._ui_availability_state == UiTradingState.MAINTENANCE:
                 return "polymarket_us_ui_maintenance"
@@ -1587,6 +1666,159 @@ class CommissioningRunner:
                 return "polymarket_us_ui_recovery_pending"
             return "polymarket_us_ui_unavailable"
         return None
+
+    def _apply_maintenance_schedule(
+        self, result: MaintenanceScheduleProbe, now: datetime,
+    ) -> None:
+        """Apply only a complete official-feed observation."""
+
+        if not isinstance(result, MaintenanceScheduleProbe):
+            result = MaintenanceScheduleProbe(
+                MaintenanceFeedState.UNKNOWN, self._maintenance_windows,
+                "invalid_probe_result", now)
+        self._maintenance_feed_state = result.state
+        self._maintenance_feed_detail = result.detail
+        self._maintenance_feed_observed_at = result.observed_at
+        if result.state is not MaintenanceFeedState.HEALTHY:
+            return
+        self._maintenance_feed_initialized = True
+        self._maintenance_windows = result.windows
+        self._maintenance_decision = maintenance_decision(
+            result.windows, now)
+        window = self._maintenance_decision.window
+        if self._maintenance_decision.paused and window is not None:
+            self._maintenance_health_required_for = window.maintenance_id
+
+    def _log_maintenance_schedule_state(self, now: datetime) -> None:
+        window = self._maintenance_decision.window
+        signature: tuple[object, ...] = (
+            self._maintenance_feed_state,
+            self._maintenance_decision.phase,
+            window.maintenance_id if window else None,
+            window.status if window else None,
+            self._maintenance_health_required_for,
+        )
+        if signature == self._maintenance_schedule_signature:
+            return
+        self._maintenance_schedule_signature = signature
+        fields = [
+            f"[maintenance-schedule] at={now.isoformat()}",
+            f"feed={self._maintenance_feed_state.value}",
+            f"phase={self._maintenance_decision.phase.value}",
+            f"detail={self._maintenance_feed_detail}",
+        ]
+        if window is not None:
+            fields.extend((
+                f"id={window.maintenance_id}",
+                f"status={window.status}",
+                f"evacuate_at={window.evacuation_at.isoformat()}",
+                f"scheduled_for={window.scheduled_for.isoformat()}",
+                f"scheduled_until={window.scheduled_until.isoformat()}",
+                f"resume_at={window.resume_at.isoformat() if window.resume_at else 'unknown'}",
+            ))
+        if self._maintenance_health_required_for is not None:
+            fields.append(
+                f"health_required_for={self._maintenance_health_required_for}")
+        print(" ".join(fields), flush=True)
+
+    async def _refresh_maintenance_schedule(
+        self, now: datetime, *, startup: bool = False,
+    ) -> None:
+        """Poll Statuspage off-loop and hold until post-window health proof."""
+
+        cache_result: MaintenanceScheduleProbe | None = None
+        previous_reason = self._current_entry_pause_reason()
+        if (startup
+                and previous_reason == "polymarket_status_schedule_unavailable"):
+            # The uninitialized constructor state is a mutation guard, not a
+            # real transition. A healthy no-window startup should be silent;
+            # a known window or failed first read still enters pause from None
+            # and requests prompt quote withdrawal.
+            previous_reason = None
+        # Time crossing a cached boundary is sufficient to tighten behavior;
+        # it must not wait for another successful network response. A failed
+        # poll can never postpone a known evacuation or clear a known hold.
+        cached = maintenance_decision(self._maintenance_windows, now)
+        self._maintenance_decision = cached
+        if cached.paused and cached.window is not None:
+            self._maintenance_health_required_for = (
+                cached.window.maintenance_id)
+        if startup:
+            try:
+                result = await asyncio.to_thread(
+                    self._maintenance_schedule_probe,
+                    self._maintenance_windows,
+                    include_history=True,
+                    now=now,
+                )
+            except Exception as exc:
+                result = MaintenanceScheduleProbe(
+                    MaintenanceFeedState.UNKNOWN, self._maintenance_windows,
+                    type(exc).__name__, now)
+            self._apply_maintenance_schedule(result, now)
+            if result.state is MaintenanceFeedState.HEALTHY:
+                cache_result = result
+            self._next_maintenance_schedule_check_at = now + timedelta(
+                seconds=MAINTENANCE_SCHEDULE_POLL_SECONDS)
+        else:
+            task = self._maintenance_schedule_task
+            if task is not None and task.done():
+                self._maintenance_schedule_task = None
+                try:
+                    result = task.result()
+                except Exception as exc:
+                    result = MaintenanceScheduleProbe(
+                        MaintenanceFeedState.UNKNOWN,
+                        self._maintenance_windows,
+                        type(exc).__name__, now)
+                self._apply_maintenance_schedule(result, now)
+                if result.state is MaintenanceFeedState.HEALTHY:
+                    cache_result = result
+                self._next_maintenance_schedule_check_at = now + timedelta(
+                    seconds=MAINTENANCE_SCHEDULE_POLL_SECONDS)
+            due = self._next_maintenance_schedule_check_at
+            if self._maintenance_schedule_task is None and (
+                    due is None or now >= due):
+                self._maintenance_schedule_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._maintenance_schedule_probe,
+                        self._maintenance_windows,
+                        include_history=False,
+                        now=now,
+                    ))
+
+        if cache_result is not None:
+            try:
+                await asyncio.to_thread(
+                    write_maintenance_cache,
+                    cache_result.windows,
+                    cache_result.observed_at,
+                    self._maintenance_cache_path,
+                )
+            except Exception as exc:
+                # The in-memory official observation remains valid. Cache
+                # failure reduces restart resilience but authorizes nothing.
+                print(
+                    f"[maintenance-schedule] at={now.isoformat()} "
+                    f"cache_write=failed error={type(exc).__name__}",
+                    flush=True,
+                )
+
+        # A live process that entered any phase of a known window requires a
+        # fresh complete schedule observation after the hold, then the same
+        # three authenticated account reads used for venue-outage recovery.
+        if (self._maintenance_decision.phase is MaintenancePhase.NORMAL
+                and self._maintenance_health_required_for is not None):
+            if self._maintenance_resume_feed_is_fresh():
+                stop = await self._wait_for_venue_recovery(
+                    "scheduled_maintenance_resume",
+                    RuntimeError("scheduled maintenance hold completed"),
+                    planned=True,
+                )
+                if stop is None:
+                    self._maintenance_health_required_for = None
+        self._log_maintenance_schedule_state(now)
+        await self._publish_entry_pause_transition(previous_reason, now)
 
     async def _publish_entry_pause_transition(
         self, previous_reason: str | None, now: datetime,
@@ -3608,7 +3840,9 @@ class CommissioningRunner:
                 state.market, now, state.book, state.book_observed_at, position,
                 self._working_orders(state.slug), False,
                 state.reward_eligible, {}, 0,
-                new_risk_allowed=False)
+                new_risk_allowed=False,
+                maintenance_flatten_required=(
+                    self._scheduled_maintenance_flatten_required()))
         today = date.fromisoformat(risk_day(now))
         new_risk_allowed = (
             self.risk_guard is not None
@@ -3644,6 +3878,8 @@ class CommissioningRunner:
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
             new_risk_allowed=new_risk_allowed,
+            maintenance_flatten_required=(
+                self._scheduled_maintenance_flatten_required()),
         )
 
     def _quote_observation_for_action(
@@ -7750,7 +7986,7 @@ class CommissioningRunner:
         return self._maintenance_stop_reason()
 
     async def _wait_for_venue_recovery(
-        self, component: str, initial: Exception,
+        self, component: str, initial: Exception, *, planned: bool = False,
     ) -> str | None:
         """Hold dormant until authenticated venue reads are stably healthy.
 
@@ -7767,14 +8003,21 @@ class CommissioningRunner:
             f"reason={type(initial).__name__}:{initial}",
             flush=True,
         )
-        await self.notifier.send_async(
-            "🛠️ Liquidity Bot detected sustained Polymarket service "
-            f"unavailability in {component}. New quoting is paused; no "
-            "order absence is treated as cancellation. Read-only account "
-            "health must pass three times over about two minutes before the "
-            "normal reconciliation and stream gates are retried.",
-            critical=True,
-        )
+        if planned:
+            await self.notifier.send_async(
+                "🛠️ Liquidity Bot completed the scheduled maintenance delay. "
+                "New quoting remains paused while read-only account health "
+                "passes three times over about two minutes; no order absence "
+                "is treated as cancellation.")
+        else:
+            await self.notifier.send_async(
+                "🛠️ Liquidity Bot detected sustained Polymarket service "
+                f"unavailability in {component}. New quoting is paused; no "
+                "order absence is treated as cancellation. Read-only account "
+                "health must pass three times over about two minutes before the "
+                "normal reconciliation and stream gates are retried.",
+                critical=True,
+            )
         stable = 0
         while stable < MAINTENANCE_STABLE_READS:
             stop = self._maintenance_stop_reason()
@@ -8752,9 +8995,11 @@ class CommissioningRunner:
         try:
             startup_mode = await self.preflight_until_ready()
             preflight_complete = True
-            # Establish public participation state before any frame can
-            # authorize new exposure. Existing positions still take the same
-            # reducer and hard-exit paths when this fails closed.
+            # Establish scheduled-maintenance and public participation state
+            # before any frame can authorize new exposure. Existing positions
+            # still use the same bounded reducer/hard-exit machinery.
+            await self._refresh_maintenance_schedule(
+                self._now(), startup=True)
             await self._refresh_entry_pause(self._now(), startup=True)
             self._publish_active_scope_snapshot()
             if startup_mode == "RECOVERY_ONLY":
@@ -8807,6 +9052,7 @@ class CommissioningRunner:
                 if len(self._scheduler_event_loop_delays) > 8192:
                     del self._scheduler_event_loop_delays[:-8192]
                 now = self._now()
+                await self._refresh_maintenance_schedule(now)
                 await self._refresh_entry_pause(now)
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_execution_fee_observation()
@@ -9234,6 +9480,12 @@ class CommissioningRunner:
             else:
                 traceback.print_exc()
         finally:
+            if self._maintenance_schedule_task is not None:
+                self._maintenance_schedule_task.cancel()
+                await asyncio.gather(
+                    self._maintenance_schedule_task,
+                    return_exceptions=True)
+                self._maintenance_schedule_task = None
             if self._ui_availability_task is not None:
                 self._ui_availability_task.cancel()
                 await asyncio.gather(

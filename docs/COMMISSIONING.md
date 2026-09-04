@@ -309,6 +309,18 @@ PYTHONPATH=src python -B scripts/entry_pause.py status
 PYTHONPATH=src python -B scripts/entry_pause.py resume
 ```
 
+No manual command is needed for scheduled production maintenance. The loaded
+runner polls the exact official production Statuspage component once per minute
+and atomically retains verified windows in
+`data/polymarket-maintenance-schedule.json`. At `scheduled_for - 30 minutes`,
+flat entries are withdrawn and held positions use the ordinary sequential
+cancel-confirm/exact-IOC exit machinery. New risk stays blocked until one hour
+after the later of `scheduled_until` or positive official completion, followed
+by three complete authenticated open-order/position/balance cycles. Existing
+stream, reconciliation, UI and risk gates still apply. If the feed becomes
+unknown, a known hold cannot clear; if notice arrives less than thirty minutes
+before start, the bot tightens immediately but cannot recover the missing lead.
+
 After the retained-value shadow build is deliberately deployed and the runner
 is restarted, verify its order-linked coverage locally on the laptop:
 

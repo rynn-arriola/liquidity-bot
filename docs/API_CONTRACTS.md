@@ -22,6 +22,26 @@ Official references:
 - Authenticated request timestamps must remain within the documented 30-second
   window, so clock drift is a startup blocker.
 
+## Public production-maintenance schedule
+
+- Official scheduling evidence comes only from
+  `status.polymarketexchange.com/api/v2/scheduled-maintenances/*` and carries
+  no credential. Startup reads the bounded history once; minute polling reads
+  upcoming and active rows, then exact details for a known item that disappears.
+- A row applies only when its components contain both exact ID `3xmdtkg3r8y5`
+  and exact name `[Production] Polymarket US Exchange`. Pre-production and
+  unrelated Statuspage components are ignored.
+- `scheduled_for` and `scheduled_until` are the announced window. Statuspage
+  `started_at` has represented notice creation and is not used as actual start.
+  Actual completion is the first `incident_updates[].status=completed`
+  `created_at`; list-level `updated_at` is a conservative fallback when detail
+  is omitted.
+- Upcoming/active disappearance is never completion. The runner retrieves the
+  known ID and requires positive `completed` state. Unknown status, transport,
+  redirect, schema, size or timestamp evidence cannot clear a cached hold.
+- The public schedule supplies timing only. It cannot prove API health, an
+  order terminal, a position flat, stream liveness or permission to quote.
+
 ## Incentives
 
 - Use snake-case query parameters: `page_size`, `page_token`, and

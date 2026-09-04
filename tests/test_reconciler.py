@@ -47,13 +47,14 @@ def policy(age=15, **overrides) -> ReconcilerPolicy:
 def frame(*, now=T0, position="0", orders=(), opened=None, entry=None,
           state_known=True, snapshot=None, portfolio_loss=0,
           eligible=frozenset({"bid", "offer"}), new_risk_allowed=True,
-          metadata=None,
+          metadata=None, maintenance_flatten_required=False,
           ) -> MarketFrame:
     snapshot = snapshot or book(now)
     return MarketFrame(
         metadata or market(), now, snapshot, now, Decimal(position), tuple(orders),
         state_known, eligible, {"bid": .01, "offer": .01},
-        portfolio_loss, opened, entry, new_risk_allowed)
+        portfolio_loss, opened, entry, new_risk_allowed,
+        maintenance_flatten_required)
 
 
 class ReconcilerTests(unittest.TestCase):
@@ -84,6 +85,28 @@ class ReconcilerTests(unittest.TestCase):
         self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
         self.assertEqual(
             actions[0].reason, "soft_reducing_quote_at_active_touch")
+
+    def test_scheduled_maintenance_forces_fresh_inventory_through_hard_exit(self):
+        actions = DesiredStateReconciler(policy(age=900)).plan(frame(
+            position="2", opened=T0, entry=.99,
+            maintenance_flatten_required=True))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(actions[0].reason, "scheduled_maintenance_evacuation")
+
+    def test_scheduled_maintenance_preserves_sequential_cancel_proof(self):
+        reducer = WorkingOrder("reduce-offer", "offer", .51, Decimal("2"))
+        builder = WorkingOrder("build-bid", "bid", .49, Decimal("2"))
+        actions = DesiredStateReconciler(policy(age=900)).plan(frame(
+            position="2", orders=(reducer, builder), opened=T0, entry=.49,
+            maintenance_flatten_required=True))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertEqual(actions[0].order_id, "build-bid")
+        self.assertEqual(
+            actions[0].reason, "hard_timeout_cancel_confirm_first")
 
     def test_flat_positive_candidate_places_two_small_post_only_quotes(self):
         actions = DesiredStateReconciler(policy()).plan(frame())

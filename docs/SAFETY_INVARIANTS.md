@@ -777,3 +777,19 @@ These are implementation requirements, not suggestions.
     It uses invariant 96's reservations, ownership proof, one-cancel driver,
     ranking/pair preservation and mutation-boundary recheck. Nonzero-position
     markets, reducers, IOC exits, recovery and shutdown remain excluded.
+98. Official production maintenance scheduling is a tightening-only clock.
+    The runner polls only the bounded public Statuspage schedule for the exact
+    `[Production] Polymarket US Exchange` component, retains verified windows
+    in an owner-only atomic cache and re-evaluates cached boundaries even when
+    a later poll fails. Thirty minutes before `scheduled_for`, flat entry
+    orders become undesired and every exact bot-owned position enters the
+    existing sequential cancel-confirm and bounded exact-position IOC path;
+    ownership, ambiguity, displayed-depth and mutation-intent rules remain
+    unchanged. A missing feed item is not completion, `started_at` is not an
+    execution clock, and an unknown observation cannot clear a hold. New risk
+    remains blocked through maintenance and until one hour after the later of
+    `scheduled_until` or the first official completed update, followed by three
+    complete authenticated order/position/balance reads. Normal stream,
+    reconciliation, UI-participation and account-risk gates must still pass.
+    The process stays alive, operator stop remains prompt, and no schedule,
+    cache, public status or health read may prove cancellation or flatness.

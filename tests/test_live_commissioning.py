@@ -54,6 +54,13 @@ from liquidity_bot.market_selector import (
     RewardMarketSelection,
     SideOpportunity,
 )
+from liquidity_bot.maintenance_schedule import (
+    MaintenanceDecision,
+    MaintenanceFeedState,
+    MaintenancePhase,
+    MaintenanceScheduleProbe,
+    MaintenanceWindow,
+)
 from liquidity_bot.market_state import MarketState, RetiredMarket
 from liquidity_bot.models import (
     AccountBalance, BookLevel, BookSnapshot, MarketIncentive, MarketMetadata,
@@ -474,8 +481,16 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 UiTradingState.HEALTHY, "test"),
             operator_entry_pause_path=(
                 ledger.path.parent / "operator-entry-pause.json"),
+            maintenance_schedule_probe=(
+                lambda _known, *, include_history, now:
+                MaintenanceScheduleProbe(
+                    MaintenanceFeedState.HEALTHY, (), "test", now)),
+            maintenance_cache_path=(
+                ledger.path.parent / "maintenance-schedule.json"),
         )
         runner.gateway.limiter = ImmediateLimiter()
+        runner._apply_maintenance_schedule(MaintenanceScheduleProbe(
+            MaintenanceFeedState.HEALTHY, (), "test", NOW), NOW)
         return runner, client, notifier
 
     def seed_working_order(
@@ -865,6 +880,150 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             for action in held_actions))
         self.assertTrue(runner._entry_pause_cancel_requested)
         self.assertIn("paused NEW ENTRIES", notifier.messages[-1][0])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduled_window_pauses_entries_and_forces_held_exit(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        scheduled_for = NOW + timedelta(minutes=20)
+        maintenance = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance", "scheduled",
+            scheduled_for, scheduled_for + timedelta(hours=4), NOW)
+        runner._apply_maintenance_schedule(MaintenanceScheduleProbe(
+            MaintenanceFeedState.HEALTHY, (maintenance,),
+            "official_statuspage", NOW), NOW)
+
+        self.assertEqual(
+            runner._maintenance_decision.phase, MaintenancePhase.EVACUATE)
+        self.assertTrue(runner._entry_pause_active())
+        runner.ledger.apply_execution(Execution(
+            execution_id="scheduled-held",
+            client_order_id="scheduled-held-client",
+            exchange_order_id="scheduled-held-order",
+            market_slug="market-one",
+            side="BUY",
+            price=Decimal("0.99"),
+            qty=Decimal("10"),
+            fee=Decimal("0"),
+            liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG",
+            event_at=NOW,
+        ), received_at=NOW)
+
+        frame = runner._frame(NOW)
+        actions = runner.reconciler.plan(frame)
+
+        self.assertFalse(frame.new_risk_allowed)
+        self.assertTrue(frame.maintenance_flatten_required)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(
+            actions[0].reason, "scheduled_maintenance_evacuation")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_cached_schedule_tightens_at_boundary_without_fresh_feed(self):
+        runner, _, notifier = self.build_runner()
+        scheduled_for = NOW + timedelta(minutes=31)
+        maintenance = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance", "scheduled",
+            scheduled_for, scheduled_for + timedelta(hours=4), NOW)
+        runner._maintenance_windows = (maintenance,)
+        runner._maintenance_decision = MaintenanceDecision(
+            MaintenancePhase.NORMAL)
+        runner._next_maintenance_schedule_check_at = NOW + timedelta(hours=1)
+
+        await runner._refresh_maintenance_schedule(NOW + timedelta(minutes=1))
+
+        self.assertEqual(
+            runner._maintenance_decision.phase, MaintenancePhase.EVACUATE)
+        self.assertTrue(runner._entry_pause_cancel_requested)
+        self.assertEqual(
+            runner._current_entry_pause_reason(),
+            "scheduled_maintenance_evacuation")
+        self.assertIn("paused NEW ENTRIES", notifier.messages[-1][0])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_failed_first_schedule_read_blocks_entry_without_forcing_exit(self):
+        runner, _, notifier = self.build_runner()
+        runner._maintenance_feed_initialized = False
+        runner._maintenance_feed_state = MaintenanceFeedState.UNKNOWN
+        runner._maintenance_feed_detail = "not_checked"
+        runner._maintenance_schedule_probe = (
+            lambda _known, *, include_history, now:
+            MaintenanceScheduleProbe(
+                MaintenanceFeedState.UNKNOWN, (), "TimeoutError", now))
+
+        await runner._refresh_maintenance_schedule(NOW, startup=True)
+
+        self.assertTrue(runner._entry_pause_active())
+        self.assertFalse(runner._scheduled_maintenance_flatten_required())
+        self.assertEqual(
+            runner._current_entry_pause_reason(),
+            "polymarket_status_schedule_unavailable")
+        self.assertTrue(runner._entry_pause_cancel_requested)
+        self.assertIn("paused NEW ENTRIES", notifier.messages[-1][0])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_scheduled_resume_waits_for_three_authenticated_reads(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        completed_at = NOW - timedelta(hours=2)
+        maintenance = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance", "completed",
+            NOW - timedelta(hours=7), NOW - timedelta(hours=2),
+            completed_at, completed_at)
+        runner._maintenance_health_required_for = "scheduled-one"
+        runner._apply_maintenance_schedule(MaintenanceScheduleProbe(
+            MaintenanceFeedState.HEALTHY, (maintenance,),
+            "official_statuspage", NOW), NOW)
+        runner.account.fetch_open_orders = AsyncMock(
+            wraps=runner.account.fetch_open_orders)
+        runner.account.fetch_positions = AsyncMock(
+            wraps=runner.account.fetch_positions)
+        runner.account.fetch_balance = AsyncMock(
+            wraps=runner.account.fetch_balance)
+
+        await runner._refresh_maintenance_schedule(NOW)
+
+        self.assertIsNone(runner._maintenance_health_required_for)
+        self.assertFalse(runner._scheduled_maintenance_pause_active())
+        self.assertEqual(runner.account.fetch_open_orders.await_count, 3)
+        self.assertEqual(runner.account.fetch_positions.await_count, 3)
+        self.assertEqual(runner.account.fetch_balance.await_count, 3)
+        self.assertTrue(any(
+            "maintenance health gate passed" in message
+            for message, _critical in notifier.messages))
+        if runner._maintenance_schedule_task is not None:
+            runner._maintenance_schedule_task.cancel()
+            await asyncio.gather(
+                runner._maintenance_schedule_task,
+                return_exceptions=True)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_stale_pre_boundary_feed_cannot_start_resume_health_gate(self):
+        runner, _, _ = self.build_runner()
+        completed_at = NOW - timedelta(hours=1)
+        maintenance = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance", "completed",
+            NOW - timedelta(hours=6), NOW - timedelta(hours=1),
+            completed_at, completed_at)
+        runner._maintenance_windows = (maintenance,)
+        runner._maintenance_health_required_for = "scheduled-one"
+        runner._maintenance_feed_observed_at = NOW - timedelta(seconds=1)
+        runner._next_maintenance_schedule_check_at = NOW + timedelta(hours=1)
+        runner.account.fetch_open_orders = AsyncMock(
+            wraps=runner.account.fetch_open_orders)
+
+        await runner._refresh_maintenance_schedule(NOW)
+
+        self.assertEqual(
+            runner._maintenance_health_required_for, "scheduled-one")
+        runner.account.fetch_open_orders.assert_not_awaited()
         await runner.private_stream.close()
         await runner.market_stream.close()
 

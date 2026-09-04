@@ -267,7 +267,7 @@ class LiveSessionTests(unittest.TestCase):
 
         self.assertEqual(result.action.kind, ActionKind.HALT_NEW_RISK)
         self.assertEqual(
-            result.action.reason, "runtime_loss_scaled_entry_order_cap")
+            result.action.reason, "runtime_entry_order_cap")
         self.assertEqual(executor.places, [])
 
         reducing = PlanAction(

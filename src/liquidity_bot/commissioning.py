@@ -31,6 +31,12 @@ LOSS_ENTRY_ORDER_CAP_TIERS: tuple[tuple[Decimal, int], ...] = (
     (Decimal("0.90"), 10),
     (Decimal("0.95"), 0),
 )
+# Separate clock-based ceiling chosen by the operator. It combines with the
+# loss ratchet by taking the smaller cap; it never replaces or resets a loss
+# tier. The window is Eastern local time so DST follows the existing risk day.
+OVERNIGHT_ENTRY_ORDER_CAP = 20
+OVERNIGHT_ENTRY_ORDER_CAP_START = time(0)
+OVERNIGHT_ENTRY_ORDER_CAP_END = time(9)
 
 
 class CommissioningRefused(RuntimeError):
@@ -300,6 +306,26 @@ class CommissioningConfig:
             if loss >= self.hard_stop_loss_usd * fraction:
                 cap = min(cap, tier_cap)
         return cap
+
+    def entry_order_cap_for_time(self, observed_at: datetime) -> int:
+        """Return the deterministic midnight-09:00 ET entry-order ceiling."""
+
+        if (observed_at.tzinfo is None
+                or observed_at.utcoffset() is None):
+            raise ValueError("observed_at must be timezone-aware")
+        try:
+            zone = ZoneInfo(NEW_YORK)
+        except ZoneInfoNotFoundError as exc:
+            raise CommissioningRefused(
+                "America/New_York timezone data is unavailable") from exc
+        local_time = observed_at.astimezone(zone).time().replace(tzinfo=None)
+        if (OVERNIGHT_ENTRY_ORDER_CAP_START
+                <= local_time < OVERNIGHT_ENTRY_ORDER_CAP_END):
+            return min(
+                self.full_entry_order_capacity,
+                OVERNIGHT_ENTRY_ORDER_CAP,
+            )
+        return self.full_entry_order_capacity
 
     @property
     def max_market_exposure_usd(self) -> Decimal:

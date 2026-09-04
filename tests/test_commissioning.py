@@ -317,6 +317,41 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             config.entry_order_cap_for_loss(Decimal("56")), 30)
 
+    def test_overnight_entry_order_cap_uses_exact_eastern_boundaries(self):
+        config = self.authorized(
+            quote_size=Decimal("10"), max_markets=32)
+
+        expected = {
+            # EDT: midnight is 04:00Z and 09:00 is 13:00Z.
+            datetime(2026, 8, 13, 4, 0, tzinfo=timezone.utc): 20,
+            datetime(2026, 8, 13, 12, 59, 59,
+                     tzinfo=timezone.utc): 20,
+            datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc): 64,
+            # EST: midnight is 05:00Z and 09:00 is 14:00Z.
+            datetime(2026, 1, 13, 5, 0, tzinfo=timezone.utc): 20,
+            datetime(2026, 1, 13, 13, 59, 59,
+                     tzinfo=timezone.utc): 20,
+            datetime(2026, 1, 13, 14, 0, tzinfo=timezone.utc): 64,
+        }
+        for observed_at, cap in expected.items():
+            with self.subTest(observed_at=observed_at):
+                self.assertEqual(
+                    config.entry_order_cap_for_time(observed_at), cap)
+
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            config.entry_order_cap_for_time(datetime(2026, 8, 13, 8, 0))
+
+    def test_overnight_cap_never_increases_a_smaller_configured_capacity(self):
+        config = self.authorized(
+            quote_size=Decimal("10"), max_markets=8)
+
+        self.assertEqual(config.full_entry_order_capacity, 16)
+        self.assertEqual(
+            config.entry_order_cap_for_time(
+                datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)),
+            16,
+        )
+
     def test_size_ten_thirty_two_canary_derives_every_breadth_control(self):
         config = self.authorized(
             quote_size=Decimal("10"), max_markets=32)

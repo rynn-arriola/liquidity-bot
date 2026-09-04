@@ -558,6 +558,76 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(
             "entry-order cap" in message for message, _ in notifier.messages))
 
+    async def test_overnight_cap_combines_with_loss_cap_by_taking_smaller(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        before_nine = datetime(
+            2026, 8, 13, 12, 59, 59, tzinfo=timezone.utc)
+        at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+
+        runner._loss_entry_order_cap = 30
+        self.assertEqual(runner._effective_entry_order_cap(NOW), 20)
+        self.assertEqual(
+            runner._effective_entry_order_cap(before_nine), 20)
+        self.assertEqual(runner._effective_entry_order_cap(at_nine), 30)
+
+        runner._loss_entry_order_cap = 10
+        self.assertEqual(runner._effective_entry_order_cap(NOW), 10)
+        self.assertEqual(runner._effective_entry_order_cap(at_nine), 10)
+
+    async def test_overnight_cap_transition_notifies_without_resetting_loss(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        runner._loss_entry_order_cap = 30
+
+        self.assertTrue(runner._overnight_entry_order_cap_active)
+        await runner._announce_overnight_entry_order_cap()
+        self.assertIn("limited to 20", notifier.messages[-1][0])
+
+        at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+        runner._refresh_overnight_entry_order_cap(at_nine)
+        self.assertFalse(runner._overnight_entry_order_cap_active)
+        self.assertEqual(runner._loss_entry_order_cap, 30)
+        await runner._announce_overnight_entry_order_cap()
+        self.assertIn(
+            "remaining loss-based cap is 30", notifier.messages[-1][0])
+
+    async def test_overnight_cap_wakes_scheduler_at_nine_am_eastern(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._loss_entry_order_cap = 40
+        before_nine = datetime(
+            2026, 8, 13, 12, 59, 59, tzinfo=timezone.utc)
+        at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+
+        self.assertNotEqual(
+            runner._entry_scheduler_signature(before_nine),
+            runner._entry_scheduler_signature(at_nine),
+        )
+
+    async def test_overnight_cap_cancels_only_overflow_at_flat_entry(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        for index in range(21):
+            self.seed_working_order(
+                runner,
+                slug="market-one",
+                side="bid" if index % 2 == 0 else "offer",
+                suffix=f"overnight-{index}",
+            )
+
+        overflow = runner._loss_cap_overflow_order_ids(NOW)
+        self.assertEqual(len(overflow), 1)
+        action = runner._loss_cap_cancel_action(runner._frame(NOW))
+        self.assertIsNotNone(action)
+        self.assertEqual(action.kind, ActionKind.CANCEL)
+        self.assertEqual(action.reason, "overnight_entry_order_cap")
+
+        at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            runner._loss_cap_overflow_order_ids(at_nine), frozenset())
+
     async def test_loss_entry_cap_cancels_lower_value_order_one_at_a_time(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

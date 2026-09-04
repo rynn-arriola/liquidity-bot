@@ -259,12 +259,13 @@ class ControlledActionDriver:
             if (not reducing and self.new_entry_allowed is not None
                     and not self.new_entry_allowed()):
                 # Recheck at the mutation boundary. The runner normally
-                # suppresses an over-cap plan earlier, but a balance update or
-                # unresolved create can tighten/consume the budget after a
-                # plan was formed. Reducers deliberately bypass this gate.
+                # suppresses an over-cap plan earlier, but a clock boundary,
+                # balance update, or unresolved create can tighten/consume
+                # the budget after a plan was formed. Reducers deliberately
+                # bypass this gate.
                 return ActionResult(PlanAction(
                     ActionKind.HALT_NEW_RISK, market.slug,
-                    "runtime_loss_scaled_entry_order_cap"))
+                    "runtime_entry_order_cap"))
             if reducing:
                 expected = "offer" if position > 0 else "bid"
                 if action.side != expected or action.qty != abs(position):

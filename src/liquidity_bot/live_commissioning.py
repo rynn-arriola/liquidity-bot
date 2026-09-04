@@ -659,6 +659,13 @@ class CommissioningRunner:
         self._loss_entry_order_cap_notice: (
             tuple[date, int, int, Decimal] | None
         ) = None
+        # Independent 00:00-09:00 ET ceiling. It is recomputed from the
+        # timezone-aware clock (rather than persisted) and combines with the
+        # durable loss ratchet by taking the smaller cap.
+        self._overnight_entry_order_cap_active: bool | None = None
+        self._overnight_entry_order_cap_notice: (
+            tuple[bool, int, int] | None
+        ) = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
             quote_size=config.quote_size,
             max_inventory_age_seconds=config.max_inventory_age_seconds,
@@ -1556,7 +1563,7 @@ class CommissioningRunner:
             self._nontrading_cash_day == today,
             session_ready,
             not self._entry_pause_active(),
-            self._loss_entry_order_cap,
+            self._effective_entry_order_cap(now),
         )
 
     def _entry_pause_active(self) -> bool:
@@ -2943,7 +2950,8 @@ class CommissioningRunner:
         await self._refresh_balance(self._now())
         self.driver = ControlledActionDriver(
             self.executor, self.ledger, self.risk_guard,
-            new_entry_allowed=lambda: not self._loss_cap_blocks_new_entry())
+            new_entry_allowed=lambda: not self._loss_cap_blocks_new_entry(
+                self._now()))
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         if recovery_only:
@@ -3935,6 +3943,7 @@ class CommissioningRunner:
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=observed_at)
         self._refresh_loss_entry_order_cap(observed_at)
+        self._refresh_overnight_entry_order_cap(observed_at)
         self._publish_live_pnl_snapshot()
 
     def _publish_active_scope_snapshot(
@@ -4088,6 +4097,45 @@ class CommissioningRunner:
             slug for slug in self.active_slugs
             if self.ledger.position(slug) == 0)
 
+    def _effective_entry_order_cap(self, observed_at: datetime) -> int:
+        """Return the tighter of the durable loss and clock-based ceilings."""
+
+        return min(
+            self._loss_entry_order_cap,
+            self.config.entry_order_cap_for_time(observed_at),
+        )
+
+    def _refresh_overnight_entry_order_cap(
+        self, observed_at: datetime,
+    ) -> None:
+        """Record midnight/09:00 ET transitions without changing loss state."""
+
+        time_cap = self.config.entry_order_cap_for_time(observed_at)
+        active = time_cap < self.config.full_entry_order_capacity
+        previous = self._overnight_entry_order_cap_active
+        self._overnight_entry_order_cap_active = active
+        if previous is active:
+            return
+        # An initial daytime observation merely establishes state. Starting
+        # inside the overnight window is material and should be announced.
+        if previous is None and not active:
+            return
+
+        effective = min(self._loss_entry_order_cap, time_cap)
+        print(
+            f"[overnight-entry-order-cap] at={observed_at.isoformat()} "
+            "window=00:00-09:00_ET "
+            f"active={str(active).lower()} time_cap={time_cap} "
+            f"loss_cap={self._loss_entry_order_cap} effective={effective} "
+            "positions_and_reducers=excluded",
+            flush=True,
+        )
+        self._overnight_entry_order_cap_notice = (
+            active, effective, self._loss_entry_order_cap)
+        self._dirty_market_slugs.update(
+            slug for slug in self.active_slugs
+            if self.ledger.position(slug) == 0)
+
     def _flat_entry_orders_and_reservations(
         self,
     ) -> tuple[tuple[Any, ...], int]:
@@ -4112,11 +4160,15 @@ class CommissioningRunner:
         }
         return working, len(reservations)
 
-    def _loss_cap_overflow_order_ids(self) -> frozenset[str]:
-        """Choose lowest-ranked flat entry orders beyond the current ceiling."""
+    def _loss_cap_overflow_order_ids(
+        self, observed_at: datetime | None = None,
+    ) -> frozenset[str]:
+        """Choose lowest-ranked flat entry orders beyond the effective cap."""
 
         working, reservations = self._flat_entry_orders_and_reservations()
-        keep_count = max(0, self._loss_entry_order_cap - reservations)
+        now = self._now() if observed_at is None else observed_at
+        keep_count = max(
+            0, self._effective_entry_order_cap(now) - reservations)
         if len(working) <= keep_count:
             return frozenset()
         rank = {slug: index for index, slug in enumerate(self.active_slugs)}
@@ -4185,21 +4237,33 @@ class CommissioningRunner:
 
         if frame.position != 0 or not frame.state_known:
             return None
-        overflow = self._loss_cap_overflow_order_ids()
+        overflow = self._loss_cap_overflow_order_ids(frame.now)
         for order in reversed(frame.working_orders):
             if order.order_id in overflow:
+                time_cap = self.config.entry_order_cap_for_time(frame.now)
+                reason = (
+                    "overnight_entry_order_cap"
+                    if time_cap < self._loss_entry_order_cap
+                    else "loss_scaled_entry_order_cap"
+                )
                 return PlanAction(
                     ActionKind.CANCEL,
                     frame.market.slug,
-                    "loss_scaled_entry_order_cap",
+                    reason,
                     side=order.side,
                     order_id=order.order_id,
                 )
         return None
 
-    def _loss_cap_blocks_new_entry(self) -> bool:
+    def _loss_cap_blocks_new_entry(
+        self, observed_at: datetime | None = None,
+    ) -> bool:
         working, reservations = self._flat_entry_orders_and_reservations()
-        return len(working) + reservations >= self._loss_entry_order_cap
+        now = self._now() if observed_at is None else observed_at
+        return (
+            len(working) + reservations
+            >= self._effective_entry_order_cap(now)
+        )
 
     async def _refresh_execution_state_for_decision(
         self, now: datetime,
@@ -4519,6 +4583,28 @@ class CommissioningRunner:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot entry-order cap {detail} ({day}). "
             "Open-position reducers and exits are excluded.")
+
+    async def _announce_overnight_entry_order_cap(self) -> None:
+        """Notify on each midnight/09:00 ET ceiling transition."""
+
+        notice, self._overnight_entry_order_cap_notice = (
+            self._overnight_entry_order_cap_notice, None)
+        if notice is None:
+            return
+        active, effective, loss_cap = notice
+        if active:
+            detail = (
+                "is active until 9:00 AM ET; pending flat-entry orders are "
+                f"limited to {effective}"
+            )
+        else:
+            detail = (
+                "ended at 9:00 AM ET; the remaining loss-based cap is "
+                f"{loss_cap}"
+            )
+        await self.notifier.send_async(
+            f"ℹ️ Liquidity Bot midnight-9:00 AM ET order cap {detail}. "
+            "Open positions, reducers, and exits are excluded.")
 
     async def _announce_provisional_hard_stop(self) -> None:
         """Announce a paper breach once, then its position-close recovery."""
@@ -5114,7 +5200,7 @@ class CommissioningRunner:
             if (actions
                     and actions[0].kind == ActionKind.PLACE_POST_ONLY
                     and frame.position == 0
-                    and self._loss_cap_blocks_new_entry()):
+                    and self._loss_cap_blocks_new_entry(frame.now)):
                 # A cap is a ceiling, not a target. Existing normal cancels
                 # still flow through the reconciler; only a building PLACE is
                 # suppressed. The next ledger/private input dirties the owner
@@ -8716,6 +8802,7 @@ class CommissioningRunner:
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_execution_fee_observation()
                 await self._announce_loss_entry_order_cap()
+                await self._announce_overnight_entry_order_cap()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break
@@ -8900,6 +8987,7 @@ class CommissioningRunner:
                 stop_reason = self._stop_reason(now) or ""
                 await self._announce_execution_fee_observation()
                 await self._announce_loss_entry_order_cap()
+                await self._announce_overnight_entry_order_cap()
                 await self._announce_provisional_hard_stop()
                 if stop_reason:
                     break

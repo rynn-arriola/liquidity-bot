@@ -7,12 +7,14 @@ actual runner must still pass exchange-state preflight before any mutation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .entry_order_policy import (
+    EntryOrderPolicy, EntryOrderPolicyError, load_entry_order_policy)
 from .quote_size import (
     DEFAULT_QUOTE_SIZE, MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, parse_quote_size)
 from .slot_capacity import DEFAULT_SLOT_CAPACITY, parse_slot_capacity
@@ -21,24 +23,6 @@ NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
 RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
 RUNTIME_SLOT_CAPACITY_PATH = Path("data/commissioning_slot_capacity")
-# Percentage of the ET-day marked-equity HARD budget consumed -> maximum
-# resting building orders.  These are account-wide entry ceilings, not market
-# exposure limits: reducers for a nonzero position never consume them.
-LOSS_ENTRY_ORDER_CAP_TIERS: tuple[tuple[Decimal, int], ...] = (
-    (Decimal("0.50"), 40),
-    (Decimal("0.70"), 30),
-    (Decimal("0.80"), 20),
-    (Decimal("0.90"), 10),
-    (Decimal("0.95"), 0),
-)
-# Separate clock-based ceiling chosen by the operator. It combines with the
-# loss ratchet by taking the smaller cap; it never replaces or resets a loss
-# tier. The window is Eastern local time so DST follows the existing risk day.
-OVERNIGHT_ENTRY_ORDER_CAP = 20
-OVERNIGHT_ENTRY_ORDER_CAP_START = time(0)
-OVERNIGHT_ENTRY_ORDER_CAP_END = time(9)
-
-
 class CommissioningRefused(RuntimeError):
     """The requested experimental live session is not narrowly authorized."""
 
@@ -139,6 +123,12 @@ class CommissioningConfig:
     # operator's original 20 + 10 design when capacity changes instead of
     # silently shrinking its cushion. At size 13 / 24 this is 34 x 13 = $442.
     max_markets: int = DEFAULT_SLOT_CAPACITY
+    # Restart-scoped pending-entry policy loaded from the validated operator
+    # config. Its order counts are automatically clamped to two orders per
+    # configured market, while its percentage thresholds follow the
+    # breadth/quantity-scaled HARD value below.
+    entry_order_policy: EntryOrderPolicy = field(
+        default_factory=load_entry_order_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -301,11 +291,10 @@ class CommissioningConfig:
         """
 
         loss = max(Decimal("0"), Decimal(loss_usd))
-        cap = self.full_entry_order_capacity
-        for fraction, tier_cap in LOSS_ENTRY_ORDER_CAP_TIERS:
-            if loss >= self.hard_stop_loss_usd * fraction:
-                cap = min(cap, tier_cap)
-        return cap
+        hard = self.hard_stop_loss_usd
+        fraction = Decimal("0") if hard <= 0 else loss / hard
+        return self.entry_order_policy.loss_cap(
+            fraction, full_cap=self.full_entry_order_capacity)
 
     def entry_order_cap_for_time(self, observed_at: datetime) -> int:
         """Return the deterministic midnight-09:00 ET entry-order ceiling."""
@@ -314,18 +303,26 @@ class CommissioningConfig:
                 or observed_at.utcoffset() is None):
             raise ValueError("observed_at must be timezone-aware")
         try:
-            zone = ZoneInfo(NEW_YORK)
-        except ZoneInfoNotFoundError as exc:
-            raise CommissioningRefused(
-                "America/New_York timezone data is unavailable") from exc
-        local_time = observed_at.astimezone(zone).time().replace(tzinfo=None)
-        if (OVERNIGHT_ENTRY_ORDER_CAP_START
-                <= local_time < OVERNIGHT_ENTRY_ORDER_CAP_END):
-            return min(
-                self.full_entry_order_capacity,
-                OVERNIGHT_ENTRY_ORDER_CAP,
-            )
-        return self.full_entry_order_capacity
+            return self.entry_order_policy.time_cap(
+                observed_at, full_cap=self.full_entry_order_capacity)
+        except EntryOrderPolicyError as exc:
+            raise CommissioningRefused(str(exc)) from exc
+        except ValueError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive domain wrap
+            raise CommissioningRefused(str(exc)) from exc
+
+    def entry_order_cap_is_overnight(self, observed_at: datetime) -> bool:
+        """Return whether the configured lower clock band applies."""
+
+        try:
+            return self.entry_order_policy.is_overnight(observed_at)
+        except EntryOrderPolicyError as exc:
+            raise CommissioningRefused(str(exc)) from exc
+        except ValueError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive domain wrap
+            raise CommissioningRefused(str(exc)) from exc
 
     @property
     def max_market_exposure_usd(self) -> Decimal:

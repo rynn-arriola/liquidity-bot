@@ -55,6 +55,11 @@ from .execution_ledger import (
     LedgerConflict,
     QuoteObservation,
 )
+from .entry_order_policy import (
+    DEFAULT_ENTRY_ORDER_POLICY_PATH,
+    EntryOrderPolicyError,
+    load_entry_order_policy,
+)
 from .entry_pause import (
     OPERATOR_ENTRY_PAUSE_PATH,
     UiTradingProbe,
@@ -664,7 +669,7 @@ class CommissioningRunner:
         # durable loss ratchet by taking the smaller cap.
         self._overnight_entry_order_cap_active: bool | None = None
         self._overnight_entry_order_cap_notice: (
-            tuple[bool, int, int] | None
+            tuple[bool, int, int, int] | None
         ) = None
         self.reconciler = DesiredStateReconciler(ReconcilerPolicy(
             quote_size=config.quote_size,
@@ -4111,7 +4116,7 @@ class CommissioningRunner:
         """Record midnight/09:00 ET transitions without changing loss state."""
 
         time_cap = self.config.entry_order_cap_for_time(observed_at)
-        active = time_cap < self.config.full_entry_order_capacity
+        active = self.config.entry_order_cap_is_overnight(observed_at)
         previous = self._overnight_entry_order_cap_active
         self._overnight_entry_order_cap_active = active
         if previous is active:
@@ -4131,7 +4136,7 @@ class CommissioningRunner:
             flush=True,
         )
         self._overnight_entry_order_cap_notice = (
-            active, effective, self._loss_entry_order_cap)
+            active, effective, self._loss_entry_order_cap, time_cap)
         self._dirty_market_slugs.update(
             slug for slug in self.active_slugs
             if self.ledger.position(slug) == 0)
@@ -4243,6 +4248,9 @@ class CommissioningRunner:
                 time_cap = self.config.entry_order_cap_for_time(frame.now)
                 reason = (
                     "overnight_entry_order_cap"
+                    if (time_cap < self._loss_entry_order_cap
+                        and self.config.entry_order_cap_is_overnight(frame.now))
+                    else "daytime_entry_order_cap"
                     if time_cap < self._loss_entry_order_cap
                     else "loss_scaled_entry_order_cap"
                 )
@@ -4591,7 +4599,7 @@ class CommissioningRunner:
             self._overnight_entry_order_cap_notice, None)
         if notice is None:
             return
-        active, effective, loss_cap = notice
+        active, effective, loss_cap, time_cap = notice
         if active:
             detail = (
                 "is active until 9:00 AM ET; pending flat-entry orders are "
@@ -4599,8 +4607,9 @@ class CommissioningRunner:
             )
         else:
             detail = (
-                "ended at 9:00 AM ET; the remaining loss-based cap is "
-                f"{loss_cap}"
+                f"ended at 9:00 AM ET; the daytime cap is {time_cap} and "
+                f"the effective cap is {effective} after the remaining "
+                f"loss-based cap of {loss_cap}"
             )
         await self.notifier.send_async(
             f"ℹ️ Liquidity Bot midnight-9:00 AM ET order cap {detail}. "
@@ -9262,6 +9271,12 @@ class CommissioningRunner:
 async def _run(args: argparse.Namespace) -> CommissioningResult:
     now = datetime.now(timezone.utc)
     auto_select = bool(getattr(args, "auto_select_rewards", False))
+    policy_path = Path(getattr(
+        args, "entry_order_policy", DEFAULT_ENTRY_ORDER_POLICY_PATH))
+    try:
+        entry_order_policy = load_entry_order_policy(policy_path)
+    except EntryOrderPolicyError as exc:
+        raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
         economic_risk_accepted=args.accept_one_contract_risk,
@@ -9271,6 +9286,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         auto_select_reward_markets=auto_select,
         quote_size=Decimal(args.quote_size),
         max_markets=args.max_markets,
+        entry_order_policy=entry_order_policy,
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
@@ -9335,6 +9351,11 @@ def main() -> int:
         choices=range(MIN_SLOT_CAPACITY, MAX_SLOT_CAPACITY + 1),
         default=MIN_SLOT_CAPACITY,
         help="restart-scoped market capacity; 21-22 are measurement canaries",
+    )
+    parser.add_argument(
+        "--entry-order-policy", type=Path,
+        default=DEFAULT_ENTRY_ORDER_POLICY_PATH,
+        help="validated restart-scoped pending-entry-order policy JSON",
     )
     args = parser.parse_args()
     try:

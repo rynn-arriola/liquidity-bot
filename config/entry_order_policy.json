@@ -1,0 +1,33 @@
+{
+  "timezone": "America/New_York",
+  "overnight": {
+    "start": "00:00",
+    "end": "09:00",
+    "max_pending_entry_orders": 30
+  },
+  "daytime": {
+    "max_pending_entry_orders": 40
+  },
+  "loss_tiers": [
+    {
+      "hard_fraction": "0.50",
+      "max_pending_entry_orders": 30
+    },
+    {
+      "hard_fraction": "0.70",
+      "max_pending_entry_orders": 25
+    },
+    {
+      "hard_fraction": "0.80",
+      "max_pending_entry_orders": 20
+    },
+    {
+      "hard_fraction": "0.90",
+      "max_pending_entry_orders": 15
+    },
+    {
+      "hard_fraction": "0.95",
+      "max_pending_entry_orders": 10
+    }
+  ]
+}

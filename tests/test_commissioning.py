@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 from tempfile import TemporaryDirectory
@@ -14,6 +15,11 @@ from liquidity_bot.commissioning import (
     configured_quote_size,
     configured_slot_capacity,
     next_six_am_new_york,
+)
+from liquidity_bot.entry_order_policy import (
+    DEFAULT_ENTRY_ORDER_POLICY_PATH,
+    EntryOrderPolicyError,
+    load_entry_order_policy,
 )
 from liquidity_bot.quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE, main
 from liquidity_bot.slot_capacity import main as slot_capacity_main
@@ -289,16 +295,16 @@ class CommissioningTests(unittest.TestCase):
         expected = {
             "0": 64,
             "63.99": 64,
-            "64": 40,
-            "89.59": 40,
-            "89.60": 30,
-            "102.39": 30,
+            "64": 30,
+            "89.59": 30,
+            "89.60": 25,
+            "102.39": 25,
             "102.40": 20,
             "115.19": 20,
-            "115.20": 10,
-            "121.59": 10,
-            "121.60": 0,
-            "128": 0,
+            "115.20": 15,
+            "121.59": 15,
+            "121.60": 10,
+            "128": 10,
         }
         for loss, cap in expected.items():
             with self.subTest(loss=loss):
@@ -313,9 +319,9 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             config.entry_order_cap_for_loss(Decimal("0")), 40)
         self.assertEqual(
-            config.entry_order_cap_for_loss(Decimal("40")), 40)
+            config.entry_order_cap_for_loss(Decimal("40")), 30)
         self.assertEqual(
-            config.entry_order_cap_for_loss(Decimal("56")), 30)
+            config.entry_order_cap_for_loss(Decimal("56")), 25)
 
     def test_overnight_entry_order_cap_uses_exact_eastern_boundaries(self):
         config = self.authorized(
@@ -323,15 +329,15 @@ class CommissioningTests(unittest.TestCase):
 
         expected = {
             # EDT: midnight is 04:00Z and 09:00 is 13:00Z.
-            datetime(2026, 8, 13, 4, 0, tzinfo=timezone.utc): 20,
+            datetime(2026, 8, 13, 4, 0, tzinfo=timezone.utc): 30,
             datetime(2026, 8, 13, 12, 59, 59,
-                     tzinfo=timezone.utc): 20,
-            datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc): 64,
+                     tzinfo=timezone.utc): 30,
+            datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc): 40,
             # EST: midnight is 05:00Z and 09:00 is 14:00Z.
-            datetime(2026, 1, 13, 5, 0, tzinfo=timezone.utc): 20,
+            datetime(2026, 1, 13, 5, 0, tzinfo=timezone.utc): 30,
             datetime(2026, 1, 13, 13, 59, 59,
-                     tzinfo=timezone.utc): 20,
-            datetime(2026, 1, 13, 14, 0, tzinfo=timezone.utc): 64,
+                     tzinfo=timezone.utc): 30,
+            datetime(2026, 1, 13, 14, 0, tzinfo=timezone.utc): 40,
         }
         for observed_at, cap in expected.items():
             with self.subTest(observed_at=observed_at):
@@ -351,6 +357,59 @@ class CommissioningTests(unittest.TestCase):
                 datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)),
             16,
         )
+
+    def test_entry_order_policy_file_is_validated_and_scalable(self):
+        policy = load_entry_order_policy(DEFAULT_ENTRY_ORDER_POLICY_PATH)
+        self.assertEqual(policy.overnight_max_orders, 30)
+        self.assertEqual(policy.daytime_max_orders, 40)
+        self.assertEqual(
+            policy.loss_tiers,
+            (
+                (Decimal("0.50"), 30),
+                (Decimal("0.70"), 25),
+                (Decimal("0.80"), 20),
+                (Decimal("0.90"), 15),
+                (Decimal("0.95"), 10),
+            ),
+        )
+        overnight = datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc)
+        daytime = datetime(2026, 8, 13, 15, 0, tzinfo=timezone.utc)
+        self.assertEqual(policy.time_cap(overnight, full_cap=64), 30)
+        self.assertEqual(policy.time_cap(daytime, full_cap=64), 40)
+        self.assertEqual(policy.time_cap(overnight, full_cap=16), 16)
+        self.assertEqual(policy.time_cap(daytime, full_cap=16), 16)
+
+    def test_entry_order_policy_refuses_malformed_or_loosening_config(self):
+        valid = json.loads(DEFAULT_ENTRY_ORDER_POLICY_PATH.read_text(
+            encoding="utf-8"))
+        cases = {}
+        cases["unknown key"] = {**valid, "surprise": True}
+        cases["wrong timezone"] = {**valid, "timezone": "UTC"}
+        cases["overnight above daytime"] = {
+            **valid,
+            "overnight": {**valid["overnight"],
+                          "max_pending_entry_orders": 41},
+        }
+        loosening = json.loads(json.dumps(valid))
+        loosening["loss_tiers"][1]["max_pending_entry_orders"] = 31
+        cases["loss tier increases"] = loosening
+        duplicate = json.loads(json.dumps(valid))
+        duplicate["loss_tiers"][1]["hard_fraction"] = "0.50"
+        cases["loss fractions do not increase"] = duplicate
+        seconds = json.loads(json.dumps(valid))
+        seconds["overnight"]["start"] = "00:00:00"
+        cases["clock includes seconds"] = seconds
+        identical = json.loads(json.dumps(valid))
+        identical["overnight"]["end"] = "00:00"
+        cases["clock interval is empty"] = identical
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            for name, document in cases.items():
+                with self.subTest(name=name):
+                    path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaises(EntryOrderPolicyError):
+                        load_entry_order_policy(path)
 
     def test_size_ten_thirty_two_canary_derives_every_breadth_control(self):
         config = self.authorized(

@@ -67,8 +67,8 @@ hard-locked by `CommissioningConfig`:
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
 | emergency HARD stop | `8 × size × slots / 20` on adjusted marked equity; $80 at 20 slots, $96 at 24, $128 at 32; provisional with open inventory |
-| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 40, 70% → 30, 80% → 20, 90% → 10, 95% → 0; never counts position-market orders or reducers |
-| overnight flat-entry orders | midnight through 8:59:59 AM `America/New_York` → maximum 20 pending entries; combines with loss tiers by taking the smaller cap |
+| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 30, 70% → 25, 80% → 20, 90% → 15, 95% → 10; HARD still stops at 100%; never counts position-market orders or reducers |
+| time-scaled flat-entry orders | midnight–8:59:59 AM `America/New_York` → maximum 30 pending entries; 9:00 AM–11:59:59 PM → maximum 40; combines with loss and physical capacity by taking the smallest |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
@@ -83,9 +83,12 @@ the next ET day. Excess owned entry orders are cancelled one at a time from
 the lowest-ranked markets; uncertain creates reserve capacity. Orders in a
 market with an open position, passive reducers, IOC exits and shutdown are
 outside this ceiling.
-Independently, midnight through 8:59:59 AM Eastern has a 20-pending-entry
-ceiling. At 9:00 AM that clock ceiling lifts, but any tighter durable loss tier
-remains. It uses the same exclusions and does not change market ranking.
+Independently, midnight through 8:59:59 AM Eastern has a 30-pending-entry
+ceiling and 9:00 AM through 11:59:59 PM has a 40-order ceiling. A tighter
+durable loss tier remains. The schedule and loss tiers load from the strict
+restart-scoped `config/entry_order_policy.json`; each value also clamps to two
+orders per configured slot. It uses the same exclusions and does not change
+market ranking.
 With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop. Realized session P&L,
 per-market realized P&L, taker-exit count and taker fees remain reporting

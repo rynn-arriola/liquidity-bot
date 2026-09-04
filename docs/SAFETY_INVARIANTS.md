@@ -752,7 +752,7 @@ These are implementation requirements, not suggestions.
     authority.
 96. Loss-scaled order capacity is a new-risk ceiling driven only by the same
     complete adjusted ET-day marked-equity evidence as HARD. At 50%, 70%, 80%,
-    90% and 95% HARD utilization, no more than 40, 30, 20, 10 and zero
+    90% and 95% HARD utilization, no more than 30, 25, 20, 15 and 10
     flat-market entry orders respectively may be working or unresolved. The
     tightest tier reached is durable for that ET date and cannot loosen after a
     mark recovery or process restart; only the following ET day restores full
@@ -763,12 +763,17 @@ These are implementation requirements, not suggestions.
     Any nonzero position excludes that market's orders from the count, and
     passive reducers, IOC exits, recovery and shutdown must never be blocked,
     cancelled or counted by this ceiling. It adds no venue read or stream and
-    does not replace exposure, stressed-exit, buying-power or HARD enforcement.
-97. A separate deterministic clock ceiling permits no more than 20 working or
+    does not replace exposure, stressed-exit, buying-power or HARD enforcement;
+    HARD at 100% remains the sole loss stop.
+97. A separate deterministic clock ceiling permits no more than 30 working or
     unresolved flat-market entry orders from 00:00 inclusive through 09:00
-    exclusive `America/New_York`, including DST. The effective ceiling is the
-    smaller of 20 and the current durable loss-scaled ceiling. Reaching 09:00
-    removes only the clock ceiling and cannot reset or widen the loss ratchet.
+    exclusive `America/New_York`, including DST, and no more than 40 during the
+    rest of the ET day. The effective ceiling is the smallest of the clock
+    band, current durable loss-scaled ceiling and two orders per configured
+    slot. Reaching 09:00 changes only the clock band and cannot reset or widen
+    the loss ratchet. The schedule and loss tiers load once at startup from a
+    strictly validated policy; an unreadable or invalid policy refuses before
+    credentials, database or venue access and cannot hot-reload.
     It uses invariant 96's reservations, ownership proof, one-cancel driver,
     ranking/pair preservation and mutation-boundary recheck. Nonzero-position
     markets, reducers, IOC exits, recovery and shutdown remain excluded.

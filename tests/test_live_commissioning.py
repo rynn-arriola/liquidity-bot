@@ -441,6 +441,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         reward_selector=None,
         ledger=None,
         client=None,
+        max_markets=20,
     ):
         # `ledger` and `client` let a test build a SECOND runner over the state
         # a previous one left behind -- which is what a restart actually is,
@@ -460,6 +461,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             maker_lab_stopped_confirmed=True,
             arm_live=True,
             auto_select_reward_markets=auto,
+            max_markets=max_markets,
         )
         runner = CommissioningRunner(
             client, config, ledger, notifier,
@@ -527,14 +529,14 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             guard.starting_equity - Decimal("28"), observed_at=NOW)
         runner._refresh_loss_entry_order_cap(NOW)
 
-        self.assertEqual(runner._loss_entry_order_cap, 30)
+        self.assertEqual(runner._loss_entry_order_cap, 25)
         await runner._announce_loss_entry_order_cap()
-        self.assertIn("reduced from 40 to 30", notifier.messages[-1][0])
+        self.assertIn("reduced from 40 to 25", notifier.messages[-1][0])
         guard.observe_equity(
             guard.starting_equity - Decimal("1"),
             observed_at=NOW + timedelta(minutes=1))
         runner._refresh_loss_entry_order_cap(NOW + timedelta(minutes=1))
-        self.assertEqual(runner._loss_entry_order_cap, 30)
+        self.assertEqual(runner._loss_entry_order_cap, 25)
 
         tomorrow = NOW + timedelta(days=1)
         runner._baseline_day = date.fromisoformat(risk_day(tomorrow))
@@ -543,7 +545,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._refresh_loss_entry_order_cap(tomorrow)
         self.assertEqual(runner._loss_entry_order_cap, 40)
         await runner._announce_loss_entry_order_cap()
-        self.assertIn("reset from 30 to 40", notifier.messages[-1][0])
+        self.assertIn("reset from 25 to 40", notifier.messages[-1][0])
 
     async def test_loss_entry_cap_restart_inherits_tightest_same_day_tier(self):
         runner, _, notifier = self.build_runner()
@@ -565,11 +567,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             2026, 8, 13, 12, 59, 59, tzinfo=timezone.utc)
         at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
 
-        runner._loss_entry_order_cap = 30
-        self.assertEqual(runner._effective_entry_order_cap(NOW), 20)
+        runner._loss_entry_order_cap = 35
+        self.assertEqual(runner._effective_entry_order_cap(NOW), 30)
         self.assertEqual(
-            runner._effective_entry_order_cap(before_nine), 20)
-        self.assertEqual(runner._effective_entry_order_cap(at_nine), 30)
+            runner._effective_entry_order_cap(before_nine), 30)
+        self.assertEqual(runner._effective_entry_order_cap(at_nine), 35)
 
         runner._loss_entry_order_cap = 10
         self.assertEqual(runner._effective_entry_order_cap(NOW), 10)
@@ -578,19 +580,21 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_overnight_cap_transition_notifies_without_resetting_loss(self):
         runner, _, notifier = self.build_runner()
         await runner.preflight()
-        runner._loss_entry_order_cap = 30
+        runner._loss_entry_order_cap = 25
 
         self.assertTrue(runner._overnight_entry_order_cap_active)
         await runner._announce_overnight_entry_order_cap()
-        self.assertIn("limited to 20", notifier.messages[-1][0])
+        self.assertIn("limited to 30", notifier.messages[-1][0])
 
         at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
         runner._refresh_overnight_entry_order_cap(at_nine)
         self.assertFalse(runner._overnight_entry_order_cap_active)
-        self.assertEqual(runner._loss_entry_order_cap, 30)
+        self.assertEqual(runner._loss_entry_order_cap, 25)
         await runner._announce_overnight_entry_order_cap()
         self.assertIn(
-            "remaining loss-based cap is 30", notifier.messages[-1][0])
+            "daytime cap is 40", notifier.messages[-1][0])
+        self.assertIn(
+            "effective cap is 25", notifier.messages[-1][0])
 
     async def test_overnight_cap_wakes_scheduler_at_nine_am_eastern(self):
         runner, _, _ = self.build_runner()
@@ -609,7 +613,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner, _, _ = self.build_runner()
         await runner.preflight()
         runner._evaluate_rewards(NOW)
-        for index in range(21):
+        for index in range(31):
             self.seed_working_order(
                 runner,
                 slug="market-one",
@@ -627,6 +631,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
         self.assertEqual(
             runner._loss_cap_overflow_order_ids(at_nine), frozenset())
+
+    async def test_daytime_cap_cancels_only_order_above_forty(self):
+        runner, _, _ = self.build_runner(max_markets=32)
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        at_nine = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+        for index in range(41):
+            self.seed_working_order(
+                runner,
+                slug="market-one",
+                side="bid" if index % 2 == 0 else "offer",
+                suffix=f"daytime-{index}",
+            )
+
+        overflow = runner._loss_cap_overflow_order_ids(at_nine)
+        self.assertEqual(len(overflow), 1)
+        frame = replace(runner._frame(NOW), now=at_nine)
+        action = runner._loss_cap_cancel_action(frame)
+        self.assertIsNotNone(action)
+        self.assertEqual(action.kind, ActionKind.CANCEL)
+        self.assertEqual(action.reason, "daytime_entry_order_cap")
 
     async def test_loss_entry_cap_cancels_lower_value_order_one_at_a_time(self):
         runner, _, _ = self.build_runner()
@@ -10373,6 +10398,32 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(CommissioningRefused, "arming"):
                 await _run(args)
         load.assert_not_called()
+
+    async def test_cli_refuses_bad_entry_policy_before_loading_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "entry-orders.json"
+            policy_path.write_text("not-json", encoding="utf-8")
+            args = Namespace(
+                market_slug="market-one",
+                accept_one_contract_risk=True,
+                exclusive_api_key=True,
+                maker_lab_stopped=True,
+                arm_live=True,
+                quote_size=5,
+                max_markets=20,
+                entry_order_policy=policy_path,
+                lock_file=Path("unused.lock"),
+                database=Path("unused.db"),
+            )
+            with patch(
+                "liquidity_bot.live_commissioning.load_runtime_secrets"
+            ) as load:
+                with self.assertRaisesRegex(
+                    CommissioningRefused,
+                    "entry-order policy could not be read",
+                ):
+                    await _run(args)
+            load.assert_not_called()
 
 
 if __name__ == "__main__":

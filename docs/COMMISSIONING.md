@@ -65,17 +65,21 @@ strategy is profitable and not permission to scale.
   are subtracted from the adjusted mark; the bounded cash-only snapshot must
   be current and proven or risk freshness expires and new risk fails closed;
 - use that same adjusted ET-day marked loss to ratchet the account-wide
-  flat-entry order ceiling: 40 at 50% of HARD, 30 at 70%, 20 at 80%, 10 at
-  90%, and exit-only (zero new entry orders) at 95%. The tightest reached tier
+  flat-entry order ceiling: 30 at 50% of HARD, 25 at 70%, 20 at 80%, 15 at
+  90%, and 10 at 95%. HARD at 100% remains the sole loss stop. The tightest reached tier
   survives restart and cannot loosen until the next ET day. Unresolved creates
   reserve capacity; excess owned entries drain one cancellation at a time from
   the lowest-ranked markets. Position-market orders, reducers, IOC exits and
   shutdown never consume or obey this entry ceiling;
-- independently cap pending flat-market entries at 20 from 00:00 inclusive to
-  09:00 exclusive `America/New_York`. Combine it with the durable loss tier by
-  taking the smaller cap. At 09:00 only the clock cap lifts; it never resets a
-  loss tier or changes selection priority. Position markets, reducers, IOC
-  exits, recovery and shutdown retain the same exclusions;
+- independently cap pending flat-market entries at 30 from 00:00 inclusive to
+  09:00 exclusive `America/New_York` and 40 during the rest of the ET day.
+  Combine that clock band with the durable loss tier and physical two-orders-
+  per-slot capacity by taking the smallest cap. At 09:00 only the clock band
+  changes; it never resets a loss tier or changes selection priority. These
+  values load from strict restart-scoped `config/entry_order_policy.json`;
+  malformed or loosening-shaped configuration refuses before credentials or
+  venue access. Position markets, reducers, IOC exits, recovery and shutdown
+  retain the same exclusions;
 - run until an operator stop or terminal safety/loss condition, then remain
   alive until every owned order is terminal and the exact position is flat;
 - one shared REST governor capped at 4 requests/second; live books and account

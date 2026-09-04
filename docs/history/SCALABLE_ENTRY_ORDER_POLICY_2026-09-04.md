@@ -130,3 +130,30 @@ completed 144 attempts and two mutations with zero failures, zero 429s, zero
 cooldown and maximum queue depth one. This accepts loaded overnight enforcement
 and recovery interaction. The 09:00 band change and later loss tiers remain
 natural acceptance paths; do not induce a loss or fill to exercise them.
+
+## September 4 false-cap repair
+
+A later deployment accidentally invoked the bare launcher once, which defaults
+to 20 slots. It ran from 20:52:51Z to 20:53:54Z and temporarily scaled HARD to
+$80. At 20:53:44Z, marked loss `$44.6506 / $80 = 55.81%` falsely crossed the
+50% tier and durably wrote a 30-order cap. Under the intended 32-slot `$128`
+HARD, the same mark was only 34.88%; a later consistent account snapshot put
+the current marked loss at 21.65% after non-trading cash.
+
+The operator authorized repair and restart. Runner `3232232` stopped with
+terminal `flat=true`; authenticated reads proved zero venue orders/positions
+and the ledger proved zero unresolved/unknown ownership. Before mutation,
+SQLite online backup
+`data/repair-backups/commissioning-20260904T221510Z-before-false-cap.db`
+passed integrity and retained the exact row; its SHA-256 is
+`668efb68e397ed8a5157cd5ca58d5a879600fe90bcd479497520a64b70b6fec7`.
+An exact all-field transaction deleted one row only, and the live database
+passed `quick_check` with no September 4 cap row.
+
+Repeated flat/order-free/known-ownership gates then passed. Supervisor
+`3272085` and runner `3272094` restarted explicitly at size 10 / 32. The
+official maintenance feed remained healthy, the first 129-second API window
+had 247 attempts with zero failures/429s/cooldown, and the cap row remained
+absent. Authenticated orders reached 37 across 20 markets with zero positions,
+proving the effective daytime ceiling was no longer 30; a preceding exact
+ledger sample had zero unresolved intents and zero `UNKNOWN_ABSENT` rows.

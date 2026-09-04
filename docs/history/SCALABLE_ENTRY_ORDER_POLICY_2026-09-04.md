@@ -96,6 +96,37 @@ environment.
 
 ## Deployment and live acceptance
 
-Pending the authorized exact-commit push/deploy/restart workflow. Any failed
-parity, full native checkout suite, repeated flat gate, startup or live cap
-proof leaves the bot stopped.
+Reviewed commit `09a273e0fb1a2d284e080f504989366881000e1d` was pushed before
+deployment. The WSL checkout fast-forwarded to that exact commit from a
+verified Git bundle, then passed all 1,102 tests in 78.365 seconds under its
+native virtual environment. `DEPLOYED_COMMIT` was set to the same hash with
+mode 600 and the changed config/runtime worktree blob hashes matched HEAD.
+
+A repeated authenticated start gate at `04:05:47.515078Z` again proved zero
+open orders and zero nonzero positions. The stopped ledger independently held
+zero working orders, unresolved intents, `UNKNOWN_ABSENT` rows and nonzero
+positions. Persisted size 10 / 32 then started supervisor `2986050` and runner
+`2986058`.
+
+The first bounded selector scan used two of ten event pages and found 49 viable
+markets. At `04:07:35.954478Z` the loaded runner printed
+`time_cap=30 loss_cap=64 effective=30`; it then placed exactly 30 initial
+entries. An authenticated `04:08:33Z` snapshot proved 30 open orders and zero
+positions, with zero unresolved/unknown ledger state after confirmations.
+
+A market WebSocket disconnected at `04:09:36Z`. The unchanged safety path
+canceled the 30 quotes made from the old book, reconnected to a fresh book and
+rebuilt them. The temporary low order count the operator saw was this safe
+rebuild, not a two-order cap. One rebuilt entry filled; the runner submitted a
+passive reducer and returned the account to flat. At `04:14:50.332461Z`, a
+final authenticated snapshot proved exactly 30 open orders across 27 markets
+and zero nonzero positions. The ledger matched with 30 working orders, zero
+unresolved intents, zero `UNKNOWN_ABSENT` rows and zero positions.
+
+The first startup window completed 386 attempts and 34 mutations with zero
+failures/429s/cooldown. The recovery interval recorded one venue timeout while
+canceling and rebuilding. The following clean 78.1-second post-recovery window
+completed 144 attempts and two mutations with zero failures, zero 429s, zero
+cooldown and maximum queue depth one. This accepts loaded overnight enforcement
+and recovery interaction. The 09:00 band change and later loss tiers remain
+natural acceptance paths; do not induce a loss or fill to exercise them.

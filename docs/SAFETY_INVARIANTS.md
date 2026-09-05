@@ -785,11 +785,19 @@ These are implementation requirements, not suggestions.
     orders become undesired and every exact bot-owned position enters the
     existing sequential cancel-confirm and bounded exact-position IOC path;
     ownership, ambiguity, displayed-depth and mutation-intent rules remain
-    unchanged. A missing feed item is not completion, `started_at` is not an
-    execution clock, and an unknown observation cannot clear a hold. New risk
-    remains blocked through maintenance and until one hour after the later of
-    `scheduled_until` or the first official completed update, followed by three
-    complete authenticated order/position/balance reads. Normal stream,
-    reconciliation, UI-participation and account-risk gates must still pass.
+    unchanged. Absence alone is not completion, `started_at` is not an
+    execution clock, and an unknown observation cannot clear a hold. A cached
+    exact row may be classified locally as `record_absent_after_end` only once
+    `scheduled_until` has passed, its exact endpoint returns 404 and a complete
+    history read succeeds without the ID; ordinary polls must also complete
+    both current-list reads. Before the planned end, or after any non-404,
+    failed or malformed read, the state remains unknown. This classification
+    does not claim official completion: it uses `scheduled_until` as the
+    boundary, while any later official completed update replaces it and extends
+    the hold. New risk remains blocked through maintenance and until one hour
+    after the later of that boundary or the first official completed update,
+    followed by three complete authenticated order/position/balance reads.
+    Normal stream, reconciliation, UI-participation and account-risk gates
+    must still pass.
     The process stays alive, operator stop remains prompt, and no schedule,
     cache, public status or health read may prove cancellation or flatness.

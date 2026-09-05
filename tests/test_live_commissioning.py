@@ -60,6 +60,7 @@ from liquidity_bot.maintenance_schedule import (
     MaintenancePhase,
     MaintenanceScheduleProbe,
     MaintenanceWindow,
+    STATUSPAGE_RECORD_ABSENT_AFTER_END,
 )
 from liquidity_bot.market_state import MarketState, RetiredMarket
 from liquidity_bot.models import (
@@ -1002,6 +1003,47 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(
                 runner._maintenance_schedule_task,
                 return_exceptions=True)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_startup_deleted_window_still_runs_resume_health_gate(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        ended = NOW - timedelta(hours=2)
+        scheduled = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance", "scheduled",
+            NOW - timedelta(hours=6), ended, NOW - timedelta(hours=6))
+        absent = MaintenanceWindow(
+            "scheduled-one", "Production Maintenance",
+            STATUSPAGE_RECORD_ABSENT_AFTER_END,
+            scheduled.scheduled_for, scheduled.scheduled_until,
+            scheduled.updated_at, ended)
+        runner._maintenance_windows = (scheduled,)
+        runner._maintenance_decision = MaintenanceDecision(
+            MaintenancePhase.NORMAL)
+        runner._maintenance_health_required_for = None
+        runner._maintenance_schedule_probe = (
+            lambda _known, *, include_history, now:
+            MaintenanceScheduleProbe(
+                MaintenanceFeedState.HEALTHY, (absent,),
+                "official_statuspage", now))
+        runner.account.fetch_open_orders = AsyncMock(
+            wraps=runner.account.fetch_open_orders)
+        runner.account.fetch_positions = AsyncMock(
+            wraps=runner.account.fetch_positions)
+        runner.account.fetch_balance = AsyncMock(
+            wraps=runner.account.fetch_balance)
+
+        await runner._refresh_maintenance_schedule(NOW, startup=True)
+
+        self.assertIsNone(runner._maintenance_health_required_for)
+        self.assertFalse(runner._scheduled_maintenance_pause_active())
+        self.assertEqual(runner.account.fetch_open_orders.await_count, 3)
+        self.assertEqual(runner.account.fetch_positions.await_count, 3)
+        self.assertEqual(runner.account.fetch_balance.await_count, 3)
+        self.assertTrue(any(
+            "maintenance health gate passed" in message
+            for message, _critical in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
 

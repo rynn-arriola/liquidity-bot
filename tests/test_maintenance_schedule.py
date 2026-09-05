@@ -6,11 +6,13 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from liquidity_bot.maintenance_schedule import (
     MAINTENANCE_ACTIVE_URL,
     MAINTENANCE_HISTORY_URL,
     MAINTENANCE_UPCOMING_URL,
+    STATUSPAGE_RECORD_ABSENT_AFTER_END,
     MaintenanceFeedState,
     MaintenancePhase,
     MaintenanceWindow,
@@ -127,6 +129,145 @@ class MaintenanceScheduleTests(unittest.TestCase):
         self.assertEqual(result.windows[0].completed_at, completed_at)
         self.assertEqual(read.call_count, 3)
 
+    def test_deleted_known_window_after_end_uses_planned_end_and_hold(self):
+        detail_url = (
+            "https://status.polymarketexchange.com/api/v2/"
+            "scheduled-maintenances/maintenance-one.json")
+
+        def response(url):
+            if url in {MAINTENANCE_UPCOMING_URL, MAINTENANCE_ACTIVE_URL}:
+                return {"scheduled_maintenances": []}
+            if url == detail_url:
+                error = HTTPError(url, 404, "not found", {}, None)
+                error.close()
+                raise error
+            if url == MAINTENANCE_HISTORY_URL:
+                return {"scheduled_maintenances": []}
+            raise AssertionError(url)
+
+        with patch(
+                "liquidity_bot.maintenance_schedule._read_json",
+                side_effect=response) as read:
+            result = probe_polymarket_us_maintenance_schedule(
+                (window(),), now=END + timedelta(hours=2))
+
+        self.assertEqual(result.state, MaintenanceFeedState.HEALTHY)
+        self.assertEqual(
+            result.windows[0].status,
+            STATUSPAGE_RECORD_ABSENT_AFTER_END)
+        self.assertEqual(result.windows[0].completed_at, END)
+        self.assertEqual(
+            result.windows[0].resume_at, END + timedelta(hours=1))
+        self.assertEqual(read.call_count, 4)
+
+    def test_deleted_known_window_before_end_remains_unknown(self):
+        detail_url = (
+            "https://status.polymarketexchange.com/api/v2/"
+            "scheduled-maintenances/maintenance-one.json")
+
+        def response(url):
+            if url in {MAINTENANCE_UPCOMING_URL, MAINTENANCE_ACTIVE_URL}:
+                return {"scheduled_maintenances": []}
+            if url == detail_url:
+                error = HTTPError(url, 404, "not found", {}, None)
+                error.close()
+                raise error
+            if url == MAINTENANCE_HISTORY_URL:
+                return {"scheduled_maintenances": []}
+            raise AssertionError(url)
+
+        with patch(
+                "liquidity_bot.maintenance_schedule._read_json",
+                side_effect=response):
+            result = probe_polymarket_us_maintenance_schedule(
+                (window(),), now=END - timedelta(seconds=1))
+
+        self.assertEqual(result.state, MaintenanceFeedState.UNKNOWN)
+        self.assertEqual(result.windows, (window(),))
+
+    def test_missing_detail_non_404_remains_unknown(self):
+        detail_url = (
+            "https://status.polymarketexchange.com/api/v2/"
+            "scheduled-maintenances/maintenance-one.json")
+
+        def response(url):
+            if url in {MAINTENANCE_UPCOMING_URL, MAINTENANCE_ACTIVE_URL}:
+                return {"scheduled_maintenances": []}
+            if url == detail_url:
+                error = HTTPError(url, 500, "server error", {}, None)
+                error.close()
+                raise error
+            raise AssertionError(url)
+
+        with patch(
+                "liquidity_bot.maintenance_schedule._read_json",
+                side_effect=response) as read:
+            result = probe_polymarket_us_maintenance_schedule(
+                (window(),), now=END + timedelta(hours=2))
+
+        self.assertEqual(result.state, MaintenanceFeedState.UNKNOWN)
+        self.assertEqual(result.windows, (window(),))
+        self.assertEqual(read.call_count, 3)
+
+    def test_deleted_detail_prefers_official_completed_history(self):
+        detail_url = (
+            "https://status.polymarketexchange.com/api/v2/"
+            "scheduled-maintenances/maintenance-one.json")
+        completed_at = END + timedelta(minutes=20)
+
+        def response(url):
+            if url in {MAINTENANCE_UPCOMING_URL, MAINTENANCE_ACTIVE_URL}:
+                return {"scheduled_maintenances": []}
+            if url == detail_url:
+                error = HTTPError(url, 404, "not found", {}, None)
+                error.close()
+                raise error
+            if url == MAINTENANCE_HISTORY_URL:
+                return {"scheduled_maintenances": [production_row(
+                    status="completed", completed_at=completed_at)]}
+            raise AssertionError(url)
+
+        with patch(
+                "liquidity_bot.maintenance_schedule._read_json",
+                side_effect=response):
+            result = probe_polymarket_us_maintenance_schedule(
+                (window(),), now=END + timedelta(hours=2))
+
+        self.assertEqual(result.state, MaintenanceFeedState.HEALTHY)
+        self.assertEqual(result.windows[0].status, "completed")
+        self.assertEqual(result.windows[0].completed_at, completed_at)
+        self.assertEqual(
+            result.windows[0].resume_at,
+            completed_at + timedelta(hours=1))
+
+    def test_startup_history_preserves_deleted_post_end_window(self):
+        detail_url = (
+            "https://status.polymarketexchange.com/api/v2/"
+            "scheduled-maintenances/maintenance-one.json")
+
+        def response(url):
+            if url == MAINTENANCE_HISTORY_URL:
+                return {"scheduled_maintenances": []}
+            if url == detail_url:
+                error = HTTPError(url, 404, "not found", {}, None)
+                error.close()
+                raise error
+            raise AssertionError(url)
+
+        with patch(
+                "liquidity_bot.maintenance_schedule._read_json",
+                side_effect=response) as read:
+            result = probe_polymarket_us_maintenance_schedule(
+                (window(),), include_history=True,
+                now=END + timedelta(hours=2))
+
+        self.assertEqual(result.state, MaintenanceFeedState.HEALTHY)
+        self.assertEqual(
+            result.windows[0].status,
+            STATUSPAGE_RECORD_ABSENT_AFTER_END)
+        self.assertEqual(result.windows[0].completed_at, END)
+        self.assertEqual(read.call_count, 2)
+
     def test_probe_failure_preserves_known_window_as_unknown(self):
         known = window()
         with patch(
@@ -153,10 +294,11 @@ class MaintenanceScheduleTests(unittest.TestCase):
     def test_cache_round_trip_and_malformed_cache_fail_closed_to_empty(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "schedule.json"
-            complete = window(
-                status="completed", completed_at=END + timedelta(minutes=2))
-            write_maintenance_cache((complete,), END, path)
-            self.assertEqual(load_maintenance_cache(path), (complete,))
+            absent = window(
+                status=STATUSPAGE_RECORD_ABSENT_AFTER_END,
+                completed_at=END)
+            write_maintenance_cache((absent,), END, path)
+            self.assertEqual(load_maintenance_cache(path), (absent,))
 
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
             self.assertEqual(load_maintenance_cache(path), ())

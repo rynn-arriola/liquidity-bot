@@ -56,5 +56,22 @@ The operator authorized repair and restart. Supervisor `3272085` and runner
 `3272094` stopped gracefully. The terminal record reported `flat=true` and an
 independent authenticated snapshot proved zero open orders and zero positions;
 the ledger also had zero working-order rows, zero nonzero-position rows and
-zero unresolved or unknown ownership. Deployment, server-suite, fresh start-gate and live
-acceptance evidence are appended once complete.
+zero unresolved or unknown ownership.
+
+Commit `4654479c198d67e008877a9b6ce2b2ec2f562a38` was pushed and fast-forwarded
+into the exact WSL production checkout. Changed source and test hashes matched
+the review tree, `DEPLOYED_COMMIT` was updated with mode 600 intact, and all
+1,121 tests passed under the production POSIX runtime.
+
+Fresh authenticated pre-start evidence at 12:47:05Z again proved zero open
+orders and zero positions; the ledger proved zero working, unknown, unresolved
+or nonzero-position rows. The explicit `auto 10 32` restart launched supervisor
+`3797873` and runner `3797883`. Startup recognized the deleted row only through
+the reviewed `record_absent_after_end` state and performed authenticated health
+cycles 1/3, 2/3 and 3/3 before reporting `phase=NORMAL` and creating any entry.
+
+Authenticated acceptance at 12:52:33Z found 29 open orders across 29 markets
+and zero positions. A later exact ledger sample found 30 working orders with
+zero `UNKNOWN_ABSENT`, unresolved-intent or nonzero-position rows. The first
+316.7-second API-budget window completed 411 attempts, including 34 mutations,
+with zero failures, rate limits or cooldown; queue depth never exceeded one.

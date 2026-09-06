@@ -43,6 +43,7 @@ from liquidity_bot.live_commissioning import (
     RUN_LOOP_COOPERATIVE_YIELD_SECONDS,
     CommissioningResult,
     CommissioningRunner,
+    _CancellationEvidencePending,
     _run,
     main,
 )
@@ -3659,6 +3660,51 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             for order_id, _payload in client.orders.cancel_calls))
         self.assertFalse(runner.ledger.working_orders("market-two"))
 
+    async def test_global_quarantine_waits_instead_of_failing_on_unconfirmed_cancel(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        runner._bind_markets(("market-one",))
+        runner.ledger.apply_order_event(
+            "ws", "open-through-cancel",
+            OrderState(
+                client_order_id="known-client",
+                exchange_order_id="known-order",
+                market_slug="market-one",
+                side="ORDER_SIDE_BUY",
+                price=Decimal("0.49"),
+                original_qty=Decimal("5"),
+                filled_qty=Decimal("0"),
+                status="OPEN",
+                event_at=NOW,
+            ),
+            received_at=NOW,
+        )
+        client.orders.rows["known-order"] = {
+            "id": "known-order",
+            "clientOrderId": "known-client",
+            "marketSlug": "market-one",
+            "side": "ORDER_SIDE_BUY",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": "5",
+            "cumQuantity": "0",
+            "state": "ORDER_STATE_NEW",
+            "createTime": NOW.isoformat(),
+        }
+
+        async def acknowledge_without_terminal(order_id, payload):
+            client.orders.cancel_calls.append((order_id, payload))
+
+        client.orders.cancel = acknowledge_without_terminal
+
+        with self.assertRaises(_CancellationEvidencePending):
+            await runner._quarantine_working_orders()
+
+        self.assertGreaterEqual(len(client.orders.cancel_calls), 1)
+        self.assertTrue(runner.ledger.working_orders("market-one"))
+        self.assertTrue(all(
+            str(row["operation"]).upper() == "CANCEL"
+            for row in runner.ledger.unresolved_intents("market-one")))
+
     async def test_unresolved_background_reconcile_rotates_bounded_owner_batches(self):
         runner, _, _ = self.build_runner()
         rows = [
@@ -4639,6 +4685,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [dict(row) for row in runner.ledger.unresolved_intents()], [],
             "the venue's terminal state must clear the stuck cancel")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_an_acknowledged_cancel_still_open_is_re_issued(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._uncertain_cancel(
+            runner, client, venue_state="ORDER_STATE_NEW")
+        with runner.ledger.connection:
+            runner.ledger.connection.execute(
+                "UPDATE execution_intents SET state='ACKNOWLEDGED' "
+                "WHERE intent_id='cancel-stuck'")
+        before = len(client.orders.cancel_calls)
+
+        await runner._retry_uncertain_cancels(runner._now())
+
+        self.assertTrue(any(
+            "exchange-stuck" in str(call)
+            for call in client.orders.cancel_calls[before:]))
+        self.assertTrue(runner.ledger.unresolved_intents())
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7961,6 +8028,46 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             runner._runtime_error_counts.get(
                 "market_stream_orphan_place_evidence", 0),
             1,
+        )
+        self.assertNotEqual(
+            runner._runtime_error_counts.get("market_stream"),
+            MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
+        )
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_market_recovery_waits_for_terminal_cancel_proof_without_exhausting(self):
+        current = [NOW]
+
+        async def advance(seconds):
+            current[0] += timedelta(seconds=seconds)
+
+        class RecoveringMarketStream(FakeMarketStream):
+            async def next_book(self, *, timeout=None):
+                return fake_selection("market-one").selected.book
+
+        runner, client, _ = self.build_runner(clock=lambda: current[0])
+        runner.sleep = advance
+        await runner.preflight()
+        runner.market_stream_factory = RecoveringMarketStream
+        runner._quarantine_working_orders = AsyncMock(side_effect=[
+            _CancellationEvidencePending(
+                "runtime recovery is waiting for terminal cancel proof"),
+            _CancellationEvidencePending(
+                "runtime recovery is waiting for terminal cancel proof"),
+            None,
+        ])
+
+        stop = await runner._recover_market_stream(
+            AdapterError("market WebSocket disconnected"))
+
+        self.assertIsNone(stop)
+        self.assertEqual(runner._quarantine_working_orders.await_count, 3)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertGreaterEqual(
+            runner._runtime_error_counts.get(
+                "market_stream_cancel_evidence", 0),
+            2,
         )
         self.assertNotEqual(
             runner._runtime_error_counts.get("market_stream"),

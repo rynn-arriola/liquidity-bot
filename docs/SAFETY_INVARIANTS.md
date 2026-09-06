@@ -52,8 +52,11 @@ These are implementation requirements, not suggestions.
 16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its stressed-exit and slippage budgets.
 17. A WebSocket reconnect has no replay guarantee: new risk remains disabled
     until REST reconciliation and complete, fresh private snapshots succeed.
-18. A create or cancel with an ambiguous response is never retried. Its market
-    is quarantined until the venue state proves the outcome.
+18. A create with an ambiguous response is never retried. An ambiguous or
+    acknowledged cancel may be re-issued only after a later authoritative
+    `OPEN` read proves terminal cancellation has not happened; unknown or
+    absent state never licenses a retry. Its market remains quarantined until
+    the venue proves the outcome.
 19. Rounded legacy position fields are not sufficient for risk. Exact
     `netPositionDecimal` state is required.
 20. A clean HTTP cancel acknowledgement is not terminal proof. A fill may win
@@ -67,8 +70,9 @@ These are implementation requirements, not suggestions.
     exchange-state failures use the error webhook and must not block the market
     or private WebSocket event loop.
 24. Commissioning runs until operator stop or a terminal safety/loss condition.
-    Recoverable adapter failures keep the process alive with new risk disabled;
-    quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
+    Recoverable adapter failures and pending terminal cancel proof keep the
+    process alive with new risk disabled; the latter does not consume a stream
+    reconnect budget. Quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
 25. The sole money-loss authority is the **8 × size × slots / 20** adjusted

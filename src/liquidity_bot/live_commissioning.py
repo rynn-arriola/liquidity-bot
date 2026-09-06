@@ -199,6 +199,10 @@ ORPHAN_PLACE_CLEAR_MIN_SECONDS = 10.0
 class _OrphanPlaceEvidencePending(CommissioningUnavailable):
     """A no-id PLACE remains dormant while repeated venue proof accumulates."""
 
+
+class _CancellationEvidencePending(CommissioningUnavailable):
+    """A requested cancel still lacks authoritative terminal order proof."""
+
 # The ordinary read gateway already retries a confirmed 429 three times. A
 # Cloudflare 1015 can outlive those short retries, and immediately converting
 # that temporary read throttle into global quarantine erased 34 healthy orders
@@ -2167,11 +2171,12 @@ class CommissioningRunner:
     ) -> None:
         """Re-issue a cancel the venue has just confirmed did not land.
 
-        `cancel` moves its intent to `UNCERTAIN` when the request fails, and a
-        CANCEL intent resolves only on a terminal order state -- correctly,
-        since an accepted HTTP response is not cancellation confirmation. But
-        nothing ever re-sent the request, so a cancel that failed stayed failed
-        and its intent stayed unresolved for the rest of the session.
+        `cancel` moves its intent to `UNCERTAIN` when the request fails and to
+        `ACKNOWLEDGED` when the request returns, while either CANCEL intent
+        resolves only on a terminal order state -- correctly, since even an
+        accepted HTTP response is not cancellation confirmation. Re-issue
+        either form only after a later positive OPEN read proves that terminal
+        cancellation still has not happened.
 
         Measured 2026-08-18T15:16:52Z: `POST /v1/order/BYRYM21VADK0/cancel`
         returned InternalServerError, the venue answered `OPEN` for the next
@@ -2196,7 +2201,8 @@ class CommissioningRunner:
         for row in self.ledger.unresolved_intents():
             if str(row["operation"]).upper() != "CANCEL":
                 continue
-            if str(row["state"]).upper() != "UNCERTAIN":
+            if str(row["state"]).upper() not in {
+                    "ACKNOWLEDGED", "UNCERTAIN"}:
                 continue
             exchange_id = str(row["exchange_order_id"] or "")
             if not exchange_id:
@@ -6640,6 +6646,12 @@ class CommissioningRunner:
                     f"proof for a no-id PLACE in {market}")
             if unresolved:
                 operation = str(unresolved[0]["operation"]).upper()
+                if all(
+                        str(row["operation"]).upper() == "CANCEL"
+                        for row in unresolved):
+                    raise _CancellationEvidencePending(
+                        "runtime recovery is waiting for terminal cancel "
+                        f"proof in {market}")
                 raise AdapterError(
                     "runtime recovery "
                     f"{operation.lower()} is not yet reconciled in {market}")
@@ -7771,6 +7783,29 @@ class CommissioningRunner:
                     return stop
                 await self.sleep(self._recovery_delay(
                     "market_stream_orphan_place_evidence",
+                    base=5.0,
+                    cap=60.0,
+                ))
+            except _CancellationEvidencePending as pending:
+                # During a Retail maintenance episode the cancel endpoint can
+                # acknowledge a request while later authoritative order reads
+                # still report OPEN.  That is neither permission to resume nor
+                # a failed market-stream reconnect.  Consuming the bounded
+                # reconnect budget here exited the runner non-flat after 12
+                # attempts and abandoned every resting order.  Stay in the
+                # same no-entry recovery loop until a terminal order state (or
+                # an operator/risk stop) arrives; each pass still performs the
+                # existing positive reads and durable cancel retry protocol.
+                exc = pending
+                attempt = 0
+                venue_failure_streak = 0
+                await self._report_runtime_error(
+                    "market_stream_cancel_evidence", pending)
+                stop = self._stop_reason(self._now())
+                if stop:
+                    return stop
+                await self.sleep(self._recovery_delay(
+                    "market_stream_cancel_evidence",
                     base=5.0,
                     cap=60.0,
                 ))

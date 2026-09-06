@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -129,6 +130,16 @@ def _cash_change_sign(
         return -amount
     if any(token in text for token in (
             "reward", "deposit", "apple pay", "credit", "bonus", "referral")):
+        return amount
+    try:
+        structured = json.loads(description)
+    except (json.JSONDecodeError, TypeError):
+        structured = None
+    if (isinstance(structured, dict)
+            and structured.get("v") == 1
+            and str(structured.get("kind") or "").lower() == "remediation"
+            and str(structured.get("action") or "").lower() == "goodwill"
+            and str(structured.get("scope") or "").lower() == "isv"):
         return amount
     raise CashActivityUnavailable(
         f"unclassified completed cash transfer: {description or '(blank)'}")

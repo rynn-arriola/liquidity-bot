@@ -805,3 +805,10 @@ These are implementation requirements, not suggestions.
     must still pass.
     The process stays alive, operator stop remains prompt, and no schedule,
     cache, public status or health read may prove cancellation or flatness.
+99. A completed cash transfer may enter adjusted trading equity as positive
+    non-trading cash only through an already reviewed plain-text class or the
+    exact structured version-1 `kind=remediation`, `action=goodwill`,
+    `scope=isv` shape. That amount is subtracted from account movement and can
+    never buy back loss capacity or mask HARD. A missing, malformed or nearby
+    structured value remains unknown and expires new-risk authority; it may
+    not be guessed from amount, timing or operator interpretation.

@@ -7560,6 +7560,69 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_structured_isv_goodwill_does_not_pause_new_risk(self):
+        """Venue outage remediation is non-trading cash, not trading gain."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        later = NOW + timedelta(seconds=20)
+        runner._now = lambda: later
+        client.account.current_balance = Decimal("200")
+        client.portfolio.cash_activities = [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "100", "currency": "USD"},
+                "description": json.dumps({
+                    "v": 1,
+                    "kind": "remediation",
+                    "event": "sep5_outage",
+                    "action": "goodwill",
+                    "reason": "isv_no_open_position",
+                    "scope": "isv",
+                    "msg": "ISV goodwill for outage no open position",
+                }),
+                "updateTime": later.isoformat(),
+            },
+        }]
+
+        await runner._refresh_balance(later)
+
+        self.assertEqual(runner._nontrading_cash, Decimal("100"))
+        self.assertEqual(runner.risk_guard.current_equity, Decimal("100"))
+        self.assertTrue(runner.risk_guard.can_add_new_risk(now=later))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_structured_non_goodwill_transfer_still_fails_closed(self):
+        """A nearby structured adjustment cannot inherit goodwill authority."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        later = NOW + timedelta(seconds=20)
+        runner._now = lambda: later
+        client.portfolio.cash_activities = [{
+            "type": "ACTIVITY_TYPE_TRANSFER",
+            "accountBalanceChange": {
+                "status": "COMPLETED",
+                "amount": {"value": "100", "currency": "USD"},
+                "description": json.dumps({
+                    "v": 1,
+                    "kind": "remediation",
+                    "action": "adjustment",
+                    "scope": "isv",
+                }),
+                "updateTime": later.isoformat(),
+            },
+        }]
+
+        with self.assertRaisesRegex(AdapterError, "unclassified completed"):
+            await runner._refresh_balance(later)
+
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=later))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_private_recovery_resumes_other_markets_while_cancel_is_ambiguous(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()

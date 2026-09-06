@@ -34,4 +34,8 @@ Regressions prove normal trading mode around the managed owner, exact
 refusal. Empty-book settlement wait and order-only startup recovery retain
 their prior behavior. Disabling the one-position scope reproduced
 `RECOVERY_ONLY`. The complete POSIX review suite passes 1,130 tests.
-Deployment and live acceptance are recorded after completion.
+Commit `99bb436f9bcd3521ed5332b883cdff0693bf07c4` was pushed, deployed
+and loaded. Supervisor `394690` and runner `394699` started at size 10 / 32.
+The old position remained barred and exit-managed while authenticated entry
+orders reached 29 across 29 unrelated markets. The first 202.6-second API
+window completed 445 attempts and 39 mutations with zero failures or 429s.

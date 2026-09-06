@@ -25,6 +25,11 @@ Eight focused tests cover acknowledged retry, unknown refusal, quarantine
 classification, indefinite wait, ordinary bounded reconnect, no-ID recovery
 and risk-stop behavior. Removing the dedicated wait handler made its regression
 fail; restoration passed. The final review tree passed all 1,124 POSIX tests.
-A stopped-safe SQLite backup was created before any recovery mutation. Push,
-deployment, startup recovery, authenticated flat proof and live acceptance are
-recorded after completion.
+A stopped-safe SQLite backup was created before any recovery mutation. Repair
+`78656af9028a2c688619af89673339bf59c09c6f` was pushed, deployed and loaded.
+Startup recovery cleared all 40 old orders and 44 uncertain intents before
+entry. At 00:29:47Z authenticated acceptance found six current orders across
+three markets, zero positions, zero unowned orders and zero unresolved or
+`UNKNOWN_ABSENT` ledger state. Supervisor `109767` and runner `109785` were
+alive, and the first 153.2-second API window had 290 attempts with zero
+failures, rate limits or cooldown.

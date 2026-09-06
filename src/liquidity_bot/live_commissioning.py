@@ -2845,14 +2845,55 @@ class CommissioningRunner:
                     for slug in nonzero)
         )
 
-    async def _add_startup_markets_around_settlement_wait(
+    def _startup_managed_position_is_scoped(
+        self, blockers: tuple[str, ...] | None, now: datetime,
+    ) -> bool:
+        """Allow other slots around one exact post-kickoff recovery owner."""
+
+        if (blockers is not None
+                and set(blockers) != {"shared account has nonzero positions"}):
+            return False
+        nonzero = tuple(
+            str(row["market_slug"])
+            for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions "
+                "WHERE CAST(net_qty AS REAL)!=0"))
+        if len(nonzero) != 1:
+            return False
+        slug = nonzero[0]
+        if (slug not in self._recovery_slugs
+                or slug not in set(self.active_slugs)
+                or slug in self._isolated_unexecutable_slugs()
+                or not self.ledger.risk_state_known()
+                or self.ledger.working_orders()
+                or self.ledger.absent_orders()
+                or self.ledger.unresolved_intents()):
+            return False
+        try:
+            basis = self.ledger.inventory_basis(slug)
+        except Exception:
+            return False
+        if basis is None or basis.net_qty != self.ledger.position(slug):
+            return False
+        state = self.state_for(slug)
+        market = state.market
+        return bool(
+            market is not None
+            and market.game_start is not None
+            and market.game_start <= now
+            and state.book is not None
+            and state.book_observed_at is not None)
+
+    async def _add_startup_markets_around_reserved_position(
         self, now: datetime,
     ) -> None:
         """Use remaining configured slots without delaying risk monitoring."""
 
         if (not self.config.auto_select_reward_markets
                 or self.reward_selector is None
-                or not self._isolated_unexecutable_slugs()):
+                or not (
+                    self._isolated_unexecutable_slugs()
+                    or self._startup_managed_position_is_scoped(None, now))):
             return
         available = self.config.max_markets - len(self.active_slugs)
         if available <= 0:
@@ -2866,7 +2907,7 @@ class CommissioningRunner:
             # ordinary bounded runtime top-up path can retry later.
             self._selection_scan_seconds_last = time.monotonic() - scan_started
             await self._report_runtime_error(
-                "startup_settlement_wait_selection", exc)
+                "startup_reserved_position_selection", exc)
             return
         self._selection_scan_seconds_last = time.monotonic() - scan_started
         self._log_selection_scan(selection)
@@ -3107,12 +3148,14 @@ class CommissioningRunner:
         # reporting set that now outlives the bar it used to imply, and a
         # control decision must not read from it.
         await self._refresh_bound_books(now)
-        if self._isolated_unexecutable_slugs():
-            # A response-backed empty book or exact non-open market has no
-            # legal mutation path. Keep each exact owner isolated, then use
-            # only the remaining configured slots. A failed/no-viable scan
-            # leaves every position monitor alive and is retried later.
-            await self._add_startup_markets_around_settlement_wait(self._now())
+        if (self._isolated_unexecutable_slugs()
+                or self._startup_managed_position_is_scoped(None, self._now())):
+            # One exact recovery owner reserves its slot. Empty/non-open
+            # owners remain mutation-free; a readable post-kickoff owner keeps
+            # the unchanged exit planner. Use only the remaining configured
+            # slots, and never let a failed scan drop position monitoring.
+            await self._add_startup_markets_around_reserved_position(
+                self._now())
             await self._refresh_bound_books(self._now())
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
@@ -3160,11 +3203,18 @@ class CommissioningRunner:
             not report.ready
             and self._startup_settlement_wait_is_scoped(
                 report.blockers, self._now()))
+        managed_position_trade = (
+            not report.ready
+            and not settlement_wait_trade
+            and self._startup_managed_position_is_scoped(
+                report.blockers, self._now()))
         recovery_only = (
             not report.ready
             and not settlement_wait_trade
+            and not managed_position_trade
             and self._startup_recovery_is_scoped(report.blockers))
-        if not report.ready and not recovery_only and not settlement_wait_trade:
+        if (not report.ready and not recovery_only
+                and not settlement_wait_trade and not managed_position_trade):
             raise CommissioningRefused("; ".join(report.blockers))
         # The startup proof can span several paginated REST calls. Start its
         # freshness window when that proof completed, just like periodic
@@ -3227,6 +3277,11 @@ class CommissioningRunner:
                     f"(empty_book={empty_count}, not_open={inactive_count}); "
                     "each reserves one configured slot and its full portfolio "
                     "exposure.")
+        elif managed_position_trade:
+            selection_note += (
+                " One exact post-kickoff recovery position remains barred "
+                "from building and under the unchanged exit manager; it "
+                "reserves one configured slot and its full portfolio exposure.")
         # Built from config, never from literals. This announced "one market,
         # one contract per quote, $5 soft stop, $15 hard stop" long after every
         # one of those had changed -- four wrong facts as the operator's first

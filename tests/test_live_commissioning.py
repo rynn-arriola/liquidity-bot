@@ -6532,6 +6532,22 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         mode = await runner.preflight()
         return runner, client, notifier, selector, original_book, mode
 
+    async def _start_with_managed_recovery_position(self, *, selection=None):
+        selector = FakeRewardSelector(
+            selection or multi_selection("market-two", "market-three"))
+        runner, client, notifier = self.build_runner(
+            auto=True, reward_selector=selector, clock=TickingClock())
+        client.markets.started.add("market-one")
+        client.portfolio.rows["market-one"] = {
+            "netPosition": "1",
+            "netPositionDecimal": "1.0000",
+            "cost": {"value": "0.49", "currency": "USD"},
+            "cashValue": {"value": "0.48", "currency": "USD"},
+            "updateTime": NOW.isoformat(),
+        }
+        mode = await runner.preflight()
+        return runner, client, notifier, selector, mode
+
     async def _start_with_inactive_market_wait(self):
         selector = FakeRewardSelector(
             multi_selection("market-two", "market-three"))
@@ -6745,6 +6761,80 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_post_kickoff_managed_position_keeps_other_slots_trading(self):
+        """A readable thin recovery book cannot force recovery-only startup."""
+
+        runner, client, notifier, selector, mode = (
+            await self._start_with_managed_recovery_position())
+
+        self.assertEqual(mode, "TRADE")
+        self.assertEqual(
+            runner.active_slugs,
+            ("market-one", "market-two", "market-three"))
+        self.assertEqual(len(selector.calls), 1)
+        self.assertEqual(runner._recovery_slugs, {"market-one"})
+        self.assertTrue(runner._is_barred_from_quoting("market-one"))
+        self.assertEqual(runner._isolated_unexecutable_slugs(), set())
+        actions = runner.reconciler.plan(
+            runner._frame(runner._now(), "market-one"))
+        self.assertTrue(actions)
+        self.assertTrue(all(
+            action.reason != "reward_positive_candidate"
+            for action in actions))
+        self.assertTrue(any(
+            "unchanged exit manager" in message
+            for message, _critical in notifier.messages))
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_managed_position_trade_refuses_order_ambiguity(self):
+        runner, _client, _notifier, _selector, _mode = (
+            await self._start_with_managed_recovery_position())
+        runner.ledger.prepare_intent(
+            "position-ambiguous", "PLACE", "market-two", "client-one", {},
+            created_at=runner._now())
+
+        self.assertFalse(runner._startup_managed_position_is_scoped(
+            ("shared account has nonzero positions",), runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_managed_position_requires_post_kickoff_readable_book(self):
+        runner, _client, _notifier, _selector, _mode = (
+            await self._start_with_managed_recovery_position())
+        state = runner.state_for("market-one")
+        original_market = state.market
+        original_book = state.book
+
+        state.market = replace(
+            original_market, game_start=runner._now() + timedelta(hours=1))
+        self.assertFalse(runner._startup_managed_position_is_scoped(
+            ("shared account has nonzero positions",), runner._now()))
+        state.market = original_market
+        state.book = None
+        self.assertFalse(runner._startup_managed_position_is_scoped(
+            ("shared account has nonzero positions",), runner._now()))
+        state.book = original_book
+        self.assertTrue(runner._startup_managed_position_is_scoped(
+            ("shared account has nonzero positions",), runner._now()))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_managed_position_reserves_one_configured_slot(self):
+        slugs = tuple(f"market-{index}" for index in range(2, 40))
+        runner, _client, _notifier, _selector, _mode = (
+            await self._start_with_managed_recovery_position(
+                selection=multi_selection(*slugs)))
+
+        self.assertEqual(len(runner.active_slugs), runner.config.max_markets)
+        self.assertIn("market-one", runner.active_slugs)
+        self.assertEqual(
+            len(set(runner.active_slugs) - {"market-one"}),
+            runner.config.max_markets - 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_settlement_wait_cannot_drop_its_nonzero_owner(self):
         runner, _client, _notifier, _selector, _book, _mode = (
             await self._start_with_settlement_wait())
@@ -6876,17 +6966,18 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             select=AsyncMock(side_effect=AdapterError("temporary read")))
         runner.reward_selector = expected
 
-        await runner._add_startup_markets_around_settlement_wait(runner._now())
+        await runner._add_startup_markets_around_reserved_position(
+            runner._now())
 
         self.assertIn(
-            "startup_settlement_wait_selection",
+            "startup_reserved_position_selection",
             runner._runtime_error_counts,
         )
         unexpected = SimpleNamespace(
             select=AsyncMock(side_effect=ValueError("local defect")))
         runner.reward_selector = unexpected
         with self.assertRaisesRegex(ValueError, "local defect"):
-            await runner._add_startup_markets_around_settlement_wait(
+            await runner._add_startup_markets_around_reserved_position(
                 runner._now())
         await runner.private_stream.close()
         await runner.market_stream.close()

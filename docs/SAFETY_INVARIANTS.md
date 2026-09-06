@@ -812,3 +812,13 @@ These are implementation requirements, not suggestions.
     never buy back loss capacity or mask HARD. A missing, malformed or nearby
     structured value remains unknown and expires new-risk authority; it may
     not be guessed from amount, timing or operator interpretation.
+100. Startup may trade around exactly one readable post-kickoff recovery
+    position only after complete account proof establishes exact bot-owned
+    basis equal to quantity, known whole-account risk, zero working or absent
+    orders and zero unresolved intents. That owner reserves one configured
+    slot and its full portfolio exposure, remains in every private/account
+    reconciliation, is permanently barred from building and keeps the
+    unchanged passive/IOC exit manager. Pregame, unreadable, unattributed,
+    multiple-position, ambiguous or unknown state retains recovery-only or
+    refusal behavior. The exception cannot widen configured capacity or alter
+    selection, quote, cap, HARD, depth, pricing or mutation rules.

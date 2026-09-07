@@ -97,12 +97,12 @@ global fallback.
 
 ## 5. Collect the retained-value refusal shadow
 
-From the active runner, collect the 60%, 70% and 80%
-`WOULD_REFUSE` labels under the current size-10/24-slot configuration. Require
-complete PLACE/fill linkage, recent-candidate versus stale/no-candidate counts, projected
-and paid reward opportunity cost, dark-slot time and canonical realized trading
-outcome. Freeze a later held-out interval before proposing any threshold. The
-shadow remains incapable of changing live orders.
+The September 7 overall audit supports further testing, not enforcement. Before
+using a threshold, repair/validate cached stressed-estimate versus actual-action
+price/quantity/book coherence (736 inconsistent observations; no fix authorized
+yet). Preserve size 10 / 32; measure paid reward opportunity, eligible replacements,
+dark time and both-side interaction on frozen future dates. The shadow remains
+incapable of changing orders. [Audit](docs/history/OVERALL_ENTRY_QUALITY_AUDIT_2026-09-07.md).
 
 The queue-reset, daily selection-probe and fixed-GTC collectors are closed.
 Their databases and reports remain evidence; do not restart them merely to add

@@ -31,16 +31,16 @@ For every prospective sample:
 - attribute actual later trading outcome using canonical owned entry/reducer
   roles;
 - compare projected reward with paid reward over complete ET reward days;
-- keep current size 13 and 22-slot configuration explicit in the cohort.
+- separate historical sizes 10/13; the current runtime is size 10 / 32.
 
 Do not enforce a threshold from the historical association. Freeze a training
 interval and a later held-out interval. A candidate must reduce realized loss
 by more than reward surrendered and must not create material dark-slot cost.
 Any live proposal requires a separate review and explicit operator decision.
-The 2026-08-31 decision keeps all 60/70/80 labels measurement-only for at least
-three complete ET days under size 13 / 22 slots. Seventy percent is provisional,
-not authorized behavior. The 900-second inventory deadline is not part of this
-experiment; the larger clean completion-time sample rejected shortening it.
+The September 7 audit finds a repeatable signal in 1,069 coherent episodes,
+but excludes 61 completed episodes with mismatched model/quoted stake; validate
+same-action measurement first. Seventy percent remains provisional, not live
+authority; keep 900 seconds. [Audit](docs/history/OVERALL_ENTRY_QUALITY_AUDIT_2026-09-07.md).
 
 ## 2. Ledger growth slope
 

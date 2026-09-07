@@ -97,6 +97,15 @@ class AccountRealizedToday:
     account_equity: Decimal | None = None
     position_count: int | None = None
     nontrading_cash: Decimal | None = None
+    opening_as_of: datetime | None = None
+
+
+class AccountTradingHistory(dict[str, Decimal]):
+    """Snapshot-interval values; delayed boundaries are not exact calendar days."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.intervals: dict[str, tuple[datetime, datetime]] = {}
 
 
 class AccountMetricUnavailable(ValueError):
@@ -126,9 +135,9 @@ def _timestamp(value: Any, field: str) -> datetime:
     return result.astimezone(timezone.utc)
 
 
-def _opening_marks_for_day(
+def _opening_snapshot_for_day(
     db: str, day_value: date, boundary: datetime,
-) -> tuple[Decimal, Decimal]:
+) -> tuple[Decimal, Decimal, datetime]:
     try:
         connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
@@ -156,7 +165,7 @@ def _opening_marks_for_day(
     # timestamp belongs to the copied UTC row and must not be judged against
     # the fresh-ET two-minute tolerance.
     if source == "legacy_utc_cutover":
-        return corrected, stored_equity + corrected - stored
+        return corrected, stored_equity + corrected - stored, boundary
     created_at = _timestamp(row["created_at"], "opening baseline")
     delta = created_at - boundary.astimezone(timezone.utc)
     audited = AUDITED_DELAYED_ET_BASELINES.get(day_value.isoformat())
@@ -169,7 +178,15 @@ def _opening_marks_for_day(
             or (delta > BASELINE_START_TOLERANCE and not audited_match)):
         raise AccountMetricUnavailable(
             "ET baseline was not captured at the day boundary")
-    return corrected, stored_equity + corrected - stored
+    return (corrected, stored_equity + corrected - stored,
+            boundary if audited_match else created_at)
+
+
+def _opening_marks_for_day(
+    db: str, day_value: date, boundary: datetime,
+) -> tuple[Decimal, Decimal]:
+    cash, equity, _ = _opening_snapshot_for_day(db, day_value, boundary)
+    return cash, equity
 
 
 def _opening_cash_for_day(db: str, day_value: date,
@@ -181,15 +198,18 @@ def historical_account_trading_by_day(
     db: str,
     days: list[date],
     changes: tuple[NontradingCashChange, ...],
+    *, through: datetime | None = None,
 ) -> dict[str, Decimal]:
-    """Use adjacent proven ET equity boundaries for completed account days.
+    """Use adjacent recorded ET snapshots, subtracting same-interval cash.
 
     This includes fills, manual closes, settlements and unbalanced inventory
     that the matched-pair ledger estimator misses. A day is omitted unless
     both boundaries are native ET snapshots captured on time (or an exact
     field-pinned audited exception above). Carried inventory is included in
     equity: this is marked trading, consistently with today's row, not a
-    claim of closed-only realized P&L. Missing boundaries remain unavailable.
+    claim of closed-only realized P&L. Delayed snapshots carry their actual
+    intervals and display as calendar-day estimates. Missing boundaries remain
+    unavailable. The caller's cash scan must cover the closing snapshot.
     """
 
     if not days:
@@ -213,7 +233,7 @@ def historical_account_trading_by_day(
         return {}
     by_day = {str(row["risk_date"]): row for row in rows}
 
-    def equity_at(day_value: date) -> Decimal | None:
+    def equity_at(day_value: date) -> tuple[Decimal, datetime] | None:
         key = day_value.isoformat()
         row = by_day.get(key)
         if row is None or str(row["source"] or "") != "fresh_et_day":
@@ -230,28 +250,31 @@ def historical_account_trading_by_day(
             return None
         delta = created_at - boundary
         if timedelta(0) <= delta <= BASELINE_START_TOLERANCE:
-            return equity
+            return equity, created_at
         audited = AUDITED_DELAYED_ET_BASELINES.get(key)
         if audited is None or any(
                 str(row[field]) != str(audited[field])
                 for field in (
                     "opening_equity", "opening_cash", "created_at", "source")):
             return None
-        return equity
+        return equity, boundary
 
-    result: dict[str, Decimal] = {}
+    result = AccountTradingHistory()
     for day_value in days:
         opening = equity_at(day_value)
         closing = equity_at(day_value + timedelta(days=1))
         if opening is None or closing is None:
             continue
+        if through is not None and closing[1] > through:
+            continue
         key = day_value.isoformat()
         nontrading = sum(
             (change.amount for change in changes
-             if reward_day(change.completed_at) == key),
+             if opening[1] < change.completed_at <= closing[1]),
             Decimal(0),
         )
-        result[key] = closing - opening - nontrading
+        result[key] = closing[0] - opening[0] - nontrading
+        result.intervals[key] = (opening[1], closing[1])
     return result
 
 
@@ -283,7 +306,7 @@ async def _historical_nontrading_cash_changes(
 async def account_realized_today(
     db: str, gateway: AsyncReadOnlyGateway, *, now: datetime,
 ) -> AccountRealizedToday:
-    """Return account-wide realized trading since ET midnight, or no number.
+    """Return account-wide trading since the recorded ET opening, or no number.
 
     Two equal balance reads bracket the position snapshot. If settled cash
     moves while positions are being read, the report declines to mix states.
@@ -297,7 +320,7 @@ async def account_realized_today(
     boundary = datetime.combine(today, time.min, tzinfo=NEW_YORK).astimezone(
         timezone.utc)
     try:
-        opening_cash, opening_equity = _opening_marks_for_day(
+        opening_cash, opening_equity, opening_at = _opening_snapshot_for_day(
             db, today, boundary)
         account = AsyncAccountSnapshotGateway(gateway)
         first = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
@@ -308,7 +331,7 @@ async def account_realized_today(
         # read differs and the mixed snapshot is rejected.
         as_of = datetime.now(timezone.utc)
         nontrading = await _nontrading_cash_today(
-            gateway, boundary=boundary, through=as_of)
+            gateway, boundary=opening_at, through=as_of)
         second = await account.fetch_balance(observed_at=datetime.now(timezone.utc))
         if as_of.astimezone(NEW_YORK).date() != today:
             raise AccountMetricUnavailable(
@@ -337,7 +360,7 @@ async def account_realized_today(
             position_value=snapshot.position_value,
             account_equity=snapshot.marked_equity,
             position_count=sum(1 for item in positions if item.net_qty != 0),
-            nontrading_cash=nontrading)
+            nontrading_cash=nontrading, opening_as_of=opening_at)
     except (AccountMetricUnavailable, AdapterError) as exc:
         return AccountRealizedToday(None, str(exc))
 
@@ -381,9 +404,12 @@ def _trading_is_estimate(
     day_value: date, *, today: date,
     account_history: dict[str, Decimal] | None,
 ) -> bool:
-    # Retained cache field for older dashboard consumers. Incomplete pair
-    # estimates no longer populate the account-trading column.
-    return False
+    interval = getattr(account_history, "intervals", {}).get(day_value.isoformat())
+    if interval is None:
+        return False
+    start = datetime.combine(day_value, time.min, tzinfo=NEW_YORK)
+    end = datetime.combine(day_value + timedelta(days=1), time.min, tzinfo=NEW_YORK)
+    return interval != (start, end)
 
 
 def _covered_total(values: list[Decimal | None]) -> str:
@@ -435,10 +461,13 @@ def build_dashboard_snapshot(
             Decimal(0) if has_gain else None)
         finalized = (
             day_value < today and trading is not None and paid_value is not None
-            and not pending_value)
+            and not pending_value and not _trading_is_estimate(
+                day_value, today=today, account_history=account_history))
         net = trading + paid_value if finalized else None
         rows.append({
             "date_et": key,
+            "trading_interval": [stamp.isoformat() for stamp in
+                getattr(account_history, "intervals", {}).get(key, ())],
             "current_day": day_value == today,
             "trading": _dashboard_money(trading),
             "trading_estimate": _trading_is_estimate(
@@ -472,6 +501,7 @@ def build_dashboard_snapshot(
                 .replace("+00:00", "Z")
                 if account_realized is not None
                 and account_realized.as_of is not None else None),
+            "overall_estimate": True,
             "overall_pnl": _dashboard_money(overall_pnl),
             "overall_trading": _dashboard_money(overall_trading),
             "overall_gain": _dashboard_money(paid_total),
@@ -522,7 +552,9 @@ def render_table(
         pending_reward = pending.get(key)
         has_reward_row = paid_reward is not None or pending_reward is not None
         if (day_value < today and trade is not None
-                and paid_reward is not None and not pending_reward):
+                and paid_reward is not None and not pending_reward
+                and not _trading_is_estimate(
+                    day_value, today=today, account_history=account_history)):
             net = trade + paid_reward
             finalized_nets.append(net)
             net_text = f"**{float(net):+,.2f}**"
@@ -584,10 +616,12 @@ def render_table(
         "",
         "`*` Current ET day is partial. `Not posted` is not zero. Pending "
         "reward is never counted in finalized net.",
-        "Trading P&L uses account-wide ET equity boundaries where proven. "
+        "Trading P&L uses recorded account snapshots, with cash changes matched "
+        "to the same interval. `~` means delayed midnight snapshots, not an "
+        "exact calendar day; its calendar-day net is not finalized. "
         "Missing boundaries remain unavailable, not a matched-pair fallback. Today's row "
         "is marked trading: closed P&L plus current open-position cashValue, "
-        "with proven non-trading cash excluded.",
+        "with proven non-trading cash excluded, since the recorded ET opening.",
     ])
     if account_realized is not None and _current_mark(account_realized) is None:
         lines.append(f"Account mark unavailable: {account_realized.reason}.")
@@ -629,7 +663,8 @@ def build_discord_payload(
         has_reward = paid_reward is not None or pending_reward is not None
         complete = (
             day_value < today and trade is not None and paid_reward is not None
-            and not pending_reward)
+            and not pending_reward and not _trading_is_estimate(
+                day_value, today=today, account_history=account_history))
         if complete:
             net = trade + paid_reward
             finalized_nets.append(net)
@@ -703,7 +738,9 @@ def build_discord_payload(
         "footer": {"text": (
             f"Generated {stamp} · * current ET day is partial · "
             "-- reward not posted · Pending excluded from net · "
-            "Trading = account marked equity change less non-trading cash · "
+            "Trading = snapshot equity change less same-interval cash transfers · "
+            "~ delayed midnight snapshots, not exact calendar-day P&L; net pending · "
+            "Today starts at the recorded ET opening · "
             "Includes carried position marks, not closed-only realized P&L · "
             "Missing boundaries = unavailable · Pair estimate only: "
             f"{unbalanced_markets} unbalanced market(s) and settled exits may be missing")},
@@ -762,15 +799,13 @@ async def main() -> int:
     try:
         history_boundary = datetime.combine(
             days[0], time.min, tzinfo=NEW_YORK).astimezone(timezone.utc)
-        today_boundary = datetime.combine(
-            today, time.min, tzinfo=NEW_YORK).astimezone(timezone.utc)
         changes = await _historical_nontrading_cash_changes(
             gateway,
             boundary=history_boundary,
-            through=today_boundary,
+            through=now,
         )
         history = historical_account_trading_by_day(
-            args.db, days, changes)
+            args.db, days, changes, through=now)
     except CashActivityUnavailable:
         # Historical account rows remain unavailable. Today's independently
         # bounded snapshot still runs; no incomplete ledger fallback.

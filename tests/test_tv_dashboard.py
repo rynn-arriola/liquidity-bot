@@ -534,7 +534,9 @@ class TvDashboardTests(unittest.TestCase):
         self.assertIn('id="slot-capacity"', html)
         self.assertIn('id="scope-capacity"', html)
         self.assertIn("TODAY P&amp;L", html)
-        self.assertIn("OVERALL P&amp;L", html)
+        self.assertIn("OVERALL P&amp;L ESTIMATE", html)
+        self.assertIn("Incomplete ledger + paid gain", html)
+        self.assertIn("Incomplete ledger + paid gain", javascript)
         headers = ["Date ET", "Trading", "Gain", "Pending", "Side Hours", "Net"]
         self.assertEqual([html.index(f">{header}<") for header in headers], sorted(
             html.index(f">{header}<") for header in headers))

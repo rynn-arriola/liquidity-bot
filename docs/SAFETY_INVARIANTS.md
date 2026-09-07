@@ -112,7 +112,10 @@ These are implementation requirements, not suggestions.
 30. Repeated recoverable strategy/action failures use exponential backoff capped
     at 30 seconds through the shared 4 requests/second REST governor.
 31. Shutdown owns a flatten budget separate from the quoting loop's, also
-    bounded to three submissions. An exhausted runtime exit counter must never
+    bounded to three submissions per owner within the unchanged overall
+    shutdown deadline. Scoped adapter failures cannot starve another owner's
+    cancellation or exit; ownership/invariant failures remain account-wide.
+    An exhausted runtime exit counter must never
     stop the terminal path from attempting a flatten, because refusing to try
     is what leaves unmatched inventory to reach settlement.
 32. A shutdown that cannot prove flat repeats its critical alert every 300
@@ -435,7 +438,10 @@ These are implementation requirements, not suggestions.
     adjacent native ET equity
     boundaries, including carried position marks, only when both timestamps
     are within the reviewed two-minute tolerance or match every field of an
-    audited delayed boundary, and all non-trading cash is removed. This is
+    audited delayed boundary, and all non-trading cash is removed over those
+    same snapshot timestamps. Delayed snapshots are marked as calendar-day
+    estimates and cannot finalize calendar-day net; the historical cash scan
+    must cover the closing snapshot rather than stop at nominal midnight. This is
     marked account P&L, not closed-only realized trading. Missing boundaries
     remain unavailable; the separate pair estimate cannot fill a daily row,
     complete the period total or finalize net. Today's net is never finalized.
@@ -669,6 +675,10 @@ These are implementation requirements, not suggestions.
     ET day and the final fresh adjusted-equity observation. A cash-history
     failure therefore leaves entry blocked without retrying against yesterday's
     boundary or allowing stale prior-day cash evidence to cross midnight.
+    An unresolved provisional HARD cohort retains yesterday's baseline while
+    fresh bracketed cash/equity reads continue against its original cash
+    boundary. No new entry is allowed; positive post-close reconciliation and
+    a newer adjusted mark must settle the old loss before ordinary rollover.
 89. Tiny-position acceleration is quantity-bounded and exit-only. An exact
     venue-tradable position from `0.01` through `0.09` contracts may switch
     from passive reduction to cashout only when its durable position-open clock

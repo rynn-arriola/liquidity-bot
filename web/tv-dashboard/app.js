@@ -147,7 +147,7 @@ function renderGainReport(report, livePnl) {
         ? `Marked account trading · ${readableAge(livePnl.age_seconds)}`
         : `Closed ${money(livePnl.realized_pnl, { signed: true })} · open ${money(livePnl.unrealized_pnl, { signed: true })} · ${readableAge(livePnl.age_seconds)}`)
       : "Waiting for a proven mark";
-    byId("overall-pnl-detail").textContent = "Trading + finalized gain";
+    byId("overall-pnl-detail").textContent = "Incomplete ledger + paid gain";
     byId("gain-report-age").textContent = "Unavailable";
     byId("gain-report-state").textContent = "LOCAL SNAPSHOT NOT YET AVAILABLE";
     const row = document.createElement("tr");
@@ -179,7 +179,7 @@ function renderGainReport(report, livePnl) {
     closedValue == null || openValue == null
       ? `Marked account trading · ${markAge}`
       : `Closed ${closed} · open ${open} · ${markAge}`;
-  byId("overall-pnl-detail").textContent = `Since ${headline.overall_since_et} ET`;
+  byId("overall-pnl-detail").textContent = `Incomplete ledger + paid gain · Since ${headline.overall_since_et} ET`;
   byId("gain-report-age").textContent = readableAge(report.age_seconds);
   const stale = Number(report.age_seconds) > 7200;
   byId("gain-report-state").textContent = stale ? "SNAPSHOT STALE" : "LOCAL SNAPSHOT READY";

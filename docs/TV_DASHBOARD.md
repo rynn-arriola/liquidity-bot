@@ -30,7 +30,8 @@ runner's latest already-proven local account mark: settled cash plus every open
 position's Retail `cashValue`, less the ET opening equity and positively
 classified non-trading cash. It displays the closed/open split only when the
 day began flat and every open basis is known. The hourly snapshot remains the
-fallback, and a cache from a previous ET day is rejected. Overall uses the
+fallback, and a cache from a previous ET day is rejected. Overall is explicitly
+labeled an estimate from an incomplete ledger plus paid gain. It uses the
 runner's established bot-only formula: lifetime
 ledger trading plus finalized bot-era gain since 2026-08-14. Pending is context
 only and never enters Today P&L, finalized Net or Overall P&L. The runner cache
@@ -41,7 +42,10 @@ The additional table is ordered exactly as `Date ET`, `Trading`, `Gain`,
 `Pending`, `Side Hours`, `Net`. Side Hours is merged resting time per market and
 side, split at ET midnight, so several simultaneous sides can total above 24 in
 one day. New report snapshots use marked account trading, including carried
-positions, with non-trading cash excluded; missing boundaries stay unavailable.
+positions, with non-trading cash matched to the actual snapshot interval;
+missing boundaries stay unavailable. Delayed midnight snapshots display `~`
+because their interval is not an exact calendar day; their daily net remains
+pending instead of mixing that interval with a calendar-day paid amount.
 Older snapshots may contain `~` estimates. Only proven completed trading/reward
 days finalize net, never the current day. `Not posted`, `Pending`
 and `Unavailable` remain distinct. The visible dashboard says Gain rather than

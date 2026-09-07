@@ -197,6 +197,7 @@ class RewardTableTests(unittest.TestCase):
             "today_realized": None,
             "today_unrealized": None,
             "today_as_of": None,
+            "overall_estimate": True,
             "overall_pnl": "-115.65",
             "overall_trading": "-130.65",
             "overall_gain": "15",
@@ -256,6 +257,49 @@ class RewardTableTests(unittest.TestCase):
             str(self.database), [date(2026, 8, 23)], changes)
 
         self.assertEqual(result["2026-08-23"], Decimal("-10"))
+
+    def test_midnight_cash_is_matched_to_actual_snapshot_interval(self):
+        # No trading: a deposit between midnight and the delayed opening
+        # belongs to the preceding snapshot interval, never a $100 loss.
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany(
+                "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+                [("2026-09-05", "1000", "0", "1000",
+                  "2026-09-05T04:00:00+00:00", "fresh_et_day"),
+                 ("2026-09-06", "1100", "0", "1100",
+                  "2026-09-06T04:01:00+00:00", "fresh_et_day"),
+                 ("2026-09-07", "1100", "0", "1100",
+                  "2026-09-07T04:00:00+00:00", "fresh_et_day")])
+        days = [date(2026, 9, 5), date(2026, 9, 6)]
+        for second in (30, 60):
+            with self.subTest(second=second):
+                change = NontradingCashChange(
+                    datetime(2026, 9, 6, 4, tzinfo=timezone.utc)
+                    + timedelta(seconds=second), Decimal(100))
+                history = historical_account_trading_by_day(
+                    str(self.database), days, (change,))
+                self.assertEqual(history, {"2026-09-05": Decimal(0),
+                                           "2026-09-06": Decimal(0)})
+                covered = historical_account_trading_by_day(
+                    str(self.database), days, (change,),
+                    through=datetime(2026, 9, 7, 3, 59, tzinfo=timezone.utc))
+                self.assertEqual(covered, {"2026-09-05": Decimal(0)})
+                payload = build_dashboard_snapshot(
+                    days, pnl={}, paid={"2026-09-05": Decimal(5)}, pending={},
+                    resting_hours={}, today=date(2026, 9, 7),
+                    generated_at=datetime(2026, 9, 7, 5, tzinfo=timezone.utc),
+                    unbalanced_markets=0, overall_trading=Decimal(0),
+                    account_history=history)
+                row = payload["rows"][0]
+                self.assertTrue(row["trading_estimate"])
+                self.assertIsNone(row["net"])
+                self.assertEqual(row["trading_interval"][1],
+                                 "2026-09-06T04:01:00+00:00")
+                rendered = render_table(
+                    days, pnl={}, paid={}, pending={}, resting_hours={},
+                    elapsed_hours={}, today=date(2026, 9, 7), account_history=history)
+                self.assertIn("~$+0.00", rendered)
+                self.assertIn("not an exact calendar day", rendered)
 
     def test_unapproved_late_boundary_cannot_create_account_history(self):
         connection = sqlite3.connect(self.database)
@@ -498,6 +542,22 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
         params = gateway.client.portfolio.activity_params[0]
         self.assertEqual(params["sortOrder"], "SORT_ORDER_DESCENDING")
         self.assertEqual(len(params["types"]), 5)
+
+    async def test_today_does_not_subtract_cash_already_in_delayed_opening(self):
+        gateway = _Gateway([Decimal(500), Decimal(500)], {}, [{
+            "activities": [{"type": "ACTIVITY_TYPE_TRANSFER",
+                "accountBalanceChange": {"status": "COMPLETED",
+                    "amount": {"value": "100", "currency": "USD"},
+                    "description": "liquidity reward payout",
+                    "updateTime": "2026-08-25T04:00:01Z"}}], "eof": True}])
+        with patch("scripts.reward_table.datetime", _August25Datetime):
+            result = await account_realized_today(
+                str(self.database), gateway,
+                now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+        self.assertEqual(result.marked_value, Decimal(0))
+        self.assertEqual(result.nontrading_cash, Decimal(0))
+        self.assertEqual(result.opening_as_of,
+                         datetime(2026, 8, 25, 4, 0, 2, tzinfo=timezone.utc))
 
     async def test_audited_legacy_cash_uses_its_et_correction(self):
         connection = sqlite3.connect(self.database)

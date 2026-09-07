@@ -155,7 +155,6 @@ MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
 # balance/positions/balance bracket. A due cash-activity scan adds its page(s)
 # and one final equal-cash proof; all requests still share the 4/s governor.
 NONTRADING_CASH_MAX_PAGES = 4
-NONTRADING_CASH_REFRESH_SECONDS = 15.0
 
 # Refresh before the risk guard's hard freshness edge. A twenty-market sweep
 # can itself take several seconds when individual books need REST recovery.
@@ -4161,7 +4160,8 @@ class CommissioningRunner:
 
         observed_at = self._now()
         today = date.fromisoformat(risk_day(observed_at))
-        if self._baseline_day != today:
+        if (self._baseline_day != today
+                and self._provisional_hard_stop_at is None):
             snapshot_day = date.fromisoformat(risk_day(snapshot.observed_at))
             if snapshot_day != today:
                 # The bracketed account read itself crossed midnight. It is
@@ -4181,47 +4181,37 @@ class CommissioningRunner:
             self._equity_snapshot = snapshot
             self.balance = snapshot.balance
             self._roll_realized_baseline()
-            if self._baseline_day != today:
-                # A provisional hard-stop cohort deliberately preserves the
-                # breached day's baseline across midnight. Do not amplify that
-                # state into a cash-history loop against yesterday's boundary.
-                return
-        adjustment_due = (
-            self._nontrading_cash is None
-            or self._nontrading_cash_observed_at is None
-            or self._nontrading_cash_day != self._baseline_day
-            or (observed_at - self._nontrading_cash_observed_at).total_seconds()
-            >= NONTRADING_CASH_REFRESH_SECONDS
+        # Every published mark needs cash activity from the same bracket.
+        # A timer-cached adjustment can misclassify a newly completed transfer
+        # (even if an offsetting fill leaves the raw cash balance unchanged).
+        if self._cash_activity_boundary is None:
+            raise RuntimeError("cash-activity boundary is unavailable")
+        nontrading = await fetch_nontrading_cash(
+            self.gateway,
+            boundary=self._cash_activity_boundary,
+            through=observed_at,
+            max_pages=NONTRADING_CASH_MAX_PAGES,
         )
-        if adjustment_due:
-            if self._cash_activity_boundary is None:
-                raise RuntimeError("cash-activity boundary is unavailable")
-            nontrading = await fetch_nontrading_cash(
-                self.gateway,
-                boundary=self._cash_activity_boundary,
-                through=observed_at,
-                max_pages=NONTRADING_CASH_MAX_PAGES,
-            )
-            # Cash activity can complete while its pages are being read. The
-            # snapshot already bracketed positions with equal cash reads; one
-            # final equal cash read proves the activity adjustment belongs to
-            # that same account state.
-            second = await self.account.fetch_balance(observed_at=self._now())
-            if snapshot.balance.current_balance != second.current_balance:
-                raise AdapterError(
-                    "settled cash changed during non-trading activity snapshot")
-            if date.fromisoformat(risk_day(self._now())) != self._baseline_day:
-                raise AdapterError(
-                    "ET risk day changed during non-trading activity snapshot")
-            # Keep every consumer on the final bracketed balance row.  Do not
-            # publish any part of the candidate snapshot until all reads have
-            # succeeded; a failed activity bracket must leave the previous
-            # proven mark intact and merely let its freshness expire.
-            snapshot = account_equity_snapshot(
-                second, snapshot.positions, observed_at=snapshot.observed_at)
-            self._nontrading_cash = nontrading
-            self._nontrading_cash_observed_at = self._now()
-            self._nontrading_cash_day = self._baseline_day
+        # Cash activity can complete while its pages are being read. The
+        # snapshot already bracketed positions with equal cash reads; one
+        # final equal cash read proves the activity adjustment belongs to
+        # that same account state.
+        second = await self.account.fetch_balance(observed_at=self._now())
+        if snapshot.balance.current_balance != second.current_balance:
+            raise AdapterError(
+                "settled cash changed during non-trading activity snapshot")
+        if date.fromisoformat(risk_day(self._now())) != today:
+            raise AdapterError(
+                "ET risk day changed during non-trading activity snapshot")
+        # Keep every consumer on the final bracketed balance row.  Do not
+        # publish any part of the candidate snapshot until all reads have
+        # succeeded; a failed activity bracket must leave the previous
+        # proven mark intact and merely let its freshness expire.
+        snapshot = account_equity_snapshot(
+            second, snapshot.positions, observed_at=snapshot.observed_at)
+        self._nontrading_cash = nontrading
+        self._nontrading_cash_observed_at = self._now()
+        self._nontrading_cash_day = self._baseline_day
 
         self._equity_snapshot = snapshot
         self.balance = snapshot.balance
@@ -8875,7 +8865,7 @@ class CommissioningRunner:
         # so an exit the runtime could not complete may still complete here.
         # Inheriting an exhausted runtime counter meant the terminal path
         # never attempted a flatten at all and inventory reached settlement.
-        exit_attempts = 0
+        exit_attempts: dict[str, int] = {}
 
         async def alert(message: str, *, force: bool = False) -> bool:
             """Repeat a stuck-shutdown alert instead of latching it once.
@@ -8929,148 +8919,168 @@ class CommissioningRunner:
                 # own an order or a position, and leaving it behind is exactly
                 # how inventory reaches settlement.
                 parked: list[str] = []
-                for market_slug in self._shutdown_slugs():
-                    position = self.ledger.position(market_slug)
-                    working = self.ledger.working_orders(market_slug)
-                    unresolved = self.ledger.market_has_unresolved_intent(
-                        market_slug)
-                    if position != 0 and not unresolved:
-                        # A position keeps its exit working. Shutdown used to
-                        # cancel every order and then cross out at whatever the
-                        # book showed, with no price cap anywhere on that path
-                        # -- so a redeploy liquidated at the market. Measured
-                        # 2026-08-15: short 5 at 0.65 with a break-even reducer
-                        # resting, cancelled and crossed at 0.96 on a deploy
-                        # restart, -$1.55 on a position that was costing
-                        # nothing to hold.
-                        #
-                        # Leaving the exit resting is strictly better: it may
-                        # fill at basis while we are down, and the next process
-                        # binds the market exit-only through recovery. Orders
-                        # that could ADD to the position are still pulled --
-                        # nothing may grow a position nobody is watching.
-                        # Kickoff is the one deadline parking may not outlive.
-                        # A held position that reaches settlement is unbounded
-                        # up to the full contract value, which is how maker-lab
-                        # lost $443.88 over four days. Inside the flatten
-                        # window we still cross out at whatever it costs.
-                        state = self.state_for(market_slug)
-                        start = (
-                            state.market.game_start
-                            if state.market is not None else None)
-                        near_kickoff = (
-                            start is None
-                            or (start - now).total_seconds()
-                            <= self.config.force_exit_before_start_seconds)
-                        if not near_kickoff:
-                            reducing = (
-                                "ORDER_SIDE_SELL" if position > 0
-                                else "ORDER_SIDE_BUY")
-                            if any(str(order["side"]) != reducing
-                                   for order in working):
-                                self._log_shutdown(
-                                    market_slug, "cancel_building",
-                                    position=position, working=len(working))
-                                await self.kill_switch.initiate(
-                                    market_slug, now=now)
-                                continue
-                            # Parking only means anything if the exit is
-                            # actually there. With nothing resting the position
-                            # is not parked, it is stranded -- shutdown reports
-                            # non-flat, the supervisor refuses to restart, and
-                            # the position sits with no way out. Observed
-                            # 2026-08-15 on aec-valorant-ff-ep: +5 held, no
-                            # order, bot down. Fall through to the flatten
-                            # below instead, which is the pre-existing path for
-                            # exactly this state.
-                            if working:
-                                self._log_shutdown(
-                                    market_slug, "parked", position=position,
-                                    working=len(working),
-                                    seconds_to_kickoff=(
-                                        None if start is None
-                                        else round((start - now).total_seconds())))
-                                parked.append(market_slug)
-                                continue
-                    if working and not unresolved:
-                        self._log_shutdown(
-                            market_slug, "cancel_working", position=position,
-                            working=len(working))
-                        await self.kill_switch.initiate(market_slug, now=now)
-                        continue
-                    if position == 0 or working or unresolved:
-                        # Silence here made a stuck shutdown look exactly like
-                        # a finished one. A flat market is genuinely nothing to
-                        # report; one still holding is waiting on something and
-                        # must say so.
-                        if position != 0:
+                # Cancel known working owners before any book/depth read.
+                owners = sorted(
+                    self._shutdown_slugs(),
+                    key=lambda owner: (
+                        not bool(self.ledger.working_orders(owner)), owner))
+                for market_slug in owners:
+                    now = self._now()
+                    if now >= deadline:
+                        break
+                    try:
+                        position = self.ledger.position(market_slug)
+                        working = self.ledger.working_orders(market_slug)
+                        unresolved = self.ledger.market_has_unresolved_intent(
+                            market_slug)
+                        if position != 0 and not unresolved:
+                            # A position keeps its exit working. Shutdown used to
+                            # cancel every order and then cross out at whatever the
+                            # book showed, with no price cap anywhere on that path
+                            # -- so a redeploy liquidated at the market. Measured
+                            # 2026-08-15: short 5 at 0.65 with a break-even reducer
+                            # resting, cancelled and crossed at 0.96 on a deploy
+                            # restart, -$1.55 on a position that was costing
+                            # nothing to hold.
+                            #
+                            # Leaving the exit resting is strictly better: it may
+                            # fill at basis while we are down, and the next process
+                            # binds the market exit-only through recovery. Orders
+                            # that could ADD to the position are still pulled --
+                            # nothing may grow a position nobody is watching.
+                            # Kickoff is the one deadline parking may not outlive.
+                            # A held position that reaches settlement is unbounded
+                            # up to the full contract value, which is how maker-lab
+                            # lost $443.88 over four days. Inside the flatten
+                            # window we still cross out at whatever it costs.
+                            state = self.state_for(market_slug)
+                            start = (
+                                state.market.game_start
+                                if state.market is not None else None)
+                            near_kickoff = (
+                                start is None
+                                or (start - now).total_seconds()
+                                <= self.config.force_exit_before_start_seconds)
+                            if not near_kickoff:
+                                reducing = (
+                                    "ORDER_SIDE_SELL" if position > 0
+                                    else "ORDER_SIDE_BUY")
+                                if any(str(order["side"]) != reducing
+                                       for order in working):
+                                    self._log_shutdown(
+                                        market_slug, "cancel_building",
+                                        position=position, working=len(working))
+                                    await self.kill_switch.initiate(
+                                        market_slug, now=now)
+                                    continue
+                                # Parking only means anything if the exit is
+                                # actually there. With nothing resting the position
+                                # is not parked, it is stranded -- shutdown reports
+                                # non-flat, the supervisor refuses to restart, and
+                                # the position sits with no way out. Observed
+                                # 2026-08-15 on aec-valorant-ff-ep: +5 held, no
+                                # order, bot down. Fall through to the flatten
+                                # below instead, which is the pre-existing path for
+                                # exactly this state.
+                                if working:
+                                    self._log_shutdown(
+                                        market_slug, "parked", position=position,
+                                        working=len(working),
+                                        seconds_to_kickoff=(
+                                            None if start is None
+                                            else round((start - now).total_seconds())))
+                                    parked.append(market_slug)
+                                    continue
+                        if working and not unresolved:
                             self._log_shutdown(
-                                market_slug, "waiting", position=position,
-                                working=len(working), unresolved=unresolved)
-                        continue
-                    if exit_attempts >= self.config.max_shutdown_exit_attempts:
+                                market_slug, "cancel_working", position=position,
+                                working=len(working))
+                            await self.kill_switch.initiate(market_slug, now=now)
+                            continue
+                        if position == 0 or working or unresolved:
+                            # Silence here made a stuck shutdown look exactly like
+                            # a finished one. A flat market is genuinely nothing to
+                            # report; one still holding is waiting on something and
+                            # must say so.
+                            if position != 0:
+                                self._log_shutdown(
+                                    market_slug, "waiting", position=position,
+                                    working=len(working), unresolved=unresolved)
+                            continue
+                        attempts = exit_attempts.get(market_slug, 0)
+                        if attempts >= self.config.max_shutdown_exit_attempts:
+                            self._log_shutdown(
+                                market_slug, "budget_exhausted",
+                                position=position, attempts=attempts,
+                                budget=self.config.max_shutdown_exit_attempts)
+                            await alert(
+                                "🚨 Liquidity Bot exhausted its shutdown exit budget. "
+                                "Maker quoting remains terminal; manual intervention "
+                                f"is required for remaining position {position} in "
+                                f"{market_slug}.",
+                                force=not exit_budget_announced)
+                            exit_budget_announced = True
+                            delay = 30.0
+                            continue
+                        await self._refresh_book(now, market_slug)
+                        state = self.state_for(market_slug)
+                        if state.book is None or state.market is None:
+                            raise AdapterError("shutdown book is unavailable")
+                        basis = self.ledger.inventory_basis(market_slug)
+                        entry_side = "bid" if position > 0 else "offer"
+                        conservative_entry = (
+                            float(basis.average_entry_price) if basis is not None
+                            else .99 if position > 0 else .01)
+                        exit_result = cross_exit(
+                            state.book, entry_side=entry_side,
+                            entry_price=conservative_entry,
+                            qty=float(abs(position)), depth_haircut=.5)
+                        if (not exit_result.complete
+                                or exit_result.worst_price is None):
+                            # This raise is why a shutdown could burn its whole
+                            # budget without ever sending an order. Say so before
+                            # raising, or the alert reports a spent budget with no
+                            # trace of what refused.
+                            self._log_shutdown(
+                                market_slug, "depth_refused", position=position,
+                                entry_side=entry_side, haircut=0.5,
+                                complete=exit_result.complete)
+                            raise AdapterError(
+                                "insufficient stressed depth to flatten exact "
+                                "position")
+                        side = "offer" if position > 0 else "bid"
+                        action = PlanAction(
+                            ActionKind.PLACE_IOC, market_slug,
+                            "commissioning_shutdown_flatten", side=side,
+                            price=exit_result.worst_price, qty=abs(position))
+                        if self.driver is None:
+                            raise RuntimeError("action driver is unavailable")
+                        if self._now() >= deadline:
+                            break
+                        # Count before mutation because a transport failure
+                        # after send may still have reached the venue.
+                        attempts += 1
+                        exit_attempts[market_slug] = attempts
+                        # Logged before the send, for the same reason the counter
+                        # increments before it: a transport failure after the send
+                        # may still have reached the venue, and a record written
+                        # only on success would omit exactly those cases.
                         self._log_shutdown(
-                            market_slug, "budget_exhausted",
-                            position=position, attempts=exit_attempts,
+                            market_slug, "flatten", position=position, side=side,
+                            price=exit_result.worst_price, qty=abs(position),
+                            attempt=attempts,
                             budget=self.config.max_shutdown_exit_attempts)
-                        await alert(
-                            "🚨 Liquidity Bot exhausted its shutdown exit budget. "
-                            "Maker quoting remains terminal; manual intervention "
-                            f"is required for remaining position {position} in "
-                            f"{market_slug}.",
-                            force=not exit_budget_announced)
-                        exit_budget_announced = True
-                        delay = 30.0
-                        continue
-                    await self._refresh_book(now, market_slug)
-                    state = self.state_for(market_slug)
-                    if state.book is None or state.market is None:
-                        raise RuntimeError("shutdown book is unavailable")
-                    basis = self.ledger.inventory_basis(market_slug)
-                    entry_side = "bid" if position > 0 else "offer"
-                    conservative_entry = (
-                        float(basis.average_entry_price) if basis is not None
-                        else .99 if position > 0 else .01)
-                    exit_result = cross_exit(
-                        state.book, entry_side=entry_side,
-                        entry_price=conservative_entry,
-                        qty=float(abs(position)), depth_haircut=.5)
-                    if (not exit_result.complete
-                            or exit_result.worst_price is None):
-                        # This raise is why a shutdown could burn its whole
-                        # budget without ever sending an order. Say so before
-                        # raising, or the alert reports a spent budget with no
-                        # trace of what refused.
+                        await self.driver.apply_one(
+                            [action], market=state.market,
+                            position=position, now=now)
+                        delay = max(delay, min(2 ** max(attempts - 1, 0), 5))
+                    except AdapterError as exc:
+                        # A scoped read/mutation failure cannot starve another
+                        # identified owner's cancel or exit. Ownership and
+                        # invariant failures still reach the account handler.
                         self._log_shutdown(
-                            market_slug, "depth_refused", position=position,
-                            entry_side=entry_side, haircut=0.5,
-                            complete=exit_result.complete)
-                        raise RuntimeError(
-                            "insufficient stressed depth to flatten exact "
-                            "position")
-                    side = "offer" if position > 0 else "bid"
-                    action = PlanAction(
-                        ActionKind.PLACE_IOC, market_slug,
-                        "commissioning_shutdown_flatten", side=side,
-                        price=exit_result.worst_price, qty=abs(position))
-                    if self.driver is None:
-                        raise RuntimeError("action driver is unavailable")
-                    # Count before mutation because a transport failure
-                    # after send may still have reached the venue.
-                    exit_attempts += 1
-                    # Logged before the send, for the same reason the counter
-                    # increments before it: a transport failure after the send
-                    # may still have reached the venue, and a record written
-                    # only on success would omit exactly those cases.
-                    self._log_shutdown(
-                        market_slug, "flatten", position=position, side=side,
-                        price=exit_result.worst_price, qty=abs(position),
-                        attempt=exit_attempts,
-                        budget=self.config.max_shutdown_exit_attempts)
-                    await self.driver.apply_one(
-                        [action], market=state.market,
-                        position=position, now=now)
-                    delay = min(2 ** max(exit_attempts - 1, 0), 5)
+                            market_slug, "owner_failed", error=type(exc).__name__)
+                        delay = max(delay, 5.0)
                 # The venue is the authority on whether we hold risk. Waiting
                 # on local bookkeeping keeps a flat process alive for minutes:
                 # risk_state_known() is false during any in-flight cancel, and

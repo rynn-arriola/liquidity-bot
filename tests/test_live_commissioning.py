@@ -2052,7 +2052,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             runner.risk_guard.equity_observed_at,
-            NOW + timedelta(seconds=14),
+            NOW + timedelta(seconds=21),
         )
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -7506,7 +7506,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._nontrading_cash_day = runner._baseline_day
         client.account.current_balance = Decimal("120")
 
-        await runner._refresh_balance(NOW)
+        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+                   AsyncMock(return_value=Decimal("100"))):
+            await runner._refresh_balance(NOW)
 
         self.assertEqual(runner.balance.marked_equity, Decimal("120"))
         self.assertEqual(runner.risk_guard.current_equity, Decimal("20"))
@@ -10807,7 +10809,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         }
         runner.config = replace(
             runner.config, shutdown_alert_interval_seconds=1,
-            max_shutdown_seconds=15)
+            max_shutdown_seconds=30)
 
         await runner._shutdown("critical:unowned_working_order")
 

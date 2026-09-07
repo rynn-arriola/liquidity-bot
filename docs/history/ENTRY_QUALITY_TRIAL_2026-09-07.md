@@ -187,3 +187,25 @@ Conclusion: mechanical enforcement and continued entry/exit activity are
 verified; profitability or reward-adjusted improvement is not established.
 Keep the authorized settings unchanged for this read-only check. Longer-window
 reward/trading evaluation remains in NEXT; no monitoring automation was added.
+
+## Why the pending-entry ceiling became 25 at 17:52Z
+
+Read-only follow-up found an explicit `loss-entry-order-cap` transition at
+**17:52:35.265120Z / 13:52 ET**: ET-day adjusted marked loss **$69.9090 / $90
+= 77.68%**, previous cap 30, new cap **25**. This is the existing 70%-HARD tier,
+not a new quality-filter limit or a reduction from 32 configured market slots.
+The daytime ceiling 40 is subordinate to the tighter durable loss ceiling.
+Open-position-market orders/reducers are excluded; unresolved building creates
+reserve capacity. The tightest tier persists until the ET-day rollover even
+if the meter recovers. The daily marked meter differs in interval and open-mark
+inclusion from the earlier -$11.3145 post-activation completed-trade cohort.
+
+At **17:58:40.843519Z**, authenticated reads found **23 orders across 21 markets
+and two positions**, zero unknown orders, four unresolved intents and 24 local
+working rows. Reads occur sequentially while trading continues; differing
+counts are not proof of cancellation. Runner 816489 remains active with size
+10 / 32 and installed `b089b3a6e`; the 17:57:39Z API window had zero failures,
+429s and cooldown. Available parity passed; backup PC remains pending. No
+code/configuration change, restart or repair was performed. Quality and other
+eligibility gates can keep actual entries below 25; it is a maximum, not a
+target or a total-order limit.

@@ -59,3 +59,57 @@ ownership proof, unchanged maintenance/recovery/shutdown authority, actual
 action price/quantity/fresh book and no additional venue request from the filter.
 Next: push, reviewed native deployment/hash/full-suite verification, fresh
 flat/clear start gate, normal explicit `auto 10 32` launcher and live acceptance.
+
+## Deployment and restart
+
+- Pushed `b089b3a6e8e99fb60196d63c042a5f76dc96e705`, then fast-forwarded the
+  clean tracked laptop WSL checkout from `b4f22b1ae`. Expected untracked
+  `DEPLOYED_COMMIT` and editable-install metadata were preserved.
+- All **163** tracked source/test/script/web/config file hashes matched after
+  normal line-ending normalization. The exact native checkout passed
+  **1,173 tests in 81.369 seconds**. Then updated `DEPLOYED_COMMIT` to the
+  tested installed release. Config and selector-policy construction both
+  independently reported enabled=true, minimum=0.70 at size 10 / 32.
+- The 15:22:45.452869Z pre-start gate again proved zero authenticated orders,
+  zero positions, zero working/unknown orders and zero unresolved intents.
+- Normal `start_commissioning.sh auto 10 32` launched supervisor **816479**
+  and runner **816489**, started **15:22:45Z**. Process arguments confirm the
+  intended quantity/width; no alternate entry-policy path overrides the
+  checked-in enabled file. The existing independent dashboard remains up.
+- Post-start quote/API acceptance is pending below; a successful launch alone
+  is not acceptance. No additional policy, schedule or risk baseline changed.
+
+## Live acceptance and operator-requested filter verification
+
+- Initial scan at **15:23:43Z** found **59 viable candidates** after the new
+  gate, with two event pages and 91 ranked books. This is enough candidate
+  supply for configured 32 capacity, not proof of a fixed number of markets
+  removed compared with the earlier differently timed scan.
+- Official maintenance evidence was `HEALTHY/NORMAL`. At **15:25:54Z** ordinary
+  lifecycle replacement released two expired owners, retained 30 and added
+  two, preserving **32 active owners**; this was not quality-driven churn.
+- Live action logs positively show `entry_quality_below_minimum` on refused
+  sides while the passing side places normally. Examples: at 15:25:03Z
+  `aec-setkamecz-mardom-oplpav-2026-09-07` blocked offer and placed bid; at
+  15:25:07Z `aec-setkameua-levana-plapav-2026-09-07` blocked bid and placed offer.
+- A read-only ledger check after the first window examined **26 new building
+  PLACE observations across 26 markets** since startup. All 26 had a retained
+  estimate at/above 70%; minimum **76.16%**, zero missing ratios, zero below
+  threshold and zero actual-stake/estimate inconsistencies. This proves initial
+  natural acceptance, not perpetual book quality or future profitable exits.
+  Reproduction: ignored `.local-tools/entry_trial_acceptance.py`.
+- First API window at **15:25:55.675571Z**: **189.4 seconds, 436 attempts,
+  2.302/s, 26 mutations, zero failures, zero 429s**, no lane cooldown and peak
+  queue depth one. No synthetic fault, fill or test webhook was induced.
+- Authenticated acceptance at **15:26:17.081356Z**: **26 open orders across 26
+  markets, zero nonzero positions, zero unknown orders**, 26 local working
+  orders and **one in-flight intent**. Do not misstate that live snapshot as
+  zero unresolved intents; the pre-start gate was entirely flat and clear.
+- Windows/GitHub/WSL/installed-marker parity passed on the code release; backup
+  PC remains offline/pending. Following documentation-only updates do not
+  alter the tested source/config or require another restart.
+
+The trial is enabled and trading. Reward-adjusted performance, more restrictive
+book transitions, both-side dark time and future maintenance/exit behavior
+remain natural evaluation items. The operator controls when to disable it;
+the setting does not expire automatically at midnight.

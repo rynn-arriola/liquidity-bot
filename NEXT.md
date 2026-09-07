@@ -98,8 +98,8 @@ global fallback.
 ## 5. Accept and evaluate the authorized entry-quality trial
 
 The operator explicitly authorized the 70% filter and Command 1 on September 7.
-Enabled-config review passes 1,173 tests; deploy, pass fresh flat/clear startup
-gates and verify live acceptance. Then compare rewards, losses and slot activity.
+Enabled-config review/native suites pass 1,173 tests; deployed `b089b3a6e` and
+restarted after a fresh flat/clear gate. Initial quotes/API accepted; evaluate net.
 The first matched reward sensitivity is unfavorable before replacements:
 $207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
 pending. Validate reward/replacement net; saved labels remain non-authoritative. [Tradeoff](docs/history/ENTRY_QUALITY_REWARD_TRADEOFF_2026-09-07.md) · [implementation](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).

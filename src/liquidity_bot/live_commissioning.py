@@ -5876,9 +5876,11 @@ class CommissioningRunner:
                     for book in drain_books():
                         self._accept_book(book)
             except Exception as exc:
-                stop = await self._recover_market_stream(exc)
+                stop = await self._recover_market_stream(
+                    exc, private_task=private_task)
                 if stop:
                     return market_task, private_task, stop
+                private_task = asyncio.create_task(self.private_stream.next_event())
             market_task = asyncio.create_task(self.market_stream.next_book())
 
         if private_task.done():
@@ -5931,9 +5933,11 @@ class CommissioningRunner:
         elif "market" in liveness_errors:
             market_task.cancel()
             await asyncio.gather(market_task, return_exceptions=True)
-            stop = await self._recover_market_stream(liveness_errors["market"])
+            stop = await self._recover_market_stream(
+                liveness_errors["market"], private_task=private_task)
             if stop:
                 return market_task, private_task, stop
+            private_task = asyncio.create_task(self.private_stream.next_event())
             market_task = asyncio.create_task(self.market_stream.next_book())
         elif "private" in liveness_errors:
             private_task.cancel()
@@ -6633,6 +6637,7 @@ class CommissioningRunner:
 
     async def _quarantine_working_orders(
         self, slug: str | None = None, *, require_terminal: bool = True,
+        drain_private_events: bool = False,
     ) -> None:
         """Cancel known quotes, optionally requiring terminal proof to return.
 
@@ -6663,6 +6668,11 @@ class CommissioningRunner:
             f"[quarantine] at={self._now().isoformat()} called_by={caller}",
             flush=True,
         )
+        # Only the recovery owner that has suspended the normal next_event
+        # consumer may drain here; otherwise a task-held older event could
+        # be applied after a newer queued event.
+        if drain_private_events:
+            await self._drain_private_events()
         now = self._now()
         # A single-market repair must not wait on an unreadable order owned by
         # another market. Private-stream repair uses the empty set: reconnect
@@ -6698,6 +6708,8 @@ class CommissioningRunner:
                 continue
             if self.ledger.working_orders(market):
                 await self.kill_switch.initiate(market, now=self._now())
+        if drain_private_events:
+            await self._drain_private_events()
         await self._rest_reconcile(
             self._now(), strict_order_markets=terminal_order_markets)
         self._assert_runtime_scope()
@@ -7796,9 +7808,31 @@ class CommissioningRunner:
                     return "runner_failure:private_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
-    async def _recover_market_stream(self, initial: Exception) -> str | None:
+    async def _recover_market_stream(
+        self, initial: Exception, *, private_task: asyncio.Task[Any] | None = None,
+    ) -> str | None:
         """Reconnect market data after canceling quotes made on the old book."""
 
+        # Transfer private consumption before waiting outside the main loop.
+        # A completed task owns the oldest event; apply it before draining the
+        # socket. A pending read is cancelled/awaited before taking over, so it
+        # cannot steal the confirmation the recovery needs. The caller starts
+        # one replacement reader only after this coroutine returns.
+        if private_task is not None:
+            if not private_task.done():
+                private_task.cancel()
+            try:
+                event = await private_task
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                pass
+            except Exception as private_exc:
+                # Both transports failed. Re-establish private visibility first
+                # through the existing strict account/scope recovery path.
+                return await self._recover_bound_streams(private_exc)
+            else:
+                await self._observe_private(event, self._now())
         exc = initial
         attempt = 0
         venue_failure_streak = 0
@@ -7821,7 +7855,7 @@ class CommissioningRunner:
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
-                await self._quarantine_working_orders()
+                await self._quarantine_working_orders(drain_private_events=True)
                 stream = self.market_stream_factory(self.client)
                 self.market_stream = stream
                 await stream.start(list(self.active_slugs))
@@ -8048,7 +8082,10 @@ class CommissioningRunner:
                     statuses.append(int(raw_status))
             except (TypeError, ValueError):
                 pass
-            current = current.__cause__ or current.__context__
+            # Only explicit adapter wrapping is causal evidence. Python's
+            # implicit context may be the old disconnect currently being
+            # recovered, not the new schema/ownership failure's cause.
+            current = current.__cause__
 
         combined = " ".join((*names, *texts))
         if any(token in combined for token in (
@@ -8148,7 +8185,13 @@ class CommissioningRunner:
             except RuntimeInvariantViolation:
                 raise
             except Exception as probe_exc:
-                if not self._is_venue_unavailable(probe_exc):
+                # A 429 is not evidence of maintenance, but inside an existing
+                # no-entry hold it is a failed health sample, not permission to
+                # terminate and abandon recovery. Never count it as success.
+                rate_limited = (
+                    isinstance(probe_exc, AdapterError)
+                    and probe_exc.status_code == 429)
+                if not (self._is_venue_unavailable(probe_exc) or rate_limited):
                     await self._report_runtime_error(
                         "maintenance_probe_terminal", probe_exc)
                     raise

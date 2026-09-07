@@ -334,7 +334,10 @@ These are implementation requirements, not suggestions.
     Recovery must start the replacement private listener before issuing its
     quarantine cancels, then apply buffered private events before classifying
     owners as ambiguous. Shutdown likewise drains buffered terminal events
-    before REST reconciliation. This preserves positive cancel/fill proof
+    before REST reconciliation. Market-only recovery must transfer the normal
+    private consumer first: apply its held event or cancel/await its pending
+    read, then drain queued events before and after quarantine cancels. Never
+    drain past a task-held earlier private event. This preserves positive cancel/fill proof
     without treating a missing REST row as terminal. Heartbeat-silence recovery
     may preserve resting orders only under the frozen decision loop: overlap-
     start only stale shards, require each replacement's balance delivery, swap
@@ -388,7 +391,11 @@ These are implementation requirements, not suggestions.
     read-only complete authenticated open-order, position and balance reads
     and are never applied as evidence that an absent order was cancelled.
     Recovery requires three consecutive complete probe cycles one minute apart;
-    any failure resets the streak. Quoting remains blocked until the original
+    any failure resets the streak. A confirmed 429 during an existing hold is
+    an unsuccessful health sample, not maintenance evidence or a terminal
+    process error. Outage classification follows only explicit exception causes,
+    never an unrelated prior disconnect in implicit exception context.
+    Quoting remains blocked until the original
     component recovery subsequently completes its cancellation, whole-account
     reconciliation, fresh-stream and private-state gates. Startup uses the
     same in-process pause rather than spending the supervisor's fast-crash

@@ -8092,6 +8092,27 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_rate_limited_maintenance_probe_keeps_hold_and_restarts_streak(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        slugs = runner.active_slugs
+        runner.account.fetch_open_orders = AsyncMock(side_effect=[
+            (), AdapterError("limited", status_code=429), (), (), ()])
+        runner.account.fetch_positions = AsyncMock(return_value=())
+        runner.account.fetch_balance = AsyncMock(wraps=runner.account.fetch_balance)
+        runner.sleep = AsyncMock()
+        stop = await runner._wait_for_venue_recovery(
+            "market_stream", AdapterError("service unavailable", status_code=503))
+        self.assertIsNone(stop)
+        self.assertEqual(runner.account.fetch_open_orders.await_count, 5)
+        self.assertEqual(runner.account.fetch_positions.await_count, 4)
+        self.assertEqual(runner.account.fetch_balance.await_count, 4)
+        self.assertEqual(runner.active_slugs, slugs)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_maintenance_probe_contract_error_is_not_hidden(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
@@ -8106,6 +8127,48 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_old_disconnect_context_cannot_hide_new_schema_failure(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.account.fetch_open_orders = AsyncMock(side_effect=[
+            AdapterError("open-order response has no orders list")
+            for _ in range(5)] + [RuntimeInvariantViolation("test_retry_ceiling")])
+        try:
+            raise AdapterError("market WebSocket disconnected")
+        except AdapterError as original:
+            with self.assertRaisesRegex(AdapterError, "no orders list"):
+                await runner._wait_for_venue_recovery("market_stream", original)
+        self.assertEqual(runner.account.fetch_open_orders.await_count, 1)
+        self.assertEqual(client.orders.create_calls, [])
+        try:
+            raise TimeoutError("request timed out")
+        except TimeoutError as original:
+            wrapped = AdapterError("read failed")
+            wrapped.__cause__ = original
+            self.assertTrue(runner._is_venue_unavailable(wrapped))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_market_recovery_routes_failed_private_reader_to_both_streams(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        failure = AdapterError("private WebSocket disconnected")
+
+        async def failed_private():
+            raise failure
+
+        private_task = asyncio.create_task(failed_private())
+        await asyncio.sleep(0)
+        runner._recover_bound_streams = AsyncMock(return_value="operator_requested")
+        stop = await runner._recover_market_stream(
+            AdapterError("market WebSocket disconnected"), private_task=private_task)
+        self.assertEqual(stop, "operator_requested")
+        runner._recover_bound_streams.assert_awaited_once_with(failure)
+        self.assertEqual(client.orders.create_calls, [])
+        self.assertEqual(client.orders.cancel_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -8206,24 +8269,22 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.sleep = advance
         await runner.preflight()
         runner.market_stream_factory = RecoveringMarketStream
+        waits = MAX_MARKET_STREAM_RECOVERY_ATTEMPTS + 2
         runner._quarantine_working_orders = AsyncMock(side_effect=[
             _CancellationEvidencePending(
-                "runtime recovery is waiting for terminal cancel proof"),
-            _CancellationEvidencePending(
-                "runtime recovery is waiting for terminal cancel proof"),
-            None,
-        ])
+                "runtime recovery is waiting for terminal cancel proof")
+            for _ in range(waits)] + [None])
 
         stop = await runner._recover_market_stream(
             AdapterError("market WebSocket disconnected"))
 
         self.assertIsNone(stop)
-        self.assertEqual(runner._quarantine_working_orders.await_count, 3)
+        self.assertEqual(runner._quarantine_working_orders.await_count, waits + 1)
         self.assertEqual(client.orders.create_calls, [])
         self.assertGreaterEqual(
             runner._runtime_error_counts.get(
                 "market_stream_cancel_evidence", 0),
-            2,
+            waits,
         )
         self.assertNotEqual(
             runner._runtime_error_counts.get("market_stream"),
@@ -8231,6 +8292,104 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         )
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_market_recovery_hands_off_private_cancel_proof_in_wire_order(self):
+        """Exercise both a task-held confirmation and one arriving on cancel."""
+
+        for held in (True, False):
+            with self.subTest(held=held):
+                runner, client, _ = self.build_runner(clock=TickingClock())
+                await runner.preflight()
+                slug = runner.market_slug
+                order_id = "recovery-order"
+                client_id = "liquidity-recovery"
+                now = runner._now()
+                runner.ledger.prepare_intent(
+                    "recovery-place", "PLACE", slug, client_id,
+                    {"marketSlug": slug}, created_at=now)
+                runner.ledger.transition_intent(
+                    "recovery-place", "SUBMITTING", updated_at=now)
+                runner.ledger.transition_intent(
+                    "recovery-place", "ACKNOWLEDGED", updated_at=now,
+                    exchange_order_id=order_id)
+                runner.ledger.apply_order_event("ws", "recovery-open", OrderState(
+                    client_order_id=client_id, exchange_order_id=order_id,
+                    market_slug=slug, side="ORDER_SIDE_BUY", price=Decimal("0.49"),
+                    original_qty=Decimal("5"), filled_qty=Decimal("0"),
+                    status="OPEN", event_at=now), received_at=now)
+                wire = {
+                    "id": order_id, "clientOrderId": client_id, "marketSlug": slug,
+                    "side": "ORDER_SIDE_BUY", "intent": "ORDER_INTENT_BUY_LONG",
+                    "price": {"value": "0.49", "currency": "USD"},
+                    "quantity": "5", "cumQuantity": "0",
+                    "state": "ORDER_STATE_NEW", "createTime": now.isoformat()}
+                client.orders.rows[order_id] = wire
+                terminal = PrivateEvent(PrivateEventKind.ORDER_UPDATE,
+                    {"execution": {"id": "recovery-cancel-proof",
+                     "type": "EXECUTION_TYPE_CANCEL", "order": {
+                         **wire, "state": "ORDER_STATE_CANCELED",
+                         "updateTime": runner._now().isoformat()}}},
+                    "recovery-cancel-event")
+                buffered = []
+
+                def drain():
+                    events = tuple(buffered)
+                    buffered.clear()
+                    return events
+
+                runner.private_stream.drain_events = drain
+                client.orders.retrieve = AsyncMock(side_effect=AdapterError(
+                    "GET order failed: NotFoundError", status_code=404))
+                runner.executor.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS = 1
+                original_cancel = client.orders.cancel
+
+                async def cancel_and_publish(order, payload):
+                    await original_cancel(order, payload)
+                    buffered.append(terminal)
+
+                client.orders.cancel = cancel_and_publish
+                book = runner.book
+
+                class Recovered(FakeMarketStream):
+                    async def next_book(self, *, timeout=None):
+                        return book
+
+                runner.market_stream_factory = Recovered
+                if held:
+                    wire["state"] = "ORDER_STATE_CANCELED"
+
+                    async def oldest_event():
+                        return terminal
+
+                    private_task = asyncio.create_task(oldest_event())
+                else:
+                    private_task = asyncio.create_task(asyncio.Event().wait())
+                await asyncio.sleep(0)
+
+                async def broken_market():
+                    raise AdapterError("market WebSocket disconnected")
+
+                market_task = asyncio.create_task(broken_market())
+                await asyncio.sleep(0)
+                new_market, new_private, stop = await runner._consume_ready_stream_tasks(
+                    market_task, private_task)
+                try:
+                    self.assertIsNone(stop)
+                    self.assertIsNot(new_private, private_task)
+                    self.assertTrue(private_task.done())
+                    self.assertEqual(private_task.cancelled(), not held)
+                    self.assertEqual(buffered, [])
+                    self.assertEqual(runner.ledger.unresolved_intents(), [])
+                    self.assertEqual(runner.ledger.working_orders(), [])
+                    self.assertEqual(client.orders.create_calls, [])
+                    self.assertEqual(len(client.orders.cancel_calls), 0 if held else 1)
+                    client.orders.retrieve.assert_not_awaited()
+                finally:
+                    new_market.cancel()
+                    new_private.cancel()
+                    await asyncio.gather(new_market, new_private, return_exceptions=True)
+                    await runner.private_stream.close()
+                    await runner.market_stream.close()
 
     async def test_hard_stop_remains_terminal_during_stream_recovery(self):
         runner, client, _ = self.build_runner()

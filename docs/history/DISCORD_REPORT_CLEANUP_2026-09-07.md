@@ -98,3 +98,26 @@ the native suite, restart only through the normal authorized safety gates,
 then inspect naturally generated reports. No test webhook spam, induced
 order ambiguity, restart, withdrawal or trading-policy change is authorized
 by this presentation task. Backup-PC parity remains pending while offline.
+
+## Authorized deployment without restart — 2026-09-07
+
+The operator subsequently said to push and deploy for the next restart,
+without restarting now. The already-pushed `f7816c324` was fast-forwarded
+into the clean tracked WSL checkout. No new source change was necessary;
+the earlier final review, reversals and full review-tree tests were reused.
+
+- All **160** source/test/script/web/config files match the review checkout
+  by SHA-256 after expected line-ending normalization.
+- The exact native production checkout passed **1,160 tests in 80.407s**.
+- `DEPLOYED_COMMIT` now names installed release
+  `f7816c3247ed9223690347fb6e05929930f24a15`. This is on-disk deployment proof,
+  **not** proof that the existing runner re-imported notification code.
+- Original runner **475856**, started **04:06:23Z**, stayed running. No stop,
+  restart, risk/config change, venue mutation, test webhook send or schedule
+  change was performed. Current authenticated exposure was not re-probed.
+- Status/error imports and duplicate suppression activate at the next
+  independently authorized restart. The separate hourly reward process reads
+  the new report layout on its next existing scheduled run.
+- Final deployment diff is the same reviewed release. Only documentation
+  follows it; native tests and hashes remain valid for those unchanged files.
+  Backup-PC parity remains pending while the peer is unavailable.

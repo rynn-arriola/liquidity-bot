@@ -113,3 +113,77 @@ The trial is enabled and trading. Reward-adjusted performance, more restrictive
 book transitions, both-side dark time and future maintenance/exit behavior
 remain natural evaluation items. The operator controls when to disable it;
 the setting does not expire automatically at midnight.
+
+## Read-only trade review at 17:50Z / 13:50 ET
+
+The operator asked whether the new change is working on actual trades. No
+trading code/configuration, risk state, order or position was changed, and no
+restart was performed. Runner 816489 / supervisor 816479 remained active with
+installed marker `b089b3a6e`; available Windows/GitHub/WSL tracked parity passed
+at documentation HEAD `d5a4fdb00`. The backup PC was offline/pending.
+
+Authenticated reads at **17:50:45.157195Z** found **22 orders across 17 markets,
+four positions, zero unknown orders and zero unresolved intents**, with 22
+local working orders. The scheduler still reported configured scope 32; order
+count is neither simultaneous slot count nor a count of entries alone.
+
+### Measurement scope and results
+
+Reused the existing full-history fill replay and consistency assertions through
+ignored `.local-tools/entry_trial_trade_review.py`, not a new accounting method.
+Source: SQLite-online parity snapshot at **17:50:57.300904Z**, 291,512,320 bytes,
+SHA-256 `54d70b1a909e3820d99ae25639b073f5d7a8cea318b22c473738ab4bfd8b23e2`.
+Native integrity and copied hash/size passed. The ignored rolling backup may
+subsequently advance; this hash identifies the actual analyzed capture.
+
+Window: **15:22:45Z activation to 17:50:57Z**, about 2 hours 28 minutes
+(11:22 AM–1:50 PM ET). Completed trades mean flat-to-inventory-to-flat episodes
+whose first fill occurred after activation; partial fills are combined and
+signed recorded fees/rebates included. Unfinished positions, rewards and
+unrelated account cashflows are excluded, so this is not today's account loss.
+
+| Evidence | Result |
+|---|---:|
+| New building-order observations | 343 across 68 markets over time |
+| Below 70% / missing ratio / inconsistent actual stake | 0 / 0 / 0 |
+| Lowest placement retained-value estimate | 70.3701% |
+| Observed entry orders with at least one recorded fill | 37 |
+| Lowest estimate among filled entry orders | 72.5636% |
+| Completed trade episodes | 32: 10 winners, 22 losers |
+| Net recorded completed-trade P&L | -$11.3145 |
+| Matched quantity / net per 10 matched contracts | 253.85 / -$0.4457 |
+| Episodes with at least one taker reducer | 28 of 32 |
+| Median completed holding time | 14.8 minutes |
+| Unfinished post-activation replay episodes | 4, excluded from closed P&L |
+
+The preceding equal-duration completed cohort was 21 episodes, 164.24 matched
+contracts and -$15.1785 (-$0.9242 per 10). This is an uncontrolled comparison,
+not proof of filter savings: different markets/times, restart/cap transitions,
+and four unfinished current episodes make causal attribution inappropriate.
+Reward sacrifice/replacement benefit is not measured by this short-window
+fill comparison; do not claim the trial improves overall net returns.
+
+### Natural enforcement and remaining losses
+
+- At **17:47:35Z**, `aec-setkameua-khaser-kulhry-2026-09-07` cancelled a
+  resting bid with `side_no_longer_desired:entry_quality_below_minimum`.
+  The filter checks resting entry quality as well as initial placement.
+- Recent API windows ending **17:49:22Z, 17:50:42Z and 17:52:05Z** had
+  158/159/158 attempts at 1.918–1.974/s, zero failures/429s/cooldown and
+  maximum waiting depth one. This is evidence for those windows, not a claim
+  that every API request throughout the day succeeded.
+- Worst completed episode: `aec-setkameua-lazrus-shcden-2026-09-07`, first
+  fill **16:45:11.994411Z**, final fill **17:03:03.426209Z**, 7.38 matched
+  contracts, **-$4.3004**, despite an initial estimate of **92.2246%**.
+  Logs show normal passive reducers, then `hard_timeout_cancel_confirm_first`
+  at 17:02:30Z and `PLACE_IOC hard_inventory_timeout` at 17:03:02Z. The exit
+  path remained active despite an entry-quality blocker. The estimate is a
+  contemporaneous stressed-book check, not a guaranteed later liquidation
+  value or a cap on loss after entry.
+- Other large completed losses were `haivol-kagvit` **-$2.85**, `wtadb-hsiost-chajoi`
+  **-$2.27**, and `cs2-tit-tsab` **-$2.09**. All had passing entry estimates.
+
+Conclusion: mechanical enforcement and continued entry/exit activity are
+verified; profitability or reward-adjusted improvement is not established.
+Keep the authorized settings unchanged for this read-only check. Longer-window
+reward/trading evaluation remains in NEXT; no monitoring automation was added.

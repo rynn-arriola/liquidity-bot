@@ -38,8 +38,7 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
 - **Application silence was mistaken for private-transport failure.** In about eight hours the old runner detected roughly 123 silences and recorded 120 recoveries covering 133 shards, all `cancels=0`, without associated 403/429, risk stop, unknown absence or quarantine. The SDK transport answered Ping/Pong while exposing only JSON to the old clock. Deployed `a1ba212` records awaited Pongs and fails closed on probe loss; 810 WSL tests and reversal passed, while natural timeout acceptance is pending. [Evidence](docs/history/PRIVATE_SHARD_FALSE_SILENCE_2026-08-29.md).
 - **Score telemetry was allowed to retire trading slots.** At 01:58Z, 34 backward-clock failures left authenticated state at 10/20 quoting. The deployed high-water repair naturally contained another backward sample at 04:19:49Z, then reached 20/20 with no retirement. Search `[score-clock] ... action=ignored_stale_sample`. [Evidence](docs/history/SCORE_CLOCK_SLOT_RETIREMENT_2026-08-28.md).
 - **Private-shard silence erased the reward slate.** At 13:50Z two shards crossed 180 seconds; recovery canceled all before the same PID rebuilt to 34, while filtered snapshots also acted account-complete.
-- **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`;
-  balance proves each socket and complete REST proves empty orders.
+- **Empty subscriptions emit no order EOF:** `order_eof=0/3 account_balance=3/3`; balance proves each socket and complete REST proves empty orders.
 - **A 429 during shard proof can erase the slate.** At 15:02:46Z shard 3 overlap
   reconciled 34 orders, then Cloudflare `1015`/429 on balance drove quarantine;
   the same PID rebuilt. Dashboards do not share the runner limiter; avoid repeated

@@ -55,6 +55,8 @@ from .execution_ledger import (
     LedgerConflict,
     QuoteObservation,
 )
+from .entry_quality import (
+    DEFAULT_ENTRY_QUALITY_POLICY_PATH, load_entry_quality_policy)
 from .entry_order_policy import (
     DEFAULT_ENTRY_ORDER_POLICY_PATH,
     EntryOrderPolicyError,
@@ -412,6 +414,7 @@ class CommissioningRunner:
         "book_sides_overlap",
         "price_too_extreme",
         "stressed_exit_incomplete",
+        "entry_quality_below_minimum",
         "projected_reward_does_not_cover_probability_weighted_exit_cost",
     })
 
@@ -715,6 +718,7 @@ class CommissioningRunner:
             max_market_worst_loss=float(config.max_market_exposure_usd),
             max_portfolio_worst_loss=float(config.max_portfolio_exposure_usd),
             max_exit_loss=float(config.max_stressed_exit_loss_usd),
+            entry_quality_policy=config.entry_quality_policy,
             max_early_exit_loss=float(config.max_early_exit_loss_usd),
             exit_depth_haircut=.5,
             max_book_age_seconds=5,
@@ -3706,6 +3710,11 @@ class CommissioningRunner:
                 state.economic_blocker_by_side[side] = (
                     "stressed_exit_incomplete")
                 continue
+            quality_blocker = self.config.entry_quality_policy.blocker(exit_result)
+            if quality_blocker:
+                state.economic_blocker_by_side[side] = quality_blocker
+                state.expected_net_by_side[side] = 0.0
+                continue
             unwind_cost = max(0.0, -exit_result.pnl)
             economics = OpportunityEconomics(
                 # Lower-bound score accrual by assigning the full horizon's
@@ -3967,6 +3976,9 @@ class CommissioningRunner:
                     or state.book_observed_at is None
                     or state.incentive is None):
                 raise RuntimeError("market observation state is incomplete")
+            if (state.book.slug != action.market_slug
+                    or state.market.slug != action.market_slug):
+                raise RuntimeError("market observation identity is inconsistent")
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now)
             if period is None:
@@ -3976,7 +3988,12 @@ class CommissioningRunner:
             projection = state.reward_projection_by_side[side]
             hazard = state.fill_probability_by_side[side]
             driver = state.fill_risk_driver_by_side[side]
-            exit_result = state.stressed_exit_by_side[side]
+            # The cached economics may describe an earlier touch. Bind these
+            # telemetry fields to this exact action and current local book.
+            exit_result = cross_exit(
+                state.book, entry_side=side, entry_price=float(action.price),
+                qty=float(action.qty), depth_haircut=.5,
+                exclude_entry_level=True)
             economics = state.opportunity_economics_by_side[side]
             model_queue = state.model_queue_ahead_by_side[side]
 
@@ -5654,6 +5671,25 @@ class CommissioningRunner:
                 )
                 return None, mutation_delay
             if (chosen.kind == ActionKind.PLACE_POST_ONLY and position == 0):
+                if self.config.entry_quality_policy.enabled:
+                    # Recheck the actual action after planning; do not consume
+                    # cached shadow labels or add any venue request. Safety
+                    # actions bypass this entry-only boundary completely.
+                    book_age = state.book_age_seconds(self._now())
+                    if (state.book is None or state.book.slug != slug
+                            or book_age is None or not 0 <= book_age <= 5
+                            or chosen.side not in {"bid", "offer"}
+                            or chosen.price is None or chosen.qty is None):
+                        return None, 1.0
+                    entry_exit = cross_exit(
+                        state.book, entry_side=chosen.side,
+                        entry_price=float(chosen.price), qty=float(chosen.qty),
+                        depth_haircut=.5, exclude_entry_level=True)
+                    quality_blocker = self.config.entry_quality_policy.blocker(entry_exit)
+                    if quality_blocker:
+                        print(f"[entry-quality] at={now.isoformat()} market={slug} "
+                              f"side={chosen.side} reason={quality_blocker}", flush=True)
+                        return None, 1.0
                 rejection_delay = self._recent_rejection_delay(slug, now)
                 if rejection_delay > 0:
                     latest = self.ledger.latest_rejection(slug)
@@ -5680,7 +5716,7 @@ class CommissioningRunner:
                 return None, self.BUYING_POWER_RECHECK_SECONDS
             quote_observation = (
                 self._quote_observation_for_action(
-                    state, actions[0], now, position)
+                    state, actions[0], self._now(), position)
                 if actions else None)
             result = await self.driver.apply_one(
                 actions, market=state.market,
@@ -9686,6 +9722,11 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         entry_order_policy = load_entry_order_policy(policy_path)
     except EntryOrderPolicyError as exc:
         raise CommissioningRefused(str(exc)) from exc
+    try:
+        entry_quality_policy = load_entry_quality_policy(Path(getattr(
+            args, "entry_quality_policy", DEFAULT_ENTRY_QUALITY_POLICY_PATH)))
+    except ValueError as exc:
+        raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
         economic_risk_accepted=args.accept_one_contract_risk,
@@ -9696,6 +9737,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         quote_size=Decimal(args.quote_size),
         max_markets=args.max_markets,
         entry_order_policy=entry_order_policy,
+        entry_quality_policy=entry_quality_policy,
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
@@ -9765,6 +9807,11 @@ def main() -> int:
         "--entry-order-policy", type=Path,
         default=DEFAULT_ENTRY_ORDER_POLICY_PATH,
         help="validated restart-scoped pending-entry-order policy JSON",
+    )
+    parser.add_argument(
+        "--entry-quality-policy", type=Path,
+        default=DEFAULT_ENTRY_QUALITY_POLICY_PATH,
+        help="validated restart-scoped entry-only exit quality policy JSON",
     )
     args = parser.parse_args()
     try:

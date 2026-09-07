@@ -31,6 +31,7 @@ from .rewards import (
 )
 from .risk import OpportunityEconomics
 from .shadow_math import cross_exit
+from .entry_quality import EntryQualityPolicy
 
 
 SUPPORTED_EVENT_PERIODS = frozenset({
@@ -102,6 +103,7 @@ class RewardSelectionPolicy:
     # 21600 is also the ceiling `__post_init__` allows, so this cannot widen
     # further without that bound moving too. Set to 7200 to go back.
     selection_horizon_seconds: float = 21600.0
+    entry_quality_policy: EntryQualityPolicy = EntryQualityPolicy()
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
@@ -331,6 +333,8 @@ def evaluate_market_opportunity(
             exit_pnl = exit_result.pnl
             if not exit_result.complete:
                 blocker = "stressed_exit_incomplete"
+            elif (quality_blocker := policy.entry_quality_policy.blocker(exit_result)):
+                blocker = quality_blocker
             else:
                 unwind_cost = max(0.0, -exit_result.pnl)
                 economics = OpportunityEconomics(

@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
 from .entry_order_policy import (
     EntryOrderPolicy, EntryOrderPolicyError, load_entry_order_policy)
 from .quote_size import (
@@ -132,6 +133,8 @@ class CommissioningConfig:
     # breadth/quantity-scaled HARD value below.
     entry_order_policy: EntryOrderPolicy = field(
         default_factory=load_entry_order_policy)
+    entry_quality_policy: EntryQualityPolicy = field(
+        default_factory=load_entry_quality_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -400,6 +403,7 @@ class CommissioningConfig:
             minimum_entry_spread=float(self.minimum_entry_spread),
             minimum_entry_price=float(self.minimum_entry_price),
             enforce_reward_cost_gate=self.enforce_reward_cost_gate,
+            entry_quality_policy=self.entry_quality_policy,
         )
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:

@@ -94,6 +94,14 @@ balance before it can clear or confirm the hard stop. Realized session P&L,
 per-market realized P&L, taker-exit count and taker fees remain reporting
 evidence and have no independent pause or stop authority.
 
+The optional entry-quality filter loads restart-scoped
+`config/entry_quality_policy.json`: `enabled` switches it on/off and
+`minimum_retained_value` sets the fraction (0.70 means 70%). It ships disabled
+pending a separate activation decision. When enabled, each new-entry side must
+retain that fraction of its actual stake in the existing stressed-exit model;
+position reducers and exits remain unchanged. Config edits require an authorized
+restart; they do not hot-reload. This is an estimate, not guaranteed protection.
+
 Plus an operator-controlled graceful stop. **These numbers have moved several
 times and older prose elsewhere in this repo still quotes superseded ones** —
 one contract, eight markets, a 30-second inventory age, and $2/$5/$15 or

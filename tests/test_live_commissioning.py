@@ -1404,10 +1404,11 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "market-one", "market-spare")
         runner._market_selection_observed_at = NOW - timedelta(seconds=30)
         state = runner.state_for("market-one")
-        exit_result = state.stressed_exit_by_side["bid"]
-        shadow_loss = -.35 * exit_result.entry_cost
-        state.stressed_exit_by_side["bid"] = replace(
-            exit_result, pnl=shadow_loss)
+        # Change the actual book, not the stale cached model result: the
+        # observation must recompute the exact proposed action's exit.
+        state.book = BookSnapshot(
+            "market-one", (BookLevel(.49, 100), BookLevel(.33, 100)),
+            (BookLevel(.51, 100), BookLevel(.52, 100)))
         prior_book_reads = client.markets.book_calls
 
         observation = runner._quote_observation_for_action(
@@ -1423,7 +1424,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(observation)
         self.assertAlmostEqual(
             observation.retained_value_ratio,
-            .65,
+            (.33 - .06 * .33 * .67) / .49,
         )
         self.assertFalse(observation.would_refuse_retained_60)
         self.assertTrue(observation.would_refuse_retained_70)
@@ -1479,8 +1480,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         runner._evaluate_rewards(NOW, "market-one")
         state = runner.state_for("market-one")
-        state.stressed_exit_by_side["bid"] = replace(
-            state.stressed_exit_by_side["bid"], complete=False)
+        state.book = BookSnapshot(
+            "market-one", (BookLevel(.49, 100),),
+            (BookLevel(.51, 100), BookLevel(.52, 100)))
 
         observation = runner._quote_observation_for_action(
             state,

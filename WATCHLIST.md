@@ -37,10 +37,10 @@ Do not enforce a threshold from the historical association. Freeze a training
 interval and a later held-out interval. A candidate must reduce realized loss
 by more than reward surrendered and must not create material dark-slot cost.
 Any live proposal requires a separate review and explicit operator decision.
-The September 7 audit finds a repeatable signal in 1,069 coherent episodes,
-but excludes 61 completed episodes with mismatched model/quoted stake; validate
-same-action measurement first. Seventy percent remains provisional, not live
-authority; keep 900 seconds. [Audit](docs/history/OVERALL_ENTRY_QUALITY_AUDIT_2026-09-07.md).
+The September 7 audit finds a repeatable signal in 1,069 coherent episodes;
+the operator approved a configurable gate and exact-action estimate repair,
+prepared disabled pending separate activation. Top-20 reward sacrifice remains
+unproven; keep 900 seconds. [Handoff](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
 ## 2. Ledger growth slope
 

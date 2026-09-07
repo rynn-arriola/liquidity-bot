@@ -95,14 +95,14 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 5. Collect the retained-value refusal shadow
+## 5. Decide entry-quality filter activation
 
-The September 7 overall audit supports further testing, not enforcement. Before
-using a threshold, repair/validate cached stressed-estimate versus actual-action
-price/quantity/book coherence (736 inconsistent observations; no fix authorized
-yet). Preserve size 10 / 32; measure paid reward opportunity, eligible replacements,
-dark time and both-side interaction on frozen future dates. The shadow remains
-incapable of changing orders. [Audit](docs/history/OVERALL_ENTRY_QUALITY_AUDIT_2026-09-07.md).
+The operator-approved 70% entry-only filter and exact-action estimate repair
+passed all 1,173 tests and three reversals, remain disabled, and need a separate
+deployment/activation/restart decision. Do not enable on a generic restart.
+Top-20 priority does not remove quality risk: 79.1% of ranked flagged quotes
+are top 20. Paid-net/replacement/pairing tradeoff remains unknown. Saved labels
+remain non-authoritative. [Handoff](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
 The queue-reset, daily selection-probe and fixed-GTC collectors are closed.
 Their databases and reports remain evidence; do not restart them merely to add

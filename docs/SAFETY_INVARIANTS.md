@@ -371,9 +371,9 @@ These are implementation requirements, not suggestions.
     entry observation. A missing or malformed observation is counted as a
     coverage gap and must not veto, delay, reorder or cancel an otherwise valid
     action. No observation field, including league, may feed selection,
-    reconciliation, scheduler priority, slot capacity or risk policy until a
-    separately reviewed rule passes a prospective held-out cohort and first
-    runs in would-refuse shadow mode.
+    reconciliation, scheduler priority, slot capacity or risk policy. A
+    separately reviewed, operator-authorized live rule must use current
+    action/book evidence instead, never persisted observation fields.
 67. Reward attribution and daily risk authority use midnight-to-midnight
     `America/New_York` and must honor DST. Changing the risk reset instant is a
     live-risk policy change, not an accounting side effect. The UTC-to-ET
@@ -636,7 +636,7 @@ These are implementation requirements, not suggestions.
     deadline for ordinary, lifecycle, reward-end and post-flat triggers, and
     lifecycle timing telemetry is evidence only rather than entry
     authorization.
-86. Retained executable value is a prospective shadow, never an entry gate.
+86. Persisted retained-value labels remain shadow evidence, never entry authority.
     The 60%, 70% and 80% labels are written only on a building post-only PLACE
     observation in the same pre-mutation intent transaction. They may not
     refuse, delay, reorder, cancel, resize or select an order. Replacement and
@@ -644,11 +644,14 @@ These are implementation requirements, not suggestions.
     selector snapshot and therefore add no venue read or socket; evidence
     older than the normal selection interval must be labeled stale and cannot
     be claimed as a spare. A missing/malformed observation still follows
-    invariant 66. No retained-value policy may be proposed until the current
-    size/capacity cohort compares avoided realized trading loss against
-    projected and paid reward surrendered, recent-candidate availability,
-    unknown replacement evidence and no-candidate capacity on a frozen
-    held-out interval, followed by explicit operator authorization.
+    invariant 66. The operator-approved September 7 implementation is a
+    separate configurable entry-only policy, disabled pending activation.
+    When enabled, fresh selection, flat quoting and actual-action recheck
+    independently compute stressed exit from current book/price/quantity;
+    below-threshold sides cannot build risk, and unknown fails closed.
+    Exits, reducers, maintenance and shutdown bypass this rule. Reward
+    opportunity and paid-net uncertainty remain explicit; activation or
+    threshold changes require an operator decision and safe restart.
 87. Host API admission may slow discovery but may not turn rate-limit recovery
     into an exit deadline. Every cooperating WSL process consumes one aggregate
     4/second clock. Background selection has its own 2/second lane; invariant

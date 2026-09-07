@@ -15,6 +15,7 @@ from typing import Mapping
 
 from .models import BookSnapshot, MarketMetadata
 from .shadow_math import cross_exit
+from .entry_quality import EntryQualityPolicy
 
 
 class ActionKind(str, Enum):
@@ -105,6 +106,7 @@ class ReconcilerPolicy:
     small_residual_min_qty: Decimal = Decimal("0.01")
     small_residual_max_qty: Decimal = Decimal("0.09")
     small_residual_timeout_seconds: float = 300.0
+    entry_quality_policy: EntryQualityPolicy = EntryQualityPolicy()
 
     def __post_init__(self) -> None:
         if self.quote_size <= 0 or self.max_inventory_age_seconds <= 0:
@@ -841,6 +843,9 @@ class DesiredStateReconciler:
                 desired_sides.remove(side)
             elif result.pnl < -self.policy.max_exit_loss:
                 drop_cause[side] = "exit_loss"
+                desired_sides.remove(side)
+            elif (quality_blocker := self.policy.entry_quality_policy.blocker(result)):
+                drop_cause[side] = quality_blocker
                 desired_sides.remove(side)
 
         actions: list[PlanAction] = []

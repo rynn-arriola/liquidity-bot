@@ -73,3 +73,20 @@ Full-suite, pushed deployment and live report evidence will be recorded here.
 - The operator explicitly reiterated **do not restart the bot**. Existing
   trading runner `475856` remained up. This release changes only the isolated
   report script, its tests and documentation; `src/` has no changes.
+- Release `1f9bacd929de4152cead3f41ae8a92718824635c` was pushed before the WSL
+  fast-forward. All 159 source/test/script/web/config file hashes match after
+  line-ending normalization. `git diff baae566d4 HEAD -- src` is empty, proving
+  the existing runner's trading source is identical to this release. The
+  deployment marker advances for the report/tests without restarting trading.
+- The existing locked hourly wrapper completed successfully and posted to the
+  existing dedicated Discord destination. Its **04:25:06Z** snapshot now shows
+  September 6 trading **-104.2022**, `trading_estimate=true`, with exact interval
+  September 6 **00:01:46.645731 EDT** through September 7 **00:07:54.512370 EDT**.
+  Calendar-day net remains pending. This is authenticated report acceptance,
+  not a synthetic number or a ledger edit; cash coverage completed normally.
+- Post-report process proof still shows original supervisor `475847` and runner
+  `475856`, explicit size 10 / 32. No stop, restart, order/position mutation or
+  risk-baseline change was performed. Current exposure was not re-probed for
+  this report-only change; the earlier separately dated live proof remains.
+- The exact native WSL checkout passed **1,150 tests in 83.215 seconds**.
+  Final documentation and diff audits passed before the acceptance handoff.

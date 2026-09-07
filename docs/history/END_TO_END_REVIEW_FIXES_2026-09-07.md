@@ -115,3 +115,55 @@ fresh start gate and post-restart acceptance are recorded below as completed.
 - Final whitespace/diff and documentation audit passed. Nine new regression
   methods were added; existing clock/cash fixtures were updated without
   weakening their money, ownership, attempt-bound or alert assertions.
+- Release `baae566d434daf36c2886796924b542fb1761fdb` was pushed before the
+  stopped WSL checkout fast-forwarded. Its `DEPLOYED_COMMIT` matches. All **159**
+  tracked source/test/script/web/config files SHA-256 match Windows and WSL
+  after line-ending normalization, with both tracked trees clean against Git.
+- The exact native production checkout passed **1,147 tests in 80.788 seconds**;
+  dependency consistency passed. Post-push parity correctly held the runtime
+  change for reviewed deployment; the private backup remained verified.
+- At **04:06:15Z**, authenticated venue proof was zero orders/positions and the
+  read-only ledger had zero unresolved intents, unknown orders and working rows.
+  The launcher then started supervisor `475847` and runner `475856` with explicit
+  `auto 10 32`. Actual quoting/API acceptance follows below, not inferred from
+  the successful launcher command.
+- Natural startup scanned two event pages, found 89 viable markets and loaded
+  the 30-order overnight ceiling with loss cap 64. Active scope is `RUNNING`,
+  capacity 32, publisher `475856`. First orders were submitted at 04:08:11Z.
+- First API window at **04:09:51Z**: 207.5 seconds, 469 attempts, 2.260/sec,
+  39 mutations, **zero failures/429s/cooldown**, queue peak one and wait p99
+  0.477 seconds. The new cash path accounted for 11 history reads. This is
+  initial healthy-load acceptance, not proof of peak-load performance.
+- At 04:09:50Z authenticated reads found **25 orders across 24 markets and zero
+  positions**. Seven live intents/six absent-order rows were in reconciliation
+  during cancellations; these are not terminal proof or new startup ambiguity.
+  Subsequent logs show ordinary re-entry after reconciliation at 04:10:01Z.
+- Final authenticated acceptance at **04:11:28Z** found **27 orders across 22
+  markets, zero positions, zero unresolved intents and zero unknown orders**;
+  the ledger also had 27 working rows. The earlier cancellation ambiguity
+  cleared naturally without a restart or manual ledger repair.
+
+## September 6 report question
+
+The operator asked why September 6 trading was unavailable after restart.
+The report snapshot was generated at **04:07:13Z**, before September 7's
+baseline was saved at **04:07:54.512370Z**. No closing boundary existed when
+that report ran. The later baseline is 7m54s after ET midnight, outside the
+two-minute tolerance, so simply rerunning the report will not establish exact
+calendar-day P&L. September 6's own opening was 04:01:46.645731Z.
+
+Stored cash/equity is $1,090.8613 for September 6 and $1,086.6591 for September 7.
+The previously authenticated September 6 result was **-$104.2022 through
+23:34 ET**, after excluding the proven $100 goodwill credit. This is the last
+verified within-day result, not newly proven exact midnight-to-midnight P&L.
+The bot was stopped across midnight for the authorized review deployment.
+Unavailable preserves that evidence gap instead of erasing the loss or
+silently claiming the late snapshot was midnight. A separate gap audit or
+explicitly labeled wider-interval report remains possible; no ledger baseline,
+audited exception or report number was changed in response to the question.
+
+The operator also asked about the **$13.33 ET-day execution-fee reference**.
+Code and active decisions confirm `$10 * (size / 10) * (slots / 24)`, rounded
+to cents: $13.33 at size 10 / 32. It is `observe_only`, not a second stop,
+order ceiling or independent loss deduction. The sole money-loss authority
+remains $90 adjusted marked-equity HARD. This clarification changed no policy.

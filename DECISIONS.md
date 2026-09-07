@@ -3,7 +3,7 @@ This file records human choices, not a backlog or AI recommendations. Code and t
 authority for exact enforced values; if they disagree with this page, stop and
 show the operator the discrepancy.
 ## Decision rights
-- **2026-09-07 Discord presentation/deployment:** concise actual reports without repeated methodology/side notes; retain pending/estimated/unavailable labels and critical alerts, never invent withdrawal values. The operator authorized pushing/deploying `f7816c324` for the next restart, explicitly **without restarting now**. The standalone reward report reloads at its next scheduled run. [Implementation](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
+- **2026-09-07 Discord presentation/deployment:** concise actual reports without repeated methodology/side notes; retain pending/estimated/unavailable labels and critical alerts, never invent withdrawal values. After deployment without restart, the operator authorized **Command 1** to stop safely and restart `f7816c324` with unchanged size 10 / 32 and risk rules. The standalone reward report retains its hourly schedule. [Implementation](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 
 - The human operator chooses strategy behavior, risk limits, capital, quote size, slot count, deployment timing and stop/restart timing.
 - AI agents investigate, explain, implement, test, review, document and carry

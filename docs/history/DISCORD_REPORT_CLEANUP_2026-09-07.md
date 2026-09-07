@@ -121,3 +121,40 @@ the earlier final review, reversals and full review-tree tests were reused.
 - Final deployment diff is the same reviewed release. Only documentation
   follows it; native tests and hashes remain valid for those unchanged files.
   Backup-PC parity remains pending while the peer is unavailable.
+
+## Command 1 restart and trading acceptance — 2026-09-07
+
+The subsequent **Command 1** explicitly authorized the normal stop/review/
+deploy/restart workflow, superseding the prior no-restart instruction for
+this run only. No additional source, configuration or risk change was made.
+
+- Supervisor 475847 was stopped first and runner 475856 received SIGTERM.
+  Its terminal record at **14:08:55.653397Z** proved `flat=true`, with reason
+  `operator_sigterm`.
+- Authenticated gates at **14:09:25.425982Z** and **14:09:57.669795Z** each
+  proved zero venue orders/positions, zero unresolved intents, zero unknown
+  orders and zero working ledger orders. Parity also captured a verified
+  stopped-runtime private recovery snapshot.
+- Local/GitHub/WSL tracked state matched. All **160** source/test/script/web/
+  config hashes matched; `git diff f7816c324 HEAD -- src tests scripts config`
+  was empty. Reused the already-completed three reversals, final review-tree
+  1,160-test run and exact native **1,160 tests / 80.407s** instead of repeating
+  unchanged verification.
+- The normal launcher restarted `auto 10 32`: supervisor **770963**, runner
+  **770972**, process start **14:09:57Z**. Installed/loaded release remains
+  **f7816c324**. $90 HARD, the durable ET-day loss state, daytime/overnight caps,
+  all position/exit rules and the independent report timers are unchanged.
+- Startup scanned two event pages and found 77 viable markets. The official
+  schedule coordinator reported `HEALTHY/NORMAL`; normal preflight completed,
+  including successful startup notification delivery, before order entry.
+- The first API window at **14:13:46.388433Z** covered **227.9 seconds**, **489
+  attempts**, **2.146/s**, zero failures, zero rate-limit errors, zero cooldown
+  in every lane, and peak queue depth one.
+- Authenticated acceptance at **14:13:55.638466Z** found **39 orders across 28
+  markets, zero positions and zero unknown orders**. One current intent was
+  awaiting confirmation; do not represent that live snapshot as zero pending
+  intents. Both pre-start gates above were completely clear.
+- The new reporting imports are loaded. Next naturally scheduled summary and
+  reward layouts, and future duplicate/critical-message paths, remain natural
+  acceptance observations; no synthetic webhook messages or induced failures
+  were used. The backup-PC peer remains pending/offline.

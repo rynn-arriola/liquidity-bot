@@ -100,9 +100,9 @@ global fallback.
 The operator-approved 70% entry-only filter and exact-action estimate repair
 passed all 1,173 tests and three reversals, remain disabled, and need a separate
 deployment/activation/restart decision. Do not enable on a generic restart.
-Top-20 priority does not remove quality risk: 79.1% of ranked flagged quotes
-are top 20. Paid-net/replacement/pairing tradeoff remains unknown. Saved labels
-remain non-authoritative. [Handoff](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
+The first matched reward sensitivity is unfavorable before replacements:
+$207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
+pending. Validate reward/replacement net; saved labels remain non-authoritative. [Tradeoff](docs/history/ENTRY_QUALITY_REWARD_TRADEOFF_2026-09-07.md) · [implementation](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
 The queue-reset, daily selection-probe and fixed-GTC collectors are closed.
 Their databases and reports remain evidence; do not restart them merely to add

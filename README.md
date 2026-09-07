@@ -66,7 +66,7 @@ hard-locked by `CommissioningConfig`:
 | concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
-| emergency HARD stop | `8 × size × slots / 20` on adjusted marked equity; $80 at 20 slots, $96 at 24, $128 at 32; provisional with open inventory |
+| emergency HARD stop | `$90 × size / 10 × slots / 32` on adjusted marked equity; $56.25 at 20 slots, $67.50 at 24, $90 at 32; provisional with open inventory |
 | loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 30, 70% → 25, 80% → 20, 90% → 15, 95% → 10; HARD still stops at 100%; never counts position-market orders or reducers |
 | time-scaled flat-entry orders | midnight–8:59:59 AM `America/New_York` → maximum 30 pending entries; 9:00 AM–11:59:59 PM → maximum 40; combines with loss and physical capacity by taking the smallest |
 | inventory age before a forced exit | 900s |

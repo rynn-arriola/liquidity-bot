@@ -56,7 +56,7 @@ class CommissioningTests(unittest.TestCase):
             self.authorized().max_early_exit_loss_usd, Decimal("4.0"))
         # The safe missing-file fallback remains size 5, so every quantity-linked
         # risk control is half of its live size-10 baseline.
-        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "40")
+        self.assertEqual(str(self.authorized().hard_stop_loss_usd), "28.125")
         self.assertEqual(
             str(self.authorized().max_stressed_exit_loss_usd), "20")
         self.assertEqual(
@@ -64,7 +64,7 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             str(self.authorized().max_portfolio_exposure_usd), "150")
         self.assertEqual(
-            str(self.authorized().weekly_operating_reserve_usd), "280")
+            str(self.authorized().weekly_operating_reserve_usd), "196.875")
         self.assertEqual(self.authorized().max_hard_exit_attempts, 3)
         self.assertEqual(self.authorized().max_hard_exit_retry_seconds, 30)
         self.assertEqual(
@@ -219,10 +219,11 @@ class CommissioningTests(unittest.TestCase):
                     config.max_stressed_exit_loss_usd,
                     Decimal(size) * Decimal("4"))
                 self.assertEqual(
-                    config.hard_stop_loss_usd, Decimal(size) * Decimal("8"))
+                    config.hard_stop_loss_usd,
+                    Decimal(size) * Decimal("5.625"))
                 self.assertEqual(
                     config.weekly_operating_reserve_usd,
-                    Decimal(size) * Decimal("56"))
+                    Decimal(size) * Decimal("39.375"))
 
     def test_size_thirteen_default_width_scales_fee_observation(self):
         config = self.authorized(quote_size=Decimal("13"))
@@ -261,19 +262,19 @@ class CommissioningTests(unittest.TestCase):
         config = self.authorized(
             quote_size=Decimal("13"), max_markets=24)
         self.assertEqual(config.max_stressed_exit_loss_usd, Decimal("52"))
-        self.assertEqual(config.hard_stop_loss_usd, Decimal("124.8"))
+        self.assertEqual(config.hard_stop_loss_usd, Decimal("87.75"))
         self.assertEqual(config.rest_requests_per_second, Decimal("4"))
 
     def test_hard_stop_scales_with_quantity_and_slot_width(self):
         expected = {
-            (10, 20): "80",
-            (10, 22): "88",
-            (10, 24): "96",
-            (10, 32): "128",
-            (13, 20): "104",
-            (13, 22): "114.4",
-            (13, 24): "124.8",
-            (13, 32): "166.4",
+            (10, 20): "56.25",
+            (10, 22): "61.875",
+            (10, 24): "67.50",
+            (10, 32): "90",
+            (13, 20): "73.125",
+            (13, 22): "80.4375",
+            (13, 24): "87.750",
+            (13, 32): "117",
         }
         for (size, slots), limit in expected.items():
             with self.subTest(size=size, slots=slots):
@@ -294,17 +295,17 @@ class CommissioningTests(unittest.TestCase):
 
         expected = {
             "0": 64,
-            "63.99": 64,
-            "64": 30,
-            "89.59": 30,
-            "89.60": 25,
-            "102.39": 25,
-            "102.40": 20,
-            "115.19": 20,
-            "115.20": 15,
-            "121.59": 15,
-            "121.60": 10,
-            "128": 10,
+            "44.99": 64,
+            "45": 30,
+            "62.99": 30,
+            "63": 25,
+            "71.99": 25,
+            "72": 20,
+            "80.99": 20,
+            "81": 15,
+            "85.49": 15,
+            "85.50": 10,
+            "90": 10,
         }
         for loss, cap in expected.items():
             with self.subTest(loss=loss):
@@ -319,9 +320,9 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(
             config.entry_order_cap_for_loss(Decimal("0")), 40)
         self.assertEqual(
-            config.entry_order_cap_for_loss(Decimal("40")), 30)
+            config.entry_order_cap_for_loss(Decimal("28.125")), 30)
         self.assertEqual(
-            config.entry_order_cap_for_loss(Decimal("56")), 25)
+            config.entry_order_cap_for_loss(Decimal("39.375")), 25)
 
     def test_overnight_entry_order_cap_uses_exact_eastern_boundaries(self):
         config = self.authorized(
@@ -418,16 +419,16 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(config.max_portfolio_exposure_usd, Decimal("420"))
         self.assertEqual(config.max_market_exposure_usd, Decimal("90"))
         self.assertEqual(config.max_stressed_exit_loss_usd, Decimal("40"))
-        self.assertEqual(config.hard_stop_loss_usd, Decimal("128"))
-        self.assertEqual(config.weekly_operating_reserve_usd, Decimal("896"))
+        self.assertEqual(config.hard_stop_loss_usd, Decimal("90"))
+        self.assertEqual(config.weekly_operating_reserve_usd, Decimal("630"))
         self.assertEqual(
             config.execution_fee_observation_usd, Decimal("13.33"))
         self.assertEqual(config.rest_requests_per_second, Decimal("4"))
 
     def test_size_ten_and_twenty_match_operator_risk_profiles(self):
         expected = {
-            10: ("300", "40", "80"),
-            20: ("600", "80", "160"),
+            10: ("300", "40", "56.25"),
+            20: ("600", "80", "112.5"),
         }
         for size, values in expected.items():
             with self.subTest(size=size):

@@ -23,6 +23,9 @@ NEW_YORK = "America/New_York"
 AUTO_REWARD_MARKET = "__AUTO_REWARD_MARKETS__"
 RUNTIME_QUOTE_SIZE_PATH = Path("data/commissioning_quote_size")
 RUNTIME_SLOT_CAPACITY_PATH = Path("data/commissioning_slot_capacity")
+HARD_STOP_SIZE_10_32_USD = Decimal("90")
+
+
 class CommissioningRefused(RuntimeError):
     """The requested experimental live session is not narrowly authorized."""
 
@@ -62,8 +65,8 @@ def next_six_am_new_york(now: datetime) -> datetime:
 class CommissioningConfig:
     """Bounded experimental authorization derived from one quote quantity.
 
-    ``hard_stop_loss_usd`` is the sole money-loss stop. Its size-10/20-slot
-    baseline is $80 and it scales as 8x quantity times configured breadth / 20.
+    ``hard_stop_loss_usd`` is the sole money-loss stop. Its size-10/32-slot
+    reference is $90 and it scales proportionally with quantity and breadth.
     The stressed-exit entry cap is an economic eligibility check, not a stop.
     """
 
@@ -76,8 +79,8 @@ class CommissioningConfig:
     # contract both the maker rebate and the taker fee round to zero (section 1
     # of FINDINGS: per-contract economics are ~37% worse at size 1), and reward
     # share is size-linear, so size 1 earns a rounding error. Worst case is
-    # 5 x 8 markets x 2 sides x ~$0.50 = $40 notional, which is what the loss
-    # stop below is set to.
+    # 5 x 8 markets x 2 sides x ~$0.50 = $40 was the original commissioning
+    # notional. The current breadth-scaled HARD policy is defined separately.
     # Raised 5 -> 10 on 2026-08-20, returned to 5 on 2026-08-24, then restored
     # to 10 later that day by operator decision. Size is leverage, not edge:
     # FINDINGS measured reward
@@ -148,7 +151,7 @@ class CommissioningConfig:
     # settlement for -$88.20, 86% of that session's loss. Never settle.
     force_exit_before_start_seconds: int = 300
     # Risk values are computed properties below. At size 10 the stressed-exit
-    # entry cap is $40 and the size-10/20-slot HARD baseline is $80.
+    # entry cap is $40 and the size-10/32-slot HARD reference is $90.
     # What an EARLY cross may cost, before the kickoff deadline makes one
     # mandatory. A third member of the family split on 2026-08-14: it read
     # the old shared $40 loss value and so could never fire, because five contracts
@@ -266,13 +269,14 @@ class CommissioningConfig:
 
     @property
     def hard_stop_loss_usd(self) -> Decimal:
-        """Scale the size-10/20-slot $80 hard policy with breadth."""
+        """Scale the operator's size-10/32-slot $90 HARD reference."""
 
         return (
-            self.quote_size
-            * Decimal("8")
+            HARD_STOP_SIZE_10_32_USD
+            * self.quote_size
+            / Decimal("10")
             * Decimal(self.max_markets)
-            / Decimal(DEFAULT_SLOT_CAPACITY)
+            / Decimal("32")
         )
 
     @property

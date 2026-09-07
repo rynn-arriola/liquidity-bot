@@ -543,7 +543,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner._loss_entry_order_cap, 40)
 
         guard.observe_equity(
-            guard.starting_equity - Decimal("28"), observed_at=NOW)
+            guard.starting_equity
+            - runner.config.hard_stop_loss_usd * Decimal("0.70"),
+            observed_at=NOW)
         runner._refresh_loss_entry_order_cap(NOW)
 
         self.assertEqual(runner._loss_entry_order_cap, 25)
@@ -8993,8 +8995,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             risk)
         self.assertIn("$100.00", capital)  # 5 contracts × 20 slots
         self.assertIn("$50.00", capital)   # existing 30× cap cushion
-        self.assertIn("$280.00", capital)  # seven $40 daily budgets
-        self.assertIn("$430.00", capital)
+        self.assertIn("$196.88", capital)  # seven $28.125 daily budgets
+        self.assertIn("$346.88", capital)
         self.assertIn("$0.00", capital)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -9016,12 +9018,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         capital = next(
             value for name, value in fields.items() if "Capital guidance" in name)
         self.assertIn(f"{'Quoting':<19}{'0/24':>10}", slots)
-        self.assertIn("$0.00 / $96.00", risk)
-        self.assertEqual(risk.count("$0.00 / $96.00"), 1)
+        self.assertIn("$0.00 / $67.50", risk)
+        self.assertEqual(risk.count("$0.00 / $67.50"), 1)
         self.assertNotIn("Session", risk)
         self.assertNotIn("Worst", risk)
         for expected in (
-                "10 / 24", "$240.00", "$100.00", "$672.00", "$1,012.00"):
+                "10 / 24", "$240.00", "$100.00", "$472.50", "$812.50"):
             self.assertIn(expected, capital)
         await runner.private_stream.close()
         await runner.market_stream.close()

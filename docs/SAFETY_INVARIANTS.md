@@ -34,7 +34,7 @@ These are implementation requirements, not suggestions.
     six-hour selection horizon does not
     change. Early-exit loss (`0.8 × size`), stressed-exit entry cap (`4 × size`),
     per-market exposure (`9 × size`), portfolio exposure
-    (`(slots + 10) × size`), HARD (`8 × size × slots / 20`),
+    (`(slots + 10) × size`), HARD (`$90 × size / 10 × slots / 32`),
     and the cent-rounded ET-day gross taker-fee telemetry reference
     (`$10 × size / 10 × slots / 24`) are computed properties. Taker-exit count
     and crossing the fee reference must not alter trading. Portfolio
@@ -75,7 +75,7 @@ These are implementation requirements, not suggestions.
     reconnect budget. Quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. The sole money-loss authority is the **8 × size × slots / 20** adjusted
+25. The sole money-loss authority is the **$90 × size / 10 × slots / 32** adjusted
     marked-account-equity HARD stop
     (`currentBalance` plus every open position's Retail `cashValue`, less
     proven non-trading cash) is the emergency sensor. Every complete mark is

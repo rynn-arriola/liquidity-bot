@@ -29,7 +29,7 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.quote_size, Decimal("10"))
         self.assertEqual(config.max_markets, 24)
-        self.assertEqual(dashboard._hard_stop_cap(config), 96.0)
+        self.assertEqual(dashboard._hard_stop_cap(config), 67.5)
 
     async def _render_with_failure(self, fail_at: str) -> str:
         class FailingAccount:

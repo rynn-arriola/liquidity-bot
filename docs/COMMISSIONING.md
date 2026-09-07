@@ -59,7 +59,7 @@ strategy is profitable and not permission to scale.
   Neither count nor fee observation can block/cancel quotes, pause/stop trading
   or change an exit path. Crossing the fee reference logs/reports once;
 - one breadth-scaled marked-account-equity HARD stop is the sole money-loss
-  authority. It is $80 at size 10 / 20 slots, $96 at 24 and $128 at 32. The ET
+  authority. It is $56.25 at size 10 / 20 slots, $67.50 at 24 and $90 at 32. The ET
   risk day resets at midnight `America/New_York`, including DST. Positively
   classified completed rewards, deposits, withdrawals, bonuses and transfers
   are subtracted from the adjusted mark; the bounded cash-only snapshot must

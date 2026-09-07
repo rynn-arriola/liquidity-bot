@@ -14,8 +14,10 @@ quantity/breadth scaling. At size 10 / 32, the existing entry-order tiers now
 begin at $45, $63, $72, $81 and $85.50; HARD stops at $90. The seven-day
 capital-guidance reserve correspondingly becomes $630.
 
-The running process remains loaded with the old $128 value. This policy takes
-effect only after reviewed deployment and an explicitly authorized restart.
+Initially held at $128, this policy was deployed and loaded by the subsequent
+authorized Command 1. The new run inherited September 6 loss $104.2022 and
+stopped flat at $90 HARD without submitting an order. See the
+[deployment evidence](REPORTING_RECOVERY_DEPLOYMENT_2026-09-06.md).
 
 ## Verification
 

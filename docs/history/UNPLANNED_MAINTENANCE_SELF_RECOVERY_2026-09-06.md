@@ -102,7 +102,10 @@ Final authenticated evidence at 2026-09-07 03:24:47.315287Z found 27 open
 orders, two nonzero positions, zero unowned orders and zero unresolved/unknown
 ledger state. Supervisor 394690 and runner 394699 were still the same processes.
 
-Prepared only. Await a separately authorized deployment/restart, then observe
+The subsequent authorized Command 1 deployed/restarted `43e9db826`; native
+tests passed 1,138/1,138. The new $90 HARD correctly ended the run flat with no
+new order because the inherited ET-day loss was $104.2022. See the
+[deployment evidence](REPORTING_RECOVERY_DEPLOYMENT_2026-09-06.md). Still observe
 natural recovery, terminal order proof, retained position management and resumed
 ordinary entries. Do not induce maintenance or claim production acceptance from
 unit tests. An actual API outage can prevent every exit; automatic software

@@ -104,10 +104,13 @@ it must not accidentally activate or revert the separately prepared HARD policy.
 
 ## Remaining acceptance
 
-Do not deploy or restart until the operator authorizes it. After deployment,
+The subsequent authorized Command 1 deployed `43e9db826` and restarted; its
+shutdown summary logged proven capital with reason `ok`. The $90 HARD gate
+then left the bot stopped, with zero orders/positions. See the
+[deployment evidence](REPORTING_RECOVERY_DEPLOYMENT_2026-09-06.md). Still
 verify a naturally generated Discord table shows September 3 -$120.39 when in
 range, missing boundaries unavailable, and withdrawal guidance uses fresh
 render-time evidence or explains its genuine blocker. Historical posted messages
 have not been edited. The operator additionally requested an unplanned-maintenance
 self-recovery review after this reporting fix; that is a separate in-scope task,
-not permission to bypass reconciliation, invent cancellation or restart now.
+not permission to bypass reconciliation, invent cancellation or erase losses.

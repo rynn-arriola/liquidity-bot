@@ -95,11 +95,11 @@ a restart-window error. Do not induce a fault. Natural acceptance must show
 unresolved/`UNKNOWN_ABSENT`. Non-429, stale and exhausted proof must retain the
 global fallback.
 
-## 5. Decide entry-quality filter activation
+## 5. Accept and evaluate the authorized entry-quality trial
 
-The operator-approved 70% entry-only filter and exact-action estimate repair
-passed all 1,173 tests and three reversals, remain disabled, and need a separate
-deployment/activation/restart decision. Do not enable on a generic restart.
+The operator explicitly authorized the 70% filter and Command 1 on September 7.
+Enabled-config review passes 1,173 tests; deploy, pass fresh flat/clear startup
+gates and verify live acceptance. Then compare rewards, losses and slot activity.
 The first matched reward sensitivity is unfavorable before replacements:
 $207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
 pending. Validate reward/replacement net; saved labels remain non-authoritative. [Tradeoff](docs/history/ENTRY_QUALITY_REWARD_TRADEOFF_2026-09-07.md) · [implementation](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).

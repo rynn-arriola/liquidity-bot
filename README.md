@@ -96,8 +96,8 @@ evidence and have no independent pause or stop authority.
 
 The optional entry-quality filter loads restart-scoped
 `config/entry_quality_policy.json`: `enabled` switches it on/off and
-`minimum_retained_value` sets the fraction (0.70 means 70%). It ships disabled
-pending a separate activation decision. When enabled, each new-entry side must
+`minimum_retained_value` sets the fraction (0.70 means 70%). The operator
+enabled 70% for the September 7 trial. When enabled, each new-entry side must
 retain that fraction of its actual stake in the existing stressed-exit model;
 position reducers and exits remain unchanged. Config edits require an authorized
 restart; they do not hot-reload. This is an estimate, not guaranteed protection.

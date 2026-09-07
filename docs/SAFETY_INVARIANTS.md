@@ -645,7 +645,7 @@ These are implementation requirements, not suggestions.
     older than the normal selection interval must be labeled stale and cannot
     be claimed as a spare. A missing/malformed observation still follows
     invariant 66. The operator-approved September 7 implementation is a
-    separate configurable entry-only policy, disabled pending activation.
+    separate configurable entry-only policy requiring explicit activation.
     When enabled, fresh selection, flat quoting and actual-action recheck
     independently compute stressed exit from current book/price/quantity;
     below-threshold sides cannot build risk, and unknown fails closed.

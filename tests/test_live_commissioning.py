@@ -31,6 +31,7 @@ from liquidity_bot.execution_ledger import (
     Execution, ExecutionLedger, LedgerConflict, OrderState, PositionState,
     TradeStateObservation)
 from liquidity_bot.entry_pause import UiTradingProbe, UiTradingState
+from liquidity_bot.entry_quality import EntryQualityPolicy
 from liquidity_bot.live_commissioning import (
     MAX_BOUND_STREAM_RECOVERY_ATTEMPTS,
     MAX_MARKET_STREAM_RECOVERY_ATTEMPTS,
@@ -471,6 +472,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             arm_live=True,
             auto_select_reward_markets=auto,
             max_markets=max_markets,
+            # Legacy lifecycle fixtures exercise the explicit off path;
+            # test_entry_quality covers the independently enabled policy.
+            entry_quality_policy=EntryQualityPolicy(enabled=False),
         )
         runner = CommissioningRunner(
             client, config, ledger, notifier,

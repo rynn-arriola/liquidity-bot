@@ -39,7 +39,7 @@ by more than reward surrendered and must not create material dark-slot cost.
 Any live proposal requires a separate review and explicit operator decision.
 The September 7 audit finds a repeatable signal in 1,069 coherent episodes;
 the operator approved a configurable gate and exact-action estimate repair,
-prepared disabled pending separate activation. Top-20 reward sacrifice remains
+now separately authorized for a September 7 trial. Top-20 reward sacrifice remains
 unproven; keep 900 seconds. [Handoff](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
 ## 2. Ledger growth slope

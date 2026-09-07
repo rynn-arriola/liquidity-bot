@@ -27,9 +27,9 @@ def cliff(slug='market-one'):
 
 
 class EntryQualityTests(unittest.TestCase):
-    def test_config_disabled_until_separate_activation(self):
+    def test_config_enabled_for_operator_authorized_trial(self):
         p = load_entry_quality_policy()
-        self.assertFalse(p.enabled)
+        self.assertTrue(p.enabled)
         self.assertEqual(p.minimum_retained_value, .7)
 
     def test_strict_restart_scoped_config(self):

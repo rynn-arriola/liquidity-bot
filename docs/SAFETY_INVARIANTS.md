@@ -426,9 +426,13 @@ These are implementation requirements, not suggestions.
     (`cashValue - basis`); otherwise only the exact total is shown. The current
     ET row and its net use this marked value. A completed historical day uses
     adjacent native ET equity
-    boundaries only when both prove flat and all non-trading cash is removed;
-    otherwise it is visibly prefixed `~` and remains the balanced-pair
-    estimate. An immutable historical scan may ignore completions after its
+    boundaries, including carried position marks, only when both timestamps
+    are within the reviewed two-minute tolerance or match every field of an
+    audited delayed boundary, and all non-trading cash is removed. This is
+    marked account P&L, not closed-only realized trading. Missing boundaries
+    remain unavailable; the separate pair estimate cannot fill a daily row,
+    complete the period total or finalize net. Today's net is never finalized.
+    An immutable historical scan may ignore completions after its
     fixed `through` boundary but must still reach EOF; the current bracketed
     snapshot may not. Any moving balance, absent position `cashValue`, unproven
     boundary, unknown cash transfer, pagination defect, page exhaustion or day
@@ -444,7 +448,7 @@ These are implementation requirements, not suggestions.
     snapshot for the TV dashboard. That cache must preserve ET dates, account
     trading, finalized gain, pending context, merged side-hours and pending-safe
     net semantics. Overall P&L is lifetime ledger realised P&L plus bot-era PAID
-    gain; pending is excluded. The live runner may additionally publish an
+    gain, an incomplete ledger estimate; pending is excluded. The live runner may additionally publish an
     atomic owner-only local cache of its latest already-proven account-wide
     marked trading total and, only when the day began flat and basis is
     complete, its closed/open breakdown. The cache excludes proven rewards,

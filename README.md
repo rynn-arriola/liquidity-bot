@@ -200,9 +200,9 @@ score. The probe never submits it.
 
 ## Seven-day reward table
 
-For one ET-dated table containing current account-realized trading, proven-flat
-historical account results where available, visibly marked balanced-pair
-fallbacks, paid and pending liquidity reward, finalized net, and merged resting
+For one ET-dated table containing account marked trading, proven historical
+ET equity changes including carried inventory, paid and pending liquidity
+reward, finalized net for proven closed days, and merged resting
 side-hours:
 
 ```bash
@@ -212,7 +212,7 @@ side-hours:
 The phrase **“run 7 day reward table”** means this exact command. The script
 opens `data/commissioning.db` read-only. It makes one earnings request, one
 bounded historical cash-only walk of at most four pages, plus a bounded account
-snapshot for `Account realized today (ET)`: two matching balance reads around a
+snapshot for `Account marked trading today (ET)`: two matching balance reads around a
 complete position read and no more than four current-day cash-only pages. Every
 cash walk must reach explicit EOF. Cash changes are assigned by completion time
 because the endpoint orders them by creation time. These calls share a separate
@@ -303,9 +303,14 @@ To avoid sampling an ordinary cancel between submission and terminal proof, a
 routine post may wait up to 60 seconds only while its balance is fresh and
 current order ambiguity is the blocker; two-second rechecks are ledger-only.
 Stale or persistent evidence remains `UNAVAILABLE`, and shutdown/critical
-summaries never wait. At loaded size 10 / 24, comfortable capital is $1,012:
-$240 slot footprint, $100 exposure cushion and $672 weekly reserve (seven $96
-hard-stop days).
+summaries never wait. Freshness uses the render clock, not an earlier decision
+sweep timestamp; an unavailable amount names its blocker. Loaded size 10 / 32
+with $128 HARD reserves $1,316. Prepared $90 HARD reserves $1,050 at that size
+and breadth; it is not active until reviewed deployment and authorized restart.
+Deposits, withdrawals and rewards never count as trading P&L. Missing daily
+account boundaries stay unavailable; incomplete matched pairs remain a separate
+diagnostic and cannot finalize net. The lifetime ledger net is labeled an
+estimate because settlements and manual exits may be missing.
 
 Unexpected termination uses the error webhook. Discord HTTP runs outside the
 WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine

@@ -6191,6 +6191,11 @@ class CommissioningRunner:
             # event loop or turn an observational failure into a bot stop.
             resting_side_hours_today = 0.0
             await self._report_runtime_error("resting_time_summary", exc)
+        # The caller's clock predates a potentially long decision sweep and
+        # the awaited report query. Balances can refresh during either. Judge
+        # freshness at rendering time, not against that obsolete timestamp.
+        now = max(now, self._now())
+        today = date.fromisoformat(reward_day(now))
         # Whole-account, not the primary market. Reporting only slot zero
         # meant a position on any other slot showed as open_positions 0 and an
         # inventory age of 0 -- the two numbers an operator watches to decide
@@ -6244,6 +6249,19 @@ class CommissioningRunner:
             1 for slug in self.active_slugs
             if self.ledger.working_orders(slug))
         idle_reasons = self._idle_market_reasons()
+        capital_reason = None
+        if self.balance is None or self.risk_guard is None:
+            capital_reason = "balance or freshness guard unavailable"
+        else:
+            balance_age = (now - self.balance.observed_at).total_seconds()
+            if balance_age < 0:
+                capital_reason = "balance timestamp is in the future"
+            elif balance_age > self.risk_guard.max_equity_age_seconds:
+                capital_reason = f"balance stale ({balance_age:.0f}s old)"
+        if capital_reason is None and (unresolved or unknown or problems):
+            capital_reason = (
+                "account integrity problem" if problems else
+                f"order proof pending ({len(unresolved)} intents, {unknown} unknown)")
         payload = build_liquidity_summary(LiquiditySummary(
             mode="LIVE",
             readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
@@ -6297,22 +6315,8 @@ class CommissioningRunner:
             # unresolved/unknown ownership state. Working owned orders are
             # safe: the calculation separately caps free cash by venue buying
             # power, so their reserved funds cannot be called withdrawable.
-            capital_state_proven=(
-                self.balance is not None
-                and 0 <= (now - self.balance.observed_at).total_seconds()
-                <= (self.risk_guard.max_equity_age_seconds
-                    if self.risk_guard is not None else 0)
-                and not unresolved
-                and not unknown
-                and not problems),
-            capital_unavailable_reason=(
-                "account evidence is stale or unresolved"
-                if (self.balance is None
-                    or (self.risk_guard is not None and not (
-                        0 <= (now - self.balance.observed_at).total_seconds()
-                        <= self.risk_guard.max_equity_age_seconds))
-                    or unresolved or unknown or problems)
-                else None),
+            capital_state_proven=capital_reason is None,
+            capital_unavailable_reason=capital_reason,
             viable_markets=(
                 self._market_selection.viable_markets
                 if self._market_selection is not None else 0),
@@ -6336,7 +6340,9 @@ class CommissioningRunner:
                     nontrading_cash=self._nontrading_cash)
                 if self._equity_snapshot is not None
                 and self._day_opening_equity is not None
-                and self._nontrading_cash is not None else Decimal("0")),
+                and self._nontrading_cash is not None
+                and self._baseline_day == today
+                and self._nontrading_cash_day == today else None),
             today_realized_pnl_usd=(
                 self._equity_snapshot.realized_trading_pnl(
                     opening_cash=self._cash_baseline,
@@ -6344,6 +6350,8 @@ class CommissioningRunner:
                 if self._equity_snapshot is not None
                 and self._cash_baseline is not None
                 and self._nontrading_cash is not None
+                and self._baseline_day == today
+                and self._nontrading_cash_day == today
                 # A carried position needs an opening basis to decompose the
                 # day's mark. The durable baseline currently stores opening
                 # cash and equity, so publish only the still-provable total.
@@ -6353,6 +6361,9 @@ class CommissioningRunner:
                 self._equity_snapshot.open_unrealized_pnl()
                 if self._equity_snapshot is not None
                 and self._day_opening_equity == self._cash_baseline
+                and self._baseline_day == today
+                and self._nontrading_cash_day == today
+                and self._nontrading_cash is not None
                 else None),
             today_pnl_as_of=(
                 self._equity_snapshot.observed_at
@@ -6429,6 +6440,8 @@ class CommissioningRunner:
             f"fill_driver={fill_driver} "
             f"earnings_paid={paid_observed:.2f} "
             f"earnings_pending={pending_observed:.2f} "
+            f"capital_proven={capital_reason is None} "
+            f"capital_reason={capital_reason or 'ok'} "
             f"retired={len(self._retired_ever)}"
             + (f" event_pages={getattr(self._market_selection, 'event_pages_used', 0)}"
                f" event_markets={self._market_selection.catalog_markets}"
@@ -6474,6 +6487,7 @@ class CommissioningRunner:
         ambiguity then sends the unchanged `UNAVAILABLE` representation.
         """
 
+        now = max(now, self._now())
         if not self._scheduled_summary_has_transient_capital_ambiguity(now):
             self._summary_proof_wait_started_at = None
             await self._send_summary(now)

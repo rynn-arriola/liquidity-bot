@@ -8,7 +8,8 @@ read-only mode. It never places, cancels, modifies, or reprices an order.
     .venv/bin/python -B scripts/reward_table.py --days 7
 
 Reward dates and table days use America/New_York, matching the venue. Trading
-uses the same balanced-leg lower-bound calculation as ``daily_pnl.py``.
+uses account marked-equity changes, excluding proven non-trading cash.
+Incomplete matched-pair ledger results are diagnostics, never daily totals.
 Resting time merges overlapping orders per (market, side), splits intervals at
 New York midnight, and sums market-side hours. It can therefore exceed 24
 hours per day when several market sides rest simultaneously.
@@ -67,6 +68,15 @@ AUDITED_DELAYED_ET_BASELINES = {
         "opening_equity": Decimal("708.3008"),
         "opening_cash": Decimal("708.3008"),
         "created_at": "2026-08-27T04:04:10.544588+00:00",
+        "source": "fresh_et_day",
+    },
+    # Flat authenticated reads at 03:50Z and 04:05Z straddle midnight;
+    # no ledger fill or completed cash activity before this startup mark.
+    # See REPORTING_ACCURACY_2026-09-06.md for the retained evidence.
+    "2026-09-04": {
+        "opening_equity": Decimal("792.7224"),
+        "opening_cash": Decimal("792.7224"),
+        "created_at": "2026-09-04T04:07:34.628633+00:00",
         "source": "fresh_et_day",
     },
 }
@@ -176,9 +186,10 @@ def historical_account_trading_by_day(
 
     This includes fills, manual closes, settlements and unbalanced inventory
     that the matched-pair ledger estimator misses. A day is omitted unless
-    both boundaries are native ET snapshots captured flat and on time (or the
-    one field-pinned audited exception above). A marked open position would
-    turn this into paper P&L, so such a boundary deliberately falls back.
+    both boundaries are native ET snapshots captured on time (or an exact
+    field-pinned audited exception above). Carried inventory is included in
+    equity: this is marked trading, consistently with today's row, not a
+    claim of closed-only realized P&L. Missing boundaries remain unavailable.
     """
 
     if not days:
@@ -215,7 +226,7 @@ def historical_account_trading_by_day(
             cash = _decimal(row["opening_cash"], "opening cash")
         except AccountMetricUnavailable:
             return None
-        if equity != cash:
+        if equity < 0 or cash < 0:
             return None
         delta = created_at - boundary
         if timedelta(0) <= delta <= BASELINE_START_TOLERANCE:
@@ -345,13 +356,13 @@ def _displayed_trading(
     account_realized: AccountRealizedToday | None,
     account_history: dict[str, Decimal] | None = None,
 ) -> Decimal | None:
-    """Prefer account truth, retaining the pair estimate as a fallback."""
+    """Only account evidence can populate the daily trading column."""
 
     if day_value == today:
         return _current_mark(account_realized)
     if account_history is not None and day_value.isoformat() in account_history:
         return account_history[day_value.isoformat()]
-    return pnl.get(day_value.isoformat())
+    return None
 
 
 def _current_mark(
@@ -370,9 +381,21 @@ def _trading_is_estimate(
     day_value: date, *, today: date,
     account_history: dict[str, Decimal] | None,
 ) -> bool:
-    return (day_value != today
-            and account_history is not None
-            and day_value.isoformat() not in account_history)
+    # Retained cache field for older dashboard consumers. Incomplete pair
+    # estimates no longer populate the account-trading column.
+    return False
+
+
+def _covered_total(values: list[Decimal | None]) -> str:
+    known = [value for value in values if value is not None]
+    if len(known) != len(values) or not values:
+        return f"Unavailable ({len(known)}/{len(values)} days proven)"
+    return f"${sum(known, Decimal(0)):+,.2f}"
+
+
+def _net_subtotal(values: list[Decimal]) -> str:
+    return (f"${sum(values, Decimal(0)):+,.2f}" if values
+            else "Unavailable (no finalized days)")
 
 
 def _dashboard_money(value: Decimal | None) -> str | None:
@@ -411,7 +434,7 @@ def build_dashboard_snapshot(
         pending_gain = pending_value if pending_value is not None else (
             Decimal(0) if has_gain else None)
         finalized = (
-            trading is not None and paid_value is not None
+            day_value < today and trading is not None and paid_value is not None
             and not pending_value)
         net = trading + paid_value if finalized else None
         rows.append({
@@ -488,7 +511,7 @@ def render_table(
         "Finalized net | Resting side-hours | Avg. sides resting |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
-    complete_net = Decimal(0)
+    finalized_nets: list[Decimal] = []
     for day_value in days:
         key = day_value.isoformat()
         trade = _displayed_trading(
@@ -498,9 +521,10 @@ def render_table(
         paid_reward = paid.get(key)
         pending_reward = pending.get(key)
         has_reward_row = paid_reward is not None or pending_reward is not None
-        if trade is not None and paid_reward is not None and not pending_reward:
+        if (day_value < today and trade is not None
+                and paid_reward is not None and not pending_reward):
             net = trade + paid_reward
-            complete_net += net
+            finalized_nets.append(net)
             net_text = f"**{float(net):+,.2f}**"
         else:
             net_text = "Pending"
@@ -519,7 +543,7 @@ def render_table(
         trade_text = (
             f"{'~' if estimate else ''}${float(trade):+,.2f}"
             if trade is not None
-            else "Unavailable" if day_value == today else "n/a")
+            else "Unavailable")
         lines.append(
             f"| {label} | {trade_text} | {paid_text} | {pending_text} | "
             f"{net_text} | {resting:.2f} | {average:.2f} |")
@@ -530,8 +554,6 @@ def render_table(
             account_history=account_history)
         for day in days
     ]
-    trade_total = sum(
-        (value for value in displayed_trades if value is not None), Decimal(0))
     pair_total = sum(
         (pnl.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     paid_total = sum((paid.get(day.isoformat(), Decimal(0)) for day in days),
@@ -552,18 +574,18 @@ def render_table(
          and account_realized.value is not None
          and account_realized.open_unrealized is not None
          else "- Closed / open mark today: **Unavailable**"),
-        f"- Displayed trading total (7d): **${float(trade_total):+,.2f}**",
+        f"- Account marked trading total ({len(days)}d): **{_covered_total(displayed_trades)}**",
         f"- Balanced-pair estimate (7d): **${float(pair_total):+,.2f}**",
         f"- Paid rewards: **${float(paid_total):,.2f}**",
         f"- Known pending rewards: **${float(pending_total):,.2f}**",
-        f"- Finalized net (complete reward days only): "
-        f"**${float(complete_net):+,.2f}**",
+        f"- Finalized net subtotal (proven closed days only): "
+        f"**{_net_subtotal(finalized_nets)}**",
         f"- Total resting side-hours: **{resting_total:,.2f}**",
         "",
         "`*` Current ET day is partial. `Not posted` is not zero. Pending "
         "reward is never counted in finalized net.",
         "Trading P&L uses account-wide ET equity boundaries where proven. "
-        "Rows prefixed `~` are the older balanced-pair estimate. Today's row "
+        "Missing boundaries remain unavailable, not a matched-pair fallback. Today's row "
         "is marked trading: closed P&L plus current open-position cashValue, "
         "with proven non-trading cash excluded.",
     ])
@@ -595,7 +617,7 @@ def build_discord_payload(
         "Date ET      Side-hours  Avg sides",
         "-----------  ----------  ---------",
     ]
-    complete_net = Decimal(0)
+    finalized_nets: list[Decimal] = []
     for day_value in days:
         key = day_value.isoformat()
         trade = _displayed_trading(
@@ -606,11 +628,11 @@ def build_discord_payload(
         pending_reward = pending.get(key)
         has_reward = paid_reward is not None or pending_reward is not None
         complete = (
-            trade is not None and paid_reward is not None
+            day_value < today and trade is not None and paid_reward is not None
             and not pending_reward)
         if complete:
             net = trade + paid_reward
-            complete_net += net
+            finalized_nets.append(net)
             net_text = f"${float(net):+,.2f}"
         else:
             net_text = "Pending"
@@ -620,7 +642,7 @@ def build_discord_payload(
         trade_text = (
             f"{'~' if estimate else ''}${float(trade):+,.2f}"
             if trade is not None
-            else "unavail" if day_value == today else "n/a")
+            else "unavail")
         if has_reward:
             paid_text = _money(paid_reward, zero_if_missing=True)
             pending_text = _money(pending_reward, zero_if_missing=True)
@@ -643,8 +665,6 @@ def build_discord_payload(
             account_history=account_history)
         for day in days
     ]
-    trade_total = sum(
-        (value for value in displayed_trades if value is not None), Decimal(0))
     pair_total = sum(
         (pnl.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     paid_total = sum(
@@ -673,20 +693,20 @@ def build_discord_payload(
             f"**Closed / open mark today:** "
             f"{_money(account_realized.value) if account_realized is not None else '—'} / "
             f"{_money(account_realized.open_unrealized) if account_realized is not None else '—'}\n"
-            f"**Displayed trading total (7d):** ${float(trade_total):+,.2f}\n"
+            f"**Account marked trading total ({len(days)}d):** {_covered_total(displayed_trades)}\n"
             f"**Balanced-pair estimate (7d):** ${float(pair_total):+,.2f}\n"
             f"**Paid rewards:** ${float(paid_total):,.2f}\n"
             f"**Known pending:** ${float(pending_total):,.2f}\n"
-            f"**Finalized net:** ${float(complete_net):+,.2f}\n"
+            f"**Finalized net subtotal (proven closed days):** {_net_subtotal(finalized_nets)}\n"
             f"**Resting side-hours:** {resting_total:,.2f}"),
         "fields": fields,
         "footer": {"text": (
             f"Generated {stamp} · * current ET day is partial · "
             "-- reward not posted · Pending excluded from net · "
-            "Account ET boundaries used where proven · ~ means pair estimate · "
-            "Today uses closed trading + current open cashValue · "
-            f"{unbalanced_markets} unbalanced market(s) and settled exits may "
-            "be missing")},
+            "Trading = account marked equity change less non-trading cash · "
+            "Includes carried position marks, not closed-only realized P&L · "
+            "Missing boundaries = unavailable · Pair estimate only: "
+            f"{unbalanced_markets} unbalanced market(s) and settled exits may be missing")},
     }
     if account_realized is not None and _current_mark(account_realized) is None:
         embed["footer"]["text"] += (
@@ -752,8 +772,8 @@ async def main() -> int:
         history = historical_account_trading_by_day(
             args.db, days, changes)
     except CashActivityUnavailable:
-        # Historical account rows fail closed to their visibly marked pair
-        # estimates. Today's independently bounded snapshot still runs.
+        # Historical account rows remain unavailable. Today's independently
+        # bounded snapshot still runs; no incomplete ledger fallback.
         history = {}
     account_realized = await account_realized_today(
         args.db, gateway, now=now)
@@ -776,7 +796,8 @@ async def main() -> int:
     if not args.quiet:
         print(table)
         print()
-        print("Trading is balanced-leg ledger P&L and excludes "
+        print("Daily trading is account marked P&L excluding non-trading cash. "
+              "The separate pair estimate is incomplete: "
               f"{unbalanced} unbalanced market(s); settled exits can be missing.")
         if _displayed_trading(
                 today, today=today, pnl={},

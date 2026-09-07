@@ -40,7 +40,10 @@ failure is display-only and cannot block trading.
 The additional table is ordered exactly as `Date ET`, `Trading`, `Gain`,
 `Pending`, `Side Hours`, `Net`. Side Hours is merged resting time per market and
 side, split at ET midnight, so several simultaneous sides can total above 24 in
-one day. `~` identifies a historical trading estimate; `Not posted`, `Pending`
+one day. New report snapshots use marked account trading, including carried
+positions, with non-trading cash excluded; missing boundaries stay unavailable.
+Older snapshots may contain `~` estimates. Only proven completed trading/reward
+days finalize net, never the current day. `Not posted`, `Pending`
 and `Unavailable` remain distinct. The visible dashboard says Gain rather than
 reward while preserving the underlying accounting meaning.
 

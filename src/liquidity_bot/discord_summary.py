@@ -88,7 +88,7 @@ class LiquiditySummary:
     # Account-wide marked TRADING P&L against the ET opening equity, after
     # proven rewards/deposits/withdrawals are removed. It includes the current
     # cashValue of every open venue position; Retail assetNotional is not used.
-    today_pnl_usd: Decimal = Decimal("0")
+    today_pnl_usd: Decimal | None = None
     # Optional decomposition of the marked total. It is available only when
     # the day began flat and every current open position reports cost.
     today_realized_pnl_usd: Decimal | None = None
@@ -259,7 +259,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     pending = _money(summary.pending_rewards_usd)
     # The headline is the account-wide trading mark: closed trading plus the
     # current open-position mark, with proven non-trading cash removed.
-    trading_today = _money(summary.today_pnl_usd)
+    trading_today = (_money(summary.today_pnl_usd)
+                     if summary.today_pnl_usd is not None else None)
     bot_pnl = _money(summary.overall_pnl_usd)
     # The trading half, derived so the subtext always reconciles to the
     # headline rather than being sourced separately and drifting from it.
@@ -338,10 +339,11 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     else:
         headline = (
             f"## {icon} {state}\n"
-            f"# {_mark(trading_today)} TRADING TODAY  "
-            f"${trading_today:+,.2f}\n"
-            f"**BOT OVERALL  ${bot_pnl:+,.2f}**\n"
-            f"-# bot overall = this ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}\n"
+            + (f"# {_mark(trading_today)} TRADING TODAY  ${trading_today:+,.2f}\n"
+               if summary.today_pnl_usd is not None
+               else "# TRADING TODAY  UNAVAILABLE\n")
+            + f"**BOT OVERALL ESTIMATE  ${bot_pnl:+,.2f}**\n"
+            + f"-# incomplete ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}; settlements/manual exits may be missing\n"
             + (f"-# today = closed ${_money(summary.today_realized_pnl_usd):+,.2f} + open mark ${_money(summary.today_unrealized_pnl_usd):+,.2f}, ACCOUNT-WIDE since 00:00 ET\n"
                if summary.today_realized_pnl_usd is not None
                and summary.today_unrealized_pnl_usd is not None
@@ -360,7 +362,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     #
     # So: red = losing today OR broken; orange = look at the slots; green =
     # healthy and up. The state icon in the title disambiguates red.
-    if color == GREEN:
+    if color == GREEN and trading_today is not None:
         color = GREEN if trading_today >= 0 else RED
 
     description = (
@@ -427,7 +429,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         summary.today_pnl_usd
         if summary.hard_stop_pnl_usd is None
         else summary.hard_stop_pnl_usd)
-    hard_loss = max(Decimal("0"), -_money(hard_stop_pnl))
+    hard_loss = (max(Decimal("0"), -_money(hard_stop_pnl))
+                 if hard_stop_pnl is not None else None)
     risk_text = (
         _row(position_label, summary.open_positions)
         + _row("Working orders", summary.working_orders)
@@ -435,7 +438,9 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         + _row("Exit samples", summary.exit_samples)
         + _row("Exit complete", f"{100 * summary.exit_completion_rate:.1f}%")
         + _row("Oldest age", f"{summary.max_inventory_age_seconds:.1f}s"))
-    if hard_cap > 0:
+    if hard_cap > 0 and hard_loss is None:
+        risk_text += "\nHARD     UNAVAILABLE\n"
+    elif hard_cap > 0:
         risk_text += (
             "\nHARD     " + _meter(float(hard_loss), float(hard_cap))
             + f"  ${float(hard_loss):,.2f} / ${float(hard_cap):,.2f}\n")

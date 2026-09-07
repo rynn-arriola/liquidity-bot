@@ -585,7 +585,7 @@ class DiscordTests(unittest.TestCase):
             overall_pnl_usd=Decimal("-91.20"))
         description = build_liquidity_summary(summary)["embeds"][0]["description"]
         self.assertIn("TRADING TODAY  $+3.00", description)
-        self.assertIn("BOT OVERALL  $-91.20", description)
+        self.assertIn("BOT OVERALL ESTIMATE  $-91.20", description)
         self.assertIn("closed $+2.00 + open mark $+1.00", description)
         self.assertIn("ACCOUNT-WIDE", description)
         self.assertIn("since 00:00 ET", description)
@@ -688,7 +688,7 @@ class DiscordTests(unittest.TestCase):
         embed = payload["embeds"][0]
         self.assertEqual(embed["color"], RED)
         self.assertIn("INTEGRITY FAILURE", embed["description"])
-        self.assertIn("BOT OVERALL  $+1.00", embed["description"])
+        self.assertIn("BOT OVERALL ESTIMATE  $+1.00", embed["description"])
         self.assertIn("Pending rewards **$9.00**", embed["description"])
         # The number pending would produce if it were counted as income.
         self.assertNotIn("$+10.00", embed["description"])

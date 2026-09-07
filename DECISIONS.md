@@ -1,6 +1,5 @@
 # Active operator decisions
-This file records choices made by the human operator. It is not a backlog and
-not a list of AI recommendations. Code and the running command remain the
+This file records human choices, not a backlog or AI recommendations. Code and the running command remain the
 authority for exact enforced values; if they disagree with this page, stop and
 show the operator the discrepancy.
 
@@ -49,6 +48,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 
 - Reward and risk days use Eastern Time.
 - Discord capital guidance is read-only: exposure reserve plus seven hard-stop days for delayed rewards. Pending is excluded; stale/ambiguous state is unavailable; `free = max(0, min(buying power, settled cash - comfortable))`.
+- Deposits and withdrawals must not affect reported trading losses; rewards and other proven non-trading cash are excluded too. The September 6 reporting correction is held from deployment/restart. The operator also requested subsequent unplanned-maintenance self-recovery work without changing ordinary trading rules.
   At loaded size 10 / 32, $320 footprint + $100 cushion + $896 weekly reserve = $1,316 comfortable.
 - A routine five-minute Discord summary may wait up to 60 seconds when fresh balance evidence is blocked only by current order ambiguity. It rechecks the local ledger every two seconds without venue traffic; stale balance evidence and ambiguity that survives the bound still report `UNAVAILABLE`, while shutdown and critical summaries never wait.
 - The seven-day reward table and hourly Discord post remain enabled and read-only, but they are opportunistic rather than trading-priority work. They use only an idle shared-API interval, at most one request every four seconds, and may finish later within the hourly interval. Their lane never publishes delay onto discovery, entry or safety clocks; a report claim can consume only the one aggregate 0.25-second interval it found idle. The five-minute cached Discord summary stays on its existing schedule and adds no venue call.

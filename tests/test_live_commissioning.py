@@ -9168,6 +9168,39 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_summary_uses_render_clock_after_balance_refresh(self):
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        scheduled = runner._now()
+        refreshed = scheduled + timedelta(seconds=90)
+        runner.balance = replace(runner.balance, observed_at=refreshed)
+        # Use the same clock hook used by _now, without any venue request.
+        runner._now = lambda: refreshed + timedelta(seconds=1)
+        calls = runner.gateway.limiter.calls
+        await runner._send_scheduled_summary(scheduled)
+        capital = next(field["value"] for field in
+            notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertNotIn("UNAVAILABLE", capital)
+        self.assertEqual(runner.gateway.limiter.calls, calls)
+        # A genuinely future timestamp must still fail closed.
+        runner.balance = replace(runner.balance,
+                                 observed_at=refreshed + timedelta(seconds=10))
+        await runner._send_summary(scheduled)
+        capital = next(field["value"] for field in
+            notifier.payloads[-1][0]["embeds"][0]["fields"]
+            if "Capital guidance" in field["name"])
+        self.assertIn("UNAVAILABLE", capital)
+        self.assertIn("future", capital)
+        runner._nontrading_cash = None
+        await runner._send_summary(scheduled)
+        description = notifier.payloads[-1][0]["embeds"][0]["description"]
+        self.assertIn("TRADING TODAY  UNAVAILABLE", description)
+        self.assertIn("BOT OVERALL ESTIMATE", description)
+        self.assertNotIn("today = closed", description)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_scheduled_summary_reports_persistent_ambiguity_at_bound(self):
         """Deferral is bounded; missing proof remains visibly unavailable."""
 

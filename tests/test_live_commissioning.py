@@ -5602,7 +5602,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         """Recovering and fatal used to look identical -- both plain text.
 
         Colour and title now carry the severity so it is readable at a glance,
-        and the footer says which host and build produced it.
+        without a repeated host/build footer.
         """
         runner, _client, notifier = self.build_runner()
         await runner.preflight()
@@ -5624,9 +5624,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(RED, colours)
         self.assertIn(GRAY, colours)
         recovering = [e for e in embeds if e["color"] == GRAY][0]
-        self.assertIn("Recovering", recovering["title"])
+        self.assertIn("Retrying", recovering["title"])
         self.assertIn("market-one", str(recovering["fields"]))
-        self.assertTrue(recovering["footer"]["text"].startswith("liquidity-bot"))
+        self.assertNotIn("footer", recovering)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -9109,7 +9109,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # number of bound markets: "0/2 bound" hid the two dead slots that
         # "0/8 of capacity" makes obvious.
         self.assertIn(f"{'Quoting':<19}{'0/8':>10}", rendered)
-        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", rendered)
+        self.assertIn(f"{'  Stuck':<19}{2:>10}", rendered)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -9150,14 +9150,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             field["value"] for field in embed["fields"]
             if "Capital guidance" in field["name"])
         self.assertIn("TRADING TODAY  $-7.25", embed["description"])
-        self.assertIn("closed $-7.25 + open mark $+0.00", embed["description"])
+        self.assertIn("Closed $-7.25 · Open mark $+0.00", embed["description"])
         self.assertIn(
             f"${adjusted_loss:.2f} / ${runner.config.hard_stop_loss_usd:.2f}",
             risk)
-        self.assertIn("$100.00", capital)  # 5 contracts × 20 slots
-        self.assertIn("$50.00", capital)   # existing 30× cap cushion
-        self.assertIn("$196.88", capital)  # seven $28.125 daily budgets
         self.assertIn("$346.88", capital)
+        self.assertIn("$142.75", capital)
         self.assertIn("$0.00", capital)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -9183,9 +9181,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(risk.count("$0.00 / $67.50"), 1)
         self.assertNotIn("Session", risk)
         self.assertNotIn("Worst", risk)
-        for expected in (
-                "10 / 24", "$240.00", "$100.00", "$472.50", "$812.50"):
-            self.assertIn(expected, capital)
+        self.assertIn("$812.50", capital)
+        self.assertIn("Retained target", capital)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -9357,8 +9354,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._send_summary(scheduled)
         description = notifier.payloads[-1][0]["embeds"][0]["description"]
         self.assertIn("TRADING TODAY  UNAVAILABLE", description)
-        self.assertIn("BOT OVERALL ESTIMATE", description)
-        self.assertNotIn("today = closed", description)
+        self.assertNotIn("BOT OVERALL ESTIMATE", description)
+        self.assertIn("Closed / open breakdown: UNAVAILABLE", description)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -9629,12 +9626,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # idle markets are broken down by reason -- the footer had grown to one
         # unreadable line and nobody was reading it.
         rewards = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
-                   if "reward" in f["name"].lower()][0]["value"]
+                   if f["name"] == "Slots"][0]["value"]
         # A retired slot is a BROKEN slot: bound, resting nothing, and not
         # releasable to another market. It is counted, and the reason is
         # named underneath, so "are we at capacity or is something stuck?"
         # is answerable from the message.
-        self.assertIn("stuck, look at it", rewards)
+        self.assertIn("Stuck", rewards)
         self.assertIn("retired", rewards)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -9670,7 +9667,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(notifier.payloads, "the summary must still be sent")
         slots = [f for f in notifier.payloads[-1][0]["embeds"][0]["fields"]
                  if "Slots" in f["name"]][0]["value"]
-        self.assertIn("stuck, look at it", slots)
+        self.assertIn("Stuck", slots)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

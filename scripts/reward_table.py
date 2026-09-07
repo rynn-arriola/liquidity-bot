@@ -731,14 +731,13 @@ def build_discord_payload(
             account_history=account_history)
         for day in days
     ]
-    pair_total = sum(
-        (pnl.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     paid_total = sum(
         (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
-    resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
-    stamp = generated_at.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M %Z")
+    reward_observed = any(
+        paid.get(day.isoformat()) is not None
+        or pending.get(day.isoformat()) is not None for day in days)
     fields = [
         {
             "name": "Daily P&L and rewards",
@@ -751,41 +750,19 @@ def build_discord_payload(
             "inline": False,
         },
     ]
-    intervals = _snapshot_interval_notes(
-        days, today=today, account_history=account_history,
-        account_realized=account_realized)
-    if intervals:
-        fields.append({
-            "name": "Snapshot intervals (ET; estimated daily boundaries)",
-            "value": "\n".join(intervals), "inline": False})
     embed = {
-        "title": "Liquidity Bot · Last 7 ET Days",
+        "title": f"Liquidity Bot · Last {len(days)} ET Days",
         "description": (
-            f"**Account marked trading today (ET):** "
-            f"{_money(_current_mark(account_realized))}\n"
-            f"**Closed / open mark today:** "
-            f"{_money(account_realized.value) if account_realized is not None else '—'} / "
-            f"{_money(account_realized.open_unrealized) if account_realized is not None else '—'}\n"
-            f"**Account marked trading total ({len(days)}d):** {_covered_total(displayed_trades)}\n"
-            f"**Balanced-pair estimate (7d):** ${float(pair_total):+,.2f}\n"
-            f"**Paid rewards:** ${float(paid_total):,.2f}\n"
-            f"**Known pending:** ${float(pending_total):,.2f}\n"
-            f"**Finalized net subtotal (proven closed days):** {_net_subtotal(finalized_nets)}\n"
-            f"**Resting side-hours:** {resting_total:,.2f}"),
+            f"**Trading total{' (estimated)' if any(_trading_is_estimate(day, today=today, account_history=account_history) for day in days) else ''}:** {_covered_total(displayed_trades)}\n"
+            f"**Reported paid:** {_money(paid_total) if reward_observed else 'Unavailable'}\n"
+            f"**Reported pending:** {_money(pending_total) if reward_observed else 'Unavailable'}\n"
+            f"**Finalized net subtotal:** {_net_subtotal(finalized_nets)}"),
         "fields": fields,
+        "color": 0x3498DB,
+        "timestamp": generated_at.isoformat(),
         "footer": {"text": (
-            f"Generated {stamp} · * current ET day is partial · "
-            "-- reward not posted · Pending excluded from net · "
-            "Trading = snapshot equity change less same-interval cash transfers · "
-            "~ delayed midnight snapshots, not exact calendar-day P&L; net pending · "
-            "Today starts at the recorded ET opening · "
-            "Includes carried position marks, not closed-only realized P&L · "
-            "Missing boundaries = unavailable · Pair estimate only: "
-            f"{unbalanced_markets} unbalanced market(s) and settled exits may be missing")},
+            "* partial day · ~ estimated interval · -- not posted")},
     }
-    if account_realized is not None and _current_mark(account_realized) is None:
-        embed["footer"]["text"] += (
-            f" · Account figure unavailable: {account_realized.reason}")
     total_chars = (
         len(embed["title"]) + len(embed["description"])
         + len(embed["footer"]["text"])

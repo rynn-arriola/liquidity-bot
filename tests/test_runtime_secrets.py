@@ -123,7 +123,7 @@ class DiscordTests(unittest.TestCase):
         self.assertTrue(notifier.send("money risk", critical=True).sent)
         self.assertIn("/2/error", calls[0][0])
         self.assertIn("/2/error", calls[1][0])
-        self.assertEqual(calls[1][1]["content"], "money risk")
+        self.assertEqual(calls[1][1]["embeds"][0]["description"], "money risk")
 
     def test_channel_routes_independently_of_severity(self):
         """Destination and severity are separate choices.
@@ -189,7 +189,7 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("9/20", rewards)
         # And the eleven bound-but-silent slots are counted outright, because
         # "how many slots are broken" is the question a slot count is asked.
-        self.assertIn("stuck, look at it", rewards)
+        self.assertIn("Stuck", rewards)
         # And the eleven that are not resting are broken down, because
         # "priced out" and "broken" need very different responses.
         self.assertIn("target_not_met", rewards)
@@ -246,10 +246,9 @@ class DiscordTests(unittest.TestCase):
             field for field in build_liquidity_summary(summary)["embeds"][0]["fields"]
             if "Capital guidance" in field["name"])
 
-        self.assertIn("10 / 24", field["value"])
-        self.assertIn("$240.00", field["value"])
-        self.assertIn("$100.00", field["value"])
-        self.assertIn("$672.00", field["value"])
+        self.assertIn("$1,300.00", field["value"])
+        self.assertIn("$1,200.00", field["value"])
+        self.assertNotIn("Slot footprint", field["value"])
         self.assertIn("$1,012.00", field["value"])
         self.assertIn("$288.00", field["value"])
 
@@ -303,7 +302,7 @@ class DiscordTests(unittest.TestCase):
             spread_filtered_markets=23, selection_failures=0)
         embed = build_liquidity_summary(healthy)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{0:>10}", slots)
         self.assertNotEqual(embed["color"], ORANGE)
         self.assertIn("17 slot(s) free", embed["description"])
         # The funnel, so "why only three" is answerable from the message.
@@ -317,7 +316,7 @@ class DiscordTests(unittest.TestCase):
                          idle_market_reasons=(("book_stale", 5),))
         embed = build_liquidity_summary(broken)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{7:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{7:>10}", slots)
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("7 slot(s) STUCK", embed["description"])
         # ...and why, so it is actionable rather than just alarming.
@@ -363,7 +362,7 @@ class DiscordTests(unittest.TestCase):
             quoting = int([row for row in slots.splitlines()
                            if row.startswith("Quoting")][0]
                           .split()[-1].split("/")[0])
-            broken = value("  stuck, look at it")
+            broken = value("  Stuck")
             free = value("  free, no supply")
             held = value("  awaiting rotation") if waiting else 0
             spin = value("  re-quoting") if cycling else 0
@@ -421,7 +420,7 @@ class DiscordTests(unittest.TestCase):
             idle_market_reasons=(("kicked_off", 3),))
         embed = build_liquidity_summary(quiet)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{0:>10}", slots)
         self.assertIn(f"{'  awaiting rotation':<19}{3:>10}", slots)
         self.assertNotIn("slot(s) STUCK", embed["description"])
 
@@ -431,7 +430,7 @@ class DiscordTests(unittest.TestCase):
             idle_market_reasons=(("kicked_off", 1), ("book_stale", 2)))
         embed = build_liquidity_summary(mixed)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{2:>10}", slots)
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("2 slot(s) STUCK", embed["description"])
         self.assertIn("book_stale", slots)
@@ -441,7 +440,7 @@ class DiscordTests(unittest.TestCase):
         absurd = LiquiditySummary(**base, awaiting_rotation_markets=99)
         slots = [f for f in build_liquidity_summary(absurd)["embeds"][0]
                  ["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{0:>10}", slots)
         self.assertIn(f"{'  awaiting rotation':<19}{3:>10}", slots)
 
     def test_a_market_between_a_cancel_and_its_replace_is_not_stuck(self):
@@ -463,7 +462,7 @@ class DiscordTests(unittest.TestCase):
         spinning = LiquiditySummary(**base, cycling_markets=7)
         embed = build_liquidity_summary(spinning)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{0:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{0:>10}", slots)
         self.assertIn(f"{'  re-quoting':<19}{7:>10}", slots)
         self.assertNotEqual(embed["color"], ORANGE)
 
@@ -473,7 +472,7 @@ class DiscordTests(unittest.TestCase):
             idle_market_reasons=(("book_stale", 2),))
         embed = build_liquidity_summary(mixed)["embeds"][0]
         slots = [f for f in embed["fields"] if "Slots" in f["name"]][0]["value"]
-        self.assertIn(f"{'  stuck, look at it':<19}{2:>10}", slots)
+        self.assertIn(f"{'  Stuck':<19}{2:>10}", slots)
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("2 slot(s) STUCK", embed["description"])
 
@@ -520,7 +519,7 @@ class DiscordTests(unittest.TestCase):
         risk = [f for f in embed["fields"]
                 if "stop loss" in f["name"]][0]["value"]
         self.assertIn("TRADING TODAY  $+0.00", embed["description"])
-        self.assertIn("rewards/deposits excluded", embed["description"])
+        self.assertIn("Account trading · ET day", embed["footer"]["text"])
         self.assertIn("$44.00 / $45.00", risk)
 
     def test_discord_headline_uses_closed_plus_open_mark(self):
@@ -540,8 +539,8 @@ class DiscordTests(unittest.TestCase):
         embed = build_liquidity_summary(summary)["embeds"][0]
         description = embed["description"]
         self.assertIn("TRADING TODAY  $-21.14", description)
-        self.assertIn("closed $-21.04 + open mark $-0.10", description)
-        self.assertIn("mark age 7.0s", description)
+        self.assertIn("Closed $-21.04 · Open mark $-0.10", description)
+        self.assertIn("Mark age 7.0s", embed["footer"]["text"])
         self.assertEqual(embed["color"], RED)
 
     def test_the_strip_is_red_on_a_losing_day_and_green_on_a_winning_one(self):
@@ -573,10 +572,8 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(embed["color"], ORANGE)
         self.assertIn("7 slot(s) STUCK", embed["description"])
 
-    def test_the_bot_overall_line_is_separate_from_today(self):
-        """A good day inside a bad week must not read as success, so both are
-        shown. Today's realized account trading, raw account mark and this
-        ledger's bot-overall result must keep their scopes explicit."""
+    def test_summary_keeps_actual_today_without_incomplete_overall_estimate(self):
+        """The concise report omits the separate incomplete ledger estimate."""
 
         summary = self._stop_summary(
             today_pnl_usd=Decimal("3.00"),
@@ -585,10 +582,9 @@ class DiscordTests(unittest.TestCase):
             overall_pnl_usd=Decimal("-91.20"))
         description = build_liquidity_summary(summary)["embeds"][0]["description"]
         self.assertIn("TRADING TODAY  $+3.00", description)
-        self.assertIn("BOT OVERALL ESTIMATE  $-91.20", description)
-        self.assertIn("closed $+2.00 + open mark $+1.00", description)
-        self.assertIn("ACCOUNT-WIDE", description)
-        self.assertIn("since 00:00 ET", description)
+        self.assertNotIn("BOT OVERALL", description)
+        self.assertNotIn("$-91.20", description)
+        self.assertIn("Closed $+2.00 · Open mark $+1.00", description)
 
     def test_viable_markets_going_unquoted_is_also_a_fault(self):
         """Supply exists and is not being collected. Distinct from a bound
@@ -688,12 +684,13 @@ class DiscordTests(unittest.TestCase):
         embed = payload["embeds"][0]
         self.assertEqual(embed["color"], RED)
         self.assertIn("INTEGRITY FAILURE", embed["description"])
-        self.assertIn("BOT OVERALL ESTIMATE  $+1.00", embed["description"])
-        self.assertIn("Pending rewards **$9.00**", embed["description"])
+        self.assertIn("TRADING TODAY  UNAVAILABLE", embed["description"])
+        rewards = next(f["value"] for f in embed["fields"] if f["name"] == "Rewards · lifetime")
+        self.assertIn("Pending", rewards)
+        self.assertIn("9.00", rewards)
         # The number pending would produce if it were counted as income.
         self.assertNotIn("$+10.00", embed["description"])
-        # And the subtext reconciles to the headline rather than drifting.
-        self.assertIn("trading $-1.00 + PAID reward $+2.00", embed["description"])
+        self.assertNotIn("PAID reward", embed["description"])
 
         calls = []
         result = DiscordNotifier(

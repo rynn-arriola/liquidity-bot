@@ -2,8 +2,8 @@
 This file records human choices, not a backlog or AI recommendations. Code and the running command remain the
 authority for exact enforced values; if they disagree with this page, stop and
 show the operator the discrepancy.
-
 ## Decision rights
+- **2026-09-07 Discord presentation:** status/errors, summary and reward webhooks should show concise actual reports without repeated methodology/side notes. Keep necessary pending/estimated/unavailable labels and critical alerts; do not invent a withdrawal value while account proof is pending. The standing instruction remains **do not restart**. [Implementation](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 
 - The human operator chooses strategy behavior, risk limits, capital, quote size, slot count, deployment timing and stop/restart timing.
 - AI agents investigate, explain, implement, test, review, document and carry

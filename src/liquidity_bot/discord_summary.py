@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from .bot_era import BOT_ERA_START_DATE
 from .capital_guidance import calculate_capital_guidance
 from typing import Any
 
@@ -18,7 +17,6 @@ ORANGE = 0xE67E22
 # alerts were missing, it is that a recovering retry and a fatal condition
 # looked identical -- both plain text, both opening "Liquidity Bot".
 GRAY = 0x95A5A6
-NOTE_SEPARATOR = chr(10) + chr(10) + "_"
 
 
 def _money(value: Decimal | str | int | float) -> Decimal:
@@ -203,23 +201,6 @@ class LiquiditySummary:
             raise ValueError("today_pnl_as_of must be timezone-aware")
 
 
-def _mark(value: Decimal) -> str:
-    """A colour for a figure that is written out beside it.
-
-    Discord does **not** render ANSI inside an embed -- it works in ordinary
-    message content, but embed descriptions and field values strip it.
-    Verified 2026-08-18: the payload carried correct 0;32 / 0;31 escapes and
-    still displayed plain, so the approach was wrong rather than the codes. A
-    coloured circle survives everywhere the embed does, including mobile.
-
-    This returns the mark ALONE. Its predecessor returned the mark and the
-    amount, and pairing that with a formatted number printed every figure
-    twice -- the header read `# RED -$28.40 TODAY $-28.40`.
-    """
-
-    return "🟢" if float(_money(value)) >= 0 else "🔴"
-
-
 def _meter(used: float, cap: float, width: int = 12) -> str:
     """A progress bar in block characters, which a text fence does render."""
 
@@ -246,11 +227,10 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     the runner can see things the dashboard would have to pay venue calls
     for. Shared *style*, separate data.
 
-    What survived the redesign, because each cost something to learn:
-    ACCOUNTED NET excludes pending rewards; markets resting is a ratio, since
-    9 alone does not say what it is 9 of; the idle breakdown always accounts
-    for every market; and the ledger's size on disk is shown, because nothing
-    else warns before it fills.
+    Keep actual account trading, pending/paid separation, market ratios and
+    blockers, the guard's own HARD input, and proven withdrawal guidance.
+    Methodology and incomplete lifetime estimates stay out of this routine
+    card; detailed diagnostics remain in the logs and audit reports.
     """
 
     now = summary.observed_at
@@ -261,10 +241,6 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # current open-position mark, with proven non-trading cash removed.
     trading_today = (_money(summary.today_pnl_usd)
                      if summary.today_pnl_usd is not None else None)
-    bot_pnl = _money(summary.overall_pnl_usd)
-    # The trading half, derived so the subtext always reconciles to the
-    # headline rather than being sourced separately and drifting from it.
-    trading_pnl = bot_pnl - paid
     integrity_ok = not summary.integrity_problems
     idle = max(0, summary.active_markets - summary.resting_markets)
 
@@ -332,23 +308,19 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
 
     if summary.mode == "SHADOW":
         headline = (
-            f"## {icon} SHADOW MEASUREMENT — NO EXCHANGE ORDERS\n"
-            f"_eligible score-hours this run "
-            f"{summary.score_seconds / 3600:,.2f} · no venue "
-            "trading P&L is claimed_\n")
+            f"**{state}**\n"
+            "**SHADOW MEASUREMENT — NO EXCHANGE ORDERS**\n"
+            f"Eligible score-hours this run {summary.score_seconds / 3600:,.2f}\n")
     else:
         headline = (
-            f"## {icon} {state}\n"
-            + (f"# {_mark(trading_today)} TRADING TODAY  ${trading_today:+,.2f}\n"
+            f"**{state}**\n"
+            + (f"**TRADING TODAY  ${trading_today:+,.2f}**\n"
                if summary.today_pnl_usd is not None
-               else "# TRADING TODAY  UNAVAILABLE\n")
-            + f"**BOT OVERALL ESTIMATE  ${bot_pnl:+,.2f}**\n"
-            + f"-# incomplete ledger trading ${trading_pnl:+,.2f} + PAID reward ${paid:+,.2f}, since {BOT_ERA_START_DATE}; settlements/manual exits may be missing\n"
-            + (f"-# today = closed ${_money(summary.today_realized_pnl_usd):+,.2f} + open mark ${_money(summary.today_unrealized_pnl_usd):+,.2f}, ACCOUNT-WIDE since 00:00 ET\n"
+               else "**TRADING TODAY  UNAVAILABLE**\n")
+            + (f"Closed ${_money(summary.today_realized_pnl_usd):+,.2f} · Open mark ${_money(summary.today_unrealized_pnl_usd):+,.2f}\n"
                if summary.today_realized_pnl_usd is not None
                and summary.today_unrealized_pnl_usd is not None
-               else "-# today = marked account trading, ACCOUNT-WIDE since 00:00 ET; breakdown unavailable\n")
-            + f"-# rewards/deposits excluded · mark age {_age((now - summary.today_pnl_as_of).total_seconds()) if summary.today_pnl_as_of is not None else 'UNKNOWN'} · up {uptime / 3600:,.1f}h\n")
+               else "Closed / open breakdown: UNAVAILABLE\n"))
     # The embed's left strip, which is the first thing read on a phone. It
     # carried operational state alone, so "am I making money today" was not
     # answerable at a glance.
@@ -365,12 +337,8 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     if color == GREEN and trading_today is not None:
         color = GREEN if trading_today >= 0 else RED
 
-    description = (
-        warning + headline
-        + (f"> Pending rewards **${pending:,.2f}** are shown but not counted.\n"
-           if pending else ""))
+    description = warning + headline
 
-    entry_label = "Fill signals" if summary.mode == "SHADOW" else "Entry fills"
     position_label = "Replays open" if summary.mode == "SHADOW" else "Positions"
 
     health_text = (
@@ -399,7 +367,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         # `stuck` is the only one of the three that means act. A bound market
         # resting nothing holds a slot no other market can use, so it is the
         # one that costs reward.
-        + _row("  stuck, look at it", broken)
+        + _row("  Stuck", broken)
         + (_row("  re-quoting", cycling) if cycling else "")
         + (_row("  awaiting rotation", waiting) if waiting else "")
         + "".join(f"      {reason[:15]:<15}{count:>4}\n"
@@ -434,9 +402,6 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     risk_text = (
         _row(position_label, summary.open_positions)
         + _row("Working orders", summary.working_orders)
-        + _row(entry_label, summary.entry_fills)
-        + _row("Exit samples", summary.exit_samples)
-        + _row("Exit complete", f"{100 * summary.exit_completion_rate:.1f}%")
         + _row("Oldest age", f"{summary.max_inventory_age_seconds:.1f}s"))
     if hard_cap > 0 and hard_loss is None:
         risk_text += "\nHARD     UNAVAILABLE\n"
@@ -461,52 +426,49 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             unavailable_reason=summary.capital_unavailable_reason,
         )
         capital_text = (
-            _row("Contracts / slots",
-                 f"{guidance.quote_size:g} / {guidance.slot_capacity}")
-            + _row("Slot footprint",
-                   f"${guidance.slot_footprint_usd:,.2f}")
-            + _row("Safety cushion", f"${guidance.cushion_usd:,.2f}")
-            + _row("Weekly reserve", f"${guidance.weekly_reserve_usd:,.2f}")
-            + _row("Comfortable", f"${guidance.comfortable_balance_usd:,.2f}")
-            + _row("Settled cash",
+            _row("Settled cash",
                    f"${guidance.settled_cash_usd:,.2f}"
                    if guidance.settled_cash_usd is not None else "UNKNOWN")
             + _row("Buying power",
                    f"${guidance.buying_power_usd:,.2f}"
                    if guidance.buying_power_usd is not None else "UNKNOWN")
+            + _row("Retained target", f"${guidance.comfortable_balance_usd:,.2f}")
             + _row("Free to withdraw",
                    f"${guidance.free_to_withdraw_usd:,.2f}"
                    if guidance.free_to_withdraw_usd is not None
                    else "UNAVAILABLE"))
         if guidance.unavailable_reason:
-            capital_text += f"  {guidance.unavailable_reason[:45]}\n"
+            reason = guidance.unavailable_reason
+            if reason.startswith("order proof pending"):
+                reason = "Order confirmation pending"
+            capital_text += f"  {reason[:45]}\n"
 
     fence = "```text\n"
     fields = [
-        {"name": "\U0001f6e0️ Health", "inline": True,
-         "value": fence + health_text + "```"},
-        {"name": "\U0001f4ca Slots and reward eligibility", "inline": True,
-         "value": fence + slots_text + "```"},
-        {"name": "⚠️ Position and stop loss", "inline": False,
+        {"name": "Position and stop loss", "inline": False,
          "value": fence + risk_text + "```"},
-        {"name": "\U0001f381 Rewards", "inline": False,
+        {"name": "Slots", "inline": False,
+         "value": fence + slots_text + "```"},
+        {"name": "Rewards · lifetime", "inline": False,
          "value": fence + reward_text + "```"},
     ]
     if capital_text:
         fields.append({
-            "name": "💵 Capital guidance · read only", "inline": False,
+            "name": "Capital guidance", "inline": False,
             "value": fence + capital_text + "```",
         })
+    fields.append({"name": "Health", "inline": False,
+                   "value": fence + health_text + "```"})
     return {"embeds": [{
-        "title": (f"{icon} Liquidity Bot — {summary.mode.replace('_', ' ')} "
-                  f"— {summary.readiness_status}"),
+        "title": f"Liquidity Bot · {summary.mode.replace('_', ' ')}",
         "description": description,
         "color": color,
         "fields": fields,
-        # No footer. It had grown to a single unreadable line of twenty
-        # diagnostics -- catalog counts, scan timings, fill-risk drivers --
-        # none of which are decisions. They are printed to the log as
-        # `[selection]` instead, where they can be read and grepped.
+        "footer": {"text": (
+            f"Uptime {uptime / 3600:,.1f}h" if summary.mode == "SHADOW" else
+            "Account trading · ET day · "
+            f"Mark age {_age((now - summary.today_pnl_as_of).total_seconds()) if summary.today_pnl_as_of is not None else 'UNKNOWN'} · "
+            f"Uptime {uptime / 3600:,.1f}h")},
         "timestamp": now.isoformat(),
     }]}
 
@@ -532,12 +494,9 @@ def build_runtime_alert(
 
     moment = now or datetime.now(timezone.utc)
     if critical:
-        colour, title, note = (
-            RED, "🛑 Needs attention",
-            "New risk is disabled until this clears.")
+        colour, title = RED, "Liquidity Bot · Action required"
     else:
-        colour, title, note = (
-            GRAY, "🔁 Recovering on its own", "No action needed. Retrying.")
+        colour, title = GRAY, "Liquidity Bot · Retrying"
     fields = [
         {"name": "Component", "value": f"`{component}`"[:1024], "inline": True},
         {"name": "Attempt", "value": str(attempt), "inline": True},
@@ -545,13 +504,10 @@ def build_runtime_alert(
     if market:
         fields.append({"name": "Market", "value": f"`{market}`"[:1024],
                        "inline": False})
-    footer = " · ".join(part for part in (
-        "liquidity-bot", host, commit) if part)
     return {"embeds": [{
         "title": title[:256],
-        "description": (error + NOTE_SEPARATOR + note + "_")[:4000],
+        "description": error[:4000],
         "color": colour,
         "fields": fields[:25],
-        "footer": {"text": footer[:2048]},
         "timestamp": moment.isoformat(),
     }]}

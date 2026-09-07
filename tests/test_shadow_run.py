@@ -133,7 +133,7 @@ class IncentiveRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(notifier.channels, ["summary"])
         embed = notifier.payloads[0]["embeds"][0]
         self.assertIn("SHADOW", embed["title"])
-        self.assertIn("DO_NOT_START_TRIAL", embed["title"])
+        self.assertIn("NOT WORKING", embed["description"])
         risk = next(field for field in embed["fields"]
                     if "stop loss" in field["name"])
         self.assertIn(f"{'Working orders':<19}{0:>10}", risk["value"])

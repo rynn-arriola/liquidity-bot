@@ -1,6 +1,7 @@
 # Current operator status
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
+- **Discord cleanup prepared, not deployed; no restart:** summary/error/reward layouts remove repeated notes and estimates, retain essential financial labels and suppress only identical noncritical operational notices for five minutes. Live logs identify pending order confirmation, not a missing calculation, as the latest withdrawal-value blocker. Runner `475856` remains unchanged. [Review](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 - **Bot is RUNNING on reviewed release `baae566d4`:** stopped-safe fixes for fresh cash marks, per-owner shutdown, provisional-midnight recovery and report interval/estimate labels were pushed/deployed after six reversals, 1,147 review and 1,147 native tests, 159 file hashes and a fresh flat/clear gate. Explicit size 10 / 32 loaded the overnight 30-order ceiling; the first 469-attempt API window had zero failures/429s/cooldown. [Repair/acceptance](docs/history/END_TO_END_REVIEW_FIXES_2026-09-07.md).
 - **Scheduled-maintenance automation is deployed, loaded and naturally accepted through the September 5 cycle:** `a348dbc1f` evacuated and held as designed; `4654479c1` safely recovered after the provider deleted the completed record. Exact public evidence remained healthy, the one-hour boundary elapsed and three authenticated cycles cleared before new entry. The September 6 production window remains scheduled for natural observation. [Implementation handoff](docs/history/SCHEDULED_MAINTENANCE_AUTOMATION_2026-09-04.md)
 - **Scalable entry-order policy was introduced in `a348dbc1f`, is retained in `4654479c1` and is live-accepted at size 10 / 32:** the original acceptance proved the 30 overnight ceiling and 30/25/20/15/10 loss tiers. After repair of a falsely persisted September 4 cap caused by an accidental 20-slot launch, explicit 10/32 restarts proved the daytime ceiling above 30 and the current overnight ceiling at 30, always excluding open-position orders. [Handoff](docs/history/SCALABLE_ENTRY_ORDER_POLICY_2026-09-04.md)
@@ -56,7 +57,6 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 | Risk day | `America/New_York`, DST-aware |
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
 ## Former server incident and current resolution
-
 From 22:07 UTC, Retail mutations returned HTTP 403/code 7 location/VPN denials. The old gateway mislabeled them as ambiguous no-ID PLACE intents and
 retirement consumed all 20 owners. The deployed repair fails only the rejected
 intent, limits later entry probes, preserves cancels/reducers and repairs only

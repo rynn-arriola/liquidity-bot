@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -48,6 +50,8 @@ class DiscordNotifier:
         self._error_url = secrets.discord_errors_webhook_url
         self._rewards_url = secrets.discord_rewards_webhook_url
         self._transport = transport
+        self._recent_operations: dict[str, float] = {}
+        self._notification_lock = threading.Lock()
 
     @staticmethod
     def _body(message: str) -> bytes:
@@ -63,8 +67,16 @@ class DiscordNotifier:
 
     def send(self, message: str, *, critical: bool = False,
              channel: str | None = None) -> NotificationResult:
+        content = json.loads(self._body(message))["content"]
+        if channel in (None, "errors"):
+            return self.send_payload({"embeds": [{
+                "title": ("Liquidity Bot · Action required" if critical
+                          else "Liquidity Bot · Status update"),
+                "description": content,
+                "color": 0xE74C3C if critical else 0x95A5A6,
+            }]}, critical=critical, channel=channel)
         return self.send_payload(
-            {"content": json.loads(self._body(message))["content"]},
+            {"content": content},
             critical=critical, channel=channel)
 
     def send_payload(
@@ -95,7 +107,30 @@ class DiscordNotifier:
         body = json.dumps(
             dict(payload), ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
-        sent = self._transport(url, body)
+        # Only suppress identical, successfully delivered operational notices.
+        # Reports and critical alerts (including non-flat shutdown reminders)
+        # always bypass this cache. The lock runs in the existing worker thread.
+        if not critical and channel in (None, "errors"):
+            key_payload = dict(payload)
+            if "embeds" in key_payload:
+                key_payload["embeds"] = [
+                    {k: v for k, v in embed.items() if k != "timestamp"}
+                    for embed in key_payload["embeds"]]
+            key = json.dumps(key_payload, sort_keys=True, ensure_ascii=False)
+            with self._notification_lock:
+                now = time.monotonic()
+                self._recent_operations = {
+                    k: at for k, at in self._recent_operations.items()
+                    if 0 <= now - at < 300}
+                if key in self._recent_operations:
+                    return NotificationResult(False, "duplicate_suppressed")
+                sent = self._transport(url, body)
+                if sent:
+                    if len(self._recent_operations) >= 128:
+                        del self._recent_operations[next(iter(self._recent_operations))]
+                    self._recent_operations[key] = time.monotonic()
+        else:
+            sent = self._transport(url, body)
         return NotificationResult(
             sent, "sent" if sent else "delivery_failed")
 

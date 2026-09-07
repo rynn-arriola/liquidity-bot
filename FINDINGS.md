@@ -1,4 +1,5 @@
 # Findings index
+- **September 7 withdrawal reporting alternates with proof availability:** 12:42/12:49Z summaries logged capital proven; 12:57/13:05Z had unresolved/unknown orders and withheld the value. No arithmetic failure was found. Concise Discord cleanup preserves this check. [Evidence](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 - **September 6 is reportable as a labeled nearby-snapshot estimate:** complete authenticated cash coverage and saved openings produce -$104.2022 from September 6 00:01:46 ET to September 7 00:07:54 ET. The 04:25:06Z report posted ~-$104.20 with actual interval notes and pending daily net. This is not exact midnight P&L; no risk baseline or trading process changed. [Evidence](docs/history/NEAR_MIDNIGHT_REPORT_FALLBACK_2026-09-07.md).
 Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.md) before theorizing: `rg -n -i "<term>" FINDINGS.md docs/history/FINDINGS_*.md`.
 - **The September 6 empty slate had two related causes:** a `$100` structured outage-goodwill transfer was initially unknown, so adjusted P&L failed closed and cancelled flat entries. After exact cash classification, restart found one owned `-10.0000` post-kickoff position with a readable but insufficient-depth book; ordinary startup recovery immediately shut down instead of using other slots. The narrow follow-up reserves one slot for the unchanged exit manager and permits remaining slots only with exact ownership, known risk and zero order ambiguity. [Cash evidence](docs/history/GOODWILL_CASH_CLASSIFICATION_2026-09-06.md) · [startup evidence](docs/history/STARTUP_MANAGED_POSITION_2026-09-06.md).
@@ -90,8 +91,7 @@ Search current and [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.
   lifecycle state and an exactly-once reversal are therefore separate durable
   facts; a current authoritative position snapshot outranks fill arithmetic.
 - **REST freshness cannot certify WebSocket liveness.** The 20-market private feed spans three connections, so each shard and the market socket needs its
-  own last-message clock. A complete REST snapshot can bridge a brief gap but
-  cannot hide 180 seconds of stream silence.
+  own last-message clock. A complete REST snapshot can bridge a brief gap but cannot hide 180 seconds of stream silence.
 - **Buying power is an entry constraint, not an equity value or exit gate.** A successful entry must reserve cached buying power within the same configured-capacity sweep. Insufficient-power and validation rejections should pause only that
   market's new entries; reducers, cancels and IOC exits remain available.
 - **Official HTTP guidance is compatible with mutation safety.** Confirmed 429 reads can honor bounded `Retry-After`; order mutations still never retry

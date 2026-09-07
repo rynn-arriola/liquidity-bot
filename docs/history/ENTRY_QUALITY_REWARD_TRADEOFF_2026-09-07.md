@@ -95,6 +95,40 @@ are insufficient evidence if those replacement trades also lose money.
 
 ## Delivery state
 
+### Market-count follow-up, September 7 15:07Z snapshot
+
+The operator asked how many usual markets would disappear if enabled. The
+read-only snapshot captured 15:07:34.268719Z contains 11,907 coherent completed-
+stress entry observations; 3,079 (25.9%) are below 70%, with 738 inconsistent
+observations excluded. Among 1,515 distinct observed markets, 944 had at least
+one flagged placement at some point. That cumulative count is **not** a count
+of wholly excluded markets or simultaneous lost slots.
+
+There are no bid/offer placement pairs sharing one exact saved book timestamp,
+quantity and market, with both observations fresh and within five seconds.
+Allowing different fresh books within five seconds finds only three pairs
+(two with neither side flagged, one with one side flagged). This is far too
+small and unrepresentative to estimate a both-sides-failing rate or scale it
+to a usual 32-market slate. The missing opposite-side observation cannot be
+treated as passing or failing. Do not convert the 25.9% placement rate into
+eight lost markets, ten simultaneous lost orders or a fixed future capacity.
+
+The configured capacity remains 32. One failed side can leave its market
+eligible on the other side; both failed sides prevent fresh entry, while a
+qualifying replacement may occupy the slot through existing rules. Exact net
+loss of tradable markets requires a same-time two-sided candidate-book audit
+and qualifying replacement supply, which this historical placement analysis
+does not establish. Recommendation remains to keep the already-disabled gate
+off; no policy change or restart is needed for that.
+
+Reproduction: ignored `.local-tools/entry_quality_market_count.py`, stdlib
+SQLite URI `mode=ro`, coherent entry-stake/ratio check, complete exit check,
+one-to-one side pairing and bounded timestamps. No venue calls. Runner
+`770972` was independently observed alive. Current venue orders/positions were
+not re-read and are not inferred from this historical ledger.
+
+### Prior implementation delivery
+
 Code/config commit `91efa8cc4` was pushed; all 1,173 tests and three restored
 reversals passed. Post-push parity confirms clean Windows/GitHub matching,
 WSL HEAD `b4f22b1ae` pending reviewed deployment, and loaded marker `f7816c324`.

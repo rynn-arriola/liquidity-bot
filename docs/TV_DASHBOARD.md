@@ -43,7 +43,9 @@ The additional table is ordered exactly as `Date ET`, `Trading`, `Gain`,
 side, split at ET midnight, so several simultaneous sides can total above 24 in
 one day. New report snapshots use marked account trading, including carried
 positions, with non-trading cash matched to the actual snapshot interval;
-missing boundaries stay unavailable. Delayed midnight snapshots display `~`
+missing boundaries stay unavailable. The first saved ET opening may be up to
+15 minutes late for reporting only; a later restart cannot substitute for
+midnight. Delayed midnight snapshots display `~`
 because their interval is not an exact calendar day; their daily net remains
 pending instead of mixing that interval with a calendar-day paid amount.
 Older snapshots may contain `~` estimates. Only proven completed trading/reward

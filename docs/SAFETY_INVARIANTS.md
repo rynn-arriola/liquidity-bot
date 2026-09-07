@@ -437,7 +437,7 @@ These are implementation requirements, not suggestions.
     ET row and its net use this marked value. A completed historical day uses
     adjacent native ET equity
     boundaries, including carried position marks, only when both timestamps
-    are within the reviewed two-minute tolerance or match every field of an
+    are within the reviewed 15-minute reporting fallback window or match every field of an
     audited delayed boundary, and all non-trading cash is removed over those
     same snapshot timestamps. Delayed snapshots are marked as calendar-day
     estimates and cannot finalize calendar-day net; the historical cash scan

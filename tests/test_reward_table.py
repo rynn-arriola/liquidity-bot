@@ -301,7 +301,59 @@ class RewardTableTests(unittest.TestCase):
                 self.assertIn("~$+0.00", rendered)
                 self.assertIn("not an exact calendar day", rendered)
 
-    def test_unapproved_late_boundary_cannot_create_account_history(self):
+    def test_september_six_restart_snapshot_is_labeled_without_double_counting(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany(
+                "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+                [("2026-09-06", "1090.8613", "0", "1090.8613",
+                  "2026-09-06T04:01:46.645731+00:00", "fresh_et_day"),
+                 ("2026-09-07", "1086.6591", "0", "1086.6591",
+                  "2026-09-07T04:07:54.512370+00:00", "fresh_et_day"),
+                 ("2026-09-08", "1081.6591", "0", "1081.6591",
+                  "2026-09-08T04:00:00+00:00", "fresh_et_day")])
+        days = [date(2026, 9, 6), date(2026, 9, 7)]
+        # Both a normal credit and a credit inside the restart gap use the
+        # same saved boundary. An opposite withdrawal makes net cash $100.
+        changes = (
+            NontradingCashChange(datetime(2026, 9, 6, 12, tzinfo=timezone.utc), Decimal(100)),
+            NontradingCashChange(datetime(2026, 9, 7, 4, 5, tzinfo=timezone.utc), Decimal(20)),
+            NontradingCashChange(datetime(2026, 9, 7, 4, 6, tzinfo=timezone.utc), Decimal(-20)))
+        history = historical_account_trading_by_day(str(self.database), days, changes)
+        self.assertEqual(history, {"2026-09-06": Decimal("-104.2022"),
+                                   "2026-09-07": Decimal("-5")})
+        self.assertEqual(history.intervals["2026-09-06"][1],
+                         history.intervals["2026-09-07"][0])
+        kwargs = dict(pnl={}, paid={"2026-09-06": Decimal(50)}, pending={},
+                      resting_hours={}, today=date(2026, 9, 8), account_history=history)
+        payload = build_discord_payload(
+            days, elapsed_hours={}, generated_at=datetime(2026, 9, 8, 5, tzinfo=timezone.utc),
+            unbalanced_markets=0, **kwargs)
+        self.assertIn("~$-104.20", payload["embeds"][0]["fields"][0]["value"])
+        notes = payload["embeds"][0]["fields"][2]["value"]
+        self.assertIn("09-07 00:07:54 EDT", notes)
+        snapshot = build_dashboard_snapshot(
+            days, generated_at=datetime(2026, 9, 8, 5, tzinfo=timezone.utc),
+            unbalanced_markets=0, overall_trading=Decimal(0), **kwargs)
+        self.assertTrue(snapshot["rows"][0]["trading_estimate"])
+        self.assertIsNone(snapshot["rows"][0]["net"])
+
+    def test_near_midnight_window_is_bounded_and_dst_aware(self):
+        # Fall-back day lasts 25 hours; boundaries are local midnight, not
+        # UTC midnight or a fixed 24-hour increment.
+        day = date(2026, 11, 1)
+        for delay, accepted in ((0, True), (900, True), (900.000001, False), (-1, False)):
+            with self.subTest(delay=delay):
+                close = datetime(2026, 11, 2, 5, tzinfo=timezone.utc) + timedelta(seconds=delay)
+                with sqlite3.connect(self.database) as connection:
+                    connection.execute("DELETE FROM execution_risk_day_baselines")
+                    connection.executemany(
+                        "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
+                        [("2026-11-01", "100", "0", "100", "2026-11-01T04:00:00+00:00", "fresh_et_day"),
+                         ("2026-11-02", "90", "0", "90", close.isoformat(), "fresh_et_day")])
+                history = historical_account_trading_by_day(str(self.database), [day], ())
+                self.assertEqual(history, {day.isoformat(): Decimal(-10)} if accepted else {})
+
+    def test_boundary_beyond_fifteen_minutes_cannot_create_account_history(self):
         connection = sqlite3.connect(self.database)
         connection.executemany(
             "INSERT INTO execution_risk_day_baselines VALUES (?,?,?,?,?,?)",
@@ -309,7 +361,7 @@ class RewardTableTests(unittest.TestCase):
                 ("2026-08-23", "500", "0", "500",
                  "2026-08-23T04:00:01+00:00", "fresh_et_day"),
                 ("2026-08-24", "490", "0", "490",
-                 "2026-08-24T04:04:00+00:00", "fresh_et_day"),
+                 "2026-08-24T04:15:00.000001+00:00", "fresh_et_day"),
             ],
         )
         connection.commit()
@@ -558,6 +610,25 @@ class AccountRealizedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.nontrading_cash, Decimal(0))
         self.assertEqual(result.opening_as_of,
                          datetime(2026, 8, 25, 4, 0, 2, tzinfo=timezone.utc))
+
+    async def test_today_uses_restart_opening_without_subtracting_gap_credit(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE execution_risk_day_baselines SET created_at=?",
+                               ("2026-08-25T04:07:54+00:00",))
+        gateway = _Gateway([Decimal(500), Decimal(500)], {}, [{
+            "activities": [{"type": "ACTIVITY_TYPE_TRANSFER",
+                "accountBalanceChange": {"status": "COMPLETED",
+                    "amount": {"value": "100", "currency": "USD"},
+                    "description": "liquidity reward payout",
+                    "updateTime": "2026-08-25T04:05:00Z"}}], "eof": True}])
+        with patch("scripts.reward_table.datetime", _August25Datetime):
+            result = await account_realized_today(
+                str(self.database), gateway,
+                now=datetime(2026, 8, 25, 17, tzinfo=timezone.utc))
+        self.assertEqual(result.marked_value, Decimal(0))
+        self.assertEqual(result.nontrading_cash, Decimal(0))
+        self.assertEqual(result.opening_as_of,
+                         datetime(2026, 8, 25, 4, 7, 54, tzinfo=timezone.utc))
 
     async def test_audited_legacy_cash_uses_its_et_correction(self):
         connection = sqlite3.connect(self.database)

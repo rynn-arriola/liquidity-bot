@@ -56,7 +56,9 @@ from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
 
 ACCOUNT_ACTIVITY_MAX_PAGES = 4
 ACCOUNT_REPORT_RATE_PER_SECOND = OPPORTUNISTIC_REPORT_RATE_PER_SECOND
-BASELINE_START_TOLERANCE = timedelta(minutes=2)
+# Reporting only: use the first saved opening, at most 15 minutes late.
+# Never relabel a much later restart as midnight or change the risk baseline.
+NEAR_MIDNIGHT_MAX_DELAY = timedelta(minutes=15)
 
 # This baseline landed four minutes after midnight because the hard-stop
 # shutdown had already proved the account flat at 03:50:49Z and the next
@@ -112,6 +114,23 @@ class AccountMetricUnavailable(ValueError):
     """The current-day account number cannot be proved from bounded reads."""
 
 
+def _report_boundary_time(row: Any, day_value: date,
+                          boundary: datetime) -> datetime:
+    """Accept an audited midnight or a bounded, explicitly dated estimate."""
+
+    created_at = _timestamp(row["created_at"], "opening baseline")
+    audited = AUDITED_DELAYED_ET_BASELINES.get(day_value.isoformat())
+    if audited is not None:
+        if any(str(row[field]) != str(audited[field]) for field in (
+                "opening_equity", "opening_cash", "created_at", "source")):
+            raise AccountMetricUnavailable("audited ET boundary fields changed")
+        return boundary
+    if not timedelta(0) <= created_at - boundary <= NEAR_MIDNIGHT_MAX_DELAY:
+        raise AccountMetricUnavailable(
+            "ET opening snapshot is outside the 15-minute reporting window")
+    return created_at
+
+
 def _decimal(value: Any, field: str) -> Decimal:
     try:
         result = Decimal(str(value))
@@ -155,6 +174,8 @@ def _opening_snapshot_for_day(
         raise AccountMetricUnavailable("ET opening-cash baseline is missing")
     stored = _decimal(row["opening_cash"], "opening cash")
     stored_equity = _decimal(row["opening_equity"], "opening equity")
+    if stored < 0 or stored_equity < 0:
+        raise AccountMetricUnavailable("ET opening snapshot is negative")
     source = str(row["source"] or "")
     try:
         corrected = corrected_opening_cash(
@@ -163,23 +184,12 @@ def _opening_snapshot_for_day(
         raise AccountMetricUnavailable(str(exc)) from exc
     # The audited correction itself establishes the ET boundary. Its stored
     # timestamp belongs to the copied UTC row and must not be judged against
-    # the fresh-ET two-minute tolerance.
+    # the native ET reporting window.
     if source == "legacy_utc_cutover":
         return corrected, stored_equity + corrected - stored, boundary
-    created_at = _timestamp(row["created_at"], "opening baseline")
-    delta = created_at - boundary.astimezone(timezone.utc)
-    audited = AUDITED_DELAYED_ET_BASELINES.get(day_value.isoformat())
-    audited_match = audited is not None and all(
-        str(row[field]) == str(audited[field])
-        for field in (
-            "opening_equity", "opening_cash", "created_at", "source")
-    )
-    if (delta < timedelta(0)
-            or (delta > BASELINE_START_TOLERANCE and not audited_match)):
-        raise AccountMetricUnavailable(
-            "ET baseline was not captured at the day boundary")
+    opening_at = _report_boundary_time(row, day_value, boundary)
     return (corrected, stored_equity + corrected - stored,
-            boundary if audited_match else created_at)
+            opening_at)
 
 
 def _opening_marks_for_day(
@@ -204,8 +214,8 @@ def historical_account_trading_by_day(
 
     This includes fills, manual closes, settlements and unbalanced inventory
     that the matched-pair ledger estimator misses. A day is omitted unless
-    both boundaries are native ET snapshots captured on time (or an exact
-    field-pinned audited exception above). Carried inventory is included in
+    both boundaries are native ET snapshots within 15 minutes of midnight
+    (or an exact field-pinned audited exception). Carried inventory is included in
     equity: this is marked trading, consistently with today's row, not a
     claim of closed-only realized P&L. Delayed snapshots carry their actual
     intervals and display as calendar-day estimates. Missing boundaries remain
@@ -241,23 +251,14 @@ def historical_account_trading_by_day(
         boundary = datetime.combine(
             day_value, time.min, tzinfo=NEW_YORK).astimezone(timezone.utc)
         try:
-            created_at = _timestamp(row["created_at"], "opening baseline")
+            opening_at = _report_boundary_time(row, day_value, boundary)
             equity = _decimal(row["opening_equity"], "opening equity")
             cash = _decimal(row["opening_cash"], "opening cash")
         except AccountMetricUnavailable:
             return None
         if equity < 0 or cash < 0:
             return None
-        delta = created_at - boundary
-        if timedelta(0) <= delta <= BASELINE_START_TOLERANCE:
-            return equity, created_at
-        audited = AUDITED_DELAYED_ET_BASELINES.get(key)
-        if audited is None or any(
-                str(row[field]) != str(audited[field])
-                for field in (
-                    "opening_equity", "opening_cash", "created_at", "source")):
-            return None
-        return equity, boundary
+        return equity, opening_at
 
     result = AccountTradingHistory()
     for day_value in days:
@@ -417,6 +418,30 @@ def _covered_total(values: list[Decimal | None]) -> str:
     if len(known) != len(values) or not values:
         return f"Unavailable ({len(known)}/{len(values)} days proven)"
     return f"${sum(known, Decimal(0)):+,.2f}"
+
+
+def _snapshot_interval_notes(
+    days: list[date], *, today: date,
+    account_history: dict[str, Decimal] | None,
+    account_realized: AccountRealizedToday | None,
+) -> list[str]:
+    """Expose actual ET endpoints; never present a late mark as midnight."""
+
+    lines = []
+    intervals = getattr(account_history, "intervals", {})
+    for day in days:
+        if _trading_is_estimate(day, today=today, account_history=account_history):
+            opening, closing = intervals[day.isoformat()]
+            lines.append(
+                f"{day.isoformat()}: "
+                f"{opening.astimezone(NEW_YORK):%m-%d %H:%M:%S %Z} to "
+                f"{closing.astimezone(NEW_YORK):%m-%d %H:%M:%S %Z}")
+        elif (day == today and account_realized is not None
+              and account_realized.opening_as_of is not None):
+            lines.append(
+                f"Today starts at "
+                f"{account_realized.opening_as_of.astimezone(NEW_YORK):%m-%d %H:%M:%S %Z}")
+    return lines
 
 
 def _net_subtotal(values: list[Decimal]) -> str:
@@ -625,6 +650,12 @@ def render_table(
     ])
     if account_realized is not None and _current_mark(account_realized) is None:
         lines.append(f"Account mark unavailable: {account_realized.reason}.")
+    intervals = _snapshot_interval_notes(
+        days, today=today, account_history=account_history,
+        account_realized=account_realized)
+    if intervals:
+        lines.extend(["", "Snapshot intervals (ET; estimated daily boundaries):",
+                      *intervals])
     return "\n".join(lines)
 
 
@@ -720,6 +751,13 @@ def build_discord_payload(
             "inline": False,
         },
     ]
+    intervals = _snapshot_interval_notes(
+        days, today=today, account_history=account_history,
+        account_realized=account_realized)
+    if intervals:
+        fields.append({
+            "name": "Snapshot intervals (ET; estimated daily boundaries)",
+            "value": "\n".join(intervals), "inline": False})
     embed = {
         "title": "Liquidity Bot · Last 7 ET Days",
         "description": (

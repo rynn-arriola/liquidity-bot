@@ -87,7 +87,9 @@ class ReviewRegressions(IsolatedAsyncioTestCase):
         self.assertFalse(runner._frame(moment).new_risk_allowed)
         reason = runner._stop_reason(moment)
         if confirmed:
-            self.assertEqual(reason, "EMERGENCY_EQUITY_HARD_STOP")
+            self.assertIsNone(reason)
+            self.assertEqual(runner._hard_stop_hold_day, original_day)
+            self.assertIsNone(runner._provisional_hard_stop_at)
             self.assertEqual(runner._baseline_day, original_day)
         else:
             self.assertIsNone(reason)

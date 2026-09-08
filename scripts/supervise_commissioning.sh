@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Restart only after an unexpected process death. A caught terminal failure,
-# refusal, non-flat exit, or operator stop is terminal and is never restarted.
+# Restart only after an unexpected process death. Safety refusals/non-flat or
+# repeated crashes remain in attention mode, without relaunching trading.
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -28,6 +28,18 @@ BACKOFF=10
 
 alert() {
     "$PY" -m liquidity_bot.supervisor_alert --critical "$1" >/dev/null 2>&1 || true
+}
+
+attention() {
+    # Stay observable without repeatedly relaunching a deterministic defect or
+    # touching unknown venue exposure. stop_commissioning.sh still ends this
+    # supervisor normally; no child trader is alive in this loop.
+    echo "[supervisor] state=ATTENTION_REQUIRED reason=$1 trading=stopped"
+    alert "Liquidity Bot needs attention: $1. Trading is stopped; automatic relaunch is blocked."
+    while true; do
+        sleep 60
+        echo "[supervisor] state=ATTENTION_REQUIRED reason=$1 trading=stopped"
+    done
 }
 
 if [ "$TARGET" = "auto" ]; then
@@ -65,18 +77,15 @@ while true; do
             ;;
         2)
             echo "[supervisor] startup refused; not restarting"
-            alert "Liquidity Bot startup was refused. Nothing was launched."
-            exit 2
+            attention "startup refused"
             ;;
         3)
             echo "[supervisor] process exited without proving flat; not restarting"
-            alert "Liquidity Bot exited without proving flat. Check the exchange immediately."
-            exit 3
+            attention "account flatness not proven; check venue exposure"
             ;;
         4)
             echo "[supervisor] caught runtime/strategy failure; not restarting"
-            alert "Liquidity Bot stopped after a caught runtime failure and will not restart."
-            exit 4
+            attention "caught runtime/strategy integrity failure"
             ;;
         5)
             # An unexpected loop failure that still proved the account flat.
@@ -96,9 +105,7 @@ while true; do
         BACKOFF=10
     fi
     if [ "$FAST" -ge "$MAX_FAST_CRASHES" ]; then
-        echo "[supervisor] ${FAST} fast process deaths; giving up"
-        alert "Liquidity Bot supervisor gave up after ${FAST} fast process deaths. Check the exchange."
-        exit 1
+        attention "${FAST} fast process deaths"
     fi
 
     echo "[supervisor] unexpected exit $CODE after ${RAN}s; restart in ${BACKOFF}s"

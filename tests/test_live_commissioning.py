@@ -5986,8 +5986,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # inside the ceiling, which is exactly the historical bug.
         client.account.current_balance -= second_step
         await restarted._refresh_balance(NOW)
-        self.assertEqual(
-            restarted._stop_reason(NOW), "EMERGENCY_EQUITY_HARD_STOP")
+        self.assertIsNone(restarted._stop_reason(NOW))
+        self.assertTrue(restarted._entry_pause_active())
+        self.assertIsNotNone(restarted._hard_stop_hold_day)
         await restarted.private_stream.close()
         await restarted.market_stream.close()
 
@@ -6025,12 +6026,12 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runner._stop_reason(NOW))
         self.assertTrue(runner.risk_guard.can_add_new_risk(now=NOW))
 
-        # One dollar beyond HARD is terminal. This is the sole money-loss stop.
+        # One dollar beyond HARD latches the sole daily money-loss pause.
         client.account.current_balance = (
             start - runner.config.hard_stop_loss_usd - Decimal("1"))
         await runner._refresh_balance(NOW)
-        self.assertEqual(
-            runner._stop_reason(NOW), "EMERGENCY_EQUITY_HARD_STOP")
+        self.assertIsNone(runner._stop_reason(NOW))
+        self.assertIsNotNone(runner._hard_stop_hold_day)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -7499,8 +7500,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner.clock = lambda: measured_at
         await runner._refresh_balance(measured_at)
 
-        self.assertEqual(
-            runner._stop_reason(measured_at), "EMERGENCY_EQUITY_HARD_STOP")
+        self.assertIsNone(runner._stop_reason(measured_at))
+        self.assertIsNotNone(runner._hard_stop_hold_day)
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -8399,7 +8400,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                     await runner.private_stream.close()
                     await runner.market_stream.close()
 
-    async def test_hard_stop_remains_terminal_during_stream_recovery(self):
+    async def test_hard_stop_remains_paused_during_stream_recovery(self):
         runner, client, _ = self.build_runner()
         await runner.preflight()
         floor = Decimal(100) - runner.config.hard_stop_loss_usd
@@ -8408,7 +8409,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         stop = await runner._recover_private_stream(
             AdapterError("private WebSocket disconnected"))
 
-        self.assertEqual(stop, "EMERGENCY_EQUITY_HARD_STOP")
+        self.assertIsNone(stop)
+        self.assertIsNotNone(runner._hard_stop_hold_day)
+        self.assertFalse(runner._frame(NOW).new_risk_allowed)
         self.assertEqual(client.orders.create_calls, [])
         await runner.private_stream.close()
         await runner.market_stream.close()

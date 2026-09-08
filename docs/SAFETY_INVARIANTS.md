@@ -86,8 +86,16 @@ These are implementation requirements, not suggestions.
     inventory is open it is provisional: existing exits keep running, a
     recovered mark cannot clear until a breach-time position is positively
     closed, and the decision requires a complete reconciliation followed by a
-    newer balance. A confirmed hard loss may stop while a different position
-    remains open. Realized session P&L, per-market realized P&L, taker-exit
+    newer balance. A confirmed hard loss durably latches its ET meter day,
+    cancels pending entries and immediately evacuates every remaining position
+    through exact sequential cancel/proof/IOC. It pauses, never shuts down for
+    HARD alone. Same-day recovered equity/restart cannot release the latch;
+    a later ET day, current adjusted baseline and fresh reconciled zero orders,
+    zero positions and zero ambiguity are required, with all other entry gates
+    still enforced. The later equity snapshot must also show zero positions;
+    older flat reconciliation cannot override a newer late fill. Temporary
+    failures retain recovery and the latch.
+    Realized session P&L, per-market realized P&L, taker-exit
     count and taker fees may be reported but cannot block/cancel quotes, pause
     or stop trading, or alter exits. Buying power is never treated as P&L or
     marked equity. The derived HARD property cannot drift independently of the
@@ -230,13 +238,15 @@ These are implementation requirements, not suggestions.
 53. Staying down is itself a failure mode. An unexpected runtime failure that
     proved the whole account flat exits `5` and is restarted, because a fresh
     process re-runs the entire flat and ownership preflight before any order.
-    HARD, unowned or cross-market state, unproven flat state, and every named
-    critical remain terminal and are never restarted.
+    Unowned/cross-market state, unproven flat state and named criticals never
+    auto-restart. Refusal/non-flat/integrity exits or three fast crashes leave
+    the supervisor in visible attention mode without relaunching trading;
+    manual clean stop ends it. HARD uses invariant 25's durable daily pause.
 54. An empty viable universe is a wait, not a refusal. With no bound market the
     runner holds no orders, no position and no stream subscription, so waiting
     carries no risk. Only an operator stop or a genuine adapter failure ends
     the wait; `SIGTERM`/`SIGINT` handlers are installed before the wait begins.
-55. Except for invariant 89's exact `0.01`–`0.09` residual band, inventory
+55. Except for HARD/scheduled evacuation, pre-kickoff and invariant 89's exact `0.01`–`0.09` residual band, inventory
     waits 900 seconds for a free passive exit before paying to cross.
     maker-lab's 112 reconstructed episodes resolved passively for 26%
     of episodes within 30 seconds but 46% by 900 seconds, while crossing costs
@@ -291,21 +301,23 @@ These are implementation requirements, not suggestions.
     retirement is purely an ambiguity container: it releases its quote bar
     only after positive terminal proof, no unresolved intent, no working order
     and a flat position. Book, plan, action and exit retirements retain their
-    cooldown/abandonment behavior. Ending the session for a per-market
+    cooldown behavior. Ending the session for a per-market
     condition exits 4, which the supervisor never restarts, so one thin book
     took down seven healthy markets and left the process dead until an
     operator noticed. Once a flat, order-free and ambiguity-free retirement
     reaches the ten-round abandonment bound, its book refresh also stops even
-    before kickoff: the planner can never run for it again, so another book
-    cannot serve an entry or exit. Any position, working/unknown-absent order
+    before kickoff: an empty owner needs no exit planning. Any later position,
+    working/unknown-absent order reactivates recovery. Any position, working/unknown-absent order
     or unresolved intent keeps the refresh alive.
-63. Retirement is bounded in three directions. Retirement is opt-in by name,
-    so an unrecognised critical still fails closed to terminal. A market that
-    fails ten rounds is abandoned and never planned again --
-    shutdown makes the final attempt -- because retirement resets the exit
-    budget and would otherwise replan forever, including after kickoff. More
-    distinct retirements than `max_markets` is systemic, not unlucky, and stops
-    the session.
+63. Retirement is opt-in by name; an unrecognised critical remains terminal.
+    Ten rounds may make only an empty/order-free/ambiguity-free owner dormant.
+    Held owners retain slots/exposure, fresh evidence and 60-second exit rounds
+    indefinitely. Re-arming rate bounds never clears an ambiguous IOC marker;
+    positive terminal proof and fresh exact quantity are mandatory. More than
+    `max_markets` recent pre-kickoff faults remains systemic: named stale-book/
+    execution-state failures pause entry and selection for the retirement
+    cooldown, then require post-cooldown account/stream proof before normal
+    guarded selection. Owner quarantine remains; unknown defects still stop.
 64. Stream visibility and order ambiguity have different scope. A private
     reconnect, or a both-stream recovery after a failed active-set bind, may
     resume unaffected markets only after complete REST order and position
@@ -332,8 +344,10 @@ These are implementation requirements, not suggestions.
     A failed pre-commit proof may not change scope, close a stream or cancel an
     order. Other scoped order reads are a recovery-only exception after global
     cancellation has already been requested. Private and both-stream reconnect
-    loops are bounded, but exhaustion never proves flat: only shutdown's
-    independent whole-account proof may authorize restartable exit `5`.
+    loops have a bounded short phase, then persistently wait for classified
+    transport/5xx/429 failures. Unknown failures retain bounded escalation;
+    exhaustion never proves flat, and only shutdown's independent whole-account
+    proof may authorize restartable exit `5`.
     Recovery must start the replacement private listener before issuing its
     quarantine cancels, then apply buffered private events before classifying
     owners as ambiguous. Shutdown likewise drains buffered terminal events
@@ -388,9 +402,11 @@ These are implementation requirements, not suggestions.
     be reactivated without a new reviewed measurement decision.
 69. Venue maintenance may pause a runner but may not relax execution truth.
     Only a positively classified transport failure, WebSocket disconnect or
-    HTTP 5xx may enter the maintenance coordinator; NotFound, HTTP 429,
-    malformed response/schema, ownership conflict and runtime invariants retain
-    their existing scoped or terminal behavior. Maintenance probes are
+    HTTP 5xx supports a maintenance diagnosis. Typed HTTP 429/admission deferral
+    may use the same persistent recovery coordinator without being labelled
+    maintenance; mixed 5xx/429 must not consume a terminal process budget.
+    NotFound, malformed schema, ownership conflicts and runtime invariants
+    retain scoped or terminal handling. Recovery probes are
     read-only complete authenticated open-order, position and balance reads
     and are never applied as evidence that an absent order was cancelled.
     Recovery requires three consecutive complete probe cycles one minute apart;
@@ -682,6 +698,9 @@ These are implementation requirements, not suggestions.
     fresh bracketed cash/equity reads continue against its original cash
     boundary. No new entry is allowed; positive post-close reconciliation and
     a newer adjusted mark must settle the old loss before ordinary rollover.
+    Confirmation latches the breached baseline day, not the later clock day,
+    and releases the provisional cohort so normal rollover can proceed while
+    the durable evacuation/entry hold remains until invariant 25's proof.
 89. Tiny-position acceleration is quantity-bounded and exit-only. An exact
     venue-tradable position from `0.01` through `0.09` contracts may switch
     from passive reduction to cashout only when its durable position-open clock

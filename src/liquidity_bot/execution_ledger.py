@@ -160,6 +160,11 @@ CREATE TABLE IF NOT EXISTS execution_risk_loss_stop_days (
     risk_date TEXT PRIMARY KEY,
     first_tripped_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_hard_stop_holds (
+    risk_date TEXT PRIMARY KEY,
+    first_tripped_at TEXT NOT NULL,
+    released_at TEXT
+);
 CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
     risk_date TEXT PRIMARY KEY,
     opening_equity TEXT NOT NULL,
@@ -687,6 +692,25 @@ class ExecutionLedger:
                 "updated_at=excluded.updated_at",
                 (day, _number(total, "score_seconds"), at))
         return total
+
+    def record_hard_stop_hold(self, risk_date: str, *, at: datetime) -> None:
+        """Latch the confirmed HARD day; restarting never forgives a breach."""
+
+        day = date.fromisoformat(risk_date).isoformat()
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO execution_hard_stop_holds"
+                "(risk_date,first_tripped_at) VALUES (?,?)",
+                (day, _time(at, "at")))
+
+    def release_hard_stop_hold(self, risk_date: str, *, at: datetime) -> None:
+        """Record release only after the runner's next-day flat/health proof."""
+
+        with self.connection:
+            self.connection.execute(
+                "UPDATE execution_hard_stop_holds SET released_at=? "
+                "WHERE risk_date=? AND released_at IS NULL",
+                (_time(at, "at"), risk_date))
 
     def record_loss_stop(self, risk_date: str, *, at: datetime) -> None:
         """Retain a legacy loss-stop day for historical analysis. Idempotent.

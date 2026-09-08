@@ -66,8 +66,8 @@ hard-locked by `CommissioningConfig`:
 | concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
-| emergency HARD stop | `$90 × size / 10 × slots / 32` on adjusted marked equity; $56.25 at 20 slots, $67.50 at 24, $90 at 32; provisional with open inventory |
-| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 30, 70% → 25, 80% → 20, 90% → 15, 95% → 10; HARD still stops at 100%; never counts position-market orders or reducers |
+| emergency HARD stop | `$90 × size / 10 × slots / 32` on adjusted marked equity; $56.25 at 20 slots, $67.50 at 24, $90 at 32; provisional with open inventory; confirmed loss durably pauses and evacuates |
+| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 30, 70% → 25, 80% → 20, 90% → 15, 95% → 10; confirmed HARD evacuates and pauses the day at 100%; never counts position-market orders or reducers |
 | time-scaled flat-entry orders | midnight–8:59:59 AM `America/New_York` → maximum 30 pending entries; 9:00 AM–11:59:59 PM → maximum 40; combines with loss and physical capacity by taking the smallest |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
@@ -93,6 +93,11 @@ With open inventory it waits for a breach-time position to close and a newer
 balance before it can clear or confirm the hard stop. Realized session P&L,
 per-market realized P&L, taker-exit count and taker fees remain reporting
 evidence and have no independent pause or stop authority.
+Once HARD is confirmed, cancel all pending entries and immediately exit every
+position through sequential cancellation, terminal proof and exact-quantity
+IOC. The bot stays alive, retries temporary failures safely and persists its
+day pause across restarts. A later ET day plus fresh flat/known account and
+normal health/maintenance gates is required before trading again.
 
 The optional entry-quality filter loads restart-scoped
 `config/entry_quality_policy.json`: `enabled` switches it on/off and
@@ -453,8 +458,10 @@ quarantine cancels, so their terminal events are observable. The launcher
 refuses to overlap maker-lab or another liquidity runner. Its
 supervisor restarts only after an unexpected process death; identified prior
 orders enter recovery-only mode, where no new risk is allowed. Operator stop,
-startup refusal, caught terminal failure, HARD, and non-flat exit are never
-restarted. See [commissioning operations](docs/COMMISSIONING.md).
+startup refusal, caught terminal failure and non-flat exit never auto-relaunch.
+Refusals/non-flat/critical exits and three fast crashes leave an observable
+supervisor attention state without trading. Confirmed HARD remains in-process
+under its durable daily evacuation pause. See [commissioning operations](docs/COMMISSIONING.md).
 
 See [the implementation plan](docs/IMPLEMENTATION_PLAN.md),
 [safety invariants](docs/SAFETY_INVARIANTS.md), and

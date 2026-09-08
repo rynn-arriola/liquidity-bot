@@ -64,6 +64,11 @@ strategy is profitable and not permission to scale.
   classified completed rewards, deposits, withdrawals, bonuses and transfers
   are subtracted from the adjusted mark; the bounded cash-only snapshot must
   be current and proven or risk freshness expires and new risk fails closed;
+- confirmed HARD cancels entries and immediately evacuates all inventory using
+  sequential cancel-confirm-exact-IOC. The durable daily pause survives restart
+  and recovered equity; resume requires a later ET day plus fresh flat account,
+  current adjusted risk and normal maintenance/stream/entry gates. A provisional
+  open-position breach still uses the existing cohort-close confirmation;
 - use that same adjusted ET-day marked loss to ratchet the account-wide
   flat-entry order ceiling: 30 at 50% of HARD, 25 at 70%, 20 at 80%, 15 at
   90%, and 10 at 95%. HARD at 100% remains the sole loss stop. The tightest reached tier
@@ -172,8 +177,12 @@ silence, non-429/stale/exhausted proof, and other private recovery establishes
 replacement visibility, cancels known quotes, applies buffered terminal events,
 reconciles the whole account, backs off exponentially, and only then permits
 new risk. Unknown strategy conditions default to terminal. Ownership, cross-market identity,
-exact-position, planning, and unexitable-inventory failures end maker quoting
-and enter cancel/flatten shutdown; they are not downgraded to warnings.
+exact-position and unknown planning failures end maker quoting and enter
+cancel/flatten shutdown; they are not downgraded to warnings. Named per-owner
+exit failures retain slow bounded rounds even after ten rounds while inventory
+or orders remain. Re-arming never erases ambiguous IOC proof. Temporary startup
+conditions and classified transport/5xx/429 recovery wait without a lifetime
+retry limit, using the existing API governor and three complete healthy probes.
 
 Every cooperating WSL API client uses `data/api-rate-limiter.state`, so the
 runner, dashboard and scheduled reports cannot each spend an independent REST
@@ -264,6 +273,9 @@ working order and nonzero position belongs to this persisted ledger and the
 identified recovery scope fits configured capacity. Automatic selection first
 follows those ledger owners rather than selecting something new. It
 cancels/flattens and exits; it does not resume quoting.
+An existing durable HARD hold instead keeps this same strictly scoped startup
+recovery in process, obtains fresh private state and continues evacuation;
+next-day quoting still requires fresh whole-account flat/known-state proof.
 
 There is one narrower availability exception. If a valid Retail response says
 that an exact bot-owned post-kickoff position has no bids and no offers, while
@@ -382,8 +394,8 @@ mutation only after three complete open-order/position snapshots spanning at
 least ten seconds all show no live order or position in the market, no local
 order row exists, and no execution at or after the intent is recorded. Any
 contrary evidence resets the proof. Startup and market-stream recovery wait in
-the same process rather than spending a restart budget; operator stop and HARD
-remain terminal. `scripts/resolve_orphan_places.py` remains a stopped-runner
+the same process rather than spending a restart budget; operator stop remains
+terminal and HARD retains its durable daily evacuation hold. `scripts/resolve_orphan_places.py` remains a stopped-runner
 manual fallback and dry-run check.
 
 ## Exit meanings
@@ -396,11 +408,15 @@ manual fallback and dry-run check.
   restart, because restarting would re-enter a known-bad state;
 - `5`: unexpected runtime failure that still proved the whole account flat;
   the supervisor restarts it, since a fresh process re-runs the entire
-  flat/ownership preflight before any order. The HARD stop is terminal and
-  never reaches this automatic-restart path;
+  flat/ownership preflight before any order. HARD stays in process and does
+  not use this automatic-restart path;
 - any other unexpected process death: bounded supervisor restart so the
   persistent ledger can recover identified state, with at most three fast
-  deaths before the supervisor gives up.
+  deaths before the supervisor enters attention mode without another launch.
+
+Exit codes 2/3/4 also leave the lightweight supervisor in `ATTENTION_REQUIRED`:
+one alert and local heartbeat, no trading and no blind relaunch. A live supervisor
+PID is not a live trader. Manual stop still terminates the supervisor and runner.
 
 Automatic selection waits rather than refusing when no market is economically
 viable. An empty universe is the normal case, so the runner holds with no bound

@@ -147,10 +147,6 @@ Clock = Callable[[], datetime]
 LIVE_PNL_CACHE_PATH = Path("data/tv-live-pnl.json")
 ACTIVE_SCOPE_CACHE_PATH = Path("data/tv-active-scope.json")
 
-# Generous: with backoff capped at 60s this is roughly an hour of retrying
-# before a transient startup condition is finally treated as a refusal.
-MAX_STARTUP_UNAVAILABLE_ATTEMPTS = 60
-
 # The runtime loss sensor needs the same positive cash classification as the
 # read-only reward report. One cash-only page currently covers the account;
 # four is the proven bounded ceiling. The marked-equity snapshot itself is a
@@ -255,13 +251,9 @@ CONTRACT_REFRESH_LOOKAHEAD_SECONDS = 5.0
 
 RETIRED_EXIT_RETRY_SECONDS = 60
 
-# After this many failed rounds the runner stops planning a retired market at
-# all. Ten rounds spans ten minutes, which covers the whole 300-second
-# pre-kickoff flatten window with room to spare. Past that the exit is not
-# coming back and replanning forever would spin the loop for the rest of the
-# session -- including after kickoff, when nothing can be done anyway. The
-# position is bounded at one contract, shutdown still makes a final attempt,
-# and every other market keeps quoting.
+# Empty, order-free, ambiguity-free owners may become dormant after this many
+# failed rounds. Any remaining position/order keeps recovery alive, with the
+# per-round exit budget and 60-second cooldown unchanged.
 MAX_RETIREMENT_ROUNDS = 10
 
 # How recently a fault must have landed to count toward the systemic bound.
@@ -676,12 +668,23 @@ class CommissioningRunner:
         # least one position that was open during the breach is positively
         # closed before accepting a recovered mark. The venue exposes only one
         # account-wide equity number, so it cannot name one culprit position.
-        # A realized-loss blocker may still pause trading while other positions
-        # remain open; complete account flatness is not required for that.
+        # A confirmed HARD breach latches the day and evacuates every remaining
+        # position; complete account flatness is required before next-day entry.
         self._provisional_hard_stop_at: datetime | None = None
         self._provisional_hard_stop_markets: set[str] = set()
         self._provisional_hard_stop_notice: str | None = None
         self._provisional_hard_stop_announced = False
+        holds = self.ledger.query(
+            "SELECT risk_date,first_tripped_at FROM execution_hard_stop_holds "
+            "WHERE released_at IS NULL ORDER BY risk_date LIMIT 1")
+        self._hard_stop_hold_day = (
+            date.fromisoformat(str(holds[0]["risk_date"])) if holds else None)
+        self._hard_stop_hold_at = (
+            datetime.fromisoformat(str(holds[0]["first_tripped_at"]))
+            if holds else None)
+        self._hard_stop_hold_notice: str | None = "held" if holds else None
+        self._transport_recovery_component: str | None = None
+        self._market_fault_pause_until: datetime | None = None
         # Footer identity, so an alert says which box and which build produced
         # it without the operator having to ask.
         self._host_name = socket.gethostname()
@@ -1615,6 +1618,9 @@ class CommissioningRunner:
 
         return (
             self._manual_entry_paused
+            or self._hard_stop_hold_day is not None
+            or self._transport_recovery_component is not None
+            or self._market_fault_pause_until is not None
             or self._scheduled_maintenance_pause_active()
             or (self._ui_availability_initialized and self._ui_entry_paused)
         )
@@ -1654,6 +1660,12 @@ class CommissioningRunner:
         )
 
     def _current_entry_pause_reason(self) -> str | None:
+        if self._hard_stop_hold_day is not None:
+            return "daily_hard_stop_flatten_and_wait"
+        if self._transport_recovery_component is not None:
+            return f"transport_recovery:{self._transport_recovery_component}"
+        if self._market_fault_pause_until is not None:
+            return "market_fault_cascade_recovery"
         if self._manual_entry_paused:
             return "operator"
         if self._maintenance_decision.phase == MaintenancePhase.EVACUATE:
@@ -2026,7 +2038,8 @@ class CommissioningRunner:
             retired = self._retired.get(slug)
             due = due or bool(
                 retired is not None
-                and retired.rounds < MAX_RETIREMENT_ROUNDS
+                and (retired.rounds < MAX_RETIREMENT_ROUNDS
+                     or slug in positions or slug in working)
                 and (retired.next_retry_at is None
                      or now >= retired.next_retry_at))
             if slug in working:
@@ -2964,11 +2977,11 @@ class CommissioningRunner:
                 await self.sleep(delay)
             except AdapterError as exc:
                 # Do not let maintenance consume the supervisor's three-fast-
-                # crash allowance.  Only positively identified transport/5xx
+                # crash allowance. Only classified transport/5xx/throttle
                 # failures enter the long-lived pause; malformed responses,
                 # validation failures and ownership/state defects still leave
                 # this process and surface normally.
-                if not self._is_venue_unavailable(exc):
+                if not self._is_transient_recovery_error(exc):
                     raise
                 venue_failure_streak += 1
                 await self._report_runtime_error(
@@ -3002,15 +3015,12 @@ class CommissioningRunner:
                     "startup_orphan_place_evidence", base=5.0, cap=60.0))
             except CommissioningUnavailable as exc:
                 venue_failure_streak = 0
-                if attempt >= MAX_STARTUP_UNAVAILABLE_ATTEMPTS:
-                    raise CommissioningRefused(
-                        f"startup blocked after {attempt} attempts: {exc}"
-                    ) from exc
                 if self._stop_requested:
                     raise CommissioningRefused(
                         f"operator stopped during startup: {exc}") from exc
                 await self._report_runtime_error(
-                    "startup_unavailable", exc, attempt)
+                    "startup_unavailable", exc, attempt,
+                    include_traceback=(attempt == 1 or attempt % 30 == 0))
                 # Discard anything the partial attempt bound so the retry
                 # re-selects and re-proves rather than trusting stale state.
                 await self._release_partial_startup()
@@ -3233,8 +3243,8 @@ class CommissioningRunner:
             max_equity_age_seconds=15,
             hard_stop_loss=self.config.hard_stop_loss_usd,
         )
-        self.risk_guard.observe_equity(
-            self._equity_snapshot.marked_equity, observed_at=now)
+        # No raw-cash HARD sample: a failed cash-activity proof during startup
+        # must not durably latch a withdrawal as trading loss in recovery.
         # Before any order can be placed. `SessionRiskGuard` stamped
         # `starting_equity` from this instant, which measures the process; this
         # re-points it at the ET day's opening equity from the ledger, so a
@@ -3246,11 +3256,13 @@ class CommissioningRunner:
         await self._refresh_balance(self._now())
         self.driver = ControlledActionDriver(
             self.executor, self.ledger, self.risk_guard,
-            new_entry_allowed=lambda: not self._loss_cap_blocks_new_entry(
-                self._now()))
+            new_entry_allowed=lambda: (
+                not self._entry_pause_active()
+                and not self._loss_cap_blocks_new_entry(self._now())))
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
-        if recovery_only:
+        hard_recovery = recovery_only and self._hard_stop_hold_day is not None
+        if recovery_only and not hard_recovery:
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
         selection_note = ""
@@ -3285,6 +3297,10 @@ class CommissioningRunner:
                 " One exact post-kickoff recovery position remains barred "
                 "from building and under the unchanged exit manager; it "
                 "reserves one configured slot and its full portfolio exposure.")
+        if hard_recovery:
+            selection_note += (
+                " Persisted HARD recovery: entries remain paused while owned "
+                "orders/positions evacuate. Next-day entry requires fresh flat proof.")
         # Built from config, never from literals. This announced "one market,
         # one contract per quote, $5 soft stop, $15 hard stop" long after every
         # one of those had changed -- four wrong facts as the operator's first
@@ -3304,7 +3320,7 @@ class CommissioningRunner:
         if not getattr(delivery, "sent", False):
             raise CommissioningRefused(
                 "Discord startup alert delivery failed before order entry")
-        return "TRADE"
+        return "HARD_RECOVERY" if hard_recovery else "TRADE"
 
     def _accrue_score(self, now: datetime) -> None:
         """Accrue resting score across every bound market.
@@ -3910,6 +3926,7 @@ class CommissioningRunner:
                 self._working_orders(state.slug), False,
                 state.reward_eligible, {}, 0,
                 new_risk_allowed=False,
+                hard_stop_flatten_required=self._hard_stop_hold_day is not None,
                 maintenance_flatten_required=(
                     self._scheduled_maintenance_flatten_required()))
         today = date.fromisoformat(risk_day(now))
@@ -3947,6 +3964,7 @@ class CommissioningRunner:
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
             new_risk_allowed=new_risk_allowed,
+            hard_stop_flatten_required=self._hard_stop_hold_day is not None,
             maintenance_flatten_required=(
                 self._scheduled_maintenance_flatten_required()),
         )
@@ -4747,18 +4765,92 @@ class CommissioningRunner:
         if self.risk_guard is not None:
             self.risk_guard.adopt_day_baseline(opening_equity)
 
+    def _latch_hard_stop(self, now: datetime) -> None:
+        """Commit before cancelling/flattening; preserve the breached meter day."""
+
+        day = self._baseline_day or date.fromisoformat(risk_day(now))
+        self.ledger.record_hard_stop_hold(day.isoformat(), at=now)
+        self._hard_stop_hold_day = day
+        self._hard_stop_hold_at = now
+        self._hard_stop_hold_notice = "held"
+        self._provisional_hard_stop_at = None
+        self._provisional_hard_stop_markets.clear()
+        self._provisional_hard_stop_notice = None
+        self._entry_pause_cancel_requested = True
+        for slug in self.active_slugs:
+            self._mark_market_dirty(slug, now)
+            if slug in self._retired:
+                self._retired[slug].next_retry_at = now
+        self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+        print(f"[daily-hard-stop] at={now.isoformat()} day={day} "
+              "state=held action=cancel_entries_and_flatten", flush=True)
+
+    def _maybe_release_hard_stop(self, now: datetime) -> None:
+        """Next ET day is necessary, not sufficient: fresh flat proof first."""
+
+        day = self._hard_stop_hold_day
+        today = date.fromisoformat(risk_day(now))
+        if (day is None or today <= day or self._baseline_day != today
+                or self._nontrading_cash_day != today
+                or self._nontrading_cash is None or self.risk_guard is None
+                or not self.risk_guard.can_add_new_risk(now=now)
+                or self._streams_need_rebind
+                or not self.gate.ready(self.ledger, now=now)):
+            return
+        reconciled = self.gate.last_reconcile_at
+        equity_at = self.risk_guard.equity_observed_at
+        if (reconciled is None or equity_at is None
+                or self._hard_stop_hold_at is None
+                or reconciled < self._hard_stop_hold_at
+                or equity_at < reconciled
+                or risk_day(reconciled) != today.isoformat()
+                or self._equity_snapshot is None
+                or any(position.net_qty != 0
+                       for position in self._equity_snapshot.positions)
+                or self.ledger.working_orders() or self.ledger.absent_orders()
+                or self.ledger.unresolved_intents()
+                or self.ledger.query("SELECT 1 FROM execution_positions "
+                                     "WHERE CAST(net_qty AS REAL)!=0 LIMIT 1")):
+            return
+        self._assert_runtime_scope()
+        self.ledger.release_hard_stop_hold(day.isoformat(), at=now)
+        self._hard_stop_hold_day = None
+        self._hard_stop_hold_at = None
+        self._hard_stop_hold_notice = "released"
+        for slug in self.active_slugs:
+            self._mark_market_dirty(slug, now)
+        self._publish_active_scope_snapshot(
+            status="ENTRY_PAUSED" if self._entry_pause_active() else "RUNNING")
+        print(f"[daily-hard-stop] at={now.isoformat()} day={day} "
+              "state=released proof=fresh_next_day_flat_account", flush=True)
+
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:
             return self._stop_requested
         if self.risk_guard is None:
             return "risk_guard_missing"
+        if (self._market_fault_pause_until is not None
+                and now >= self._market_fault_pause_until
+                and not self._streams_need_rebind
+                and self.gate.ready(self.ledger, now=now)
+                and self.gate.last_reconcile_at is not None
+                and self.gate.last_reconcile_at >= self._market_fault_pause_until
+                and self.risk_guard.can_add_new_risk(now=now)):
+            self._market_fault_pause_until = None
+            # Retired owners and their ambiguity/cooldowns remain barred. Only
+            # normal discovery may find healthy replacements after this hold.
+            self._publish_active_scope_snapshot()
+            print(f"[market-fault-recovery] at={now.isoformat()} "
+                  "state=released proof=fresh_account_after_cooldown", flush=True)
+        self._maybe_release_hard_stop(now)
         open_position_slugs = {
             str(row["market_slug"])
             for row in self.ledger.query(
                 "SELECT market_slug FROM execution_positions "
                 "WHERE CAST(net_qty AS REAL)!=0")
         }
-        hard_hit = self.risk_guard.hard_stop_reached(now=now)
+        hard_hit = (self._hard_stop_hold_day is None
+                    and self.risk_guard.hard_stop_reached(now=now))
         if hard_hit and open_position_slugs:
             if self._provisional_hard_stop_at is None:
                 self._provisional_hard_stop_at = now
@@ -4778,7 +4870,7 @@ class CommissioningRunner:
                     open_position_slugs)
         elif hard_hit and self._provisional_hard_stop_at is None:
             # No open inventory can explain this as temporary paper movement.
-            return "EMERGENCY_EQUITY_HARD_STOP"
+            self._latch_hard_stop(now)
 
         if self._provisional_hard_stop_at is not None:
             reconcile_at = self.gate.last_reconcile_at
@@ -4804,7 +4896,7 @@ class CommissioningRunner:
             # bounce above and below the line. Require a breach-time position
             # to have actually closed, then accept the fresh adjusted balance.
             if hard_hit and closed:
-                return "EMERGENCY_EQUITY_HARD_STOP"
+                self._latch_hard_stop(now)
             if not hard_hit and closed:
                 self._provisional_hard_stop_at = None
                 self._provisional_hard_stop_markets.clear()
@@ -4922,6 +5014,18 @@ class CommissioningRunner:
     async def _announce_provisional_hard_stop(self) -> None:
         """Announce a paper breach once, then its position-close recovery."""
 
+        hold_notice, self._hard_stop_hold_notice = self._hard_stop_hold_notice, None
+        if hold_notice == "held":
+            await self.notifier.send_async(
+                "⏸️ HARD loss confirmed. Cancelling pending entries and exiting "
+                "all positions with terminal confirmation. Trading stays paused "
+                "for the ET day, including across restarts. Next-day entry "
+                "requires a fresh flat account and healthy trading gates.",
+                critical=True)
+        elif hold_notice == "released":
+            await self.notifier.send_async(
+                "✅ Daily HARD pause cleared for the new ET day after fresh "
+                "flat-account proof. Other entry and maintenance gates still apply.")
         notice, self._provisional_hard_stop_notice = (
             self._provisional_hard_stop_notice, None)
         if notice == "started" and not self._provisional_hard_stop_announced:
@@ -5495,8 +5599,13 @@ class CommissioningRunner:
 
         state = self.state_for(slug)
         retired = self._retired.get(slug)
-        if retired is not None and retired.rounds >= MAX_RETIREMENT_ROUNDS:
-            # Abandoned. Still flattened by shutdown, never planned again.
+        if (retired is not None and retired.rounds >= MAX_RETIREMENT_ROUNDS
+                and self.ledger.position(slug) == 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders(slug)
+                and not self.ledger.unresolved_intents(slug)):
+            # Only positively empty local owners may become dormant. Held or
+            # ambiguous owners keep their normal proof and slow exit service.
             return None, 0.0
         if (retired is not None and retired.next_retry_at is not None
                 and now < retired.next_retry_at):
@@ -7809,7 +7918,7 @@ class CommissioningRunner:
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
-                    if self._is_venue_unavailable(recovery_exc) else 0)
+                    if self._is_transient_recovery_error(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
@@ -7942,7 +8051,7 @@ class CommissioningRunner:
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
-                    if self._is_venue_unavailable(recovery_exc) else 0)
+                    if self._is_transient_recovery_error(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
@@ -8054,7 +8163,7 @@ class CommissioningRunner:
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
-                    if self._is_venue_unavailable(recovery_exc) else 0)
+                    if self._is_transient_recovery_error(recovery_exc) else 0)
                 stop = self._stop_reason(self._now())
                 if stop:
                     return stop
@@ -8078,6 +8187,25 @@ class CommissioningRunner:
                     # inventory into a restartable result.
                     return "runner_failure:bound_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
+
+    @classmethod
+    def _is_transient_recovery_error(cls, exc: Exception) -> bool:
+        """Typed throttling is recoverable, but is not a maintenance claim."""
+
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        throttled = False
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, RuntimeInvariantViolation):
+                return False
+            if isinstance(current, ApiAdmissionDeferred):
+                throttled = True
+            if (isinstance(current, AdapterError)
+                    and current.status_code == 429):
+                throttled = True
+            current = current.__cause__
+        return throttled or cls._is_venue_unavailable(exc)
 
     @staticmethod
     def _is_venue_unavailable(exc: Exception) -> bool:
@@ -8164,6 +8292,8 @@ class CommissioningRunner:
         before the run loop can quote again.
         """
 
+        self._transport_recovery_component = component
+        self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
         print(
             f"[maintenance-pause] at={self._now().isoformat()} "
             f"component={component} state=entered "
@@ -8178,8 +8308,8 @@ class CommissioningRunner:
                 "is treated as cancellation.")
         else:
             await self.notifier.send_async(
-                "🛠️ Liquidity Bot detected sustained Polymarket service "
-                f"unavailability in {component}. New quoting is paused; no "
+                "🛠️ Liquidity Bot is waiting for API/stream recovery "
+                f"in {component}. New quoting is paused; no "
                 "order absence is treated as cancellation. Read-only account "
                 "health must pass three times over about two minutes before the "
                 "normal reconciliation and stream gates are retried.",
@@ -8214,10 +8344,7 @@ class CommissioningRunner:
                 # A 429 is not evidence of maintenance, but inside an existing
                 # no-entry hold it is a failed health sample, not permission to
                 # terminate and abandon recovery. Never count it as success.
-                rate_limited = (
-                    isinstance(probe_exc, AdapterError)
-                    and probe_exc.status_code == 429)
-                if not (self._is_venue_unavailable(probe_exc) or rate_limited):
+                if not self._is_transient_recovery_error(probe_exc):
                     await self._report_runtime_error(
                         "maintenance_probe_terminal", probe_exc)
                     raise
@@ -8239,6 +8366,10 @@ class CommissioningRunner:
                     flush=True,
                 )
             if stable < MAINTENANCE_STABLE_READS:
+                print(
+                    f"[recovery-wait] component={component} "
+                    f"next_probe_at={(self._now() + timedelta(seconds=MAINTENANCE_POLL_SECONDS)).isoformat()} "
+                    f"stable={stable}/{MAINTENANCE_STABLE_READS}", flush=True)
                 stop = await self._maintenance_sleep(MAINTENANCE_POLL_SECONDS)
                 if stop:
                     return stop
@@ -8253,6 +8384,7 @@ class CommissioningRunner:
             flush=True,
         )
         self._runtime_error_counts.pop("maintenance_probe", None)
+        self._transport_recovery_component = None
         return None
 
     async def _reconcile_pending_hard_exit(
@@ -8410,12 +8542,9 @@ class CommissioningRunner:
         # financial harm without turning a routine exit count into a
         # process-lifetime limit.
         #
-        # Not always, though. Clearing the budget also clears the sent marker,
-        # which is the only evidence that a confirmation is stuck. Reset it
-        # there and the condition stops re-firing, the round counter never
-        # advances, and the market never reaches the abandonment bound -- the
-        # runner retries forever. Callers whose condition is *detected* by that
-        # marker must keep it.
+        # Pending-confirmation callers retain even the round budget. A normal
+        # re-arm resets its rate bounds, but never clears the sent IOC marker;
+        # only _reconcile_pending_hard_exit may clear that after fresh proof.
         if reset_exit_budget:
             self.reconciler.restart_hard_exit_budget(slug)
         now = self._now()
@@ -8455,7 +8584,10 @@ class CommissioningRunner:
             f"reason={reason} round={rounds} position={position}",
             flush=True,
         )
-        if rounds >= MAX_RETIREMENT_ROUNDS:
+        if (rounds == MAX_RETIREMENT_ROUNDS and position == 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders(slug)
+                and not self.ledger.unresolved_intents(slug)):
             print(
                 f"[market-retired] at={self._now().isoformat()} market={slug} "
                 f"abandoned_after={rounds}_rounds position={position}",
@@ -8464,11 +8596,12 @@ class CommissioningRunner:
             await self.notifier.send_async(
                 f"🚨 Liquidity Bot abandoned {slug} after {rounds} failed exit "
                 f"rounds, position {position}. It will not be planned again "
-                "this session; shutdown will make a final attempt. Every other "
+                "while empty; any position or pending order reactivates recovery. Every other "
                 "market keeps running.",
                 critical=True,
             )
-        elif rounds == 1 or (rounds & (rounds - 1)) == 0:
+        elif (rounds == 1 or rounds == MAX_RETIREMENT_ROUNDS
+              or (rounds & (rounds - 1)) == 0):
             if reason == "unresolved_mutation_timeout":
                 quote_status = (
                     "It remains barred until the intent has positive terminal "
@@ -8486,8 +8619,8 @@ class CommissioningRunner:
                 "running.",
                 critical=True,
             )
-        # One full slate of retirements AT ONCE is not unlucky books, it is a
-        # systemic fault. Stop rather than churn every slot.
+        # One full slate of retirements AT ONCE is a systemic problem. Named
+        # recoverable faults pause entry/selection; unknown defects still stop.
         #
         # Two things are excluded, because both produce that shape without any
         # fault at all. Markets bound by recovery share the retired set (they
@@ -8508,6 +8641,23 @@ class CommissioningRunner:
             and entry.retired_at >= horizon
             and not self._retired_past_kickoff(name, now)}
         if len(recent_faults) > self.config.max_markets:
+            if all(self._retired[name].reason in {
+                    "unrecoverable_book_stale",
+                    "unrecoverable_execution_state_unknown",
+            } for name in recent_faults):
+                if self._market_fault_pause_until is None:
+                    self._market_fault_pause_until = now + timedelta(
+                        seconds=RETIREMENT_COOLDOWN_SECONDS)
+                    self._entry_pause_cancel_requested = True
+                    for name in self.active_slugs:
+                        self._mark_market_dirty(name, now)
+                    self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+                    await self.notifier.send_async(
+                        "⏸️ Widespread stale market/account state. Entries paused; "
+                        "position recovery continues. Selection will retry after "
+                        "the 30-minute cooldown and fresh account/stream proof.",
+                        critical=True)
+                return None
             return "critical:market_retirement_limit_exceeded"
         return None
 

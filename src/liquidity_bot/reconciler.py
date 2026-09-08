@@ -164,6 +164,9 @@ class MarketFrame:
     # exact terminal proof, IOC bounds, ownership and displayed-depth checks
     # remain the ordinary hard-exit path.
     maintenance_flatten_required: bool = False
+    # Confirmed account HARD: evacuate now using the same exact cancel/proof/
+    # IOC sequence as scheduled evacuation, never a new entry or blind retry.
+    hard_stop_flatten_required: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (("now", self.now),
@@ -411,7 +414,12 @@ class DesiredStateReconciler:
         still open and every other market still healthy.
         """
 
-        self._clear_hard_exit(market_slug)
+        # Cancel retries still require the driver's existing positive OPEN /
+        # intent-proof protocol. Never erase an in-flight IOC: only terminal
+        # evidence can authorize another exact-position submission.
+        self._clear_hard_exit_cancel(market_slug)
+        self._hard_exit_attempts.pop(str(market_slug), None)
+        self._hard_exit_started_at.pop(str(market_slug), None)
 
     def _clear_hard_exit(self, market_slug: str) -> None:
         slug = str(market_slug)
@@ -487,7 +495,8 @@ class DesiredStateReconciler:
         pre_kickoff_due = (
             seconds_to_event is not None
             and seconds_to_event <= self.policy.force_exit_before_start_seconds)
-        maintenance_due = frame.maintenance_flatten_required
+        maintenance_due = (
+            frame.maintenance_flatten_required or frame.hard_stop_flatten_required)
         # Use the durable position-open clock. An initially tiny partial fill
         # gets the full grace period; a position already held for five minutes
         # that later shrinks into the tiny band exits the remainder at once
@@ -611,7 +620,9 @@ class DesiredStateReconciler:
             self._hard_exit_started_at.setdefault(slug, frame.now)
             self._hard_exit_attempts[slug] = attempts + 1
             self._hard_exit_sent[slug] = frame.now
-            if maintenance_due:
+            if frame.hard_stop_flatten_required:
+                reason = "daily_hard_stop_evacuation"
+            elif maintenance_due:
                 reason = "scheduled_maintenance_evacuation"
             elif small_residual_due and not normal_exit_due:
                 reason = "tiny_residual_timeout"

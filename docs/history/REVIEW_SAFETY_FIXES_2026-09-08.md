@@ -91,7 +91,29 @@ Retain the database/history and require explicit risk review and safe stop.
 
 ## Deployment and natural acceptance
 
-Pending final complete suite, push, normalized server hashes, native complete
-suite, repeated fresh start gate and size-10/32 restart acceptance. Do not induce
-losses, fills, maintenance or Discord failures to test the live bot. Successful
-initial quoting is not natural acceptance of future outage/HARD/midnight paths.
+- Release **28de01f20** was pushed to GitHub before the clean WSL fast-forward.
+  All **166** normalized source/test/script/web/config hashes matched.
+- The exact native WSL deployment passed **1,202 tests in 87.626 seconds**;
+  the installed `DEPLOYED_COMMIT` then advanced to the verified release.
+- An additional offline partial-fill audit proved that three filled plus seven
+  uncertain short contracts reserve the original $8 exactly once; replaying
+  the same fill does not change risk, and the held owner consumes no entry count.
+- The fresh **11:19:32.522434Z** authenticated start gate again proved zero
+  orders, positions, unresolved intents, unknown orders and local working rows.
+  Normal `start_commissioning.sh auto 10 32` launched supervisor **1685457** and
+  runner **1685485** at 11:19:32–33Z. The independent dashboard remained running.
+- Startup selected 52 viable markets from two event pages and retained the
+  configured 32-owner scope and normal overnight 30-entry ceiling. The official
+  schedule is HEALTHY/completed but requires `RESUME_HOLD` until
+  **11:30:07.911Z / 07:30:07.911 ET**, followed by the existing health checks.
+  This expected pause must not be bypassed to manufacture quoting acceptance.
+- Authenticated **11:22:19.308108Z** proof found zero orders/positions and zero
+  unresolved, unknown or local working state while both processes remained up.
+  The **11:22:13Z** first 159-second API window completed **450 reads, zero
+  mutations, zero failures/429s/cooldown**, and maximum queue depth one.
+- Laptop/GitHub/WSL/installed-marker parity passed on the code release; the
+  offline backup PC remains pending. Subsequent handoff-only commits do not
+  change loaded source. No live loss, fill, maintenance or Discord failure was
+  induced. Natural entry resumption and future outage/HARD/midnight transitions
+  remain observation-only acceptance; initial paused health is not proof of
+  future recovery under every external failure.

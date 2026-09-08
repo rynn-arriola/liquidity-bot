@@ -236,6 +236,11 @@ class ControlledActionDriver:
             raise RuntimeInvariantViolation(
                 "place_action_incomplete", "place action is incomplete")
         if action.kind == ActionKind.PLACE_IOC:
+            expected = "offer" if position > 0 else "bid"
+            if action.side != expected:
+                raise RuntimeInvariantViolation(
+                    "ioc_not_reducing_direction",
+                    "IOC must oppose the exact position direction")
             if position == 0 or action.qty != abs(position):
                 raise RuntimeInvariantViolation(
                     "ioc_not_exact_position",

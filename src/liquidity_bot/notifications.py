@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -148,3 +149,100 @@ class DiscordNotifier:
     ) -> NotificationResult:
         return await asyncio.to_thread(
             self.send_payload, payload, critical=critical, channel=channel)
+
+
+class RuntimeNotificationDispatcher:
+    """Bounded runtime-only delivery; startup still requires actual delivery.
+
+    Queue acceptance is never reported as delivery. One worker prioritizes
+    critical notices, retries their failed delivery three times, and logs
+    failures/overflow without credentials. No trading caller awaits HTTP.
+    """
+
+    def __init__(self, notifier: Any, *, capacity: int = 128):
+        if capacity < 1:
+            raise ValueError("notification capacity must be positive")
+        self.notifier = notifier
+        self.capacity = capacity
+        self._critical: deque = deque()
+        self._normal: deque = deque()
+        self._wake = asyncio.Event()
+        self._task: asyncio.Task | None = None
+        self._closed = False
+        self._inflight = False
+
+    def _enqueue(self, method: str, value: Any, critical: bool,
+                 channel: str | None) -> NotificationResult:
+        if self._closed:
+            print("[notification-delivery] state=closed_rejected", flush=True)
+            return NotificationResult(False, "dispatcher_closed")
+        if len(self._critical) + len(self._normal) >= self.capacity:
+            if critical and self._normal:
+                self._normal.popleft()
+                print("[notification-delivery] state=noncritical_evicted", flush=True)
+            else:
+                print(f"[notification-delivery] state=queue_full critical={critical}", flush=True)
+                return NotificationResult(False, "notification_queue_full")
+        queue = self._critical if critical else self._normal
+        queue.append((method, value, critical, channel))
+        self._wake.set()
+        if self._task is None:
+            self._task = asyncio.create_task(self._work())
+        return NotificationResult(False, "queued")
+
+    async def send_async(self, message: str, *, critical: bool = False,
+                         channel: str | None = None) -> NotificationResult:
+        return self._enqueue("send_async", str(message), critical, channel)
+
+    async def send_payload_async(self, payload: Mapping[str, Any], *,
+                                 critical: bool = False,
+                                 channel: str | None = None) -> NotificationResult:
+        # Capture the report as it was measured, not a later mutated dict.
+        snapshot = json.loads(json.dumps(dict(payload)))
+        return self._enqueue("send_payload_async", snapshot, critical, channel)
+
+    async def _work(self) -> None:
+        while True:
+            if not self._critical and not self._normal:
+                if self._closed:
+                    return
+                self._wake.clear()
+                await self._wake.wait()
+                continue
+            queue = self._critical if self._critical else self._normal
+            method, value, critical, channel = queue.popleft()
+            self._inflight = True
+            try:
+                attempts = 3 if critical else 1
+                for attempt in range(attempts):
+                    try:
+                        result = await getattr(self.notifier, method)(
+                            value, critical=critical, channel=channel)
+                        if result.sent or result.reason == "duplicate_suppressed":
+                            break
+                    except Exception as exc:
+                        print("[notification-delivery] state=transport_exception "
+                              f"type={type(exc).__name__}", flush=True)
+                    if attempt + 1 == attempts:
+                        print("[notification-delivery] state=delivery_failed "
+                              f"critical={critical} attempts={attempts}", flush=True)
+                    else:
+                        await asyncio.sleep(2 ** attempt)
+            finally:
+                self._inflight = False
+
+    async def close(self, *, timeout: float = 2.0) -> None:
+        """Drain only after shutdown safety work, with a bounded wait."""
+        self._closed = True
+        self._wake.set()
+        if self._task is None:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(self._task), timeout)
+        except (TimeoutError, asyncio.CancelledError):
+            pending = len(self._critical) + len(self._normal) + int(self._inflight)
+            print(f"[notification-delivery] state=shutdown_undelivered count={pending}", flush=True)
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._critical.clear()
+            self._normal.clear()

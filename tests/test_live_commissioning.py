@@ -4402,6 +4402,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def _absent_order(self, runner, client, *, venue_state):
         """One order the ledger holds working and the venue no longer lists."""
 
+        self._seed_owned_place_provenance(runner, "absent")
         client.orders.rows["exchange-absent"] = {
             "id": "exchange-absent",
             "marketSlug": "market-one",
@@ -7725,11 +7726,24 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    def _seed_owned_place_provenance(self, runner, suffix):
+        """A scoped owned-order fixture needs its durable pre-submit intent."""
+        intent = f"place-{suffix}"
+        runner.ledger.prepare_intent(
+            intent, "PLACE", "market-one", f"liquidity-{suffix}",
+            {"marketSlug": "market-one", "intent": "ORDER_INTENT_BUY_LONG",
+             "price": {"value": "0.49", "currency": "USD"}, "quantity": "5"},
+            created_at=NOW)
+        runner.ledger.transition_intent(intent, "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent(intent, "ACKNOWLEDGED", updated_at=NOW,
+                                       exchange_order_id=f"exchange-{suffix}")
+
     async def test_private_recovery_resumes_other_markets_while_cancel_is_ambiguous(self):
         runner, client, _ = self.build_runner(clock=TickingClock())
         await runner.preflight()
         runner._bind_markets(("market-one", "market-two"))
         self._complete_neighbour_frame(runner)
+        self._seed_owned_place_provenance(runner, "before-disconnect")
         runner.ledger.apply_order_event(
             "ws", "owned-before-disconnect",
             OrderState(
@@ -7817,6 +7831,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         runner._bind_markets(("market-one", "market-two"))
         self._complete_neighbour_frame(runner)
+        self._seed_owned_place_provenance(runner, "before-failed-bind")
         runner.ledger.apply_order_event(
             "ws", "owned-before-failed-bind",
             OrderState(

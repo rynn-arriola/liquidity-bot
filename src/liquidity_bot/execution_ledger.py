@@ -165,6 +165,12 @@ CREATE TABLE IF NOT EXISTS execution_hard_stop_holds (
     first_tripped_at TEXT NOT NULL,
     released_at TEXT
 );
+CREATE TABLE IF NOT EXISTS execution_provisional_hard_stop (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    risk_date TEXT NOT NULL,
+    first_tripped_at TEXT NOT NULL,
+    markets_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
     risk_date TEXT PRIMARY KEY,
     opening_equity TEXT NOT NULL,
@@ -702,6 +708,33 @@ class ExecutionLedger:
                 "INSERT OR IGNORE INTO execution_hard_stop_holds"
                 "(risk_date,first_tripped_at) VALUES (?,?)",
                 (day, _time(at, "at")))
+            # Confirmation and provisional release are one crash-safe commit.
+            self.connection.execute("DELETE FROM execution_provisional_hard_stop")
+
+    def record_provisional_hard_stop(
+        self, risk_date: str, *, at: datetime, markets: set[str],
+    ) -> None:
+        day = date.fromisoformat(risk_date).isoformat()
+        stamp = _time(at, "at")
+        if not markets or any(not isinstance(s, str) or not s for s in markets):
+            raise ValueError("provisional HARD cohort must be nonempty")
+        with self.connection:
+            prior = self.connection.execute(
+                "SELECT risk_date,first_tripped_at,markets_json "
+                "FROM execution_provisional_hard_stop WHERE singleton=1").fetchone()
+            if prior is not None:
+                if prior["risk_date"] != day or prior["first_tripped_at"] != stamp:
+                    raise LedgerConflict("provisional HARD identity changed")
+                markets = markets | set(json.loads(prior["markets_json"]))
+            self.connection.execute(
+                "INSERT INTO execution_provisional_hard_stop VALUES (1,?,?,?) "
+                "ON CONFLICT(singleton) DO UPDATE SET markets_json=excluded.markets_json",
+                (day, stamp, json.dumps(sorted(markets))))
+
+    def clear_provisional_hard_stop(self) -> None:
+        """Only the runner's fresh post-close recovery may release this state."""
+        with self.connection:
+            self.connection.execute("DELETE FROM execution_provisional_hard_stop")
 
     def release_hard_stop_hold(self, risk_date: str, *, at: datetime) -> None:
         """Record release only after the runner's next-day flat/health proof."""

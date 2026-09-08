@@ -5,6 +5,9 @@ These are implementation requirements, not suggestions.
 1. Live execution is off by default.
 2. No live startup is allowed without a positive, shadow-validated maximum inventory age.
 3. Every building order must fit both per-market and portfolio unmatched-loss budgets.
+   Owned unresolved PLACE and UNKNOWN_ABSENT exposure retain deduplicated
+   reservations until terminal proof. An unknown basis reserves full unit loss
+   for either position sign; absence never frees flat-entry count capacity.
 4. After the first fill, all risk-building orders for that market are cancelled.
 5. After a fill, cancel every building order and work the exact reducing quote
    at the active touch, with **no cost-basis floor**. A floor only fills when
@@ -69,6 +72,9 @@ These are implementation requirements, not suggestions.
 23. Normal summaries use the status webhook; critical process, money, or
     exchange-state failures use the error webhook and must not block the market
     or private WebSocket event loop.
+    Runtime delivery must also never hold the trading decision/cancel coroutine
+    behind HTTP. Use bounded queued delivery with explicit failure/overflow;
+    startup delivery proof remains synchronous and queued never means sent.
 24. Commissioning runs until operator stop or a terminal safety/loss condition.
     Recoverable adapter failures and pending terminal cancel proof keep the
     process alive with new risk disabled; the latter does not consume a stream
@@ -86,7 +92,11 @@ These are implementation requirements, not suggestions.
     inventory is open it is provisional: existing exits keep running, a
     recovered mark cannot clear until a breach-time position is positively
     closed, and the decision requires a complete reconciliation followed by a
-    newer balance. A confirmed hard loss durably latches its ET meter day,
+    newer balance.
+    The provisional breach day/time/cohort must also survive restart; restoration
+    uses the original durable baseline and post-breach closure proof before
+    release. Confirmed hold and provisional cleanup must commit atomically.
+    A confirmed hard loss durably latches its ET meter day,
     cancels pending entries and immediately evacuates every remaining position
     through exact sequential cancel/proof/IOC. It pauses, never shuts down for
     HARD alone. Same-day recovered equity/restart cannot release the latch;

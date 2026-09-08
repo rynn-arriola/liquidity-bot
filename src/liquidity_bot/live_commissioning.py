@@ -106,7 +106,7 @@ from .maintenance_schedule import (
     write_maintenance_cache,
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
-from .notifications import DiscordNotifier
+from .notifications import DiscordNotifier, RuntimeNotificationDispatcher
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
@@ -674,6 +674,22 @@ class CommissioningRunner:
         self._provisional_hard_stop_markets: set[str] = set()
         self._provisional_hard_stop_notice: str | None = None
         self._provisional_hard_stop_announced = False
+        self._provisional_hard_stop_day: date | None = None
+        provisional = self.ledger.query(
+            "SELECT risk_date,first_tripped_at,markets_json "
+            "FROM execution_provisional_hard_stop WHERE singleton=1")
+        if provisional:
+            row = provisional[0]
+            self._provisional_hard_stop_day = date.fromisoformat(row["risk_date"])
+            self._provisional_hard_stop_at = datetime.fromisoformat(row["first_tripped_at"])
+            markets = json.loads(row["markets_json"])
+            if (not isinstance(markets, list) or not markets
+                    or any(not isinstance(s, str) or not s for s in markets)
+                    or self._provisional_hard_stop_at.tzinfo is None):
+                raise RuntimeInvariantViolation(
+                    "provisional_hard_stop_invalid", "durable HARD cohort is malformed")
+            self._provisional_hard_stop_markets = set(markets)
+            self._provisional_hard_stop_notice = "started"
         holds = self.ledger.query(
             "SELECT risk_date,first_tripped_at FROM execution_hard_stop_holds "
             "WHERE released_at IS NULL ORDER BY risk_date LIMIT 1")
@@ -3824,17 +3840,44 @@ class CommissioningRunner:
             position = self.ledger.position(slug)
             if position:
                 basis = self.ledger.inventory_basis(slug)
-                price = (float(basis.average_entry_price)
-                         if basis is not None else 1.0)
-                total += (float(abs(position))
-                          * (price if position > 0 else 1.0 - price))
-            for order in self._working_orders(slug):
+                unit_loss = (1.0 if basis is None else
+                             float(basis.average_entry_price) if position > 0
+                             else 1.0 - float(basis.average_entry_price))
+                total += float(abs(position)) * unit_loss
+            for order in self._working_orders(slug, include_absent=True):
                 total += float(order.remaining_qty) * (
                     order.price if order.side == "bid" else 1.0 - order.price)
+            # PLACE may be live before any order row arrives. Row-backed
+            # intents are already counted above (or positively terminal).
+            for intent in self.ledger.unresolved_intents(slug):
+                if intent["operation"] != "PLACE":
+                    continue
+                if self.ledger.query(
+                        "SELECT 1 FROM execution_orders WHERE client_order_id=?",
+                        (intent["client_order_id"],)):
+                    continue
+                payload = json.loads(intent["payload_json"])
+                price = Decimal(str(payload["price"]["value"]))
+                qty = Decimal(str(payload["quantity"]))
+                fills = self.ledger.query(
+                    "SELECT qty FROM execution_fills WHERE client_order_id=? AND reversed=0",
+                    (intent["client_order_id"],))
+                remaining = max(Decimal(0), qty - sum(
+                    (Decimal(str(row["qty"])) for row in fills), Decimal(0)))
+                side = str(payload.get("intent", ""))
+                if (not price.is_finite() or not qty.is_finite()
+                        or not 0 <= price <= 1 or qty <= 0
+                        or side not in {"ORDER_INTENT_BUY_LONG", "ORDER_INTENT_SELL_SHORT",
+                                        "ORDER_INTENT_BUY_SHORT", "ORDER_INTENT_SELL_LONG"}):
+                    raise RuntimeInvariantViolation(
+                        "reserved_order_invalid", "unresolved order risk is malformed")
+                total += float(remaining * (
+                    price if side in {"ORDER_INTENT_BUY_LONG", "ORDER_INTENT_SELL_SHORT"}
+                    else 1 - price))
         return total
 
     def _working_orders(
-        self, slug: str | None = None,
+        self, slug: str | None = None, *, include_absent: bool = False,
     ) -> tuple[WorkingOrder, ...]:
         result: list[WorkingOrder] = []
         side_by_intent = {
@@ -3843,7 +3886,10 @@ class CommissioningRunner:
             "ORDER_INTENT_BUY_SHORT": "offer",
             "ORDER_INTENT_SELL_LONG": "offer",
         }
-        for row in self.ledger.working_orders(slug or self.market_slug):
+        rows = self.ledger.working_orders(slug or self.market_slug)
+        if include_absent:
+            rows += self.ledger.absent_orders(slug or self.market_slug)
+        for row in rows:
             intent_row = self.ledger.query(
                 "SELECT payload_json FROM execution_intents "
                 "WHERE operation='PLACE' AND client_order_id=? "
@@ -4485,6 +4531,10 @@ class CommissioningRunner:
             and str(row["market_slug"]) not in positioned
             and str(row["client_order_id"]) not in active_clients
         }
+        reservations.update(
+            str(row["client_order_id"]) for row in self.ledger.absent_orders()
+            if str(row["market_slug"]) not in positioned
+            and str(row["client_order_id"]) not in active_clients)
         return working, len(reservations)
 
     def _loss_cap_overflow_order_ids(
@@ -4697,7 +4747,14 @@ class CommissioningRunner:
             # Preserve the breached day's baseline until its position cohort
             # closes. Resetting at ET midnight while it remains open would
             # forgive the breach before the required confirmation.
-            return
+            if self._baseline_day is not None:
+                return
+            today = self._provisional_hard_stop_day
+            if today is None or not self.ledger.query(
+                    "SELECT 1 FROM execution_risk_day_baselines WHERE risk_date=?",
+                    (today.isoformat(),)):
+                raise RuntimeInvariantViolation(
+                    "provisional_hard_baseline_missing", "breached baseline is unavailable")
         if self._baseline_day == today:
             return
         if self.balance is None or self._equity_snapshot is None:
@@ -4853,6 +4910,10 @@ class CommissioningRunner:
                     and self.risk_guard.hard_stop_reached(now=now))
         if hard_hit and open_position_slugs:
             if self._provisional_hard_stop_at is None:
+                day = self._baseline_day or date.fromisoformat(risk_day(now))
+                self.ledger.record_provisional_hard_stop(
+                    day.isoformat(), at=now, markets=open_position_slugs)
+                self._provisional_hard_stop_day = day
                 self._provisional_hard_stop_at = now
                 self._provisional_hard_stop_markets = set(open_position_slugs)
                 self._provisional_hard_stop_notice = "started"
@@ -4866,8 +4927,12 @@ class CommissioningRunner:
                 # An already-resting entry can fill while its cancellation is
                 # in flight. It is exposed to the same marked breach and must
                 # join the set whose closure can settle the provisional state.
-                self._provisional_hard_stop_markets.update(
-                    open_position_slugs)
+                if not open_position_slugs <= self._provisional_hard_stop_markets:
+                    self.ledger.record_provisional_hard_stop(
+                        self._provisional_hard_stop_day.isoformat(),
+                        at=self._provisional_hard_stop_at,
+                        markets=self._provisional_hard_stop_markets | open_position_slugs)
+                    self._provisional_hard_stop_markets.update(open_position_slugs)
         elif hard_hit and self._provisional_hard_stop_at is None:
             # No open inventory can explain this as temporary paper movement.
             self._latch_hard_stop(now)
@@ -4877,7 +4942,7 @@ class CommissioningRunner:
             equity_at = self.risk_guard.equity_observed_at
             closed: set[str] = set()
             if (reconcile_at is not None and equity_at is not None
-                    and equity_at >= reconcile_at):
+                    and equity_at >= reconcile_at >= self._provisional_hard_stop_at):
                 for slug in self._provisional_hard_stop_markets:
                     rows = self.ledger.query(
                         "SELECT net_qty,received_at FROM execution_positions "
@@ -4890,7 +4955,7 @@ class CommissioningRunner:
                         str(rows[0]["received_at"]))
                     if (position_at.tzinfo is not None
                             and position_at.utcoffset() is not None
-                            and reconcile_at >= position_at):
+                            and reconcile_at >= position_at >= self._provisional_hard_stop_at):
                         closed.add(slug)
             # A recovered mark by itself is not enough: the same open trade can
             # bounce above and below the line. Require a breach-time position
@@ -4898,6 +4963,7 @@ class CommissioningRunner:
             if hard_hit and closed:
                 self._latch_hard_stop(now)
             if not hard_hit and closed:
+                self.ledger.clear_provisional_hard_stop()
                 self._provisional_hard_stop_at = None
                 self._provisional_hard_stop_markets.clear()
                 self._provisional_hard_stop_notice = "cleared"
@@ -8922,6 +8988,7 @@ class CommissioningRunner:
         slugs.update(
             str(row["market_slug"])
             for row in self.ledger.working_orders())
+        slugs.update(str(row["market_slug"]) for row in self.ledger.absent_orders())
         slugs.update(
             str(row["market_slug"])
             for row in self.ledger.unresolved_intents())
@@ -9330,6 +9397,8 @@ class CommissioningRunner:
             await self.sleep(delay)
 
     async def run(self) -> CommissioningResult:
+        direct_notifier = self.notifier
+        notifications: RuntimeNotificationDispatcher | None = None
         market_task: asyncio.Task | None = None
         private_task: asyncio.Task | None = None
         stop_reason = "unknown"
@@ -9338,6 +9407,8 @@ class CommissioningRunner:
         try:
             startup_mode = await self.preflight_until_ready()
             preflight_complete = True
+            notifications = RuntimeNotificationDispatcher(direct_notifier)
+            self.notifier = notifications
             # Establish scheduled-maintenance and public participation state
             # before any frame can authorize new exposure. Existing positions
             # still use the same bounded reducer/hard-exit machinery.
@@ -9840,11 +9911,16 @@ class CommissioningRunner:
                 task.cancel()
             if stream_tasks:
                 await asyncio.gather(*stream_tasks, return_exceptions=True)
-            if preflight_complete:
-                await self._shutdown(stop_reason)
-            self._publish_active_scope_snapshot(status="STOPPED")
-            await self.private_stream.close()
-            await self.market_stream.close()
+            try:
+                if preflight_complete:
+                    await self._shutdown(stop_reason)
+                self._publish_active_scope_snapshot(status="STOPPED")
+                await self.private_stream.close()
+                await self.market_stream.close()
+            finally:
+                if notifications is not None:
+                    await notifications.close()
+                self.notifier = direct_notifier
         if preflight_error is not None:
             raise preflight_error
         stopped = self._now()

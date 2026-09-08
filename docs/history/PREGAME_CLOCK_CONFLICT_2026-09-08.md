@@ -57,4 +57,27 @@ market responses. Removing this repair reintroduces the proven incident;
 older rollback code is unsafe for a row with this exact clock conflict unless
 that market is excluded or trading remains stopped.
 
-Deployment, fresh start gate and live acceptance are recorded after they occur.
+## Deployment and live acceptance
+
+Reviewed release **2193e0e85** was pushed before the stopped WSL checkout was
+fast-forwarded. The exact native checkout then passed all **1,208 tests**; only
+after that success did `DEPLOYED_COMMIT` advance to the same full hash.
+
+The fresh 15:59:00Z authenticated start gate proved zero venue orders,
+positions, unresolved intents, unknown orders and local working rows. Normal
+`start_commissioning.sh auto 10 32` launched supervisor **1922974** and runner
+**1923002** with every configured strategy/risk setting unchanged.
+
+The first live selector found 33 viable markets, then ordinary lifecycle
+replacement retained the exact 32-owner scope. A production read-only probe at
+16:02:34Z derived `game_start=15:00Z` and `phase=live` for the known VfB/CGN
+market. At 16:05:57Z authenticated acceptance found 38 venue orders across 29
+other markets, two positions under normal management, zero unresolved/unknown
+state and 38 matching local working rows. The offender had zero open order and
+no ledger event after its 15:28:57Z shutdown cancellation. Thus ordinary
+trading resumed while the known live market remained excluded.
+
+The first 182-second API window completed 445 attempts, including 29 creates,
+at 2.445/s with zero failures, 429s or cooldown and maximum queue depth one.
+No fill, live game or venue failure was induced. Future clock conflicts and
+genuine postponements remain natural observation paths.

@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError, ApiAdmissionDeferred
@@ -444,12 +444,14 @@ class RewardMarketSelector:
         gateway: AsyncReadOnlyGateway,
         policy: RewardSelectionPolicy | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
+        *, clock: Callable[[], datetime] | None = None,
     ):
         self.gateway = gateway
         self.policy = policy or RewardSelectionPolicy()
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
         self._book_cursor = 0
         self._last_selected_slug: str | None = None
+        self.clock = clock
 
     async def select(self, *, now: datetime) -> RewardMarketSelection:
         scope = getattr(self.gateway, "traffic_class", None)
@@ -481,6 +483,7 @@ class RewardMarketSelector:
             limit=EVENT_DISCOVERY_PAGE_SIZE,
             require_complete=True,
         )
+        now = self.clock() if self.clock is not None else now
         event_pages_used = int(getattr(
             self.gateway, "last_upcoming_event_pages", 0))
         executable_catalog = {
@@ -491,6 +494,7 @@ class RewardMarketSelector:
         }
         incentives = await self.gateway.fetch_incentives(
             sorted(executable_catalog))
+        now = self.clock() if self.clock is not None else now
         rewarded_executable = {
             slug: incentives[slug]
             for slug in executable_catalog
@@ -612,6 +616,7 @@ class RewardMarketSelector:
 
         markets = await self.gateway.fetch_markets_by_slugs(clean)
         incentives = await self.gateway.fetch_incentives(clean)
+        now = self.clock() if self.clock is not None else now
         window_end = now + timedelta(
             seconds=self.policy.selection_horizon_seconds)
         opportunities: list[RewardMarketOpportunity] = []
@@ -666,6 +671,7 @@ class RewardMarketSelector:
             and market.status in OPEN_MARKET_STATUSES
             and market.game_start is not None
             and now < market.game_start <= window_end
+            and market.event_allows_entry(now)
             and market.tick_size is not None
             and market.minimum_trade_qty is not None
             # The venue minimum must fit inside one quote, so this scales
@@ -744,6 +750,7 @@ class RewardMarketSelector:
         if (not market.active or market.closed
                 or market.status not in OPEN_MARKET_STATUSES
                 or market.game_start is None or market.game_start <= now
+                or not market.event_allows_entry(now)
                 or market.tick_size is None
                 or market.minimum_trade_qty is None
                 or market.minimum_trade_qty > self.policy.quote_size

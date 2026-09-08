@@ -49,6 +49,23 @@ class MarketMetadata:
     catalog_volume_usd: float | None = None
     catalog_volume_24h_usd: float | None = None
     catalog_liquidity_usd: float | None = None
+    # Execution gateways require fresh parent-event evidence independently
+    # of the scheduled clock. Library/report metadata remains descriptive.
+    event_guard_required: bool = False
+    event_slug: str | None = None
+    event_checked_at: datetime | None = None
+    event_not_started: bool = False
+    event_started_at: datetime | None = None
+
+    def event_allows_entry(self, now: datetime) -> bool:
+        if not self.event_guard_required:
+            return True
+        return (
+            self.event_started_at is None
+            and self.event_not_started
+            and self.event_checked_at is not None
+            and 0 <= (now - self.event_checked_at).total_seconds() < 30
+        )
 
     @property
     def is_supported_moneyline(self) -> bool:

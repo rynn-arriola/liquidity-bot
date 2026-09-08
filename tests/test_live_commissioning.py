@@ -130,6 +130,17 @@ class FakeMarkets:
         }}
 
 
+class FakeLifecycleEvents:
+    def __init__(self, markets):
+        self.markets = markets
+        self.live = set()
+
+    async def list(self, params):
+        return {"events": [{"slug": slug, "live": slug in self.live,
+            "ended": False, "markets": [(await self.markets.retrieve_by_slug(slug))["market"]]}
+            for slug in params.get("slug", ())]}
+
+
 class FakeOrders:
     def __init__(self):
         self.create_calls = []
@@ -213,6 +224,7 @@ class FakeAccount:
 class FakeClient:
     def __init__(self):
         self.markets = FakeMarkets()
+        self.events = FakeLifecycleEvents(self.markets)
         self.orders = FakeOrders()
         self.portfolio = FakePortfolio()
         self.account = FakeAccount()
@@ -538,6 +550,115 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 event_at=NOW,
             ),
             received_at=NOW)
+
+    async def test_event_live_cancels_flat_quote_despite_future_clock(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        self.seed_working_order(runner, slug="market-one", side="bid", suffix="live")
+        client.events.live.add("market-one")
+        await runner.gateway.refresh_event_states(runner.active_slugs, force=True)
+        await runner._refresh_event_guard()
+        frame = runner._frame(NOW)
+        self.assertFalse(frame.new_risk_allowed)
+        self.assertEqual(frame.market.game_start, NOW)
+        self.assertEqual(runner.reconciler.plan(frame)[0].kind, ActionKind.CANCEL)
+        self.assertIn("market-one", runner._dirty_market_slugs)
+        self.assertIsNotNone(runner._lifecycle_top_up_requested_at)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_live_forces_exit_without_waiting_inventory_timeout(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner.ledger.apply_execution(Execution(
+            execution_id="event-held", market_slug="market-one", side="BUY",
+            price=Decimal("0.49"), qty=Decimal("10"), fee=Decimal("0"),
+            intent="ORDER_INTENT_BUY_LONG", event_at=NOW), received_at=NOW)
+        client.events.live.add("market-one")
+        await runner.gateway.refresh_event_states(runner.active_slugs, force=True)
+        frame = runner._frame(NOW)
+        actions = runner.reconciler.plan(frame)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_IOC)
+        self.assertEqual(frame.position_opened_at, NOW)
+        self.assertEqual(actions[0].side, "offer")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_unknown_blocks_entry_but_not_passive_reduction(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner.ledger.apply_execution(Execution(
+            execution_id="event-unknown-held", market_slug="market-one", side="BUY",
+            price=Decimal("0.49"), qty=Decimal("10"), fee=Decimal("0"),
+            intent="ORDER_INTENT_BUY_LONG", event_at=NOW), received_at=NOW)
+        runner.gateway._event_status.clear()
+        frame = runner._frame(NOW)
+        self.assertFalse(frame.new_risk_allowed)
+        actions = runner.reconciler.plan(frame)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side, "offer")
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_refresh_failure_cancels_without_retiring_or_stopping(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        self.seed_working_order(runner, slug="market-one", side="bid", suffix="unknown-live")
+        runner.gateway._event_status.clear()
+        client.events.list = AsyncMock(side_effect=AdapterError("503"))
+        await runner._refresh_event_guard()
+        frame = runner._frame(NOW)
+        self.assertFalse(frame.new_risk_allowed)
+        self.assertEqual(runner.reconciler.plan(frame)[0].kind, ActionKind.CANCEL)
+        self.assertFalse(runner._retired)
+        self.assertFalse(runner._stop_requested)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_expiry_wakes_quiet_market_at_30_seconds(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        self.quiet_scheduler(runner)
+        with patch.object(runner, "_mark_global_scheduler_transitions"):
+            self.assertNotIn("market-one", runner._scheduled_market_slugs(NOW + timedelta(seconds=29)))
+            self.assertIn("market-one", runner._scheduled_market_slugs(NOW + timedelta(seconds=30)))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_refresh_observes_operator_stop_before_mutation(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner.gateway._event_status.clear()
+        original = client.events.list
+        async def stop_during_read(params):
+            runner.request_stop("operator_requested")
+            return await original(params)
+        client.events.list = stop_during_read
+        await runner._decide_for_market("market-one", NOW)
+        self.assertFalse(client.orders.create_calls)
+        self.assertFalse(runner.ledger.unresolved_intents())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_event_live_shutdown_cannot_park_future_scheduled_position(self):
+        runner, client, slug = await self._parking_runner("ORDER_SIDE_BUY")
+        runner.ledger.prepare_intent("park-live", "PLACE", slug, "park-live-client",
+            {"marketSlug": slug, "quantity": "5"}, created_at=NOW)
+        runner.ledger.transition_intent("park-live", "SUBMITTING", updated_at=NOW)
+        runner.ledger.transition_intent("park-live", "ACKNOWLEDGED", updated_at=NOW,
+            exchange_order_id="resting-exit")
+        client.events.live.add(slug)
+        runner.gateway._event_status.clear()
+        with patch("sys.stdout", new=io.StringIO()) as output:
+            await runner._shutdown("operator_requested")
+        self.assertNotIn("decision=parked", output.getvalue())
+        self.assertTrue(client.orders.cancel_calls, output.getvalue())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_loss_entry_cap_ratchets_until_next_et_day_and_notifies(self):
         runner, _, notifier = self.build_runner()
@@ -2374,6 +2495,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # Hold account-wide freshness constant so this test isolates the
         # market-local dwell timer rather than its independent fail-closed
         # transition.
+        runner.market = replace(runner.market,
+            event_checked_at=NOW + timedelta(seconds=75))
         with patch.object(runner, "_mark_global_scheduler_transitions"):
             self.assertEqual(
                 runner._scheduled_market_slugs(
@@ -5587,6 +5710,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._nontrading_cash = Decimal("0")
         runner._nontrading_cash_observed_at = next_day
         runner._nontrading_cash_day = runner._baseline_day
+        runner.clock = lambda: next_day
+        await runner.gateway.refresh_event_states(runner.active_slugs, force=True)
         self.assertTrue(runner._frame(next_day).new_risk_allowed)
         await runner.private_stream.close()
         await runner.market_stream.close()
@@ -5869,6 +5994,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         expected_day = date.fromisoformat(risk_day(tomorrow))
         self.assertEqual(runner._baseline_day, expected_day)
         self.assertEqual(runner._nontrading_cash_day, expected_day)
+        await runner.gateway.refresh_event_states(runner.active_slugs, force=True)
         self.assertTrue(runner._frame(tomorrow).new_risk_allowed)
         rows = runner.ledger.query(
             "SELECT risk_date FROM execution_risk_day_baselines "

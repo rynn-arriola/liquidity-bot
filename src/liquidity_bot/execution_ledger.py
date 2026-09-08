@@ -36,6 +36,11 @@ ACTIVE_ORDER_STATES = {"OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED"}
 
 SCHEMA = """
 PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS execution_event_starts (
+    market_slug TEXT PRIMARY KEY,
+    event_slug TEXT NOT NULL,
+    started_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution_intents (
     intent_id TEXT PRIMARY KEY,
     operation TEXT NOT NULL,
@@ -581,6 +586,29 @@ class QuoteObservation:
 
 class ExecutionLedger:
     """SQLite system of record for intents and observed execution state."""
+
+    def event_starts(self) -> dict[str, tuple[str, datetime]]:
+        return {str(r["market_slug"]): (str(r["event_slug"]),
+                datetime.fromisoformat(r["started_at"]))
+                for r in self.connection.execute(
+                    "SELECT market_slug,event_slug,started_at FROM execution_event_starts")}
+
+    def record_event_starts(self, rows: Mapping[str, tuple[str, datetime]]) -> None:
+        """Monotonic started evidence; never cleared by a restart or late feed."""
+        with self.connection:
+            for slug, (event_slug, stamp) in rows.items():
+                if not slug or not event_slug:
+                    raise LedgerConflict("event identity is missing")
+                old = self.connection.execute(
+                    "SELECT event_slug FROM execution_event_starts WHERE market_slug=?",
+                    (slug,)).fetchone()
+                if old is not None and old["event_slug"] != event_slug:
+                    raise LedgerConflict("market changed its started-event identity")
+                self.connection.execute(
+                    "INSERT INTO execution_event_starts VALUES (?,?,?) "
+                    "ON CONFLICT(market_slug) DO UPDATE SET "
+                    "started_at=MIN(started_at,excluded.started_at)",
+                    (slug, event_slug, _time(stamp, "event started_at")))
 
     def __init__(self, path: str | Path):
         self.path = Path(path)

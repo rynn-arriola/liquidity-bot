@@ -106,6 +106,7 @@ from .maintenance_schedule import (
     write_maintenance_cache,
 )
 from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadata
+from .event_guard import EventAwareGateway
 from .notifications import DiscordNotifier, RuntimeNotificationDispatcher
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
@@ -467,7 +468,8 @@ class CommissioningRunner:
         self._maintenance_schedule_signature: tuple[object, ...] | None = None
         limiter = limiter or AsyncIntervalLimiter.from_rate(
             float(config.rest_requests_per_second))
-        self.gateway = AsyncReadOnlyGateway(client, limiter=limiter)
+        self.gateway = EventAwareGateway(
+            client, limiter=limiter, ledger=ledger, now=lambda: self._now())
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
         self.reward_selector = reward_selector
         if self.reward_selector is None and config.auto_select_reward_markets:
@@ -475,6 +477,7 @@ class CommissioningRunner:
                 self.gateway,
                 config.reward_selection_policy(),
                 fill_hazard_model=self.fill_hazard_model,
+                clock=lambda: self._now(),
             )
         self.account = AsyncAccountSnapshotGateway(
             self.gateway, resolve_client_id=ledger.resolve_client_order_id)
@@ -1242,7 +1245,7 @@ class CommissioningRunner:
             state,
             market=market,
             incentive=incentives.get(slug),
-            now=now,
+            now=self._now(),
             for_exit=for_exit,
             accept_bound_lifecycle_end=accept_bound_lifecycle_end,
         )
@@ -1337,6 +1340,11 @@ class CommissioningRunner:
                 self._request_lifecycle_top_up(now)
                 return
             raise CommissioningUnavailable(f"{slug} is no longer pregame")
+        if not state.market.event_allows_entry(now):
+            state.incentive = None
+            state.reward_eligible = frozenset()
+            state.clear_economics()
+            raise CommissioningUnavailable(f"{slug} event pregame state is unavailable")
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now)
@@ -2047,6 +2055,10 @@ class CommissioningRunner:
             due = due or (
                 state.next_contract_refresh is None
                 or state.next_contract_refresh <= due_before)
+            if (slug not in isolated and state.market is not None
+                    and state.market.event_guard_required
+                    and state.market.event_started_at is None):
+                due = due or not state.market.event_allows_entry(now)
             if slug not in self._inactive_market_wait_slugs:
                 due = due or (
                     state.next_book_refresh is None
@@ -3964,6 +3976,8 @@ class CommissioningRunner:
         state = self.state_for(slug or self.market_slug)
         if state.market is None or state.book is None or state.book_observed_at is None:
             raise RuntimeError("market frame is incomplete")
+        if isinstance(self.gateway, EventAwareGateway):
+            state.market = self.gateway.apply_event_status(state.market)
         position = self.ledger.position(state.market.slug)
         basis = self.ledger.inventory_basis(state.market.slug)
         if position != 0 and basis is None:
@@ -3984,6 +3998,7 @@ class CommissioningRunner:
             and self._nontrading_cash is not None
             and self._nontrading_cash_day == today
             and not self._entry_pause_active()
+            and state.market.event_allows_entry(now)
         )
         eligible = state.reward_eligible
         if position == 0 and not new_risk_allowed:
@@ -5647,6 +5662,27 @@ class CommissioningRunner:
             flush=True,
         )
 
+    async def _refresh_event_guard(self) -> None:
+        if not isinstance(self.gateway, EventAwareGateway):
+            return
+        try:
+            await self.gateway.refresh_event_states(self.managed_slugs())
+        except AdapterError as exc:
+            # Invalidated freshness cancels/blocks entries, not reductions.
+            await self._report_runtime_error("event_lifecycle", exc)
+        for owner in self._markets.values():
+            if owner.market is None:
+                continue
+            previous = owner.market.event_started_at
+            owner.market = self.gateway.apply_event_status(owner.market)
+            if owner.market.event_started_at is not None and previous is None:
+                self._mark_market_dirty(owner.slug, self._now())
+                if owner.slug in self._retired:
+                    self._retired[owner.slug].next_retry_at = self._now()
+                self._request_lifecycle_top_up(self._now())
+                print(f"[event-started] at={self._now().isoformat()} "
+                      f"market={owner.slug} action=cancel_entries_and_exit", flush=True)
+
     async def _decide_for_market(
         self, slug: str, now: datetime, *, replanned: bool = False,
     ) -> tuple[str | None, float]:
@@ -5680,6 +5716,10 @@ class CommissioningRunner:
             # replanning here would re-fire the same condition immediately.
             return None, 0.0
         try:
+            await self._refresh_event_guard()
+            if self._stop_requested:
+                return None, 0.0
+            now = self._now()
             frame = self._frame(now, slug)
             overflow_cancel = self._loss_cap_cancel_action(frame)
             actions = (
@@ -5846,6 +5886,8 @@ class CommissioningRunner:
                 )
                 return None, mutation_delay
             if (chosen.kind == ActionKind.PLACE_POST_ONLY and position == 0):
+                if not state.market.event_allows_entry(self._now()):
+                    return None, 1.0
                 if self.config.entry_quality_policy.enabled:
                     # Recheck the actual action after planning; do not consume
                     # cached shadow labels or add any venue request. Safety
@@ -6240,6 +6282,9 @@ class CommissioningRunner:
 
         serviced_slugs = self.managed_slugs() if slugs is None else slugs
         if slugs is None and self._post_flat_top_up_can_preempt(self._now()):
+            return ""
+        await self._refresh_event_guard()
+        if self._stop_requested:
             return ""
         await self._refresh_due_contract_batches(
             self._now(), serviced_slugs)
@@ -9146,6 +9191,7 @@ class CommissioningRunner:
                 # events. Apply those before falling back to REST reads.
                 await self._drain_private_events()
                 await self._rest_reconcile(now)
+                await self._refresh_event_guard()
                 if (self._isolated_unexecutable_slugs()
                         and self._only_settlement_wait_positions_remain(
                             self._now())):
@@ -9212,6 +9258,8 @@ class CommissioningRunner:
                                 if state.market is not None else None)
                             near_kickoff = (
                                 start is None
+                                or (state.market is not None
+                                    and not state.market.event_allows_entry(self._now()))
                                 or (start - now).total_seconds()
                                 <= self.config.force_exit_before_start_seconds)
                             if not near_kickoff:

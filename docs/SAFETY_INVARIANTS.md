@@ -884,3 +884,13 @@ These are implementation requirements, not suggestions.
     reduction, pre-kickoff flattening, reconciliation and shutdown retain their
     existing authority. Conflicts add no API request and must fail toward less
     new risk.
+102. Production entries additionally require fresh (less than 30 seconds),
+    exact-parent membership and positive pregame lifecycle evidence. Parent
+    live/ended, played period or nonzero score outranks future schedules and
+    contradictory copies. Once positively started, the market remains barred
+    durably through restart; its effective exit deadline can only tighten.
+    Missing/stale/malformed event evidence cannot authorize entry, including
+    after admission waits, but cannot veto exact position reductions. Partial
+    replies may retain independently proven owners; transport failure never
+    proves cancellation, flatness or free capacity. Shutdown cannot park a
+    known-live or lifecycle-unproven position based on a future schedule.

@@ -178,6 +178,7 @@ class AsyncTradingGateway:
 
     async def _mutation(
         self, operation: str, call: Any, *, traffic_class: str = "safety",
+        admission_check=None,
     ) -> Any:
         # Never use AsyncReadOnlyGateway._call here: its confirmed-429 retry is
         # correct for reads but can duplicate an order after an ambiguous POST.
@@ -200,6 +201,9 @@ class AsyncTradingGateway:
             # Preserve the long-standing zero-argument protocol for injected
             # deterministic gates used by tests and dry-run composition.
             await self.gateway.limiter.wait()
+        if admission_check is not None:
+            # A local veto before network I/O is exact, never UNCERTAIN.
+            admission_check()
         started_at = time.monotonic()
         try:
             result = await call()
@@ -250,6 +254,14 @@ class AsyncTradingGateway:
     async def create(
         self, payload: Mapping[str, Any], *, reducing: bool = False,
     ) -> Mapping[str, Any]:
+        def check_event():
+            check = getattr(self.gateway, "event_entry_allowed", None)
+            if (not reducing and callable(check)
+                    and not check(str(payload.get("marketSlug", "")))):
+                raise ApiAdmissionDeferred(
+                    "event pregame evidence expired; request not sent",
+                    error_code="LOCAL_EVENT_ENTRY_BLOCKED", retry_after_seconds=1.0)
+
         traffic_class = (
             "safety"
             if (reducing
@@ -258,7 +270,7 @@ class AsyncTradingGateway:
         response = await self._mutation(
             "POST /v1/orders",
             lambda: self.client.orders.create(dict(payload)),
-            traffic_class=traffic_class)
+            traffic_class=traffic_class, admission_check=check_event)
         if not isinstance(response, Mapping):
             raise AdapterError("create-order response is not an object")
         return response

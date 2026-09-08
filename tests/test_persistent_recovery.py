@@ -131,6 +131,7 @@ class PersistentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runner._hard_stop_hold_day)
         self.assertTrue(runner._entry_pause_active())
         runner._manual_entry_paused = False
+        await runner.gateway.refresh_event_states(runner.active_slugs, force=True)
         self.assertTrue(runner._frame(tomorrow).new_risk_allowed)
         self.assertIsNotNone(runner.ledger.query(
             "SELECT released_at FROM execution_hard_stop_holds")[0][0])

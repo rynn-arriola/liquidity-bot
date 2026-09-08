@@ -438,6 +438,8 @@ def _request_category(operation: str, request_kind: str) -> str:
         return "market_settlement"
     if clean == "markets.list(slug-filtered)":
         return "market_contract_batch"
+    if clean == "events.list(lifecycle-batch)":
+        return "event_contract_batch"
     if clean.startswith("markets.list(") or clean.startswith("events.list("):
         return "market_discovery"
     if clean == "GET /v1/incentives (symbol-filtered)":

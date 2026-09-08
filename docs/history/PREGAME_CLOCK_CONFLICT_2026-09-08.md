@@ -81,3 +81,93 @@ The first 182-second API window completed 445 attempts, including 29 creates,
 at 2.445/s with zero failures, 429s or cooldown and maximum queue depth one.
 No fill, live game or venue failure was induced. Future clock conflicts and
 genuine postponements remain natural observation paths.
+
+## Follow-up: agreeing schedules do not prove pregame
+
+At 16:16:41Z a read-only audit compared 62 entry intents across 32 markets
+against fresh Retail metadata, with no entry at or after those timestamps.
+All 120 deployed source/test files matched `2193e0e85`. This proves adherence
+to the supplied clocks, not that the games had actually not started.
+
+The operator subsequently identified Matteo Mutti / Daniele Pinto and Vincent
+Picard / Tugay Yilmaz as live, then reported all held games live. Fresh raw
+market responses give both named WTT matches `gameStartTime=21:00Z` and exact
+question schedules of 21:00 UTC. Both therefore normalize to 17:00 ET, with no
+question/structured disagreement for the existing repair to tighten. The
+timestamp parser preserves UTC offsets and the selector compares aware UTC
+datetimes; no local UTC/ET conversion defect was found. Actual live status is
+operator-reported here; the raw market responses have no live/score field and
+an independent actual-start source has not yet been verified.
+
+Durable owned-entry fills prove Mutti bought 10 at 0.57 at 16:04:35Z, followed
+by a non-owned sell of 10 at 16:12:55Z and another owned entry buy of 10 at 0.56
+at 16:16:50Z. Picard sold 10 at 0.82 at 16:03:42Z, reduced flat at 16:17:06Z,
+then made a new entry buy of 10 at 0.68 at 16:18:56Z. Non-owned closing fills
+followed at 16:19:20Z. Thus manually closing an owner does not prevent re-entry
+while its supplied start remains in the future. Event retrieval using the
+market slug failed, so no event-level live signal was established by this
+probe; correct event identity must be resolved before selecting a repair.
+
+The operator requested stop, then force-stop and manual position handling.
+The normal stop had already terminated supervisor and runner, with terminal
+`operator_sigterm` / `flat=false` at 16:22:11Z; process absence was reconfirmed
+at 16:22:59Z, so no force kill was needed. The 16:22:44Z authenticated snapshot
+still had Lajovic/Landaluce -10, Vivarelli/Georgieva +8.62 and Mutti/Pinto +7.50,
+with three corresponding closing orders. The operator handles those remaining
+positions; this task made no order mutation beyond the requested normal
+shutdown and did not restart or change trading code. Keep stopped pending a
+reviewed actual-live detection remedy and new restart authorization.
+
+## Critical root cause confirmed from official event state
+
+A bounded catalog read resolved actual parent identities from nested market
+membership (event slugs omit the market's `aec-` prefix in these samples):
+Mutti/Pinto event 105657, Picard/Yilmaz 105909, Vivarelli/Georgieva 105913,
+Lajovic/Landaluce 103491 and Vasyl/Yaroslav 106083. Never infer that prefix rule
+universally; preserve observed parent identity.
+
+At the event response update time **16:23:47Z**, the first three explicitly
+reported `live=true` and `ended=false`:
+
+| Event | Period | Score | Still-reported scheduled UTC start |
+|---|---|---|---|
+| Mutti/Pinto | S4 | 10-12, 11-3, 10-12, 8-6 | 21:00 |
+| Picard/Yilmaz | S5 | 9-11, 11-9, 11-2, 9-11, 5-4 | 21:00 |
+| Vivarelli/Georgieva | S3 | 11-9, 11-13, 8-4 | 22:10 |
+
+The same positive signals exist on the event, `eventState`, and
+`metadata.gameState`. In contrast, each `marketGroups[].live` was false, so
+that unrelated field must not override actual event state. Lajovic's response
+said period `NS` with no positive live signal; Vasyl's said `live=false`, empty
+period and `0-0`. Those two were not independently proven live by this read.
+
+The official [Retail Get Event By Slug contract](https://docs.polymarket.us/api-reference/events/get-event-by-slug)
+documents event `live`, `ended`, `score` and `period` separately from schedule.
+`AsyncReadOnlyGateway.list_upcoming_sports_markets` currently flattens each
+event into `_market(row)` and discards all parent state. `MarketMetadata` has
+no event identity or started/live field. Direct/batch metadata refresh and
+`RewardMarketSelector._catalog_market_is_executable` therefore cannot use the
+event signal; the gate tests only future clock plus normal market eligibility.
+The runtime's pregame and exit deadline checks also use `game_start`, and
+shutdown can park a reducer because the same incorrect time appears distant.
+
+At **16:26:41–16:26:49Z**, fresh exact-event reads were passed through the
+unmodified deployed `_market` and actual catalog eligibility method. All
+three returned **accepted=true while event.live=true**, with S4/S5/S3 and the
+same future starts. This is a read-only reproduction, not a live placement.
+It confirms the bot defect independently of the operator's screen report.
+
+Recommended repair scope: carry observed parent identity and validated event
+state through discovery and refresh; actual started/live/ended evidence must
+override future schedules; preserve started evidence through later missing or
+regressed samples and restart; revoke/cancel building orders, prevent re-entry,
+and invoke existing exact risk-reducing exit handling. Test fresh/ongoing
+selection, cached selection, boundary transitions, missing/malformed/stale
+fields, conflicting copies, shutdown and recovery, while bounding incremental
+event reads under the existing shared API governor. A missing `live` field or
+`0-0` score alone must not be treated as reliable not-started proof. The
+operator's latest request is investigation; no trading implementation,
+deployment, extra cancellation or restart was performed.
+
+After the operator's manual closures, the **16:27:40Z** authenticated snapshot
+proved zero open orders and zero positions. The bot remains stopped.

@@ -46,6 +46,15 @@ decoder or workaround; it does not authorize undocumented trading behavior.
 
 ## Source hierarchy for an AI review
 
+**September 8 live-event diagnosis:** the Retail
+[Get Event By Slug](https://docs.polymarket.us/api-reference/events/get-event-by-slug)
+contract exposes event `live`, `ended`, `score` and `period` independently of
+`startTime`. Exact Mutti, Picard and Vivarelli event responses reported live
+sets S4/S5/S3 while nested market clocks remained hours in the future. Parent
+event state must not be discarded or confused with `marketGroups[].live`,
+which was false in the same live responses. Current bot metadata drops this
+signal; a reviewed repair is pending. [Evidence](history/PREGAME_CLOCK_CONFLICT_2026-09-08.md).
+
 1. The exact Retail endpoint page under `/api-reference/`.
 2. The matching Retail Python SDK page and the pinned SDK implementation.
 3. The applicable trader guide for conceptual and operational guidance.

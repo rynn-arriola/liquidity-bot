@@ -138,7 +138,10 @@ horizon plus a one-day clock-skew buffer, flattens their nested market metadata,
 and applies the market-level clock and V2-moneyline gates before requesting
 rewards only for those exact symbols. The wider event window retains delayed
 or rescheduled games whose event `startTime` lags their market
-`gameStartTime`; the exact market clock remains authoritative. It never walks
+`gameStartTime`. Structured market `gameStartTime` remains required. If that
+same market's generated question contains an exact earlier `scheduled for ...
+UTC` timestamp, the earlier value is the effective pregame deadline; question
+text can never extend or replace structured time. It never walks
 the account-wide active market or incentive universe, and a full tenth event
 page fails closed rather than silently truncating discovery.
 Each successful full selection emits `[selection-scan]` with event pages used,

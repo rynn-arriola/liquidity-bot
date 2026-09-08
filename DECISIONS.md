@@ -22,6 +22,7 @@ show the operator the discrepancy.
 | Quote size | 10 contracts is loaded live; whole values 5-30 are supported and restart-scoped |
 | Concurrent market capacity | 32 slots is the loaded direct canary; 24 is the first rollback target and 20 remains the bare-launcher default. Reviewed values 20-32 are accepted, while 33 remains refused. Reduce on a capacity-linked breach; peak-band acceptance at actual 32-owner occupancy remains required before calling 32 durable |
 | Entry horizon | Six hours before the modeled pregame boundary |
+| Conflicting pregame clocks | Structured market `gameStartTime` remains required. When that same market question contains an exact generated `scheduled for ... UTC` timestamp that is earlier, use the earlier time as the pregame deadline. Question text may only shorten trading time; it may never extend the structured time or replace a missing clock |
 | League selection | No league filter |
 | New-entry spread | Keep the 2-cent fresh-selection minimum. If a selected market's live book tightens to exactly one tick, quote both touches rather than backing only the offer away; a locked book keeps the safe 2-cent non-crossing back-off. Keep the separate 1.5-cent retention hysteresis |
 | Persistent idle slots | After 10 continuous minutes of named current-book economic refusal, a flat/order-free/ambiguity-free slot may be replaced on the normal 15-minute scan only when that scan supplies a viable replacement |
@@ -104,8 +105,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 
 - No automatic same-price cancel/repost to move a nearly-front order backward
   in the queue.
-- The maximum-30 validator is dormant capability, not permission to change the
-  live size. Size 20 remains measurement-only until separately selected.
+- The maximum-30 validator is dormant capability, not permission to change the live size. Size 20 remains measurement-only until separately selected.
 - No removal of the 2-cent fresh-selection gate beyond the explicit one-tick touch behavior for a market already selected on a qualifying book.
 - No live spread-scalping orders or automatic early-exit rule; collected scalp
   evidence must be reviewed before any separate strategy proposal.

@@ -11,6 +11,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import time
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -60,6 +61,24 @@ REST_REQUEST_TIMEOUT_SECONDS = 15.0
 OPPORTUNISTIC_REPORT_RATE_PER_SECOND = 0.25
 
 
+_QUESTION_SCHEDULED_UTC = re.compile(
+    r"\bscheduled\s+for\s+"
+    r"(?P<month>January|February|March|April|May|June|July|August|"
+    r"September|October|November|December)\s+"
+    r"(?P<day>\d{1,2}),\s+(?P<year>\d{4})\s+at\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s+"
+    r"(?P<meridiem>AM|PM)\s+UTC\b",
+    re.IGNORECASE,
+)
+_MONTH_NUMBER = {
+    name.lower(): number
+    for number, name in enumerate((
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ), start=1)
+}
+
+
 def _amount(value: Any, *, field: str) -> float:
     if isinstance(value, dict):
         value = value.get("value")
@@ -87,6 +106,40 @@ def _timestamp(value: Any, *, field: str, required: bool = False) -> datetime | 
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise AdapterError(f"{field} is not timezone-aware")
     return parsed.astimezone(timezone.utc)
+
+
+def _question_scheduled_start(value: Any) -> datetime | None:
+    """Extract the venue's explicit UTC schedule embedded in a question.
+
+    Retail primary moneylines can temporarily expose a later
+    ``gameStartTime`` than the same row's generated question.  Using the later
+    value can authorize an in-play entry.  A recognized question timestamp is
+    therefore an additional upper bound on pregame time, never a replacement
+    for missing structured metadata.
+    """
+
+    match = _QUESTION_SCHEDULED_UTC.search(str(value or ""))
+    if match is None:
+        return None
+    try:
+        hour = int(match.group("hour"))
+        if not 1 <= hour <= 12:
+            raise ValueError("12-hour clock is outside 1-12")
+        if match.group("meridiem").upper() == "AM":
+            hour = 0 if hour == 12 else hour
+        elif hour != 12:
+            hour += 12
+        return datetime(
+            int(match.group("year")),
+            _MONTH_NUMBER[match.group("month").lower()],
+            int(match.group("day")),
+            hour,
+            int(match.group("minute")),
+            tzinfo=timezone.utc,
+        )
+    except (KeyError, ValueError) as exc:
+        raise AdapterError(
+            "market.question scheduled UTC time is invalid") from exc
 
 
 def _period(row: Any) -> IncentivePeriod:
@@ -130,6 +183,9 @@ def _market(row: Any, *, expected_slug: str | None = None,
     clock = _timestamp(
         row.get("gameStartTime"), field="market.gameStartTime",
         required=require_clock)
+    question_clock = _question_scheduled_start(row.get("question"))
+    if clock is not None and question_clock is not None:
+        clock = min(clock, question_clock)
     raw_tick = row.get("orderPriceMinTickSize")
     tick = None if raw_tick is None or str(raw_tick).strip() == "" \
         else _amount(raw_tick, field="market.orderPriceMinTickSize")

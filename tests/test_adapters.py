@@ -921,6 +921,85 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(market.catalog_best_bid, 0.49)
         self.assertEqual(market.catalog_best_offer, 0.51)
 
+    def test_market_uses_earlier_explicit_question_clock(self):
+        client = FakeClient()
+        response = fixture("market.json")
+        response["market"]["gameStartTime"] = "2026-09-08T16:00:00Z"
+        response["market"]["question"] = (
+            "Who will win in the upcoming esports event VfB eSports vs CGN "
+            "Esports scheduled for September 8, 2026 at 3:00 PM UTC?"
+        )
+        client.markets.market_response = response
+
+        market = self.run_async(
+            AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
+        self.assertEqual(
+            market.game_start.isoformat(), "2026-09-08T15:00:00+00:00")
+
+    def test_question_clock_cannot_extend_structured_pregame_time(self):
+        client = FakeClient()
+        response = fixture("market.json")
+        response["market"]["gameStartTime"] = "2026-09-08T15:00:00Z"
+        response["market"]["question"] = (
+            "Who will win in an event scheduled for September 8, 2026 at "
+            "4:00 PM UTC?"
+        )
+        client.markets.market_response = response
+
+        market = self.run_async(
+            AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
+        self.assertEqual(
+            market.game_start.isoformat(), "2026-09-08T15:00:00+00:00")
+
+    def test_question_clock_cannot_replace_missing_structured_clock(self):
+        client = FakeClient()
+        response = fixture("market.json")
+        response["market"]["gameStartTime"] = ""
+        response["market"]["question"] = (
+            "Who will win in an event scheduled for September 8, 2026 at "
+            "3:00 PM UTC?"
+        )
+        client.markets.market_response = response
+
+        with self.assertRaises(AdapterError):
+            self.run_async(
+                AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
+    def test_question_clock_handles_twelve_hour_boundaries(self):
+        for label, expected in (
+            ("12:05 AM", "2026-09-08T00:05:00+00:00"),
+            ("12:05 PM", "2026-09-08T12:05:00+00:00"),
+        ):
+            with self.subTest(label=label):
+                client = FakeClient()
+                response = fixture("market.json")
+                response["market"]["gameStartTime"] = "2026-09-09T00:00:00Z"
+                response["market"]["question"] = (
+                    "Who will win in an event scheduled for September 8, "
+                    f"2026 at {label} UTC?"
+                )
+                client.markets.market_response = response
+
+                market = self.run_async(
+                    AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
+                self.assertEqual(market.game_start.isoformat(), expected)
+
+    def test_malformed_recognized_question_clock_fails_closed(self):
+        client = FakeClient()
+        response = fixture("market.json")
+        response["market"]["question"] = (
+            "Who will win in an event scheduled for September 31, 2026 at "
+            "3:00 PM UTC?"
+        )
+        client.markets.market_response = response
+
+        with self.assertRaisesRegex(AdapterError, "scheduled UTC time"):
+            self.run_async(
+                AsyncReadOnlyGateway(client).fetch_market("market-one"))
+
     def test_missing_market_clock_fails_closed(self):
         client = FakeClient()
         response = fixture("market.json")
@@ -1008,6 +1087,29 @@ class GatewayTests(unittest.TestCase):
             "startTimeMin": start.isoformat(), "startTimeMax": end.isoformat(),
             "limit": 50, "offset": 0,
         }])
+
+    def test_upcoming_discovery_uses_earlier_explicit_question_clock(self):
+        client = FakeClient()
+        row = dict(
+            fixture("market.json")["market"],
+            gameStartTime="2026-09-08T16:00:00Z",
+            question=(
+                "Who will win in the upcoming esports event VfB eSports vs "
+                "CGN Esports scheduled for September 8, 2026 at 3:00 PM UTC?"
+            ),
+        )
+        client.events.list_responses = [{"events": [{"markets": [row]}]}]
+
+        markets = self.run_async(
+            AsyncReadOnlyGateway(client).list_upcoming_sports_markets(
+                start=datetime(2026, 9, 8, tzinfo=timezone.utc),
+                end=datetime(2026, 9, 9, tzinfo=timezone.utc),
+                limit=50,
+            ))
+
+        self.assertEqual(len(markets), 1)
+        self.assertEqual(
+            markets[0].game_start.isoformat(), "2026-09-08T15:00:00+00:00")
 
     def test_upcoming_event_discovery_paginates_until_a_short_page(self):
         client = FakeClient()

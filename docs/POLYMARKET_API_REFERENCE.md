@@ -227,6 +227,15 @@ moneyline type filter returned only one row despite hundreds of locally parsed
 open moneylines. These are observed API contracts, not assumptions from the
 documentation.
 
+On 2026-09-08, primary market `aec-lol-vfb-cgn-2026-09-08` exposed a
+16:00 UTC `gameStartTime` while its same-row generated question stated 15:00
+UTC; sibling markets and the public event page also used 15:00 UTC. The bot
+therefore uses an exact earlier `scheduled for ... UTC` timestamp in the same
+market question as a conservative upper bound on pregame time. Structured
+`gameStartTime` remains mandatory, and question text can neither extend it nor
+fill a missing value. This adds no request and deliberately prefers an early
+stop if venue fields conflict.
+
 A separate runner-level retry-not-before deadline prevents lifecycle,
 reward-end and post-flat signals from bypassing the ordinary backoff after any
 complete top-up failure. This is admission/load control only; it does not

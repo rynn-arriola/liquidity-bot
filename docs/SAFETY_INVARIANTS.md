@@ -875,3 +875,12 @@ These are implementation requirements, not suggestions.
     multiple-position, ambiguous or unknown state retains recovery-only or
     refusal behavior. The exception cannot widen configured capacity or alter
     selection, quote, cap, HARD, depth, pricing or mutation rules.
+101. Structured market `gameStartTime` is required for live entry authority.
+    If the same market row's generated question contains an exact earlier UTC
+    schedule, the effective pregame deadline is the earlier of those two
+    clocks. Question text may tighten the deadline only; it may never extend
+    structured time or replace a missing/malformed structured clock. At or
+    after the effective deadline, new entry is forbidden while owned-position
+    reduction, pre-kickoff flattening, reconciliation and shutdown retain their
+    existing authority. Conflicts add no API request and must fail toward less
+    new risk.

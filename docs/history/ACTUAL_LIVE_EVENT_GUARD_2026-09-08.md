@@ -75,4 +75,30 @@ used to reset risk, fills, positions or order ownership.
   then positively re-read two snapshot-absent orders. At 16:56:17Z the final
   authenticated account had zero orders/positions and the ledger had zero
   working, unresolved or unknown orders. No cancel/create or invented terminal
-  state was used. Native tests/hashes and live acceptance follow below.
+  state was used.
+- Pushed/deployed `105d8d2b8`: all **168** normalized source/test/script/web/config
+  hashes match; native complete suite **1,226 passed**, 88.462s. Native HEAD and
+  marker match the release. Windows/GitHub parity is clean; backup-PC peer is
+  still pending/offline, not falsely marked synchronized.
+- At 16:58:10Z the three incident markets were durably barred using fresh exact
+  event reads. The final 16:59:20Z authenticated start gate again proved zero
+  orders/positions/working/unresolved/unknown state. Started normal `auto 10 32`
+  as supervisor `1983090`, runner `1983100`. First selection at 16:59:53Z used
+  two event pages, 123 executable markets and 29 viable markets.
+- Startup refresh at 17:00:03/11Z rejected `aec-setkamemd-turvic-cucser-2026-09-08`
+  and `aec-setkameua-stuvla-hovser-2026-09-08` as no longer pregame. Lifecycle
+  top-up subsequently replaced two other expired owners and committed 26 active
+  markets. No market/slot eligibility gate was loosened to fill capacity.
+- First API window at 17:01:53Z: 372 attempts in 152.7 seconds (23 creates),
+  zero failures/429s/cooldown. Second at 17:02:58Z: 113 attempts in 64.3 seconds,
+  zero failures/429s/cooldown and just two event lifecycle batches.
+- Authenticated 17:02:47Z acceptance: **29 open orders across 22 markets, zero
+  positions**. Every entry market had independently refreshed exact-parent
+  pregame evidence; all three original incident markets had zero orders.
+  During the changing snapshot the ledger had six in-flight intents and one
+  transient absence; at 17:03:28Z normal reconciliation had 34 working orders,
+  one in-flight intent and zero unknown orders. No manual repair occurred live.
+- Entry prevention and normal trading resumption are accepted. Natural
+  live-position evacuation, later feed regression and restart under fresh
+  incident exposure remain uninduced paths covered by regression tests, not
+  claimed as proven live execution.

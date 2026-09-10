@@ -97,3 +97,24 @@ subscription fault, nor does handshake success prove trading permission.
 If silence persists, venue support needs these UTC times, endpoint and safe
 probe results to investigate delivery. No support message, production edit,
 SDK upgrade, gate bypass, order mutation or restart was performed for this check.
+
+## Operator stop around 23:25Z
+
+The 22:42:14–22:42:59Z repeat raw probe also received zero application messages
+despite authenticated handshake and initial/final Pongs. At 22:42:35Z the
+account was independently flat/order-free. Startup remained blocked through
+attempt 40 at 23:24:09Z, still missing all four private balance snapshots.
+
+The operator requested stop, then force stop while the command was finishing.
+The normal stop script stopped supervisor `2819379` and sent SIGTERM to runner
+`2819387`; the next check found both absent, so no force kill was needed or used.
+The last log line was a transport failure retrieving `caoc-073e1f995509080b`
+(404/code 5), not a new successful flat shutdown record.
+
+Authenticated 23:25:31Z reads found zero orders and one nonzero position, with
+zero ledger working/unknown orders or unresolved intents. The 23:25:59Z repeat
+identified `+278.8900` contracts in `caoc-073e1f995509080b` and zero orders.
+This supersedes earlier flat evidence. The position's origin/ownership is not
+established; no position mutation or ledger repair was attempted. The operator
+was told that it remains. Bot and supervisor stay stopped, configuration/source
+unchanged, and no restart is authorized by the stop request.

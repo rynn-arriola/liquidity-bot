@@ -51,6 +51,20 @@ tests pass. Final pinned-venv review-worktree suite: **1,228 tests passed** in
 
 ## Release acceptance
 
-Pending final suites, push, native deployment verification and fresh start gate.
-The bot remains stopped until these checks complete. No strategy, cap, size,
-HARD, entry-quality or live-event protection changes are included.
+- Pushed and deployed `3625927fb`; all 168 normalized source/test/script/web/
+  config hashes match. Native complete suite: **1,228 passed** in 89.087s.
+- Windows/GitHub/WSL and installed marker match; inactive backup PC remains
+  pending/offline. No strategy, cap, size, HARD, entry-quality or live-event
+  protection changes are included.
+- Fresh authenticated 21:45:16Z gate again proved zero orders/positions and
+  zero working/unknown/unresolved ledger state. Normal `auto 10 32` launch
+  started supervisor `2819379`, runner `2819387` at approximately 21:45:17Z.
+- First selection found 29 viable markets in three event pages. Startup then
+  dropped one market whose pregame lifecycle could not be proved. At 21:46:42Z
+  startup again failed private-state proof with `order_eof=0/4
+  account_balance=0/4`; the same runner remains alive and retrying without entry.
+- Independent authenticated 21:47:17Z acceptance still found zero orders,
+  positions, working/unknown orders and unresolved intents. Restart is accepted
+  as a running fail-closed retry, **not restored trading**. New-label emission
+  awaits the natural longer recovery coordinator; it was regression-tested,
+  not induced live. The underlying stream failure is not repaired by wording.

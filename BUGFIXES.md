@@ -1,4 +1,5 @@
 # Production defect index
+- **September 10 reporting-only repair prepared:** generic API/stream recovery uses venue-recovery labels; scheduled maintenance retains its own wording. The read-only capacity consumer recognizes both. Two reversal checks detect the old behavior; recovery and all trading gates are unchanged. [Release](docs/history/VENUE_RECOVERY_LABEL_2026-09-10.md).
 - **Loaded and entry-accepted in `105d8d2b8` — actual-live event omission:** normalized clocks discarded parent lifecycle, permitting live-game entries and shutdown parking. Durable started evidence, fresh exact-membership checks, batched refresh, quiet-owner wake and post-admission checks block building and tighten exits. Both 1,226-test suites and 168 hashes pass; live acceptance found 29 orders on 22 confirmed-pregame markets, no positions or incident-market orders. Natural live-position evacuation remains uninduced. [Release](docs/history/ACTUAL_LIVE_EVENT_GUARD_2026-09-08.md).
 - **Loaded and live-accepted in `2193e0e85` — conflicting Retail kickoff clocks:** one primary esports market's `gameStartTime` lagged its own generated question and sibling clocks by one hour, allowing new entries after the actual scheduled start. The adapter now takes the earlier exact same-row UTC question schedule without permitting prose to extend or replace structured time. Six focused regressions, an exact reversal and both 1,208-test suites pass. Restart acceptance rebuilt 38 orders while the known live market remained absent. [Evidence](docs/history/PREGAME_CLOCK_CONFLICT_2026-09-08.md).
 - **Loaded in `28de01f20` — September 8 safety review:** durable provisional HARD/cohort restoration, runtime Discord queue, ambiguous-exposure/count reservations and IOC direction guard. Twelve regressions, nine reversal failures, both 1,202-test suites and 166 hashes pass. Restarted after a fresh flat/clear gate; initial acceptance is a healthy scheduled-maintenance hold with zero orders/positions and a clean 450-read API window. Natural fault-path/quoting acceptance remains. [Release](docs/history/REVIEW_SAFETY_FIXES_2026-09-08.md).
@@ -89,8 +90,7 @@ History through 2026-08-27: [archive](docs/history/BUGFIXES_THROUGH_2026-08-27.m
   realized P&L and reports. Trade identity/state are durable and the linked
   fill reverses exactly once; market-identity conflicts fail closed and newer
   authoritative position snapshots prevent double reversal.
-- Twenty entry decisions could reuse one stale buying-power observation, while
-  persistent rejects could hot-loop. Successful entries now reserve cached
+- Twenty entry decisions could reuse one stale buying-power observation, while persistent rejects could hot-loop. Successful entries now reserve cached
   power during the sweep and structured rejection delays are market-local.
   Reducing post-only orders, cancels and IOC exits bypass both protections.
 - Read errors discarded useful HTTP context and confirmed 429 reads ignored `Retry-After`. Adapters now preserve safe status/code/trace metadata and use bounded numeric or HTTP-date retry guidance; mutations remain non-retrying.

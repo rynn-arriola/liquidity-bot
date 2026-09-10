@@ -1,4 +1,5 @@
 # Open work only
+**September 10 authorized label repair/restart:** finish full-suite/push/native verification and fresh flat/clear startup gates; preserve `auto 10 32` and every current risk rule. A restart is not proof that private snapshots have recovered. [Handoff](docs/history/VENUE_RECOVERY_LABEL_2026-09-10.md).
 **Actual-live guard `105d8d2b8` loaded and entry-accepted:** restart rebuilt 29 authenticated orders on 22 independently confirmed-pregame markets with zero positions and zero incident-market orders. Two startup rechecks naturally rejected newly non-pregame markets. Both 1,226-test suites/168 hashes passed; first two API windows were clean. Natural held-position live evacuation and later-event restart latch acceptance must not be induced. Venue publication lag and unavailable exit depth remain limitations. [Release](docs/history/ACTUAL_LIVE_EVENT_GUARD_2026-09-08.md).
 **Discord cleanup is loaded; natural report acceptance remains:** Command 1 restarted `f7816c324` after two authenticated flat/clear gates, reused 1,160 native tests and verified 160 hashes. Runner `770972` rebuilt 39 authenticated orders with zero positions/unknown orders; first API window was clean. Inspect the next natural summary/reward posts and future repeated noncritical/critical alerts without inducing faults. [Handoff](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 **Reconcile September 6–7 account/fill gaps:** exact-window differences are $14.90 / $7.3964 (today includes $0.1674 open mark). Preserve account authority; require positive activity evidence before attribution or repair. [Cutoffs and evidence](docs/history/TRADING_LOSS_ATTRIBUTION_2026-09-07.md). Completed work: [archive](docs/history/NEXT_THROUGH_2026-08-27.md).
@@ -105,8 +106,7 @@ The first matched reward sensitivity is unfavorable before replacements:
 $207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
 pending. Validate reward/replacement net; saved labels remain non-authoritative. [Tradeoff](docs/history/ENTRY_QUALITY_REWARD_TRADEOFF_2026-09-07.md) · [implementation](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
-The queue-reset, daily selection-probe and fixed-GTC collectors are closed.
-Their databases and reports remain evidence; do not restart them merely to add
+The queue-reset, daily selection-probe and fixed-GTC collectors are closed. Their databases and reports remain evidence; do not restart them merely to add
 sample volume.
 
 ## 6. Naturally accept no-ID PLACE self-recovery after deployment

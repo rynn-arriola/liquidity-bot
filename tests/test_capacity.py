@@ -20,7 +20,7 @@ from liquidity_bot.capacity import (
     project_api_budget_window,
     simulate_request_schedule,
 )
-from scripts.api_capacity_report import _attributed_windows, _windows
+from scripts.api_capacity_report import _attributed_windows, _burst_drivers, _windows
 
 
 class CapacityTests(unittest.TestCase):
@@ -143,6 +143,17 @@ class CapacityTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].slots, 24)
+
+    def test_capacity_report_distinguishes_recovery_from_maintenance(self):
+        window = parse_api_budget_line(
+            "[api-budget] slots=32 seconds=60 attempts=1 failures=0 "
+            "rate_limited=0 max_waiting=1 categories=balance:1")
+        self.assertEqual(
+            _burst_drivers(window, {"venue-recovery-pause": 1}),
+            ("runtime recovery", "account proofs/reconciliation"))
+        self.assertEqual(
+            _burst_drivers(window, {"maintenance-pause": 1}),
+            ("venue maintenance", "account proofs/reconciliation"))
 
     def test_capacity_report_attributes_burst_time_and_logged_drivers(self):
         with TemporaryDirectory() as directory:

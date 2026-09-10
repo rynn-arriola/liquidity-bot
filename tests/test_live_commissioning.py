@@ -8154,10 +8154,55 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             MAINTENANCE_STABLE_READS)
         self.assertEqual(client.orders.create_calls, [])
         self.assertTrue(any(
-            "maintenance" in message.lower()
+            "venue recovery pause" in message.lower()
             for message, _ in notifier.messages))
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_recovery_reporting_distinguishes_scheduled_maintenance(self):
+        import contextlib
+
+        for planned in (False, True):
+            with self.subTest(planned=planned):
+                runner, client, notifier = self.build_runner()
+                await runner.preflight()
+                notifier.messages.clear()
+                runner.account.fetch_open_orders = AsyncMock(side_effect=[
+                    AdapterError("service unavailable", status_code=503),
+                    (), (), ()])
+                runner.account.fetch_positions = AsyncMock(return_value=())
+                runner.account.fetch_balance = AsyncMock(
+                    wraps=runner.account.fetch_balance)
+                captured = io.StringIO()
+                with contextlib.redirect_stdout(captured):
+                    stop = await runner._wait_for_venue_recovery(
+                        "private_stream", AdapterError("stream disconnected"),
+                        planned=planned)
+                self.assertIsNone(stop)
+                tag = "maintenance-pause" if planned else "venue-recovery-pause"
+                lines = [line for line in captured.getvalue().splitlines()
+                         if line.startswith(f"[{tag}]")]
+                self.assertEqual(len(lines), 6)  # enter, failure, 3 reads, gate
+                self.assertIn("state=entered", lines[0])
+                self.assertIn("health=failed", lines[1])
+                self.assertIn("state=health_gate_passed", lines[-1])
+                messages = [message for message, _ in notifier.messages]
+                label = "maintenance" if planned else "venue recovery"
+                self.assertTrue(any(f"{label} health gate passed" in message
+                                    for message in messages))
+                if planned:
+                    self.assertIn("scheduled maintenance delay", messages[0])
+                else:
+                    self.assertIn("venue recovery pause", messages[0])
+                    self.assertNotIn("[maintenance-pause]", captured.getvalue())
+                    self.assertFalse(any("maintenance" in message.lower()
+                                         for message in messages))
+                self.assertTrue(any("quoting remains blocked" in message
+                                    for message in messages))
+                self.assertEqual(client.orders.create_calls, [])
+                self.assertEqual(client.orders.cancel_calls, [])
+                await runner.private_stream.close()
+                await runner.market_stream.close()
 
     async def test_maintenance_pause_honours_operator_stop(self):
         runner, client, _ = self.build_runner()

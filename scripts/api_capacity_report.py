@@ -39,6 +39,7 @@ _RECOVERY_SIGNALS = frozenset({
     "private-shard-recovery",
     "quarantine",
     "runtime-recovery",
+    "venue-recovery-pause",
 })
 _SELECTION_SIGNALS = frozenset({
     "selection",

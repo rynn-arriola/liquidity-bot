@@ -3019,7 +3019,7 @@ class CommissioningRunner:
                     stop = await self._wait_for_venue_recovery("startup", exc)
                     if stop:
                         raise CommissioningRefused(
-                            f"operator stopped during maintenance pause: {stop}"
+                            f"operator stopped during venue recovery pause: {stop}"
                         ) from exc
                     venue_failure_streak = 0
                     attempt = 0
@@ -8405,8 +8405,10 @@ class CommissioningRunner:
 
         self._transport_recovery_component = component
         self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+        pause_tag = "maintenance-pause" if planned else "venue-recovery-pause"
+        health_label = "maintenance" if planned else "venue recovery"
         print(
-            f"[maintenance-pause] at={self._now().isoformat()} "
+            f"[{pause_tag}] at={self._now().isoformat()} "
             f"component={component} state=entered "
             f"reason={type(initial).__name__}:{initial}",
             flush=True,
@@ -8419,7 +8421,7 @@ class CommissioningRunner:
                 "is treated as cancellation.")
         else:
             await self.notifier.send_async(
-                "🛠️ Liquidity Bot is waiting for API/stream recovery "
+                "🛠️ Liquidity Bot venue recovery pause: waiting for API/stream recovery "
                 f"in {component}. New quoting is paused; no "
                 "order absence is treated as cancellation. Read-only account "
                 "health must pass three times over about two minutes before the "
@@ -8441,7 +8443,7 @@ class CommissioningRunner:
                     observed_at=observed_at)
                 stable += 1
                 print(
-                    f"[maintenance-pause] at={self._now().isoformat()} "
+                    f"[{pause_tag}] at={self._now().isoformat()} "
                     f"component={component} health=success "
                     f"stable={stable}/{MAINTENANCE_STABLE_READS} "
                     f"open_orders={len(orders)} positions={len(positions)} "
@@ -8470,7 +8472,7 @@ class CommissioningRunner:
                     # marker remain present for every probe.
                     include_traceback=(attempt == 1 or attempt % 30 == 0))
                 print(
-                    f"[maintenance-pause] at={self._now().isoformat()} "
+                    f"[{pause_tag}] at={self._now().isoformat()} "
                     f"component={component} health=failed stable=0/"
                     f"{MAINTENANCE_STABLE_READS} "
                     f"reason={type(probe_exc).__name__}:{probe_exc}",
@@ -8485,12 +8487,12 @@ class CommissioningRunner:
                 if stop:
                     return stop
         await self.notifier.send_async(
-            "✅ Liquidity Bot maintenance health gate passed three complete "
+            f"✅ Liquidity Bot {health_label} health gate passed three complete "
             "authenticated account reads. Normal stream recovery and exact "
             "order/position reconciliation are resuming; quoting remains "
             "blocked until those existing gates pass.")
         print(
-            f"[maintenance-pause] at={self._now().isoformat()} "
+            f"[{pause_tag}] at={self._now().isoformat()} "
             f"component={component} state=health_gate_passed",
             flush=True,
         )

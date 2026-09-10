@@ -68,3 +68,32 @@ tests pass. Final pinned-venv review-worktree suite: **1,228 tests passed** in
   as a running fail-closed retry, **not restored trading**. New-label emission
   awaits the natural longer recovery coordinator; it was regression-tested,
   not induced live. The underlying stream failure is not repaired by wording.
+
+## Read-only API-structure check at 21:53Z
+
+The operator asked whether Polymarket changed the API because the app appeared
+healthy. Rechecked the official [changelog](https://docs.polymarket.us/changelog),
+[Retail private WebSocket contract](https://docs.polymarket.us/api-reference/websocket/private),
+Python SDK documentation, installed socket/decoder code and live PyPI metadata.
+No announced relevant private-stream breaking change was found. The latest
+published SDK remains `polymarket-us==0.1.2` (January 22 upload), matching the
+installation. The documented subscribe wrapper, order/position/balance enums,
+endpoint and balance/order snapshot names are already supported by the bot.
+
+An isolated signed, read-only raw WebSocket bypassed both the SDK message loop
+and bot decoder. It subscribed only to account balance and account-wide orders,
+used one connection/two subscriptions, had no ledger or order-mutation access,
+and closed after its bounded observation. At 21:52:41–21:53:26Z the authenticated
+handshake succeeded and explicit initial/final protocol Pongs succeeded, but
+**zero application frames** arrived over 45 seconds; therefore no frame failed
+JSON or bot decoding. This independently reproduces silence with the documented
+request format; it is not evidence of a renamed incoming field being rejected.
+
+The public status feed still reported partially degraded service and the
+investigating [balance-ledger latency incident](https://stspg.io/xfr2rjt0vds1).
+Its relationship to Retail private-stream silence remains unproved. The test
+does not rule out an undocumented server-side change or account-specific
+subscription fault, nor does handshake success prove trading permission.
+If silence persists, venue support needs these UTC times, endpoint and safe
+probe results to investigate delivery. No support message, production edit,
+SDK upgrade, gate bypass, order mutation or restart was performed for this check.

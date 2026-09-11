@@ -108,3 +108,52 @@ supervisor 36080 / runner 36088 and marker `64dcefdc1`. Authenticated venue:
 29 orders across 22 markets, three positions. Contemporaneous read-only ledger:
 29 working orders, zero unknown orders and zero unresolved intents. This is
 not a zero-exposure/start gate; do not restart on the strength of this snapshot.
+
+## Authorized deployment and restart
+
+The operator subsequently requested **“Restart the bot.”** Supervisor 36080
+was stopped first; runner 36088 received SIGTERM, canceled its orders and used
+the unchanged shutdown exit path. Final record at 13:36:05.528395Z reported
+`flat=true`, `operator_sigterm`. No force-kill or manual venue mutation.
+
+At **13:36:28.617670Z**, authenticated venue proved zero orders and positions;
+read-only ledger proved zero working/unknown orders and unresolved intents.
+Maker-lab, old runner and supervisor were absent. Pre-work parity confirmed
+clean Windows/GitHub source `0f231d216`, expected pending WSL deployment and
+offline peer PC; the private ledger copy was integrity/hash verified.
+
+Reviewed the exact pushed deployment diff again: only the two scheduling source
+files, focused tests and handoff/safety documentation changed. Fast-forwarded
+stopped WSL from `d18aa2dff` to `0f231d216`; all **172** normalized tracked
+source/test/script/web/config hashes matched. Native full-suite and fresh
+second start gate were required before launch; no baseline/schema/config reset.
+
+The stopped-runtime private recovery copy was captured and integrity/hash
+verified at **13:37:58.226560Z**. The native complete suite passed **1,298 tests
+in 97.952s**. After hash/test verification, `DEPLOYED_COMMIT` was set to the
+exact source release `0f231d216e8102c2433bb49f13bf9187f00103f1`.
+
+Second authenticated gate at **13:38:43.189566Z** again proved zero orders,
+positions, unresolved intents, unknown orders and ledger working orders.
+Started `auto 10 32 rest-fallback` as supervisor **50387** / runner **50396**.
+The existing TV dashboard remained available. Startup/process creation alone
+is not proof of quoting or natural position-handling latency acceptance.
+
+Startup dropped two no-longer-pregame owners, then spent another 55.9-second
+selection scan refilling those slots. Four transient event-freshness eligibility
+holds subsequently recovered through the existing refresh path. No safety gate
+was bypassed. Official schedule feed was HEALTHY/NORMAL at 13:40:27Z.
+The first 203.4-second API window at 13:42:07Z reported **425 reads, zero
+mutations, zero failures and zero rate limits**. This is startup evidence only.
+First new entry was logged at **13:42:39.437122Z**.
+
+At **13:43:33.772248Z / 09:43 ET**, authenticated venue proved **20 orders
+across 20 markets and zero positions**. Contemporaneous read-only ledger showed
+zero unknown orders/unresolved intents and 22 working orders; these sequential
+reads overlap active order creation and are not an atomic count comparison.
+The original requested settings, $90 HARD and temporary 30-entry ceiling were
+preserved. No further code changes were needed during deployment/restart.
+
+Release is loaded and ordinary entry is accepted. Sustained natural
+fill/cancel/exit reaction timing and full-cap API load remain to be measured;
+the flat restart cannot prove the new position-priority path has fired live.

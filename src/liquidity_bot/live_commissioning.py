@@ -6006,6 +6006,11 @@ class CommissioningRunner:
                 self._market_action_generation.get(slug, 0) + 1)
         return None, 0.0
 
+    def _position_priority_tokens(self) -> dict[str, tuple[Any, ...]]:
+        """Optional account-source scheduling hint, never mutation authority."""
+
+        return {}
+
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
     ) -> str | None:
@@ -6013,7 +6018,14 @@ class CommissioningRunner:
 
         state_refresh_failed = False
         planned_slugs = self.active_slugs if slugs is None else slugs
-        for slug in planned_slugs:
+        pending_slugs = list(planned_slugs)
+        priority_seen: dict[str, tuple[Any, ...]] = {}
+        priority_visits: dict[str, int] = {}
+        priority_dispatches: set[str] = set()
+        while pending_slugs:
+            slug = pending_slugs.pop(0)
+            priority_dispatch = slug in priority_dispatches
+            priority_dispatches.discard(slug)
             # SIGTERM is delivered by an event-loop callback.  The outer run
             # loop cannot see it while this twenty-market sweep is already in
             # progress, so without this boundary the remaining slots can place
@@ -6065,6 +6077,31 @@ class CommissioningRunner:
                     # account-wide REST proof for every remaining market in the
                     # same sweep; the outer loop will give it another chance.
                     state_refresh_failed = True
+            # REST can discover a fill while proving a different, flat owner.
+            # Re-enter the SAME guarded path for that position before another
+            # entry decision. A changed quantity/order state can wake an owner
+            # already visited (notably cancel-confirm -> exact reducer).
+            # Bound extra visits so changing inventory cannot starve the slate.
+            priorities = self._position_priority_tokens()
+            if priority_dispatch and slug not in priorities:
+                # Inventory can flatten during the proof above. A position
+                # interruption must not turn into an extra flat entry pass.
+                self._mark_market_dirty(slug, self._now())
+                continue
+            if slug in priorities:
+                priority_seen[slug] = priorities[slug]
+            else:
+                urgent = next((owner for owner, token in priorities.items()
+                               if priority_seen.get(owner) != token
+                               and priority_visits.get(owner, 0) < 4), None)
+                if urgent is not None:
+                    priority_seen[urgent] = priorities[urgent]
+                    priority_visits[urgent] = priority_visits.get(urgent, 0) + 1
+                    priority_dispatches.add(urgent)
+                    pending_slugs = [urgent, slug, *(
+                        owner for owner in pending_slugs if owner != urgent)]
+                    # No guard, backoff, proof or stop check is bypassed.
+                    continue
             try:
                 # Account reconciliation can take seconds. Its pre-await time
                 # must not make an expired equity mark appear fresh.

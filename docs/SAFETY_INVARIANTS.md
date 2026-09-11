@@ -919,3 +919,11 @@ These are implementation requirements, not suggestions.
     positive history can survive expired proof, never entry authority. Equity
     freshness uses the current clock after account reconciliation, not its
     pre-await timestamp. Stable mode capacity and trading policy are unchanged.
+105. REST position priority is scheduling only: exact quantity, order and
+    unresolved/absent ownership changes may interrupt flat-owner work through
+    the same guarded decision path. Snapshot timestamps cannot cause repeated
+    interruptions. Extra visits are bounded per owner/sweep; unknown intents,
+    isolation, backoff, stop and complete proof/admission checks remain binding.
+    A priority owner that flattens during proof cannot gain an extra entry pass.
+    Non-selected exposure remains exit-only; normal WebSocket scheduling and
+    every pricing, sizing, entry-cap, risk and lifecycle rule are unchanged.

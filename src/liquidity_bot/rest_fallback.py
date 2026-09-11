@@ -181,6 +181,38 @@ class RestFallbackRunner(CommissioningRunner):
                 or not 0 <= (now - completed).total_seconds() < self.REST_POLL_SECONDS):
             await self._rest_reconcile(now, tag="rest-source-decision")
 
+    def _position_priority_tokens(self):
+        # Ignore snapshot timestamps: an unchanged proof must not repeatedly
+        # interrupt reward-ranked entries. Exact quantity/working-order changes
+        # do matter, including positive terminal proof after a cancel.
+        managed, positions, _ = self._scheduler_owner_sets()
+        orders = {}
+        for row in self.ledger.working_orders():
+            slug = str(row["market_slug"])
+            if slug in positions:
+                orders.setdefault(slug, []).append((
+                    str(row["exchange_order_id"]), str(row["status"]),
+                    str(row["original_qty"]), str(row["filled_qty"])))
+        unresolved = {}
+        for intent_id, (_, slug, _) in self._unresolved_intent_owners().items():
+            unresolved.setdefault(slug, []).append(intent_id)
+        absent = {}
+        for row in self.ledger.absent_orders():
+            absent.setdefault(str(row["market_slug"]), []).append(
+                str(row["exchange_order_id"]))
+        priorities = {}
+        for slug in managed:
+            if slug not in positions:
+                continue
+            # Non-selected exposure still belongs to the existing exit-only
+            # service path; creating its state does not grant entry eligibility.
+            self.state_for(slug)
+            priorities[slug] = (
+                self.ledger.position(slug), tuple(sorted(orders.get(slug, ()))),
+                tuple(sorted(unresolved.get(slug, ()))),
+                tuple(sorted(absent.get(slug, ()))))
+        return priorities
+
     def _accept_book(self, book):
         # The outer scheduler may hold one older completed next_book result
         # while a REST poll drains newer queued books. Do not roll back to it.

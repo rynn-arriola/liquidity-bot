@@ -343,3 +343,12 @@ unchanged size 10 / 32 REST mode. Its latest inspected 11:38:22Z budget window
 had 185 reads, zero mutations/failures/429s. No code, config, ledger, restart or
 venue order mutation accompanied the test. The operator should revoke only the
 chat-exposed test key; no revocation was performed by this task.
+
+The operator subsequently explicitly requested saving the new key for future
+tests and declined revocation. It was saved through the native Windows
+Credential Manager API as a per-user generic credential under
+`LiquidityBot/Diagnostics/PolymarketUS/SecondaryKey`. Read-back equality was
+verified without printing either value. No plaintext credential file was
+created and no live trading credential/configuration was changed. The saved
+credential is diagnostic-only and not selected automatically. Chat exposure
+remains a security risk despite protected local storage. No key was revoked.

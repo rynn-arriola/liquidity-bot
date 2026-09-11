@@ -1,6 +1,7 @@
 # Active operator decisions
 This file records human choices, not a backlog or AI recommendations. Code and the running command remain the authority for exact enforced values; if they disagree with this page, stop and show the operator the discrepancy.
 ## Decision rights
+- **2026-09-11 diagnostic credential retention:** after an isolated second-key test, the operator explicitly authorized retaining the new key for testing and declined revocation despite chat exposure. Store only in Windows Credential Manager under `LiquidityBot/Diagnostics/PolymarketUS/SecondaryKey`; no secret/key value in tracked files. Do not replace the bot's original credentials or automatically use/revoke this diagnostic key. The exposure risk remains; storage does not undo it.
 - **2026-09-11 temporary REST activation:** operator explicitly requested running the saved fallback after the original WebSocket remained silent. Select `auto 10 32 rest-fallback`; preserve $90 HARD, maintenance buffer, order caps, risk/strategy and ledger, with no manual daily reset. `rest-fallback-2026-09-10` at `e1c704f06` and original `v1.2.0` stay immutable. This supersedes September 10's WebSocket-mode selection; no automatic switching or unrelated recovery-code repair is authorized. [Scope](docs/history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
 - **2026-09-08 actual-live protection:** after the confirmed Mutti/Picard/Vivarelli incident, operator authorized fixing the live-event gap and restarting after review. Parent-event live/ended/period/score evidence overrides future schedules, forbids entries/re-entry, and triggers existing cancel-confirm-exact-exit handling. Preserve every current size, capacity, reward, cap and HARD rule. [Release](docs/history/ACTUAL_LIVE_EVENT_GUARD_2026-09-08.md).
 - **2026-09-07 Discord presentation/deployment:** concise actual reports without repeated methodology/side notes; retain pending/estimated/unavailable labels and critical alerts, never invent withdrawal values. After deployment without restart, the operator authorized **Command 1** to stop safely and restart `f7816c324` with unchanged size 10 / 32 and risk rules. The standalone reward report retains its hourly schedule. [Implementation](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
@@ -112,8 +113,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 - No league-based reward-market filter.
 - No inference that an absent venue order is canceled.
 - No new droplet based solely on the transient August 26 location denial.
-- No residential proxy, disguised IP or other attempt to evade Polymarket's
-  location/access controls; obtain support confirmation before changing hosts.
+- No residential proxy, disguised IP or other attempt to evade Polymarket's location/access controls; obtain support confirmation before changing hosts.
 - No unattended or automatic desktop/laptop failover. A handoff requires the
   old runner to be absent, known account state, a verified stopped-runtime
   ledger snapshot and explicit start authorization on the new owner.

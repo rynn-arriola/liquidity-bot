@@ -150,3 +150,39 @@ Final follow-up source gate: **1,282 tests passed in 129.591 seconds**,
 including 25 new review regressions. The durable-anchor reversal failed as
 expected, bringing the repair/edge reversal detections to thirteen. No source
 or configuration changes remain outside the reviewed diff.
+
+## Final deployment and restart
+
+- Final code commit **`64dcefdc1`** pushed before stopped-runtime deployment;
+  all **171** tracked source/test/script/web/config hashes matched and
+  `DEPLOYED_COMMIT` names the same full commit.
+- Native full suite: **1,282 tests / 96.347 seconds**, passing. Review suite:
+  **1,282 / 129.591 seconds**, passing; thirteen reversal detections.
+- Final authenticated start gate at **12:45:10Z** again proved zero venue orders,
+  positions, unknown orders, unresolved intents and ledger working orders.
+- Restart requested with `auto 10 32 rest-fallback`; current live acceptance
+  follows below. The temporary cap applies to flat-entry orders/reservations,
+  not 30 markets or a restriction on exact position exits.
+
+## Initial live acceptance
+
+Supervisor **36080** / runner **36088** are running the final commit in temporary
+mode. Startup logged `max_pending_entries=30`, four bounded order reads and
+`effective=30`; scheduled maintenance was NORMAL at 12:47:07Z. New orders began
+at **12:47:28Z**. Authenticated evidence at 12:48:28Z found 23 orders on 23
+markets, zero positions, zero unresolved/unknown state, matching 23 ledger orders.
+
+The first completed rebuilt-slate API window at **12:49:08Z** contained **544
+attempts / 221.2 seconds**, 514 reads and **30 creates**, **zero failures and zero
+429s**, 2.459 requests/second, response p99 0.372s, and maximum read waiters four
+(the deliberately bounded concurrency). No create/cancel churn appeared during
+this initial rebuild. Decision latency p50/p95 was **73.731/129.938 seconds**;
+action latency p50/p95 **0.389/1.970 seconds**. This is initial startup/slate
+evidence, not an apples-to-apples steady-state performance comparison or proof
+of instantaneous fill response. Sustained natural fill/exit latency and later
+maintenance/HARD recovery remain operational observations, not induced tests.
+
+At **12:49:53Z / 08:49 ET**, authenticated venue and ledger matched **30
+working orders across 30 markets, zero open positions, zero unknown orders and
+zero unresolved intents**. The requested pending-entry ceiling is reached;
+this is not a restriction on position reducers or a guarantee of future reward.

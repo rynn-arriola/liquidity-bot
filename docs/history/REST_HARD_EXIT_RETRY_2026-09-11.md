@@ -78,3 +78,28 @@ be followed by exact source parity and a fresh authenticated proof of orders,
 positions and ownership. Natural live acceptance should confirm an unfilled
 hard IOC receives its next exact retry without an unrelated-order scan; do not
 induce a position or failure for testing.
+
+## Authorized deployment and restart
+
+The operator later superseded the stop instruction with **“Ok lets run bot
+again.”** Authenticated REST at 23:05:53Z showed zero orders and positions, but
+the stopped ledger retained 13 `UNKNOWN_ABSENT` orders and one stale +10
+position. Every absent order was individually retrieved and positively proven
+`ORDER_STATE_CANCELED`; a stopped-safe 346.5 MB ledger backup was taken before
+the exact terminal states and complete flat position snapshot were applied.
+The resulting ledger had zero working/absent orders, unresolved intents or
+nonzero positions.
+
+WSL was fast-forwarded to reviewed GitHub commit `82acdfd14`. The exact native
+checkout passed all 1,305 tests in 98.618 seconds. Windows, GitHub and WSL HEAD
+matched; a fresh private recovery snapshot was integrity/hash verified. The
+23:15:52Z final start gate again proved zero venue orders/positions and zero
+local ambiguity, then the deployment marker was matched exactly and
+`auto 10 32 rest-fallback` started as supervisor 262801 / runner 262812.
+
+At 23:18:49Z authenticated REST showed 22 orders across 22 markets and zero
+positions. A single selected market whose exact pregame evidence was
+unavailable was safely skipped; unrelated eligible markets continued placing
+orders. This proves loaded entry operation and the unchanged temporary
+30-pending-entry ceiling, not the natural hard-exit repair. Do not induce a fill
+or failed IOC; acceptance of that path remains observational.

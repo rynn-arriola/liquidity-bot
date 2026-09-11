@@ -11,6 +11,7 @@ import asyncio
 from datetime import datetime
 
 from .adapters import AdapterError, ApiAdmissionDeferred
+from .errors import RuntimeInvariantViolation
 from .commissioning import CommissioningUnavailable
 from .live_commissioning import CommissioningRunner
 from .live_orders import AsyncTradingGateway
@@ -86,15 +87,56 @@ class RestFallbackRunner(CommissioningRunner):
     SOURCE_REBOUND_DESCRIPTION = "rebound market/REST sources"
     REQUIRE_EXECUTION_BACKFILL = True
     REST_POLL_SECONDS = 5.0
+    PENDING_ENTRY_ORDER_CEILING = 30
+    ORDER_READ_CONCURRENCY = 4
 
     def __init__(self, *args, **kwargs):
         kwargs["private_stream_factory"] = DisabledPrivateStream
         super().__init__(*args, **kwargs)
         self.gate = RestStateGate(max_silence_seconds=30)
         self._rest_poll_completed_at = None
+        self._rest_history_seen: frozenset[str] | None = None
+        self._rest_history_pending: frozenset[str] = frozenset()
         self.executor.gateway = RestProofTradingGateway(
             self.gateway,
             lambda: self.gate.session_ready(self.ledger, now=self._now()))
+
+    async def _read_owned_order_states(self, exchange_ids, now):
+        # Only independent reads overlap. All still share the unchanged host
+        # governor; no mutation is parallelized and every owner is checked.
+        semaphore = asyncio.Semaphore(self.ORDER_READ_CONCURRENCY)
+
+        async def read(exchange_id):
+            async with semaphore:
+                try:
+                    await self.executor.reconcile_order(exchange_id, observed_at=now)
+                except Exception as exc:
+                    return exc
+            return None
+
+        tasks = [asyncio.create_task(read(item)) for item in exchange_ids]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        failures = []
+        for exchange_id, result in zip(exchange_ids, results):
+            if isinstance(result, RuntimeInvariantViolation):
+                raise result
+            if result is not None:
+                failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+        return failures
+
+    async def _fetch_execution_history(self, now):
+        batch = await self.account.fetch_executions(
+            observed_at=now, require_coverage=True,
+            known_execution_ids=self._rest_history_seen)
+        self._rest_history_pending = frozenset(
+            item.execution_id for item in batch if hasattr(item, "execution_id"))
+        return batch
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
         started = self._now()
@@ -102,9 +144,16 @@ class RestFallbackRunner(CommissioningRunner):
         try:
             # History, including conflicts, is mandatory without private fills.
             await super()._rest_reconcile(started, tag=tag)
+            # Positive, successfully applied history remains useful even if
+            # this first full backfill outlives the account-freshness budget.
+            # The next proof must still re-read current orders and positions.
+            self._rest_history_seen = (
+                (self._rest_history_seen or frozenset()) | self._rest_history_pending)
             self.gate.on_rest_reconciled(started)
             if not 0 <= (self._now() - started).total_seconds() <= 30:
-                raise AdapterError("REST account proof exceeded freshness bound")
+                raise ApiAdmissionDeferred(
+                    "REST account proof exceeded freshness bound",
+                    error_code="LOCAL_REST_STATE_EXPIRED", retry_after_seconds=1.0)
         except BaseException:
             self.gate.on_reconciliation_conflict()
             raise
@@ -159,5 +208,6 @@ class RestFallbackRunner(CommissioningRunner):
             await self._wait_for_initial_private_state()
         print("[account-state] mode=rest-fallback private_socket=disabled "
               "decision_poll_seconds=5 idle_poll_seconds=10 "
-              "max_proof_age_seconds=30 experimental=yes", flush=True)
+              "max_proof_age_seconds=30 max_pending_entries=30 "
+              "order_read_concurrency=4 experimental=yes", flush=True)
         return result

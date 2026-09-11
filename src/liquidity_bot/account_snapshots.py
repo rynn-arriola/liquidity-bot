@@ -155,6 +155,8 @@ class AsyncAccountSnapshotGateway:
 
     async def fetch_executions(
         self, *, observed_at: datetime, max_pages: int = 2,
+        require_coverage: bool = False,
+        known_execution_ids: frozenset[str] | None = None,
     ) -> ExecutionHistoryBatch:
         """Recent fills still retained by the venue for this account.
 
@@ -182,6 +184,8 @@ class AsyncAccountSnapshotGateway:
         rows: dict[str, Execution] = {}
         trade_states: dict[str, TradeStateObservation] = {}
         cursor: str | None = None
+        seen_cursors: set[str] = set()
+        covered = False
         # Deliberately shallow. This runs on every reconcile and shares the one
         # 4 req/s governor with book refreshes and order placement, so walking
         # the whole history would spend the budget quotes need -- and there is
@@ -190,8 +194,12 @@ class AsyncAccountSnapshotGateway:
         # recent activity with headroom for a burst. A venue reset can make
         # this legitimately empty; callers may use it only as positive fill
         # evidence, never as a complete negative snapshot.
-        for _ in range(max(1, min(max_pages, self.gateway.max_pages))):
+        page_limit = (self.gateway.max_pages if require_coverage
+                      else max(1, min(max_pages, self.gateway.max_pages)))
+        for page_number in range(page_limit):
             params: dict[str, Any] = {"limit": 100}
+            if require_coverage:
+                params["sortOrder"] = "SORT_ORDER_DESCENDING"
             if cursor:
                 params["cursor"] = cursor
             response = await self.gateway._call(
@@ -201,11 +209,16 @@ class AsyncAccountSnapshotGateway:
             if not isinstance(response, dict) or not isinstance(
                     response.get("activities"), list):
                 raise AdapterError("activity response has no activities list")
+            page_execution_ids: set[str] = set()
             for activity in response["activities"]:
                 if not isinstance(activity, dict):
+                    if require_coverage:
+                        raise AdapterError("execution history contains a malformed activity")
                     continue
                 trade = activity.get("trade")
                 if not isinstance(trade, dict):
+                    if require_coverage and activity.get("type") == "ACTIVITY_TYPE_TRADE":
+                        raise AdapterError("execution history trade payload is missing")
                     continue
                 trade_id = str(trade.get("id") or "").strip()
                 trade_state = str(trade.get("state") or "").strip().upper()
@@ -250,6 +263,12 @@ class AsyncAccountSnapshotGateway:
                 leg = (trade.get("aggressorExecution")
                        if trade.get("isAggressor")
                        else trade.get("passiveExecution"))
+                if require_coverage:
+                    if isinstance(leg, dict):
+                        if not isinstance(trade.get("isAggressor"), bool):
+                            raise AdapterError("execution history account leg is ambiguous")
+                    elif trade_state != "TRADE_STATE_BUSTED":
+                        raise AdapterError("execution history account execution is missing")
                 if isinstance(leg, dict):
                     if str(leg.get("type") or "").upper() in {
                             "EXECUTION_TYPE_FILL",
@@ -263,6 +282,8 @@ class AsyncAccountSnapshotGateway:
                                 trade_id=trade_id or execution.trade_id,
                                 trade_state=trade_state or None)
                         except AdapterError:
+                            if require_coverage:
+                                raise
                             # Malformed rather than foreign. Failing the whole
                             # sweep over one leg would lose our own fills too.
                             execution = None
@@ -276,9 +297,28 @@ class AsyncAccountSnapshotGateway:
                             # our own fills -- the original double-counting bug
                             # is prevented by taking exactly one leg here.
                             rows[execution.execution_id] = execution
+                            page_execution_ids.add(execution.execution_id)
             cursor = str(response.get("nextCursor") or "").strip() or None
             if not cursor or response.get("eof"):
+                if require_coverage and response.get("eof") is not True:
+                    raise AdapterError("execution history omitted EOF/continuation proof")
+                covered = True
                 break
+            if require_coverage:
+                if cursor in seen_cursors:
+                    raise AdapterError("execution history repeated pagination cursor")
+                seen_cursors.add(cursor)
+                # A fresh process first walks all retained history. Later
+                # descending walks keep at least the original two-page overlap
+                # and continue through a whole already-proven fill page.
+                # A partial page with one old fill cannot conceal a burst.
+                if (page_number >= 1 and known_execution_ids is not None
+                        and page_execution_ids
+                        and page_execution_ids <= known_execution_ids):
+                    covered = True
+                    break
+        if require_coverage and not covered:
+            raise AdapterError("execution history coverage exceeded bounded page limit")
         return ExecutionHistoryBatch(
             tuple(rows.values()), tuple(trade_states.values()))
 

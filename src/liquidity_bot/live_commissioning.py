@@ -333,6 +333,7 @@ class CommissioningRunner:
     ACCOUNT_STATE_DESCRIPTION = "REST and fresh private state"
     SOURCE_REBOUND_DESCRIPTION = "rebound both streams"
     REQUIRE_EXECUTION_BACKFILL = False
+    PENDING_ENTRY_ORDER_CEILING: int | None = None
 
     # How long "up but resting nothing" may last before it is worth waking
     # someone. Long enough that a rotation, a top-up rebind or a slate between
@@ -2285,6 +2286,22 @@ class CommissioningRunner:
             key: at for key, at in self._cancel_retried_at.items()
             if key in seen}
 
+    async def _read_owned_order_states(
+        self, exchange_ids: list[str], now: datetime,
+    ) -> list[tuple[str, str]]:
+        failures: list[tuple[str, str]] = []
+        for exchange_id in exchange_ids:
+            try:
+                await self.executor.reconcile_order(exchange_id, observed_at=now)
+            except RuntimeInvariantViolation:
+                raise
+            except Exception as exc:
+                failures.append((exchange_id, f"{type(exc).__name__}: {exc}"))
+        return failures
+
+    async def _fetch_execution_history(self, now: datetime):
+        return await self.account.fetch_executions(observed_at=now)
+
     async def _rest_reconcile(
         self, now: datetime, *, tag: str = "",
         strict_order_markets: frozenset[str] | None = None,
@@ -2342,6 +2359,7 @@ class CommissioningRunner:
         reconcile_failures: list[tuple[str, str]] = []
         skipped_order_ids: set[str] = set()
         skipped_order_markets: set[str] = set()
+        read_ids: list[str] = []
         for exchange_id in sorted(exchange_ids):
             markets = exchange_markets.get(exchange_id, set())
             if strict_order_markets is not None and len(markets) == 1:
@@ -2350,19 +2368,8 @@ class CommissioningRunner:
                     skipped_order_ids.add(exchange_id)
                     skipped_order_markets.add(market)
                     continue
-            try:
-                await self.executor.reconcile_order(
-                    exchange_id, observed_at=now)
-            except RuntimeInvariantViolation:
-                # Terminal by contract, and never absorbed by handling that
-                # exists to survive transport failures. Nothing reachable from
-                # `reconcile_order` raises this today -- only this module and
-                # `live_session` raise it at all -- and this is what keeps that
-                # true if anything below ever starts to.
-                raise
-            except Exception as exc:
-                reconcile_failures.append((
-                    exchange_id, f"{type(exc).__name__}: {exc}"))
+            read_ids.append(exchange_id)
+        reconcile_failures.extend(await self._read_owned_order_states(read_ids, now))
         # Deliberately before failure classification. The sweep above has just
         # written the venue's current word on every readable order, which is
         # the only thing that licenses re-issuing a cancel -- and an unreadable
@@ -2465,8 +2472,7 @@ class CommissioningRunner:
         # ever written. Failing this must not fail the whole reconcile -- the
         # order and position snapshots above are what gate new risk.
         try:
-            execution_batch = await self.account.fetch_executions(
-                observed_at=now)
+            execution_batch = await self._fetch_execution_history(now)
             for execution in execution_batch:
                 try:
                     self.ledger.apply_execution(execution, received_at=now)
@@ -4496,10 +4502,12 @@ class CommissioningRunner:
     def _effective_entry_order_cap(self, observed_at: datetime) -> int:
         """Return the tighter of the durable loss and clock-based ceilings."""
 
-        return min(
+        policy_cap = min(
             self._loss_entry_order_cap,
             self.config.entry_order_cap_for_time(observed_at),
         )
+        ceiling = self.PENDING_ENTRY_ORDER_CEILING
+        return policy_cap if ceiling is None else min(policy_cap, ceiling)
 
     def _refresh_overnight_entry_order_cap(
         self, observed_at: datetime,
@@ -4517,7 +4525,7 @@ class CommissioningRunner:
         if previous is None and not active:
             return
 
-        effective = min(self._loss_entry_order_cap, time_cap)
+        effective = self._effective_entry_order_cap(observed_at)
         print(
             f"[overnight-entry-order-cap] at={observed_at.isoformat()} "
             "window=00:00-09:00_ET "
@@ -4649,6 +4657,9 @@ class CommissioningRunner:
                     if time_cap < self._loss_entry_order_cap
                     else "loss_scaled_entry_order_cap"
                 )
+                if self._effective_entry_order_cap(frame.now) < min(
+                        time_cap, self._loss_entry_order_cap):
+                    reason = "account_source_entry_order_cap"
                 return PlanAction(
                     ActionKind.CANCEL,
                     frame.market.slug,
@@ -6055,7 +6066,9 @@ class CommissioningRunner:
                     # same sweep; the outer loop will give it another chance.
                     state_refresh_failed = True
             try:
-                await self._refresh_equity_for_decision(now)
+                # Account reconciliation can take seconds. Its pre-await time
+                # must not make an expired equity mark appear fresh.
+                await self._refresh_equity_for_decision(self._now())
             except Exception:
                 # Preserve the last observation until its 15-second bound;
                 # once stale, `_frame` removes entry eligibility fail-closed.
@@ -6224,6 +6237,7 @@ class CommissioningRunner:
 
         recovering = set(self._recovery_slugs) & set(self.active_slugs)
         healthy: list[str] = []
+        transient_failure: Exception | None = None
         for slug in self.active_slugs:
             if slug in self._settlement_wait_slugs:
                 # The first pass already proved valid metadata plus an exact
@@ -6256,9 +6270,15 @@ class CommissioningRunner:
             except Exception as exc:
                 if slug in recovering:
                     raise
+                if self._is_transient_recovery_error(exc):
+                    transient_failure = exc
                 await self._report_runtime_error(
                     f"startup_market_dropped:{slug}", exc)
         if not healthy:
+            if transient_failure is not None:
+                # Preserve the typed 5xx/transport/429 cause for startup's
+                # retry path. Genuine invalid/unsafe candidates still refuse.
+                raise AdapterError("startup market reads temporarily unavailable") from transient_failure
             raise CommissioningRefused("no bound market has a usable book")
         if len(healthy) != len(self.active_slugs):
             self._bind_markets(tuple(healthy))

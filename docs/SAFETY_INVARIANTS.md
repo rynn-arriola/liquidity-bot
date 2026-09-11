@@ -900,7 +900,7 @@ These are implementation requirements, not suggestions.
     or heartbeat. Every account proof strictly reads all owned working/ambiguous
     orders, complete open orders, exact positions and mandatory execution history.
     History failure/conflict, partial state or cancellation revokes authority;
-    complete proof age includes the serial read duration and cannot exceed 30
+    complete proof age includes the entire read duration and cannot exceed 30
     seconds. Creates/reducers recheck proof after admission; known owned cancels
     remain available. Every existing ownership, exact reduction, lifecycle,
     pricing, capital, daily loss, transfer adjustment and shutdown rule remains
@@ -908,3 +908,13 @@ These are implementation requirements, not suggestions.
     retried, and source selection cannot reset the ledger or assume ownership.
     REST success is not proof of source timeliness or full-width capacity; live
     activation requires separate operator authority and acceptance evidence.
+104. Temporary REST mode has a 30 pending-entry ceiling, combined by minimum
+    with existing clock/loss rules; position orders and exact reducers do not
+    consume it. Unresolved entry reservations still count. At most four
+    independent exact-order reads overlap under the unchanged shared governor;
+    all workers finish or are canceled before proof returns. History initially
+    covers retained EOF, then at least two descending pages through known fill
+    overlap; malformed or truncated coverage cannot certify proof. Applied
+    positive history can survive expired proof, never entry authority. Equity
+    freshness uses the current clock after account reconciliation, not its
+    pre-await timestamp. Stable mode capacity and trading policy are unchanged.

@@ -137,3 +137,41 @@ or risk ceiling was lowered to conceal this. Source freshness is bounded local
 observation age, never proof against a silently stale venue. Rollback preserves
 the ledger and requires the normal separate authority/proof procedure. Secret
 files, snapshots, probe helpers and databases stay ignored and are not pushed.
+
+## Authorized deployment and restart — September 10 ET / September 11 UTC
+
+After the rate-budget discussion, the operator said to restart. This supersedes
+the earlier implementation-only restriction for this launch; it does not
+authorize changing loss/cap/size settings, resetting the ledger or assuming an
+external position. The 02:15:34Z authenticated gate was flat/order-free with
+zero unresolved/unknown/working ledger rows. The old runner and supervisor were
+already stopped.
+
+The native WSL checkout fast-forwarded to pushed `e04df8ec3`, containing reviewed
+implementation `2b7e2e4de`. All **170** source/test/script/web/config normalized
+hashes matched review. The native complete suite passed **1,257 tests in 91.475
+seconds**; the marker was updated only after verification. No code was changed
+in this restart task.
+
+A second fresh gate at **02:18:33Z** again proved zero venue orders/positions and
+zero unresolved/unknown/working ledger rows. The normal launcher started
+supervisor **2860106** and runner **2860114** with explicit
+`auto 10 32 rest-fallback`; $90 HARD and existing entry caps/filter remained
+unchanged. The existing dashboard service was reused. First discovery at
+02:19:26Z used two event pages and found 66 viable markets in 44.4 seconds.
+Live order/capacity acceptance is recorded after observing the running loop.
+
+At **02:20:03Z** the September 10 ET adjusted account-loss sensor read
+**$93.04225 / $90 (103.38%)** and tightened the loss tier to ten entries.
+At **02:20:12Z** the unchanged daily HARD policy durably latched its hold;
+entries remain disabled regardless of that count tier. The REST startup marker
+and healthy/normal maintenance schedule had already passed. This is a money
+stop, not another missing-private-snapshot pause. No daily state was reset.
+
+At **02:21:00Z** authenticated reads proved zero venue orders/positions and zero
+unresolved/unknown/working ledger rows. The bot remains online in the daily hold.
+It may resume no earlier than September 11 **00:00 ET / 04:00 UTC**, after fresh
+flat, adjusted-equity and all other gates pass. This is account-level adjusted
+trading loss, not a finding that all $93.04225 belongs to bot-managed trades.
+Startup/HARD-pause acceptance passed; no new quote or full-width request-load
+acceptance can be claimed while the existing loss rule prohibits entry.

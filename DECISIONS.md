@@ -1,7 +1,7 @@
 # Active operator decisions
 This file records human choices, not a backlog or AI recommendations. Code and the running command remain the authority for exact enforced values; if they disagree with this page, stop and show the operator the discrepancy.
 ## Decision rights
-- **2026-09-10 temporary alternative:** preserve the reviewed source as immutable `v1.2.0` and implement opt-in REST account-state fallback while private messages are missing. Preserve accounting accuracy and all current risk/strategy rules. This is implementation authority only; no deploy, restart, capacity reduction, ledger reset or position intervention. Default source remains WebSocket. [Scope](docs/history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
+- **2026-09-10 temporary alternative and restart:** preserve the reviewed source as immutable `v1.2.0`; implement opt-in REST account-state fallback with unchanged accounting and risk/strategy rules. After discussing polling latency/API load, operator authorized deployment and restart in temporary mode, preserving size 10 / 32 and current caps/HARD. Normal source remains default WebSocket; no ledger reset, external-position intervention or rate-limit increase. [Scope](docs/history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
 - **2026-09-08 actual-live protection:** after the confirmed Mutti/Picard/Vivarelli incident, operator authorized fixing the live-event gap and restarting after review. Parent-event live/ended/period/score evidence overrides future schedules, forbids entries/re-entry, and triggers existing cancel-confirm-exact-exit handling. Preserve every current size, capacity, reward, cap and HARD rule. [Release](docs/history/ACTUAL_LIVE_EVENT_GUARD_2026-09-08.md).
 - **2026-09-07 Discord presentation/deployment:** concise actual reports without repeated methodology/side notes; retain pending/estimated/unavailable labels and critical alerts, never invent withdrawal values. After deployment without restart, the operator authorized **Command 1** to stop safely and restart `f7816c324` with unchanged size 10 / 32 and risk rules. The standalone reward report retains its hourly schedule. [Implementation](docs/history/DISCORD_REPORT_CLEANUP_2026-09-07.md).
 
@@ -67,7 +67,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 
 ## Multi-machine operating choice
 
-- `v1.1.0` is the current immutable stable rollback anchor selected before capacity work beyond 24 slots; its executable content matches loaded source `4b6e4e8`, while `v1.0.0` remains the earlier 20-slot checkpoint.
+- `v1.2.0` is the immutable reviewed pre-REST-fallback rollback checkpoint at `a3defc014`; it retains fail-closed behavior during the private-feed incident. `v1.1.0` and `v1.0.0` remain the earlier immutable 24-slot and 20-slot checkpoints.
 - Work may be performed from the desktop or laptop, but GitHub `main` is the
   synchronization point between them; neither workstation is independently
   authoritative.

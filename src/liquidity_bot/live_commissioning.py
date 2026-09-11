@@ -330,6 +330,10 @@ class CommissioningResult:
 class CommissioningRunner:
     """Compose the tested primitives into one deliberately narrow live loop."""
 
+    ACCOUNT_STATE_DESCRIPTION = "REST and fresh private state"
+    SOURCE_REBOUND_DESCRIPTION = "rebound both streams"
+    REQUIRE_EXECUTION_BACKFILL = False
+
     # How long "up but resting nothing" may last before it is worth waking
     # someone. Long enough that a rotation, a top-up rebind or a slate between
     # kickoffs passes quietly; short enough that neither 2026-08-16 outage
@@ -2467,6 +2471,8 @@ class CommissioningRunner:
                 try:
                     self.ledger.apply_execution(execution, received_at=now)
                 except LedgerConflict:
+                    if self.REQUIRE_EXECUTION_BACKFILL:
+                        raise
                     # Already recorded. The dedupe hashes the whole payload, so
                     # adding a field to Execution -- `outcome` did exactly this
                     # -- makes a replay of an existing fill look like a
@@ -2490,6 +2496,8 @@ class CommissioningRunner:
             raise
         except Exception as exc:
             await self._report_runtime_error("execution_backfill", exc)
+            if self.REQUIRE_EXECUTION_BACKFILL:
+                raise
         stamp = f"{tag}:{now.isoformat()}" if tag else now.isoformat()
         self.ledger.apply_order_snapshot(
             f"commissioning-rest-orders:{stamp}", orders,
@@ -8248,8 +8256,8 @@ class CommissioningRunner:
                         flush=True,
                     )
                 await self.notifier.send_async(
-                    "✅ Liquidity Bot rebound both streams; REST and fresh "
-                    "private state passed. "
+                    f"✅ Liquidity Bot {self.SOURCE_REBOUND_DESCRIPTION}; "
+                    f"{self.ACCOUNT_STATE_DESCRIPTION} passed. "
                     + (
                         "Quoting may resume on unaffected markets; "
                         f"{len(ambiguous_markets)} market(s) remain scoped "
@@ -10017,6 +10025,13 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
+    account_state_mode = getattr(args, "account_state_mode", "websocket")
+    if account_state_mode not in {"websocket", "rest-fallback"}:
+        raise CommissioningRefused("invalid account-state mode")
+    runner_type = CommissioningRunner
+    if account_state_mode == "rest-fallback":
+        from .rest_fallback import RestFallbackRunner
+        runner_type = RestFallbackRunner
     secrets = load_runtime_secrets(require_polymarket=True)
     if not (secrets.discord_configured and secrets.discord_errors_configured):
         raise CommissioningRefused(
@@ -10027,7 +10042,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         key_id=secrets.key_id, secret_key=secrets.secret_key,
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     ledger = ExecutionLedger(args.database)
-    runner = CommissioningRunner(
+    runner = runner_type(
         client, config, ledger, DiscordNotifier(secrets),
         limiter=shared_api_limiter(float(config.rest_requests_per_second)))
     loop = asyncio.get_running_loop()
@@ -10067,6 +10082,11 @@ def main() -> int:
     parser.add_argument("--accept-one-contract-risk", action="store_true")
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
+    parser.add_argument(
+        "--account-state-mode", choices=("websocket", "rest-fallback"),
+        default="websocket",
+        help="restart-scoped account source; REST fallback is experimental",
+    )
     parser.add_argument(
         "--quote-size", type=int,
         choices=range(int(MIN_QUOTE_SIZE), int(MAX_QUOTE_SIZE) + 1),

@@ -2,6 +2,21 @@
 
 ## Current stable baseline
 
+`v1.2.0` is the immutable reviewed **pre-REST-fallback** checkpoint requested
+on September 10, 2026. It points to
+`a3defc0148baf0c95e09ae0073e811e8be82af91`; executable content matches the
+installed `3625927fb` release, which passed 1,228 tests in both review and
+native WSL. It preserves size 10 / 32 configuration support, $90 HARD at that
+envelope, clock/loss order caps, live-event protection and recovery/reporting
+repairs. This checkpoint intentionally retains the fail-closed private-feed
+requirement: it is **not currently tradable proof** during the silent-feed
+incident. No runtime data, credentials or venue exposure is included.
+
+The separately opt-in temporary REST source is experimental, not a replacement
+stable tag. See [REST fallback](history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
+
+## Previous stable baseline
+
 `v1.1.0` is the immutable known-good production checkpoint selected on
 2026-08-31 before work on capacity beyond 24 slots. It preserves the loaded
 size-10, 24-slot, six-hour implementation, the class-aware host API admission
@@ -53,7 +68,7 @@ server-local databases, logs, runtime setting files or schema migrations.
 Never use a destructive reset of `main` and never equate a code rollback with
 a flat account. When the operator requests a rollback:
 
-1. Select the intended immutable stable tag (normally `v1.1.0`), preserve all
+1. Select the intended immutable stable tag (normally `v1.2.0`), preserve all
    dirty workstation/runtime files and identify the suspect commits with
    `git diff <stable-tag>..HEAD`.
 2. Verify live process, orders, positions and unresolved ownership. Stop or

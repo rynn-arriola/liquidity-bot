@@ -21,6 +21,11 @@ implemented.
 
 ## Interface actually used by this project
 
+The normal private-stream requirement has one explicitly selected experimental
+local alternative: [REST account source](history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
+It is bot implementation policy, not a venue guarantee of REST freshness or
+equivalence to the private stream. Public books still require market data.
+
 - Product: Polymarket US Retail API.
 - REST hosts: `https://api.polymarket.us` for authenticated account/trading
   resources and `https://gateway.polymarket.us` for public resources.

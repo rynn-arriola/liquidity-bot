@@ -25,7 +25,7 @@ These are implementation requirements, not suggestions.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
 9. Published pools and pending earnings are never treated as cash or guaranteed revenue.
 10. Unknown order, fill, position, book, or incentive state fails closed for new risk.
-11. The private WebSocket is the primary live state feed; REST snapshots reconcile it after startup and reconnect.
+11. The private WebSocket is the default primary live state feed; REST snapshots reconcile it after startup and reconnect. Only the explicitly selected experimental REST account-source mode may replace private snapshots, under invariant 103; an outage never silently switches modes.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
     maker-lab stopped. Size and breadth are restart-scoped operator inputs.
@@ -55,6 +55,7 @@ These are implementation requirements, not suggestions.
 16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its stressed-exit and slippage budgets.
 17. A WebSocket reconnect has no replay guarantee: new risk remains disabled
     until REST reconciliation and complete, fresh private snapshots succeed.
+    Explicit REST account-source mode instead requires invariant 103's proof.
 18. A create with an ambiguous response is never retried. An ambiguous or
     acknowledged cancel may be re-issued only after a later authoritative
     `OPEN` read proves terminal cancellation has not happened; unknown or
@@ -894,3 +895,16 @@ These are implementation requirements, not suggestions.
     replies may retain independently proven owners; transport failure never
     proves cancellation, flatness or free capacity. Shutdown cannot park a
     known-live or lifecycle-unproven position based on a future schedule.
+103. Experimental REST account-source mode is restart-scoped and opt-in; normal
+    WebSocket behavior remains default. It supplies no fabricated private event
+    or heartbeat. Every account proof strictly reads all owned working/ambiguous
+    orders, complete open orders, exact positions and mandatory execution history.
+    History failure/conflict, partial state or cancellation revokes authority;
+    complete proof age includes the serial read duration and cannot exceed 30
+    seconds. Creates/reducers recheck proof after admission; known owned cancels
+    remain available. Every existing ownership, exact reduction, lifecycle,
+    pricing, capital, daily loss, transfer adjustment and shutdown rule remains
+    authoritative. Absence never proves cancellation, no unknown create is
+    retried, and source selection cannot reset the ledger or assume ownership.
+    REST success is not proof of source timeliness or full-width capacity; live
+    activation requires separate operator authority and acceptance evidence.

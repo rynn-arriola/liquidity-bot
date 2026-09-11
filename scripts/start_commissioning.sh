@@ -7,10 +7,15 @@ cd "$(dirname "$0")/.." || exit 1
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-}
 SLOT_CAPACITY=${3:-20}
-if [ "$#" -gt 3 ]; then
-    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE] [SLOT-CAPACITY]"
+ACCOUNT_STATE_MODE=${4:-websocket}
+if [ "$#" -gt 4 ]; then
+    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE] [SLOT-CAPACITY] [websocket|rest-fallback]"
     exit 2
 fi
+case "$ACCOUNT_STATE_MODE" in
+    websocket|rest-fallback) ;;
+    *) echo "REFUSED: invalid account-state mode"; exit 2 ;;
+esac
 
 maker_pids() {
     ps -eo pid=,comm=,args= \
@@ -59,10 +64,10 @@ fi
 
 printf '%s\n' "$QUOTE_SIZE" > data/commissioning_quote_size
 printf '%s\n' "$SLOT_CAPACITY" > data/commissioning_slot_capacity
-setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY" \
+setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY" "$ACCOUNT_STATE_MODE" \
     >> logs/supervisor.log 2>&1 < /dev/null &
 
-echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY"
+echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY account_state=$ACCOUNT_STATE_MODE"
 for _ in $(seq 1 20); do
     sleep 1
     [ -n "$(runner_pids)" ] && break

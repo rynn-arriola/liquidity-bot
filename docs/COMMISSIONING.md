@@ -8,6 +8,13 @@ operator's choices in [DECISIONS.md](../DECISIONS.md).
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
+The default account source is still the private WebSocket. An explicit
+`rest-fallback` fourth launcher argument selects the separately reviewed
+[experimental REST account source](history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
+It retains the same strategy and risk rules but has additional polling latency
+and stricter account-proof requirements. It must not activate automatically on
+a socket error or be treated as full-width live acceptance.
+
 ## Fixed execution envelope
 
 - join every executable active sports market to its liquidity rewards and
@@ -128,7 +135,8 @@ The command refuses before order entry unless all of these are true:
 5. The whole account has no open order, nonzero position, unresolved mutation,
    or unowned state.
 6. The balance schema is complete and marked equity is known.
-7. REST reconciliation and the private account WebSocket are fresh.
+7. REST reconciliation and the private account WebSocket are fresh; explicitly
+   selected REST mode instead requires safety invariant 103's complete proof.
 8. Normal and critical Discord webhooks are configured.
 9. Authenticated earnings for the active liquidity program can be read and
    persisted separately from execution P&L.

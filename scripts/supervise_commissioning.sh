@@ -8,6 +8,11 @@ cd "$(dirname "$0")/.." || exit 1
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-5}
 SLOT_CAPACITY=${3:-20}
+ACCOUNT_STATE_MODE=${4:-websocket}
+case "$ACCOUNT_STATE_MODE" in
+    websocket|rest-fallback) ;;
+    *) echo "[supervisor] refused invalid account-state mode"; exit 2 ;;
+esac
 PY=.venv/bin/python
 if [ ! -x "$PY" ]; then
     echo "[supervisor] refused: $PY is missing"
@@ -48,8 +53,8 @@ else
     MARKET_ARGS=(--market-slug "$TARGET")
 fi
 
-echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY"
-alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote across up to $SLOT_CAPACITY markets."
+echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY account_state=$ACCOUNT_STATE_MODE"
+alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote across up to $SLOT_CAPACITY markets; account source: $ACCOUNT_STATE_MODE."
 
 while true; do
     STARTED=$(date -u +%s)
@@ -66,6 +71,7 @@ while true; do
         --exclusive-api-key \
         --maker-lab-stopped \
         --quote-size "$QUOTE_SIZE" \
+        --account-state-mode "$ACCOUNT_STATE_MODE" \
         --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1
     CODE=$?
     RAN=$(( $(date -u +%s) - STARTED ))

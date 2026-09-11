@@ -261,3 +261,33 @@ Official changelog remained v0.0.88 announcing September 11 04:00–07:00 ET
 Retail/Institutional maintenance; the stop fell within that announced window.
 The live status page could not be retrieved in this check, so actual completion
 and causal attribution to maintenance are not independently confirmed.
+
+## September 11 authorized temporary REST activation
+
+The operator explicitly requested running the saved temporary fallback. Old
+attention supervisor 726 was gracefully stopped; no trader was alive. Parity
+passed on the available workstation/GitHub/WSL, with the offline peer pending.
+All 170 normalized source/test/script/web/config hashes matched, preserving
+both 1,257-test suite results. No executable or policy change was needed.
+
+Authenticated gate at **11:09:25Z** proved zero venue orders/positions and zero
+ledger working/unknown/unresolved state. The launcher started **supervisor
+6274 / runner 6282** with `auto 10 32 rest-fallback`, reusing the dashboard.
+First selection at 11:10:39Z found 51 viable markets; a bound candidate that
+was no longer pregame was correctly dropped at 11:10:51Z.
+
+At **11:11:15Z** the overnight pending-entry cap was 30 with positions/reducers
+excluded; the runner emitted explicit `mode=rest-fallback private_socket=disabled`.
+At **11:11:23Z**, the runner's own official Statuspage check proved completed
+maintenance and entered `RESUME_HOLD` until **12:00:07.486Z / 08:00:07 ET**,
+plus all existing health gates. This live source supersedes the preceding
+diagnostic browser's inability to retrieve status; it does not attribute the
+earlier HTTP failures beyond their timing.
+
+At **11:11:36Z**, September 10 HARD released through normal
+`fresh_next_day_flat_account` proof. No manual baseline/latch reset occurred.
+At **11:11:48Z** authenticated account/ledger again proved flat/order-free/clear.
+Startup and maintenance-hold acceptance passed, not normal quoting/full-width
+capacity acceptance. The startup server-error classification gap remains
+unfixed and shared by both modes. Source marker remains `e04df8ec3`; $90 HARD,
+size 10 / 32, entry quality, event guards, exits and API limits are unchanged.

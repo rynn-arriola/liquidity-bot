@@ -3,11 +3,19 @@
 ## Operational state
 
 The operator force-stopped the runner and supervisor after a position did not
-close automatically, then manually handled venue orders and inventory. A local
-process check proved no trading runner or supervisor remains. Manual venue
-actions were not followed by an authenticated account read, so current orders,
-positions and ownership state are unknown. The operator explicitly instructed
-**“Dont restart.”** This repair is not deployed or loaded.
+close automatically, then manually handled venue orders and inventory. Fresh
+Windows and WSL process checks proved no trading runner or supervisor remains.
+The operator explicitly instructed **“Dont restart.”** This repair is not
+deployed or loaded.
+
+At 16:33:23.841323Z a read-only authenticated REST snapshot proved zero open
+orders and did not contain the incident market. It did contain two different
+nonzero positions: `caoc-07e40c552867e96f` at +186.2600 with $49.9990 cost and
+`caoc-ce0c850b50d2aad5` at +171.7900 with $49.9970 cost. Both report `expired`
+false and no title; direct market lookup returns 404. The bot ledger contains
+no order, fill or position row for either slug. Their origin and meaning are
+not proven, so do not classify, mutate or treat them as flat. A later restart
+requires operator identification and a new authenticated clean gate.
 
 ## Incident evidence
 

@@ -186,3 +186,42 @@ At **12:49:53Z / 08:49 ET**, authenticated venue and ledger matched **30
 working orders across 30 markets, zero open positions, zero unknown orders and
 zero unresolved intents**. The requested pending-entry ceiling is reached;
 this is not a restriction on position reducers or a guarantee of future reward.
+
+## Read-only follow-up at 13:12Z / 09:12 ET
+
+The operator asked whether issues remained. No source/configuration changes,
+venue mutations, stop or restart were authorized or performed in this check.
+The same supervisor 36080 / runner 36088 and marker 64dcefdc1 remain active.
+
+- Eight completed API windows through 13:10:59Z total **3,697 attempts, zero
+  failures and zero rate limits**. Since the new runner's trading start there
+  were zero logged runtime-error events and zero
+  `account_new_risk_paused` cancellations. Normal price/economics/quality cancels
+  occurred; those are not a recurrence of the repaired stale-equity bug.
+- The **09:00 ET boundary held the temporary ceiling at 30**: at 13:00:08Z,
+  daytime `time_cap=40`, loss cap 64, effective cap 30 were logged.
+- **A significant scheduling/reaction delay remains.** Dirty-input-to-decision
+  p50/p95 was 349.684/365.246s at 12:59:14Z, 429.144/462.904s at 13:06:42Z and
+  253.998/272.544s at 13:10:59Z. These are scheduler measurements, not HTTP
+  response times or exact fill-detection latency. Passing source tests and a
+  clean API window did not establish timely sustained reaction.
+- The first natural fill was **8.41 contracts BUY at 0.42**, venue execution
+  time **13:08:33.714740Z**, on
+  `aec-setkameua-lazrus-hairus-2026-09-11`. The building-order cancel was logged
+  at 13:10:21.611566Z (about **108 seconds** later), then its passive reducing
+  offer was logged at **13:11:17.506566Z** (about **164 seconds / 2m44s** after
+  the fill). This measures venue execution time to logged action, not proof of
+  a realized loss caused by the delay. The ledger `received_at` field is the
+  reconciliation's start timestamp and precedes this fill; do not use it as
+  actual receipt/detection time.
+- Authenticated snapshot at **13:12:59.326667Z** found **30 venue orders**,
+  including an exact **8.41 SELL exit at 0.43** covering the sole **+8.41**
+  position. The other **29 orders are flat entries**. The local read-only ledger
+  check found zero unresolved intents and zero unknown orders.
+
+Recommendation: prioritize a narrow scheduling repair that services newly
+observed positions and safety deadlines ahead of the remaining flat-market
+sweep, and profile/reduce repeated full-account work without weakening exact
+proof or freshness. Do not change entry strategy, caps, risk, API limits or
+exit prices to hide latency. This follow-up is diagnosis, not authorization to
+implement/deploy/restart. Sustained timing acceptance is explicitly not passed.

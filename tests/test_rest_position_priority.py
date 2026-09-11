@@ -236,6 +236,95 @@ class RestPositionPriorityTests(IsolatedAsyncioTestCase):
         visited, _ = await self.sweep(runner, slugs, decide=decide)
         self.assertEqual([s for s, _ in visited], [slugs[0], held, slugs[1]])
 
+    async def test_terminal_hard_exit_state_reenters_before_flat_owner(self):
+        runner, _, slugs = await self.build(count=2)
+        held = slugs[-1]
+        self.position(runner, held)
+        runner.reconciler._hard_exit_attempts[held] = 1
+        runner.reconciler._hard_exit_started_at[held] = self.now
+        runner.reconciler._hard_exit_sent[held] = self.now
+        held_visits = 0
+
+        async def decide(slug, now):
+            nonlocal held_visits
+            if slug == held:
+                held_visits += 1
+                if held_visits == 1:
+                    # Positive terminal proof changes no position or working
+                    # order row when an IOC opened and expired between polls.
+                    runner.reconciler.confirm_hard_exit_terminal(held)
+            return None, 0.0
+
+        visited, _ = await self.sweep(runner, slugs, decide=decide)
+
+        self.assertEqual([s for s, _ in visited], [held, held, slugs[0]])
+
+    async def test_hard_exit_priority_budget_covers_three_send_proof_pairs(self):
+        runner, _, slugs = await self.build(count=2)
+        held = slugs[-1]
+        self.position(runner, held)
+        runner.reconciler._hard_exit_attempts[held] = 1
+        runner.reconciler._hard_exit_started_at[held] = self.now
+        runner.reconciler._hard_exit_sent[held] = self.now
+        held_visits = 0
+
+        async def decide(slug, now):
+            nonlocal held_visits
+            if slug == held:
+                held_visits += 1
+                if held_visits < 6:
+                    if held_visits % 2:
+                        runner.reconciler.confirm_hard_exit_terminal(held)
+                    else:
+                        runner.reconciler._hard_exit_attempts[held] += 1
+                        runner.reconciler._hard_exit_sent[held] = self.now
+            return None, 0.0
+
+        visited, _ = await self.sweep(runner, slugs, decide=decide)
+
+        self.assertEqual([s for s, _ in visited].count(held), 6)
+        self.assertIn(slugs[0], [s for s, _ in visited])
+
+    async def test_hard_exit_confirmation_uses_scoped_non_authorizing_proof(self):
+        runner, _, _ = await self.build(count=2)
+        slug = runner.market_slug
+        completed_before = runner._rest_poll_completed_at
+
+        with patch.object(
+                fixtures.CommissioningRunner, "_rest_reconcile",
+                new_callable=AsyncMock) as reconcile:
+            await runner._reconcile_hard_exit_state(slug)
+
+        reconcile.assert_awaited_once()
+        self.assertEqual(
+            reconcile.await_args.kwargs["strict_order_markets"],
+            frozenset({slug}),
+        )
+        self.assertFalse(reconcile.await_args.kwargs["advance_gate"])
+        self.assertEqual(runner._rest_poll_completed_at, completed_before)
+
+    async def test_pending_hard_exit_routes_through_focused_proof(self):
+        runner, _, _ = await self.build(count=2)
+        slug = runner.market_slug
+        self.position(runner, slug, "10")
+        runner.reconciler._hard_exit_sent[slug] = self.now
+
+        with patch.object(
+                runner, "_reconcile_hard_exit_state",
+                new_callable=AsyncMock) as proof:
+            outcome = await runner._reconcile_pending_hard_exit(slug)
+
+        proof.assert_awaited_once_with(slug)
+        self.assertEqual(outcome, "retry")
+        self.assertNotIn(slug, runner.reconciler._hard_exit_sent)
+
+    async def test_rest_terminal_hard_exit_retry_has_no_extra_backoff(self):
+        runner, _, _ = await self.build(count=2)
+        slug = runner.market_slug
+        runner.reconciler._hard_exit_attempts[slug] = 1
+
+        self.assertEqual(runner._hard_exit_retry_delay(slug), 0.0)
+
     async def test_real_position_path_cancels_confirms_then_places_exact_exit_before_entries(self):
         runner, client, slugs = await self.build()
         held = "market-one"

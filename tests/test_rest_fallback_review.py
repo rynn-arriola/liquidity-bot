@@ -137,6 +137,54 @@ class RestFallbackReviewTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(runner.ledger.working_orders()), 40)
         self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
 
+    async def test_hard_exit_proof_skips_40_unrelated_order_reads_and_not_gate(self):
+        runner, client, _ = self.build()
+        await runner.preflight()
+        held = runner.market_slug
+        client.portfolio.rows[held] = {
+            "netPositionDecimal": "10",
+            "cost": {"value": "6.90", "currency": "USD"},
+        }
+        for i in range(40):
+            slug = f"unrelated-{i // 2}"
+            side = "bid" if i % 2 == 0 else "offer"
+            suffix = f"unrelated-{i}"
+            self.fixture.seed_working_order(
+                runner, slug=slug, side=side, suffix=suffix)
+            client.orders.rows[f"exchange-{suffix}"] = raw_order(
+                id=f"exchange-{suffix}", marketSlug=slug,
+                side="BUY" if side == "bid" else "SELL",
+                price={"value": "0.49", "currency": "USD"},
+                quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+                createTime=self.now.isoformat())
+        gate_before = runner.gate.last_reconcile_at
+        poll_before = runner._rest_poll_completed_at
+        self.now += timedelta(seconds=1)
+
+        with patch.object(
+                client.orders, "retrieve",
+                wraps=client.orders.retrieve) as retrieve:
+            await runner._reconcile_hard_exit_state(held)
+
+        self.assertEqual(retrieve.await_count, 0)
+        self.assertEqual(runner.ledger.position(held), 10)
+        self.assertEqual(runner.gate.last_reconcile_at, gate_before)
+        self.assertEqual(runner._rest_poll_completed_at, poll_before)
+
+    async def test_failed_hard_exit_proof_revokes_entry_authority(self):
+        runner, _, _ = self.build()
+        await runner.preflight()
+        self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
+
+        with patch.object(
+                CommissioningRunner, "_rest_reconcile",
+                new_callable=AsyncMock,
+                side_effect=AdapterError("scoped proof failed", status_code=503)):
+            with self.assertRaisesRegex(AdapterError, "scoped proof failed"):
+                await runner._reconcile_hard_exit_state(runner.market_slug)
+
+        self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
+
     async def test_cancelled_read_batch_leaves_no_workers_running(self):
         runner, _, _ = self.build()
         active = 0

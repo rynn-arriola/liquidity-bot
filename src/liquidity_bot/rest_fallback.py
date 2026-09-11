@@ -77,10 +77,12 @@ class RestProofTradingGateway(AsyncTradingGateway):
 class RestFallbackRunner(CommissioningRunner):
     """Shared strategy/lifecycle, with a strict REST-only account source.
 
-    Every proof reads all owned working/ambiguous orders individually, then
-    complete open orders, exact positions and execution history. Even scoped
-    recovery calls cannot skip an order in this mode. No failed poll retains
-    entry authority. Proof age includes the entire serial read duration.
+    Account-wide proofs read all owned working/ambiguous orders individually,
+    then complete open orders, exact positions and execution history. A hard
+    exit may use an explicitly market-scoped order proof; it cannot grant new
+    entry authority, and a failed scoped proof revokes existing authority. No
+    failed poll retains entry authority. Proof age includes the entire serial
+    read duration.
     """
 
     ACCOUNT_STATE_DESCRIPTION = "complete REST account state (temporary mode)"
@@ -181,6 +183,58 @@ class RestFallbackRunner(CommissioningRunner):
                 or not 0 <= (now - completed).total_seconds() < self.REST_POLL_SECONDS):
             await self._rest_reconcile(now, tag="rest-source-decision")
 
+    async def _reconcile_hard_exit_state(self, slug):
+        """Prove one IOC terminal without turning scoped proof into entry proof.
+
+        A whole-account REST pass individually retrieves every owned order.
+        With 30 entry orders that exceeded the hard-exit's complete retry
+        window in production. Confirmation needs this owner's order states
+        plus complete order, position and history snapshots, not 29 unrelated
+        individual reads. The scoped result deliberately cannot renew global
+        REST entry authority or the normal poll clock.
+        """
+
+        observed_at = self._now()
+        try:
+            await CommissioningRunner._rest_reconcile(
+                self,
+                observed_at,
+                tag=f"hard-exit:{slug}",
+                strict_order_markets=frozenset({str(slug)}),
+                advance_gate=False,
+            )
+        except BaseException:
+            # An incomplete safety proof is account uncertainty. Revoke entry
+            # authority immediately; only the next complete proof may restore
+            # it. Successful scoped proof preserves, but never renews, the
+            # already-established short-lived account gate so the confirmed
+            # risk-reducing retry can proceed without another 30-order scan.
+            self.gate.on_reconciliation_conflict()
+            raise
+        self._rest_history_seen = (
+            (self._rest_history_seen or frozenset())
+            | self._rest_history_pending)
+
+    def _hard_exit_retry_delay(self, slug):
+        # The focused proof above is the delay. Re-enter immediately while its
+        # terminal position facts and displayed book are still fresh.
+        return 0.0
+
+    def _position_priority_visit_limit(self, slug):
+        attempts, sent_at, started_at = (
+            self.reconciler.hard_exit_schedule_token(slug))
+        if attempts or sent_at is not None or started_at is not None:
+            # Three submissions need at most one send and one terminal-proof
+            # visit each, plus the existing cancel/reducer transitions. This
+            # remains finite and does not change the mutation attempt ceiling.
+            return max(4, 2 * self.reconciler.policy.max_hard_exit_attempts + 2)
+        return super()._position_priority_visit_limit(slug)
+
+    def _position_priority_replan_immediately(self, slug, before, after):
+        # The final token element is reconciler-only hard-exit state. Other
+        # position/order changes retain the established bounded scheduler path.
+        return bool(before and after and before[-1] != after[-1])
+
     def _position_priority_tokens(self):
         # Ignore snapshot timestamps: an unchanged proof must not repeatedly
         # interrupt reward-ranked entries. Exact quantity/working-order changes
@@ -210,7 +264,8 @@ class RestFallbackRunner(CommissioningRunner):
             priorities[slug] = (
                 self.ledger.position(slug), tuple(sorted(orders.get(slug, ()))),
                 tuple(sorted(unresolved.get(slug, ()))),
-                tuple(sorted(absent.get(slug, ()))))
+                tuple(sorted(absent.get(slug, ()))),
+                self.reconciler.hard_exit_schedule_token(slug))
         return priorities
 
     def _accept_book(self, book):

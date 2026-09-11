@@ -2305,6 +2305,7 @@ class CommissioningRunner:
     async def _rest_reconcile(
         self, now: datetime, *, tag: str = "",
         strict_order_markets: frozenset[str] | None = None,
+        advance_gate: bool = True,
     ) -> None:
         """Re-read the whole account from REST and apply it to the ledger.
 
@@ -2322,6 +2323,11 @@ class CommissioningRunner:
         if ambiguity survives. An empty set is the private-stream form:
         reconnect visibility account-wide, but keep every ambiguous owner
         dormant. An unattributable order is always read strictly.
+
+        ``advance_gate=False`` is for a risk-reducing, market-scoped proof. It
+        may update positive account facts, but cannot certify that every owned
+        order was re-read and therefore cannot renew account-wide entry
+        authority.
         """
 
         unresolved_owners = self._unresolved_intent_owners()
@@ -2551,7 +2557,8 @@ class CommissioningRunner:
             )
         # Freshness begins when the multi-call reconciliation has completed,
         # not when its first request entered the shared REST limiter.
-        self.gate.on_rest_reconciled(self._now())
+        if advance_gate:
+            self.gate.on_rest_reconciled(self._now())
 
     def _unresolved_cancel_owners(self) -> dict[str, str]:
         """Map unresolved CANCEL intents to their positively-known owner."""
@@ -5790,8 +5797,7 @@ class CommissioningRunner:
                         f"hard_exit_confirmation:{slug}", None)
                     if outcome == "flat":
                         return None, 0.0
-                    attempts = self.reconciler.hard_exit_attempts(slug)
-                    return None, float(min(2 ** max(attempts - 1, 0), 5))
+                    return None, self._hard_exit_retry_delay(slug)
                 except Exception as exc:
                     await self._report_runtime_error(
                         f"hard_exit_confirmation:{slug}", exc)
@@ -6011,6 +6017,24 @@ class CommissioningRunner:
 
         return {}
 
+    def _position_priority_visit_limit(self, slug: str) -> int:
+        """Bound scheduling-only interruptions for one owner per sweep."""
+
+        return 4
+
+    def _position_priority_replan_immediately(
+        self, slug: str, before: tuple[Any, ...], after: tuple[Any, ...],
+    ) -> bool:
+        """Return whether one scheduling-token change needs same-owner service."""
+
+        return False
+
+    def _hard_exit_retry_delay(self, slug: str) -> float:
+        """Back off a confirmed terminal IOC before its bounded retry."""
+
+        attempts = self.reconciler.hard_exit_attempts(slug)
+        return float(min(2 ** max(attempts - 1, 0), 5))
+
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
     ) -> str | None:
@@ -6093,7 +6117,8 @@ class CommissioningRunner:
             else:
                 urgent = next((owner for owner, token in priorities.items()
                                if priority_seen.get(owner) != token
-                               and priority_visits.get(owner, 0) < 4), None)
+                               and priority_visits.get(owner, 0)
+                               < self._position_priority_visit_limit(owner)), None)
                 if urgent is not None:
                     priority_seen[urgent] = priorities[urgent]
                     priority_visits[urgent] = priority_visits.get(urgent, 0) + 1
@@ -6133,6 +6158,25 @@ class CommissioningRunner:
                     self._market_dirty_generation.get(slug, 0) + 1)
                 self._dirty_market_since[slug] = action_at
                 self._market_last_input_at[slug] = action_at
+            # A REST IOC may be submitted and become terminal between account
+            # snapshots. Its position and working-order token can therefore
+            # look unchanged unless the reconciler's bounded exit state is
+            # included by the account-source subclass. Re-read that token
+            # after the decision and immediately re-enter this same guarded
+            # path when it changed. Unknown intents are still rejected at the
+            # top of the loop, and the per-owner limit prevents starvation.
+            priority_after = self._position_priority_tokens()
+            if (slug in priority_seen and slug in priority_after
+                    and priority_seen[slug] != priority_after[slug]
+                    and self._position_priority_replan_immediately(
+                        slug, priority_seen[slug], priority_after[slug])
+                    and priority_visits.get(slug, 0)
+                    < self._position_priority_visit_limit(slug)):
+                priority_seen[slug] = priority_after[slug]
+                priority_visits[slug] = priority_visits.get(slug, 0) + 1
+                priority_dispatches.add(slug)
+                pending_slugs = [slug, *(
+                    owner for owner in pending_slugs if owner != slug)]
             # A normal full sweep can reach a market whose REST terminal proof
             # queued priority earlier in this same loop. Its replan has now
             # happened, so do not service it again next iteration.
@@ -8571,7 +8615,7 @@ class CommissioningRunner:
         """Confirm a submitted IOC without converting latency into shutdown."""
 
         slug = slug or self.market_slug
-        await self._rest_reconcile(self._now())
+        await self._reconcile_hard_exit_state(slug)
         if (self.ledger.market_has_unresolved_intent(slug)
                 or self.ledger.working_orders(slug)):
             return "pending"
@@ -8582,6 +8626,11 @@ class CommissioningRunner:
         # retry boundary, not permission to duplicate an ambiguous mutation.
         self.reconciler.confirm_hard_exit_terminal(slug)
         return "retry"
+
+    async def _reconcile_hard_exit_state(self, slug: str) -> None:
+        """Refresh the evidence required to classify one submitted IOC."""
+
+        await self._rest_reconcile(self._now())
 
     async def _recover_strategy_state(self, reason: str, slug: str) -> None:
         """Quarantine an unexpected strategy state without ending the process.

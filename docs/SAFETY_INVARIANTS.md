@@ -897,8 +897,14 @@ These are implementation requirements, not suggestions.
     known-live or lifecycle-unproven position based on a future schedule.
 103. Experimental REST account-source mode is restart-scoped and opt-in; normal
     WebSocket behavior remains default. It supplies no fabricated private event
-    or heartbeat. Every account proof strictly reads all owned working/ambiguous
-    orders, complete open orders, exact positions and mandatory execution history.
+    or heartbeat. Every account-wide proof strictly reads all owned
+    working/ambiguous orders, complete open orders, exact positions and
+    mandatory execution history. A risk-reducing hard-exit confirmation may
+    limit individual order GETs to the exact position owner, but must still
+    consume complete open-order, position and mandatory-history snapshots. It
+    cannot renew the account-wide entry gate or the ordinary poll clock; a
+    failed scoped proof revokes existing entry authority, and the next complete
+    proof must restore it.
     History failure/conflict, partial state or cancellation revokes authority;
     complete proof age includes the entire read duration and cannot exceed 30
     seconds. Creates/reducers recheck proof after admission; known owned cancels
@@ -925,5 +931,9 @@ These are implementation requirements, not suggestions.
     interruptions. Extra visits are bounded per owner/sweep; unknown intents,
     isolation, backoff, stop and complete proof/admission checks remain binding.
     A priority owner that flattens during proof cannot gain an extra entry pass.
+    In temporary REST mode, bounded hard-exit send/terminal state is also a
+    scheduling token so an IOC that opens and expires between polls receives
+    its next exact retry before unrelated flat owners. Same-owner service is
+    finite and cannot exceed the existing hard-exit attempt/deadline authority.
     Non-selected exposure remains exit-only; normal WebSocket scheduling and
     every pricing, sizing, entry-cap, risk and lifecycle rule are unchanged.

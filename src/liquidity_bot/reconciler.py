@@ -352,6 +352,25 @@ class DesiredStateReconciler:
     def hard_exit_attempts(self, market_slug: str) -> int:
         return self._hard_exit_attempts.get(str(market_slug), 0)
 
+    def hard_exit_schedule_token(
+        self, market_slug: str,
+    ) -> tuple[int, datetime | None, datetime | None]:
+        """Return non-authoritative state used only to schedule exit service.
+
+        A submitted IOC can open and expire between two REST account polls.
+        Position quantity and working-order rows then look unchanged even
+        though terminal proof has authorized the next bounded attempt. This
+        token lets the REST scheduler notice that transition; it grants no
+        mutation authority and deliberately exposes no order identity.
+        """
+
+        slug = str(market_slug)
+        return (
+            self._hard_exit_attempts.get(slug, 0),
+            self._hard_exit_sent.get(slug),
+            self._hard_exit_started_at.get(slug),
+        )
+
     def hard_exit_confirmation_expired(
         self, market_slug: str, *, now: datetime,
     ) -> bool:

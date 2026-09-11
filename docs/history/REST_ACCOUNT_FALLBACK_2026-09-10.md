@@ -103,6 +103,13 @@ a destructive reset or replacement of the execution ledger.
   cases. Documentation audit and whitespace checks passed. No deployment or live
   trading acceptance is claimed; native installed-source testing awaits an
   authorized deployment. Production remains on `3625927fb`.
+- Implementation `2b7e2e4de` and immutable tag `v1.2.0` were pushed atomically.
+  Final parity confirmed clean Windows/GitHub equality and a verified private
+  ledger recovery copy. WSL intentionally remains on its prior installed source:
+  parity reports pending reviewed deployment, not permission to deploy. The PC
+  peer was offline/pending and was preserved. At 00:57:05Z the supervisor/runner
+  were still stopped; authenticated reads showed zero orders / one position and
+  the production ledger had zero unresolved, unknown or working orders.
 
 ## Dedicated final edge-case audit
 

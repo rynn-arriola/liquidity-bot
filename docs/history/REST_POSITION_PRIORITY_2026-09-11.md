@@ -157,3 +157,32 @@ preserved. No further code changes were needed during deployment/restart.
 Release is loaded and ordinary entry is accepted. Sustained natural
 fill/cancel/exit reaction timing and full-cap API load remain to be measured;
 the flat restart cannot prove the new position-priority path has fired live.
+
+## Natural position-priority acceptance
+
+Read-only follow-up at **15:48:19.519897Z / 11:48 ET** proved supervisor
+50387 / runner 50396 remained active on marker `0f231d216`. Authenticated venue
+showed 31 orders and three exact +10 positions. Each position had one exact
+10-contract SELL reducer working: M80/6666 at 0.82, Patdek/Kevedw at 0.39 and
+Cilic/Modic at 0.89. Contemporaneous ledger ownership was clear.
+
+Venue fill timestamps to first reducing-action logs:
+
+- M80/6666: 15:39:47.475501Z to 15:39:57.849009Z = **10.374s**.
+- Patdek/Kevedw: 15:41:54.745556Z to 15:42:36.231368Z = **41.486s**;
+  the existing opposite entry was canceled/replaced first.
+- Cilic/Modic: 15:43:13.988633Z to 15:43:27.519292Z = **13.531s**.
+
+Median is 13.531s and range 10.374–41.486s, versus the earlier single pre-fix
+163.792s observation. This is direct natural evidence that detected positions
+now bypass remaining flat entries. It is only three cases and does not measure
+the unpublished fill-to-REST-detection interval: ledger `received_at` can
+precede venue `event_at` because it records poll start.
+
+The latest complete window at 15:46:33Z had 737 attempts (722 reads, 15
+mutations), zero failures/429s, 2.342 requests/second. One earlier window had a
+single 15-second read failure and the public market socket disconnected once;
+both recovered without process restart. Current action latency p95 was 4.559s,
+but flat-owner decision p95 remained 325.267s. Therefore the position fix is
+naturally accepted and current exposure is covered, while temporary REST still
+does not equal private-WebSocket detection speed or normal flat-market latency.

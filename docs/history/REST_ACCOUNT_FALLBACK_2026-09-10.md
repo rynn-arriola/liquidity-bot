@@ -352,3 +352,23 @@ verified without printing either value. No plaintext credential file was
 created and no live trading credential/configuration was changed. The saved
 credential is diagnostic-only and not selected automatically. Chat exposure
 remains a security risk despite protected local storage. No key was revoked.
+
+## First REST quoting observation after maintenance
+
+Read-only status check on September 11 found unchanged supervisor 6274 /
+runner 6282 alive. Maintenance entered NORMAL at **12:00:19Z**; the separate
+health requirement cleared at **12:02:05Z**. New entry actions are present
+from the 12:06–12:08Z startup rebuild, with per-side entry-quality refusals
+still visible. At **12:08:40Z / 08:08 ET**, complete authenticated reads and
+read-only ledger checks proved **25 working orders across 25 markets, zero
+positions, zero unresolved intents and zero unknown orders**.
+
+The **12:08:01Z** API window covered 142.7 seconds: 344 attempts, 318 reads,
+26 creates, 2.411 requests/second, zero failures/429s and max waiter count one.
+This establishes initial REST-mode order placement/working-order proof, not
+full-width sustained capacity or successful natural fill/exit handling.
+Scheduler decision latency p50/p95 was **111.727/318.619 seconds**, with action
+latency p50/p95 **0.319/0.578 seconds**. The large decision delays remain a
+performance concern; a clean HTTP budget alone cannot establish safety-time
+or loaded-capacity acceptance. No performance fix, business-policy change,
+credential change, induced fill or restart was made for this status check.

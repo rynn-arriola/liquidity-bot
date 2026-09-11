@@ -319,3 +319,27 @@ key/account/subscription trace is required for that distinction. No new key or
 second account was accessed. Official status summary at 11:24:50Z reported all
 systems operational with empty active-incident/maintenance lists; that public
 summary does not override the measured private silence. No code/deploy/restart.
+
+## Authorized isolated second-key test
+
+After creating a new key, the operator explicitly authorized a read-only test
+despite being warned that the pasted secret should be treated as exposed.
+The new credentials were supplied only through the diagnostic process's
+environment into WSL, not installed in any credential/configuration file.
+Values are intentionally omitted here. The child shell removed its overrides
+after the probe; the running fallback and original runtime key were unchanged.
+
+At **September 11 11:38:30–11:39:15Z / 07:38–07:39 ET**, the raw private
+socket probe confirmed both key and secret environment overrides present.
+Handshake, initial Pong and final Pong succeeded. Balance and order
+subscriptions produced **zero application frames over 45 seconds**, with zero
+decode failures. This reproduces the original-key symptom and makes a defect
+limited to that old key less likely. It does not prove application-level
+subscription acceptance or distinguish same-account permissions/routing from
+a broader private-service problem. No second account was accessed.
+
+Supervisor 6274 / runner 6282 remained alive with original credentials and
+unchanged size 10 / 32 REST mode. Its latest inspected 11:38:22Z budget window
+had 185 reads, zero mutations/failures/429s. No code, config, ledger, restart or
+venue order mutation accompanied the test. The operator should revoke only the
+chat-exposed test key; no revocation was performed by this task.

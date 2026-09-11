@@ -233,3 +233,31 @@ unresolved counts were all zero. Reboot did not repair missing private data.
 The preceding independent read-only socket check at **02:51:29–02:52:14Z**
 had also completed its 45-second balance/order observation with successful
 handshake, initial/final awaited Pongs and zero application frames.
+
+## September 11 morning diagnostic: private silence plus stopped trader
+
+At **11:04Z / 07:04 ET**, a read-only check found supervisor 726 alive but
+runner 734 absent. Logs end near **08:48:20Z / 04:48 ET** with repeated
+`GET /v1/incentives (symbol-filtered)` HTTP 500/code 2 failures during bound
+contract refresh, followed by `commissioning refused: no bound market has a
+usable book`. The supervisor repeatedly reports `ATTENTION_REQUIRED` with
+`reason=startup refused`; it deliberately does not relaunch exit code 2.
+
+Source inspection confirms `_refresh_bound_books` catches ordinary exceptions
+as per-market drops, then raises `CommissioningRefused` when none survives.
+Thus a transient server failure can lose its recoverable classification and
+stop the trader. This is a diagnosed local recovery gap, not an implemented fix
+or proof that every market's book was actually empty. Repair/restart requires
+authorization and full normal review; no source or trading changes were made.
+
+The independent read-only private probe at **11:04:16–11:05:01Z** subscribed
+to balance and orders, completed 45 seconds, received both awaited Pongs and
+zero application frames, with zero decode failures. Private recovery is still
+unproven independently of the stopped runner. Authenticated account proof at
+**11:04:51Z** showed zero orders/positions and zero ledger working/unknown/
+unresolved rows. No orders were sent or canceled by this diagnostic.
+
+Official changelog remained v0.0.88 announcing September 11 04:00–07:00 ET
+Retail/Institutional maintenance; the stop fell within that announced window.
+The live status page could not be retrieved in this check, so actual completion
+and causal attribution to maintenance are not independently confirmed.

@@ -210,3 +210,26 @@ private feed. At **02:28:28Z** authenticated reads again proved zero orders and
 positions, with zero unresolved/unknown/working ledger rows. No quoting
 acceptance is claimed and the prior daily HARD latch was not cleared. Both
 the private readiness gate and the normal daily loss policy remain required.
+
+## Laptop reboot and authorized rerun
+
+After the operator rebooted the laptop, the September 11 check proved both
+supervisor and runner absent. Current-workstation/GitHub/WSL parity passed;
+the offline peer remains pending. All 170 normalized deployed file hashes
+matched the reviewed source, preserving the existing full-suite evidence.
+At **02:56:00Z** authenticated reads proved zero orders/positions and the
+read-only ledger gate proved zero working/unknown/unresolved rows.
+
+The explicitly authorized launch restored **supervisor 726 / runner 734**
+with `auto 10 32 websocket`; independent dashboard PID 759 also started.
+No executable, configuration policy, ledger baseline or daily HARD latch was
+changed. REST remains disabled. The first new selection at **02:56:59Z**
+found 69 viable markets; selection is not private-feed or quoting acceptance.
+
+At **02:57:50Z** the new runner reported `startup_unavailable` with
+`order_eof=0/4 account_balance=0/4`. It remains alive in the safe retry loop.
+At **02:58:05Z** authenticated orders/positions and ledger working/unknown/
+unresolved counts were all zero. Reboot did not repair missing private data.
+The preceding independent read-only socket check at **02:51:29–02:52:14Z**
+had also completed its 45-second balance/order observation with successful
+handshake, initial/final awaited Pongs and zero application frames.

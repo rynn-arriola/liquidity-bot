@@ -291,3 +291,31 @@ Startup and maintenance-hold acceptance passed, not normal quoting/full-width
 capacity acceptance. The startup server-error classification gap remains
 unfixed and shared by both modes. Source marker remains `e04df8ec3`; $90 HARD,
 size 10 / 32, entry quality, event guards, exits and API limits are unchanged.
+
+## Same-account scope comparison at September 11 11:29Z
+
+The operator asked whether the private failure is account-specific. Bounded
+read-only probes used the same runtime credentials, laptop and raw WebSocket
+library, bypassing bot subscription/decoding behavior for the wire comparison.
+No additional account/key, credential rotation, egress change or mutation was
+used; REST fallback supervisor 6274 / runner 6282 remained unchanged.
+
+- **Private:** 11:28:50–11:29:35Z, complete 45-second observation after balance
+  and all-order subscriptions: handshake and initial/final Pongs succeeded,
+  zero application frames and zero decode failures.
+- **Markets:** 11:29:00–11:29:11Z, one current bound-market full-book subscription:
+  handshake/Pongs succeeded, three real `marketData` frames, zero error frames;
+  probe closed at its three-message cap. Envelope keys were `marketData`,
+  `requestId`, `subscriptionType`, matching the Retail docs.
+- **REST:** 11:29:28Z authenticated orders/positions returned zero, and read-only
+  ledger working/unknown/unresolved counts were zero. The runner's preceding
+  187-request window had zero failures/429s and zero mutations.
+
+This evidence disfavors a general invalid credential, total WebSocket block
+or general laptop/network outage. It does not distinguish account/key-specific
+private permissions/routing from a wider private-service defect or prove server
+subscription acceptance. Another authorized account or Polymarket's server-side
+key/account/subscription trace is required for that distinction. No new key or
+second account was accessed. Official status summary at 11:24:50Z reported all
+systems operational with empty active-incident/maintenance lists; that public
+summary does not override the measured private silence. No code/deploy/restart.

@@ -175,3 +175,38 @@ flat, adjusted-equity and all other gates pass. This is account-level adjusted
 trading loss, not a finding that all $93.04225 belongs to bot-managed trades.
 Startup/HARD-pause acceptance passed; no new quote or full-width request-load
 acceptance can be claimed while the existing loss rule prohibits entry.
+
+## Return to original WebSocket path and preserve alternative
+
+The operator next requested returning to the old version while saving REST,
+then explicitly confirmed restart. The immutable tag
+`rest-fallback-2026-09-10` was pushed at `e1c704f06`, preserving the complete
+experimental implementation and evidence. Original `v1.2.0` is unchanged.
+
+This uses the original path already retained in the reviewed executable, not a
+source/ledger reset: the explicit launcher source changes from `rest-fallback`
+to `websocket`. The alternative code remains disabled and available. There are
+no schema migrations to undo, and no daily loss state is cleared.
+
+Graceful stop removed supervisor 2860106 and ended runner 2860114 at
+**02:24:50Z**, with terminal `flat=true`, zero session creates and
+`stop_reason=operator_sigterm`. Two paused-run API windows had 428/197 reads,
+zero mutations/failures/429s and queue depth one; they do not prove capacity
+under resting orders or fills. Post-stop authenticated proof at 02:25:44Z was
+flat/order-free and ledger-clear. All 170 file hashes still matched, so the
+existing complete-suite evidence remained valid without repeating unchanged
+code tests.
+
+At **02:26:11Z** a fresh flat/clear gate passed, and the launcher started
+supervisor **2862401** / runner **2862413** with explicit
+`auto 10 32 websocket`. Installed marker remains `e04df8ec3`. The dashboard was
+reused. The September 10 HARD latch remains intact; normal stream readiness is
+again required and the original feed incident is not presumed resolved.
+
+At **02:27:58Z** the first normal-mode attempt reported
+`startup_unavailable` with `order_eof=0/4 account_balance=0/4`. The runner stays
+in its existing safe startup retry loop; switching back did not repair the
+private feed. At **02:28:28Z** authenticated reads again proved zero orders and
+positions, with zero unresolved/unknown/working ledger rows. No quoting
+acceptance is claimed and the prior daily HARD latch was not cleared. Both
+the private readiness gate and the normal daily loss policy remain required.

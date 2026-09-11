@@ -15,6 +15,16 @@ incident. No runtime data, credentials or venue exposure is included.
 The separately opt-in temporary REST source is experimental, not a replacement
 stable tag. See [REST fallback](history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
 
+## Saved experimental alternative
+
+`rest-fallback-2026-09-10` immutably preserves commit `e1c704f06`, including the
+reviewed REST alternative and its startup/HARD-hold evidence. Both suites passed
+1,257 tests; normal quoting and full-width capacity were not accepted. The
+operator subsequently returned to the existing WebSocket path by restart-scoped
+mode selection, keeping the REST code disabled but available. This is not an
+exact source-tree rollback to `v1.2.0`, and it does not restore the ledger or
+clear the daily loss stop. Future REST activation requires explicit selection.
+
 ## Previous stable baseline
 
 `v1.1.0` is the immutable known-good production checkpoint selected on

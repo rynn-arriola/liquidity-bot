@@ -912,8 +912,9 @@ These are implementation requirements, not suggestions.
     with existing clock/loss rules; position orders and exact reducers do not
     consume it. Unresolved entry reservations still count. At most four
     independent exact-order reads overlap under the unchanged shared governor;
-    all workers finish or are canceled before proof returns. History initially
-    covers retained EOF, then at least two descending pages through known fill
+    all workers finish or are canceled before proof returns. History uses
+    durable fill IDs as restart anchors (retained EOF for an empty ledger),
+    with at least two descending pages through known fill
     overlap; malformed or truncated coverage cannot certify proof. Applied
     positive history can survive expired proof, never entry authority. Equity
     freshness uses the current clock after account reconciliation, not its

@@ -33,8 +33,9 @@ default. Stable tags and diagnostic/trading credentials are untouched.
    fabricated venue-maintenance claim or permanent startup refusal.
 3. **Two-page history truncation was insufficient without private fills.** A
    201-fill fixture returned only 200 fills and discarded its continuation.
-   REST mode now initially walks retained history to EOF within the existing
-   page bound. Later descending polls retain at least the original two pages
+   REST mode uses durable recorded fill IDs as its restart anchor; an empty
+   ledger instead walks retained history to EOF within the existing page bound.
+   Descending polls retain at least the original two pages
    and continue until a whole already-proven fill page or EOF. Unknown/malformed
    account legs, missing EOF/continuation, repeated cursors and page exhaustion
    cannot certify coverage. History IDs advance only after successful ledger
@@ -93,7 +94,8 @@ price selection and API rate limits were not changed.
   bounded. Slow/unavailable APIs can still pause trading. No synchronous report
   or diagnostic task is added to the live decision path.
 - Restart/rollback: preserve the same ledger and original credential source;
-  history coverage starts unproven on a new process; no stable tag movement,
+  history uses durable fill anchors but fresh account proof is still required;
+  no stable tag movement,
   database rewrite, risk reset or automatic source switch.
 
 ## Limits and live acceptance
@@ -120,3 +122,31 @@ The final review suite passed **1,281 tests in 126.454 seconds**. It includes
 reversal detections established that the new tests reject removed repairs.
 Final source review retained all safety gates and found no further actionable
 policy drift. Runtime deployment and live acceptance remain separate gates.
+
+## Production-sized rehearsal follow-up
+
+Commit `665b72f42` was pushed and deployed while stopped; all 171 tracked
+source/test/script/web/config hashes matched. Its native full suite passed
+1,281 tests in 94.401 seconds. No bot restart had occurred.
+
+An isolated rehearsal used an online copy of the production ledger, disabled
+all create/cancel calls, and the 0.25/s reporting lane. It was interrupted after
+several minutes while paging history; no production ledger or venue mutation
+occurred. Requiring the entire old retained history on every process start was
+an avoidable cold-start/load regression. The follow-up seeds known history from
+durable execution IDs; it still requires at least two pages and continues across
+unseen fill bursts until known-page overlap or EOF. It does not reset inventory,
+assume complete historical P&L, or authorize entries without current proof.
+An empty ledger still requires EOF. One added restart-anchor regression and its
+reversal cover this follow-up; final re-verification is recorded below.
+
+At **12:39:35Z**, the follow-up completed the same isolated production-ledger
+REST proof in **14.828 seconds**, even on the deliberately slow reporting lane:
+zero working orders/positions, complete proof true, no error, no production
+ledger write and no venue mutation. This validates flat-start account decoding
+and retained overlap, not sustained 30-entry timing or fill latency.
+
+Final follow-up source gate: **1,282 tests passed in 129.591 seconds**,
+including 25 new review regressions. The durable-anchor reversal failed as
+expected, bringing the repair/edge reversal detections to thirteen. No source
+or configuration changes remain outside the reviewed diff.

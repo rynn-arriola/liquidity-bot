@@ -308,8 +308,8 @@ class AsyncAccountSnapshotGateway:
                 if cursor in seen_cursors:
                     raise AdapterError("execution history repeated pagination cursor")
                 seen_cursors.add(cursor)
-                # A fresh process first walks all retained history. Later
-                # descending walks keep at least the original two-page overlap
+                # An empty ledger first walks retained history. Restart and
+                # later descending walks keep at least the two-page overlap
                 # and continue through a whole already-proven fill page.
                 # A partial page with one old fill cannot conceal a burst.
                 if (page_number >= 1 and known_execution_ids is not None

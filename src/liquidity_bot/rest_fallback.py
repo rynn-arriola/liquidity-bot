@@ -95,7 +95,11 @@ class RestFallbackRunner(CommissioningRunner):
         super().__init__(*args, **kwargs)
         self.gate = RestStateGate(max_silence_seconds=30)
         self._rest_poll_completed_at = None
-        self._rest_history_seen: frozenset[str] | None = None
+        # Durable fills are the restart anchor, not an instruction to replay
+        # the venue's entire retained account history at every restart.
+        stored_fills = frozenset(str(row["execution_id"]) for row in
+                                 self.ledger.query("SELECT execution_id FROM execution_fills"))
+        self._rest_history_seen: frozenset[str] | None = stored_fills or None
         self._rest_history_pending: frozenset[str] = frozenset()
         self.executor.gateway = RestProofTradingGateway(
             self.gateway,

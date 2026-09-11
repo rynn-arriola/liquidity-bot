@@ -220,6 +220,21 @@ class RestFallbackReviewTests(IsolatedAsyncioTestCase):
         client.portfolio.activities = pages
         return calls
 
+    async def test_restart_uses_durable_fill_anchor_without_resetting_ledger(self):
+        runner, _, _ = self.build()
+        execution = fixtures.Execution(
+            execution_id="known-fill", client_order_id="known-client",
+            exchange_order_id="known-order", market_slug="market-one",
+            side="BUY", price=fixtures.Decimal("0.49"), qty=fixtures.Decimal("1"),
+            fee=fixtures.Decimal("0"), liquidity="MAKER",
+            intent="ORDER_INTENT_BUY_LONG", event_at=self.now)
+        runner.ledger.apply_execution(execution, received_at=self.now)
+        with patch.object(fixtures, "CommissioningRunner", RestFallbackRunner):
+            restarted, _, _ = self.fixture.build_runner(
+                ledger=runner.ledger, clock=lambda: self.now)
+        self.assertEqual(restarted._rest_history_seen, frozenset({"known-fill"}))
+        self.assertEqual(restarted.ledger.position("market-one"), fixtures.Decimal("1"))
+
     async def test_first_history_walk_reaches_fill_201_and_eof(self):
         runner, client, _ = self.build()
         calls = self.history(client)

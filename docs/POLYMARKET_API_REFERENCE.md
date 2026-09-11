@@ -31,8 +31,8 @@ adds a temporary-only 30 pending-entry maximum and bounded concurrent exact
 reads without changing the shared rate limit. The Retail
 [activities contract](https://docs.polymarket.us/api-reference/portfolio/get-activities),
 reopened September 11, documents descending timestamp sorting and cursor/EOF
-pagination. The temporary source initially walks retained EOF, then keeps a
-minimum two-page known-fill overlap; it must not silently truncate new fills
+pagination. The temporary source starts from durable fill anchors (retained EOF
+for an empty ledger), then keeps a minimum two-page known-fill overlap; it must not silently truncate new fills
 at the normal source's two-page backfill bound. This is positive retained
 evidence, not proof that older/pruned or arbitrarily late history is complete.
 

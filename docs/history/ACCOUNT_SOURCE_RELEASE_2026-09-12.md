@@ -203,3 +203,39 @@ order was cancelled, then the official market-scoped synchronous close-position
 operation executed three fills. Fresh authenticated proof returned zero open
 orders and zero positions. Account-wide cancel-all was not used. Deployment,
 restart and the requested live observation are appended only after completion.
+
+### Deployment and live acceptance
+
+Commit `b826ff11ee739e61704ddba80533e089be84b111` was pushed before
+deployment. Windows and GitHub matched; the clean WSL checkout fast-forwarded
+from the already GitHub-verified Windows repository after its direct HTTPS fetch
+stalled. WSL HEAD and `DEPLOYED_COMMIT` match. The stopped parity capture at
+07:58:54Z produced a 362,795,008-byte private recovery copy with SHA-256 prefix
+`81126369aa4d`; the offline desktop peer remains pending. The exact deployed
+checkout passed all **1,469 tests in 127.423 seconds**.
+
+Fresh authenticated 08:00:50Z evidence proved zero venue orders/positions and
+zero unresolved/unknown ledger state, while the ledger truthfully retained the
+one locally stale working order/position closed outside the stopped runner. The
+normal startup reconcile retrieved the exact terminal order, backfilled the close
+executions and applied complete account snapshots before new entries were
+authorized; there was no raw ledger edit or risk-baseline reset.
+
+The explicit `auto 10 32 rest` launch started supervisor `649355` and runner
+`649372` at 08:02:00Z. It logged a healthy official maintenance state and the
+unchanged overnight max of 30 flat pending entries, with positions/reducers
+excluded. Its first 290.1-second budget window completed 543 attempts, including
+30 mutations, at 1.872/s with zero 429s. The new telemetry attributed all five
+failed reads to `order_retrieve@404`; the next 72.9-second window completed 137
+attempts/four mutations with zero failures and `failure_categories=none`.
+
+A natural ten-contract fill at 08:06Z provided position-path acceptance. The
+runner cancelled the building order, placed a passive reducer and continued
+cancel-confirm-repricing it. At 08:08:17Z, authenticated evidence showed 25 flat
+entry orders plus one reducer on that positioned market, the +10 position, and
+zero unresolved intents or unknown orders. No exchange order had more than one
+CANCEL intent during the new session, so the immediate duplicate pattern did not
+recur. The open position is still inside the unchanged passive phase; this proves
+continuous reducer coverage, not a forced 900-second exit or final close. Both
+processes remained alive after the requested 7:15 observation, so no corrective
+second restart was warranted.

@@ -8,6 +8,8 @@ trades latency for availability, and cannot detect silently stale venue data.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -58,16 +60,36 @@ class DisabledPrivateStream:
 class RestProofTradingGateway(AsyncTradingGateway):
     """Expire create/reducer permission after admission waits; allow cancels."""
 
-    def __init__(self, gateway, proof_current):
+    def __init__(self, gateway, proof_current, reducing_proof_current):
         super().__init__(gateway)
         self.proof_current = proof_current
+        self.reducing_proof_current = reducing_proof_current
+        self._reducing_market = ContextVar(
+            "rest_reducing_market", default=None)
+
+    async def create(self, payload, *, reducing=False):
+        market = str(payload.get("marketSlug", "")) if reducing else None
+        token = self._reducing_market.set(market)
+        try:
+            return await super().create(payload, reducing=reducing)
+        finally:
+            self._reducing_market.reset(token)
 
     async def _mutation(self, operation, call, *, traffic_class="safety",
                         admission_check=None):
         def check():
             if admission_check is not None:
                 admission_check()
-            if operation == "POST /v1/orders" and not self.proof_current():
+            scoped_market = self._reducing_market.get()
+            scoped_reduction_proved = (
+                operation == "POST /v1/orders"
+                and traffic_class == "safety"
+                and bool(scoped_market)
+                and self.reducing_proof_current(scoped_market)
+            )
+            if (operation == "POST /v1/orders"
+                    and not self.proof_current()
+                    and not scoped_reduction_proved):
                 raise ApiAdmissionDeferred(
                     "REST account proof expired; request not sent",
                     error_code="LOCAL_REST_STATE_EXPIRED",
@@ -102,6 +124,7 @@ class RestFallbackRunner(CommissioningRunner):
         self._bulk_order_proof = False
         self._bulk_skipped = {}
         self._hard_exit_terminal_proofs = {}
+        self._hard_exit_retry_authorizations = {}
         kwargs["private_stream_factory"] = DisabledPrivateStream
         super().__init__(*args, **kwargs)
         self.gate = RestStateGate(max_silence_seconds=30)
@@ -114,7 +137,8 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_history_pending: frozenset[str] = frozenset()
         self.executor.gateway = RestProofTradingGateway(
             self.gateway,
-            lambda: self.gate.session_ready(self.ledger, now=self._now()))
+            lambda: self.gate.session_ready(self.ledger, now=self._now()),
+            self._scoped_reducing_mutation_proof_current)
 
     async def _read_owned_order_states(self, exchange_ids, now):
         if self._bulk_order_proof and exchange_ids:
@@ -310,25 +334,135 @@ class RestFallbackRunner(CommissioningRunner):
         REST entry authority or the normal poll clock.
         """
 
-        token = self.reconciler.hard_exit_schedule_token(slug)
-        cached = self._hard_exit_terminal_proofs.pop(slug, None)
-        if cached is not None:
-            proof_token, proved_at = cached
-            age = (self._now() - proved_at).total_seconds()
-            sent_age = ((self._now() - token[1]).total_seconds()
-                        if token[1] is not None else None)
-            if (proof_token == token and token[1] is not None
-                    and 0 <= age <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
-                    and 0 <= sent_age <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
-                    and not self.ledger.unresolved_intents(slug)
-                    and not self.ledger.working_orders(slug)
-                    and not self.ledger.absent_orders(slug)):
-                # The post-mutation transition proof already consumed exact
-                # order state plus complete open-order, position and history
-                # snapshots. Repeating that same proof here used the entire
-                # retry window even though this IOC was positively terminal.
-                return
+        proved_at = self._usable_hard_exit_terminal_proof(
+            slug, consume=True)
+        if proved_at is not None:
+            # The post-mutation transition proof already consumed exact order
+            # state plus complete open-order, position and history snapshots.
+            # Repeating that same proof here used the entire retry window even
+            # though this IOC was positively terminal.
+            return proved_at
         await self._reconcile_position_state(slug, tag="hard-exit")
+        return self._now()
+
+    def _usable_hard_exit_terminal_proof(self, slug, *, consume=False):
+        """Return one exact, fresh proof for confirmation or the next retry."""
+
+        cached = (self._hard_exit_terminal_proofs.pop(slug, None)
+                  if consume else self._hard_exit_terminal_proofs.get(slug))
+        if cached is None:
+            return None
+        proof_token, proved_at = cached
+        token = self.reconciler.hard_exit_schedule_token(slug)
+        attempts, sent_at, started_at = token
+        now = self._now()
+        age = (now - proved_at).total_seconds()
+        sent_age = ((now - sent_at).total_seconds()
+                    if sent_at is not None else None)
+        valid = (
+            proof_token == token
+            and attempts > 0
+            and started_at is not None
+            and 0 <= age
+            <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
+            # A positive terminal proof remains useful when the proof itself
+            # took longer than the confirmation preference. Its completion
+            # time, not the IOC submission time, is the freshness boundary.
+            # The unchanged retry-window check still decides whether another
+            # IOC may be sent.
+            and (sent_age is None or sent_age >= 0)
+            and self.ledger.position(slug) != 0
+            and not self.ledger.unresolved_intents(slug)
+            and not self.ledger.working_orders(slug)
+            and not self.ledger.absent_orders(slug)
+        )
+        if not valid:
+            self._hard_exit_terminal_proofs.pop(slug, None)
+            return None
+        return proved_at
+
+    def _position_priority_has_fresh_transition_proof(self, slug):
+        return self._usable_hard_exit_terminal_proof(slug) is not None
+
+    def _scoped_reducing_mutation_proof_current(self, slug):
+        """Recheck one exact retry authorization at the network boundary."""
+
+        authorization = self._hard_exit_retry_authorizations.pop(slug, None)
+        if authorization is None:
+            return False
+        prior_token, proved_at = authorization
+        attempts, sent_at, started_at = (
+            self.reconciler.hard_exit_schedule_token(slug))
+        prior_attempts, prior_sent_at, prior_started_at = prior_token
+        age = (self._now() - proved_at).total_seconds()
+        pending = self.ledger.unresolved_intents(slug)
+        return (
+            prior_attempts > 0
+            and prior_sent_at is None
+            and prior_started_at is not None
+            and attempts == prior_attempts + 1
+            and sent_at is not None
+            and started_at == prior_started_at
+            and 0 <= age
+            <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
+            and self.ledger.position(slug) != 0
+            # The executor has durably prepared this exact retry before its
+            # final admission check. The pre-plan proof required zero unknown
+            # intent; allow only the single new, not-yet-sent PLACE it created.
+            and len(pending) == 1
+            and str(pending[0]["operation"]) == "PLACE"
+            and str(pending[0]["state"]) == "SUBMITTING"
+            and not pending[0]["exchange_order_id"]
+            and not self.ledger.working_orders(slug)
+            and not self.ledger.absent_orders(slug)
+        )
+
+    def _frame(self, now, slug=None):
+        frame = super()._frame(now, slug)
+        owner = slug or self.market_slug
+        proved_at = self._usable_hard_exit_terminal_proof(owner)
+        if (not frame.state_known and frame.position != 0
+                and proved_at is not None):
+            # Scoped proof is deliberately owner-only: it can keep an exact
+            # reducer/IOC moving when the account-wide entry gate ages out,
+            # but it can never restore entry authority for this or any other
+            # market.
+            frame = replace(
+                frame, state_known=True, new_risk_allowed=False)
+        token = self.reconciler.hard_exit_schedule_token(owner)
+        if (frame.position != 0 and proved_at is not None
+                and token[0] > 0 and token[1] is None
+                and token[2] is not None):
+            # Planning records the next IOC token before the executor reaches
+            # its final network-boundary admission check. Preserve the exact
+            # pre-plan token so only that one increment on this owner can use
+            # the scoped proof; another market or flat create cannot borrow it.
+            self._hard_exit_retry_authorizations[owner] = (token, proved_at)
+        return frame
+
+    async def _reconcile_pending_hard_exit(self, slug=None):
+        """Confirm one IOC and carry its exact proof to the bounded retry."""
+
+        slug = slug or self.market_slug
+        proved_at = await self._reconcile_hard_exit_state(slug)
+        if (self.ledger.market_has_unresolved_intent(slug)
+                or self.ledger.working_orders(slug)):
+            return "pending"
+        if self.ledger.position(slug) == 0:
+            self.reconciler.confirm_hard_exit_terminal(slug)
+            self._hard_exit_terminal_proofs.pop(slug, None)
+            return "flat"
+        # The exact terminal proof also authorizes the next bounded IOC. Keep
+        # its original completion time: carrying it forward must never renew
+        # stale evidence or global entry authority.
+        self.reconciler.confirm_hard_exit_terminal(slug)
+        token = self.reconciler.hard_exit_schedule_token(slug)
+        if (proved_at is not None
+                and not self.ledger.unresolved_intents(slug)
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders(slug)):
+            self._hard_exit_terminal_proofs[slug] = (token, proved_at)
+        return "retry"
 
     async def _reconcile_position_state(self, slug, *, tag):
         observed_at = self._now()

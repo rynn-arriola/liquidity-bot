@@ -6033,6 +6033,18 @@ class CommissioningRunner:
 
         return False
 
+    def _position_priority_has_fresh_transition_proof(
+        self, slug: str,
+    ) -> bool:
+        """Return whether same-owner service already has exact account proof.
+
+        This is a scheduling-only hook for account sources that can positively
+        prove one risk-reducing transition without renewing entry authority.
+        The default source never bypasses its normal account/equity refresh.
+        """
+
+        return False
+
     def _hard_exit_retry_delay(self, slug: str) -> float:
         """Back off a confirmed terminal IOC before its bounded retry."""
 
@@ -6100,7 +6112,11 @@ class CommissioningRunner:
                 self._dirty_market_slugs.discard(slug)
                 self._dirty_market_since.pop(slug, None)
                 continue
-            if not state_refresh_failed:
+            transition_proved = (
+                priority_dispatch
+                and self._position_priority_has_fresh_transition_proof(slug)
+            )
+            if not state_refresh_failed and not transition_proved:
                 try:
                     await self._refresh_execution_state_for_decision(now)
                 except Exception:
@@ -6151,7 +6167,8 @@ class CommissioningRunner:
             try:
                 # Account reconciliation can take seconds. Its pre-await time
                 # must not make an expired equity mark appear fresh.
-                await self._refresh_equity_for_decision(self._now())
+                if not transition_proved:
+                    await self._refresh_equity_for_decision(self._now())
             except Exception:
                 # Preserve the last observation until its 15-second bound;
                 # once stale, `_frame` removes entry eligibility fail-closed.

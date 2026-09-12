@@ -1,12 +1,14 @@
 """Moving-clock, full-slate and degraded-source regressions; fake venue only."""
 import asyncio
 from datetime import timedelta
+from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
 from test_venue_state import raw_execution, raw_order
 from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
+from liquidity_bot.execution_ledger import PositionState
 from liquidity_bot.live_commissioning import CommissioningRunner
 from liquidity_bot.rest_fallback import RestFallbackRunner
 
@@ -78,6 +80,62 @@ class RestFallbackReviewTests(IsolatedAsyncioTestCase):
             "reservation", "PLACE", "market-reserved", "client-reserved",
             {"marketSlug": "market-reserved"}, created_at=self.now)
         self.assertTrue(runner._loss_cap_blocks_new_entry(self.now))
+
+    def test_position_reducer_does_not_consume_temporary_thirty_order_cap(self):
+        runner, _, _ = self.build()
+        self.now += timedelta(hours=12)
+        runner._loss_entry_order_cap = 40
+        for i in range(29):
+            self.fixture.seed_working_order(
+                runner, slug=f"market-{i}", side="bid", suffix=str(i))
+        held = "held-market"
+        self.fixture.seed_working_order(
+            runner, slug=held, side="offer", suffix="reducer")
+        runner.ledger.apply_position_event(
+            "rest-cap-test",
+            held,
+            PositionState(held, Decimal("10"), self.now),
+            received_at=self.now,
+        )
+        runner.ledger.prepare_intent(
+            "held-reservation", "PLACE", held, "client-held-reducer",
+            {"marketSlug": held}, created_at=self.now)
+
+        working, reservations = runner._flat_entry_orders_and_reservations()
+        self.assertEqual(len(working), 29)
+        self.assertEqual(reservations, 0)
+        self.assertFalse(runner._loss_cap_blocks_new_entry(self.now))
+
+        runner.ledger.prepare_intent(
+            "flat-reservation", "PLACE", "market-30", "client-30",
+            {"marketSlug": "market-30"}, created_at=self.now)
+        self.assertTrue(runner._loss_cap_blocks_new_entry(self.now))
+
+    async def test_scoped_exit_proof_never_authorizes_flat_or_other_owner_create(self):
+        runner, client, _ = self.build()
+        held = runner.market_slug
+        await runner.preflight()
+        runner.ledger.apply_position_event(
+            "scoped-proof-position",
+            held,
+            PositionState(held, Decimal("10"), self.now),
+            received_at=self.now,
+        )
+        runner.reconciler._hard_exit_attempts[held] = 1
+        runner.reconciler._hard_exit_started_at[held] = self.now
+        token = runner.reconciler.hard_exit_schedule_token(held)
+        runner._hard_exit_terminal_proofs[held] = (token, self.now)
+        runner.gate.on_reconciliation_conflict()
+        runner._frame(self.now, held)
+        self.assertIn(held, runner._hard_exit_retry_authorizations)
+
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(
+                {"marketSlug": "flat-market"}, reducing=False)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(
+                {"marketSlug": "other-held-market"}, reducing=True)
+        self.assertEqual(client.orders.create_calls, [])
 
     async def test_reads_overlap_boundedly_but_visit_every_owner(self):
         runner, _, _ = self.build()

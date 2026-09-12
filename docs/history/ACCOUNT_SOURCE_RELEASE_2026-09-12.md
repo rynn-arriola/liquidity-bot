@@ -155,8 +155,10 @@ without an authoritative venue publication watermark.
   disprove an isolated request failure.
 - A natural position appeared at 07:22:20Z and the existing reducer path detected
   it, cancelled the building order and began repricing the passive reducing order.
-  This is useful detection/soft-reducer evidence, not yet acceptance of the
-  unchanged 900-second hard-exit path or unfilled-IOC continuation.
+  Authenticated **07:29:44Z** evidence then found 29 orders across 21 markets,
+  zero positions, unresolved intents or unknown orders. This naturally accepts
+  detection and passive reduction; it is not acceptance of the unchanged
+  900-second hard-exit path or unfilled-IOC continuation.
 
 No code, configuration, source selection or process state changed during the
 failure investigation. Exact per-category/status failure telemetry is a proposed

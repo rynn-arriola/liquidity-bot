@@ -686,7 +686,14 @@ These are implementation requirements, not suggestions.
     revalidation have an independent 4/second entry lane; account proof,
     cancels, passive reducers and IOC exits use safety. A 429
     cools only its originating class, safety's own cooldown is at most one
-    second, and no mutation retries. Non-safety reads publish cooldown and fail
+    second, and no mutation retries. Public book-read 429s are a narrower
+    endpoint exception: all slugs/classes share bounded adaptive backoff and
+    one expiring recovery-probe lease, never an inline retry or an account/
+    mutation-lane cooldown. Only the matching probe's success clears that
+    circuit; old responses cannot erase a newer failure. Local deferral neither
+    renews book freshness nor proves a broken market, cancellation or flatness.
+    Fresh streamed books retain their normal authority, and unavailable depth
+    cannot invent an exit price. Non-safety reads publish cooldown and fail
     promptly instead of sleeping inline; later non-safety work with more than
     one second remaining defers before network IO. A deferred entry is exactly
     `FAILED`, not uncertain, causes no market quarantine and gates later entry

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 try:  # Production runs in WSL; tests/imports remain portable on Windows.
     import fcntl
@@ -500,6 +501,7 @@ class AsyncIntervalLimiter:
         1.0 / OPPORTUNISTIC_REPORT_RATE_PER_SECOND)
     REPORT_IDLE_INTERVAL_SECONDS = 0.30
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
+    BOOK_PROBE_LEASE_SECONDS = 20.0  # Longer than the owned 15s HTTP timeout.
 
     def __init__(
         self,
@@ -557,6 +559,7 @@ class AsyncIntervalLimiter:
         }
         self._interrupt_generation = 0
         self._interrupt_event = asyncio.Event()
+        self._book_backoff: dict[str, Any] = {}
 
     @classmethod
     def from_rate(
@@ -620,7 +623,7 @@ class AsyncIntervalLimiter:
         return chosen
 
     @staticmethod
-    def _read_shared_state(handle: Any) -> dict[str, float | int]:
+    def _read_shared_state(handle: Any) -> dict[str, Any]:
         handle.seek(0)
         try:
             raw = json.load(handle)
@@ -630,7 +633,7 @@ class AsyncIntervalLimiter:
 
     @staticmethod
     def _write_shared_state(
-        handle: Any, state: Mapping[str, float | int],
+        handle: Any, state: Mapping[str, Any],
     ) -> None:
         handle.seek(0)
         json.dump(dict(state), handle, separators=(",", ":"), sort_keys=True)
@@ -721,8 +724,81 @@ class AsyncIntervalLimiter:
     def _lane_cooldown_name(traffic_class: str) -> str:
         return f"cooldown_until_{traffic_class}"
 
+    def _book_admission(
+        self, state: dict[str, Any], now: float, token: str, *, claim: bool,
+    ) -> None:
+        """Endpoint backoff, independent of account/mutation traffic lanes.
+
+        A post-429 probe is leased atomically across all slugs and cooperating
+        processes. Crashed/cancelled probes expire; only their own successful
+        response can reopen the endpoint. An older in-flight success cannot
+        erase a newer 429 or another probe's lease.
+        """
+        cooldown = self._shared_timestamp(state.get("book_cooldown_until"), now)
+        probe = self._shared_timestamp(
+            state.get("book_probe_until"), now,
+            maximum_future_seconds=self.BOOK_PROBE_LEASE_SECONDS)
+        delay = max(cooldown, probe) - now
+        if delay > 0:
+            raise ApiAdmissionDeferred(
+                "market-book backoff active; request not sent",
+                operation="markets.book", error_code="LOCAL_BOOK_COOLDOWN",
+                retry_after_seconds=delay)
+        if claim and state.get("book_rate_limited") is True:
+            state["book_probe_token"] = token
+            state["book_probe_until"] = now + self.BOOK_PROBE_LEASE_SECONDS
+
+    def _book_result(
+        self, state: dict[str, Any], now: float, *, token: str | None,
+        status_code: int | None, failed: bool, retry_after_seconds: float | None,
+    ) -> None:
+        if status_code == 429:
+            last = self._shared_timestamp(state.get("book_last_429_at"), now)
+            try:
+                streak = min(5, max(0, int(state.get("book_429_streak", 0))))
+            except (TypeError, ValueError, OverflowError):
+                streak = 0
+            if last <= 0 or now - last > self.RATE_LIMIT_STREAK_RESET_SECONDS:
+                streak = 0
+            streak += 1
+            other_probe_until = (
+                self._shared_timestamp(
+                    state.get("book_probe_until"), now,
+                    maximum_future_seconds=self.BOOK_PROBE_LEASE_SECONDS)
+                if state.get("book_probe_token") != token else 0.0)
+            state.update(book_rate_limited=True, book_429_streak=streak,
+                         book_last_429_at=now, book_probe_token="",
+                         book_probe_until=other_probe_until)
+            state["book_cooldown_until"] = max(
+                self._shared_timestamp(state.get("book_cooldown_until"), now),
+                now + self._cooldown_delay(retry_after_seconds, streak))
+        elif token is not None and token == state.get("book_probe_token"):
+            state["book_probe_token"] = ""
+            state["book_probe_until"] = 0.0
+            if failed:
+                # A transport/5xx failure is not recovery from the earlier 429.
+                state["book_cooldown_until"] = now + self._cooldown_delay(None, 1)
+            else:
+                state.update(book_rate_limited=False, book_429_streak=0,
+                             book_last_429_at=0.0, book_cooldown_until=0.0)
+
+    def _record_shared_book_result(self, **result: Any) -> None:
+        path = self.shared_state_path
+        assert path is not None and fcntl is not None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._open_shared_state(path) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self._read_shared_state(handle)
+                before = dict(state)
+                self._book_result(state, time.time(), **result)
+                if state != before:
+                    self._write_shared_state(handle, state)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def _claim_shared_slot(
-        self, interval: float, traffic_class: str,
+        self, interval: float, traffic_class: str, book_token: str | None = None,
     ) -> tuple[float, float]:
         """Try one host claim; return total delay and its cooldown portion."""
 
@@ -735,6 +811,8 @@ class AsyncIntervalLimiter:
             try:
                 state = self._read_shared_state(handle)
                 now = time.time()
+                if book_token is not None:
+                    self._book_admission(state, now, book_token, claim=False)
                 aggregate_due = self._shared_timestamp(
                     state.get("next_request_at", 0.0), now,
                     maximum_future_seconds=(
@@ -771,6 +849,8 @@ class AsyncIntervalLimiter:
                 delay = max(0.0, due - now)
                 if delay > 0.0:
                     return delay, max(0.0, cooldown_due - now)
+                if book_token is not None:
+                    self._book_admission(state, now, book_token, claim=True)
                 state["next_request_at"] = (
                     now + self.shared_global_interval_seconds)
                 if lane_clock is not None:
@@ -874,7 +954,7 @@ class AsyncIntervalLimiter:
     async def wait(
         self, *, operation: str = "", request_kind: str = "read",
         traffic_class: str | None = None,
-    ) -> None:
+    ) -> str | None:
         if request_kind not in {"read", "mutation"}:
             raise ValueError("request_kind must be read or mutation")
         queued_at = time.monotonic()
@@ -886,6 +966,9 @@ class AsyncIntervalLimiter:
             operation, request_kind, chosen_class)
         interrupt_generation = self._interrupt_generation
         interrupt_event = self._interrupt_event
+        book_token = (uuid4().hex if request_kind == "read"
+                      and _request_category(operation, request_kind) == "market_book"
+                      else None)
         try:
             while True:
                 if self.shared_state_path is not None:
@@ -893,10 +976,13 @@ class AsyncIntervalLimiter:
                     # both processes and coroutines. Do not hold the local
                     # asyncio lock while a worker waits for that file lock.
                     delay, cooldown_delay = await asyncio.to_thread(
-                        self._claim_shared_slot, interval, chosen_class)
+                        self._claim_shared_slot, interval, chosen_class, book_token)
                 else:
                     async with self._lock:
                         now = time.monotonic()
+                        if book_token is not None:
+                            self._book_admission(
+                                self._book_backoff, now, book_token, claim=False)
                         lane_due = 0.0
                         if chosen_class == "entry":
                             lane_due = self._next_entry_at
@@ -923,6 +1009,9 @@ class AsyncIntervalLimiter:
                         delay = max(0.0, due - now)
                         cooldown_delay = max(0.0, cooldown_due - now)
                         if delay == 0.0:
+                            if book_token is not None:
+                                self._book_admission(
+                                    self._book_backoff, now, book_token, claim=True)
                             self._next_at = now + self.shared_global_interval_seconds
                             if chosen_class == "entry":
                                 self._next_entry_at = now + interval
@@ -968,6 +1057,7 @@ class AsyncIntervalLimiter:
             _request_category(operation, request_kind)
         ] += 1
         self._wait_samples.append(waited)
+        return book_token
 
     def interrupt_waits(self) -> None:
         """Wake waits that began before an operator stop boundary.
@@ -1011,6 +1101,7 @@ class AsyncIntervalLimiter:
         failed: bool = False, retry_after_seconds: float | None = None,
         traffic_class: str = "safety",
         operation: str = "", request_kind: str = "read",
+        admission_token: str | None = None,
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
@@ -1025,6 +1116,19 @@ class AsyncIntervalLimiter:
                 f"{category}@{status}"] += 1
         else:
             self._successful_responses += 1
+        if (request_kind == "read"
+                and _request_category(operation, request_kind) == "market_book"):
+            result = dict(token=admission_token, status_code=status_code,
+                          failed=failed, retry_after_seconds=retry_after_seconds)
+            if self.shared_state_path is not None:
+                await asyncio.to_thread(self._record_shared_book_result, **result)
+            else:
+                async with self._lock:
+                    self._book_result(self._book_backoff, time.monotonic(), **result)
+            if status_code == 429:
+                self._rate_limited_responses += 1
+            # Book throttling must not cool the account/cancel/reducer lane.
+            return
         if status_code == 429:
             self._rate_limited_responses += 1
             now = time.monotonic()
@@ -1334,6 +1438,7 @@ class AsyncReadOnlyGateway:
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
+            admission_token = None
             await self._checkpoint_before_read()
             traffic_class = (
                 self._traffic_class_override.get()
@@ -1341,7 +1446,7 @@ class AsyncReadOnlyGateway:
             if isinstance(self.limiter, AsyncIntervalLimiter):
                 traffic_class = self.limiter.traffic_class_for(
                     operation, "read", traffic_class)
-                await self.limiter.wait(
+                admission_token = await self.limiter.wait(
                     operation=operation,
                     request_kind="read",
                     traffic_class=traffic_class,
@@ -1357,7 +1462,8 @@ class AsyncReadOnlyGateway:
                     await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
                         traffic_class=traffic_class,
-                        operation=operation, request_kind="read")
+                        operation=operation, request_kind="read",
+                        admission_token=admission_token)
                 return result
             except AdapterError as exc:
                 if isinstance(self.limiter, AsyncIntervalLimiter):
@@ -1369,6 +1475,7 @@ class AsyncReadOnlyGateway:
                             exc, "retry_after_seconds", None),
                         traffic_class=traffic_class,
                         operation=operation, request_kind="read",
+                        admission_token=admission_token,
                     )
                 raise
             except Exception as exc:
@@ -1380,12 +1487,17 @@ class AsyncReadOnlyGateway:
                         retry_after_seconds=self._retry_after_seconds(exc),
                         traffic_class=traffic_class,
                         operation=operation, request_kind="read",
+                        admission_token=admission_token,
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text
                 # "Global Rate Limit Exceeded" even though it is not a rate
                 # limit; slowing down in response makes that failure worse.
                 if self._status_code(exc) != 429 or attempt + 1 >= self.retry_attempts:
+                    raise self._adapter_error(operation, exc) from exc
+                if _request_category(operation, "read") == "market_book":
+                    # Let the next ordinary caller claim the single recovery
+                    # probe; never hold the decision loop in book retry sleep.
                     raise self._adapter_error(operation, exc) from exc
                 # A selection/report retry is awaited by its caller and can
                 # therefore serialize the live runner even though its limiter

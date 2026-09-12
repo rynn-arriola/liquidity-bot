@@ -6712,6 +6712,12 @@ class CommissioningRunner:
             if self._refreshed_book_this_call:
                 self._runtime_error_counts.pop(
                     f"quiet_book_rest_refresh:{slug}", None)
+        except ApiAdmissionDeferred as exc:
+            # No book request was sent. Preserve the last receipt/failure
+            # evidence; local endpoint backoff is not a broken market and
+            # cannot retire an owner. Fresh streamed books still plan normally.
+            state.next_book_refresh = self._now() + timedelta(
+                seconds=self._api_admission_delay(exc))
         except EmptyBookError as exc:
             if self._enter_settlement_wait(slug, self._now()):
                 self._runtime_error_counts.pop(
@@ -6730,8 +6736,6 @@ class CommissioningRunner:
                     raise RuntimeInvariantViolation(
                         "market_retirement_limit_exceeded", stop)
         except Exception as exc:
-            await self._report_runtime_error(
-                f"quiet_book_rest_refresh:{slug}", exc)
             state.next_book_refresh = self._now() + timedelta(seconds=3)
             # A book that will not parse is not a book we can ever quote, and
             # retrying it every three seconds holds a market slot while burning
@@ -6739,15 +6743,20 @@ class CommissioningRunner:
             # the log at 2,121 occurrences across 21 of 77 markets, with two
             # markets retried about 1,100 times each. Retire it on the same
             # bound the strategy-state recoveries use.
-            if (self._runtime_error_counts.get(
-                    f"quiet_book_rest_refresh:{slug}", 0)
-                    >= MAX_RECOVERY_ATTEMPTS):
-                stop = await self._retire_market(
-                    slug, f"unrecoverable_book_{type(exc).__name__}",
-                    reset_exit_budget=False)
-                if stop:
-                    raise RuntimeInvariantViolation(
-                        "market_retirement_limit_exceeded", stop)
+            if isinstance(exc, AdapterError) and exc.status_code == 429:
+                self._log_book_rate_limit(slug)
+            else:
+                await self._report_runtime_error(
+                    f"quiet_book_rest_refresh:{slug}", exc)
+                if (self._runtime_error_counts.get(
+                        f"quiet_book_rest_refresh:{slug}", 0)
+                        >= MAX_RECOVERY_ATTEMPTS):
+                    stop = await self._retire_market(
+                        slug, f"unrecoverable_book_{type(exc).__name__}",
+                        reset_exit_budget=False)
+                    if stop:
+                        raise RuntimeInvariantViolation(
+                            "market_retirement_limit_exceeded", stop)
         # Check before evaluating: a retired market that reached flat should
         # stop being treated as retired in the same pass that would otherwise
         # keep blocking its slot.
@@ -8909,12 +8918,28 @@ class CommissioningRunner:
             await self._quarantine_working_orders(slug)
         except RuntimeInvariantViolation:
             raise
+        except ApiAdmissionDeferred:
+            # Book cooldown does not prove the resting orders unsafe and must
+            # not turn one endpoint throttle into per-owner quarantine/error
+            # escalation. The unchanged stale-book gate still bars new plans.
+            return
         except Exception as exc:
+            if (isinstance(exc, AdapterError) and exc.status_code == 429
+                    and str(exc.operation or "").startswith("markets.book(")):
+                self._log_book_rate_limit(slug)
+                return
             if reason == "book_stale":
                 await self._report_runtime_error(
                     component, AdapterError(str(reason or "unknown")))
             await self._report_runtime_error(
                 f"strategy_state_recovery:{slug}", exc)
+
+    def _log_book_rate_limit(self, slug: str) -> None:
+        # One concise line per actual failed request, not per deferred owner.
+        # HTTP failure bodies can contain gateway HTML and IP addresses.
+        print(f"[book-rate-limit] at={self._now().isoformat()} market={slug} "
+              "status=429 action=endpoint_backoff fresh_book_required=yes",
+              flush=True)
 
     @staticmethod
     def _terminal_exception_reason(component: str, exc: Exception) -> str:

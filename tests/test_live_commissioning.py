@@ -6390,6 +6390,67 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "accumulated failures -- doing so is what let a permanently dead "
             "market hold a slot for two hours")
 
+    async def test_book_backoff_preserves_position_and_failure_evidence(self):
+        for error in (
+            ApiAdmissionDeferred("book cooldown", error_code="LOCAL_BOOK_COOLDOWN",
+                                 retry_after_seconds=30),
+            AdapterError("<html>private gateway detail</html>", status_code=429,
+                         operation="markets.book(market-one)"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                runner, client, _ = self.build_runner(max_markets=32)
+                slug = runner.market_slug
+                state = runner.state_for(slug)
+                state.market = await runner.gateway.fetch_market(slug)
+                state.book = await runner.gateway.fetch_book(slug)
+                receipt = NOW - timedelta(seconds=10)
+                state.book_observed_at = receipt
+                state.next_contract_refresh = NOW + timedelta(seconds=60)
+                runner.ledger.position = lambda _slug=None: Decimal("10")
+                self.seed_working_order(runner, slug=slug, side="offer", suffix="held")
+                before = tuple(dict(row) for row in runner.ledger.working_orders(slug))
+                key = f"quiet_book_rest_refresh:{slug}"
+                runner._runtime_error_counts[key] = MAX_RECOVERY_ATTEMPTS - 1
+                with patch.object(runner, "_refresh_book", new=AsyncMock(side_effect=error)), \
+                        patch.object(runner, "_retire_market", new=AsyncMock()) as retire, \
+                        patch("sys.stdout", new=io.StringIO()) as output:
+                    await runner._service_market_state(slug, NOW)
+                retire.assert_not_awaited()
+                self.assertEqual(runner._runtime_error_counts[key], MAX_RECOVERY_ATTEMPTS - 1)
+                self.assertEqual(state.book_observed_at, receipt)
+                self.assertFalse(runner._book_is_fresh_enough_to_plan(slug))
+                self.assertEqual(runner.ledger.position(slug), Decimal("10"))
+                self.assertEqual(tuple(dict(row) for row in runner.ledger.working_orders(slug)), before)
+                self.assertNotIn("private gateway detail", output.getvalue())
+                self.assertGreater(state.next_book_refresh, NOW)
+
+    async def test_book_backoff_recovery_does_not_quarantine_or_escalate(self):
+        runner, _, _ = self.build_runner()
+        slug = runner.market_slug
+        for error in (ApiAdmissionDeferred("book cooldown"),
+                      AdapterError("429", status_code=429, operation=f"markets.book({slug})")):
+            with patch.object(runner, "_refresh_book", new=AsyncMock(side_effect=error)), \
+                    patch.object(runner, "_quarantine_working_orders", new=AsyncMock()) as quarantine:
+                await runner._recover_strategy_state("book_stale", slug)
+            quarantine.assert_not_awaited()
+            self.assertNotIn(f"strategy_state:{slug}", runner._runtime_error_counts)
+            self.assertNotIn(f"strategy_state_recovery:{slug}", runner._runtime_error_counts)
+
+    async def test_streamed_fresh_book_remains_usable_during_rest_book_backoff(self):
+        runner, _, _ = self.build_runner()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        state.market = await runner.gateway.fetch_market(slug)
+        state.book = await runner.gateway.fetch_book(slug)
+        # The normal market stream stamps this receipt independently of REST.
+        state.book_observed_at = NOW
+        state.next_book_refresh = NOW + timedelta(seconds=30)
+        state.next_contract_refresh = NOW + timedelta(seconds=60)
+        with patch.object(runner, "_refresh_book", new=AsyncMock()) as refresh:
+            await runner._service_market_state(slug, NOW)
+        refresh.assert_not_awaited()
+        self.assertTrue(runner._book_is_fresh_enough_to_plan(slug))
+
     async def _dead_retired_market(self, runner, slug):
         """Retire `slug` for a book fault and put its kickoff in the past."""
         state = runner.state_for(slug)

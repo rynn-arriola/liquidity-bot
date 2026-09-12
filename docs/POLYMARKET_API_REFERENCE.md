@@ -21,11 +21,14 @@ implemented.
 
 ## Interface actually used by this project
 
-September 12 read-throttle follow-up: official changelog/rate guidance were
-reopened; the status-page fetch failed. The prepared local repair coalesces only
-already-complete fresh equity brackets and schedules due REST positions earlier.
-It changes no endpoint, quota, cash classification or source selection, and does
-not claim the venue's exact 429 cause is known. [Audit](history/REST_THROTTLE_EXIT_SCHEDULING_2026-09-12.md).
+September 12 public-book follow-up: confirmed `market_book@429`/Cloudflare 1015
+responses exposed a local inline-retry amplifier despite sub-4/s aggregate
+traffic. The prepared repair isolates book reads in a shared endpoint backoff
+with one expiring recovery probe, independent of account/mutation lanes. This
+qualifies the older class-only descriptions below; book 429s never cool safety
+or retry inline. The public status API reported operational, but the first
+venue rejection's exact quota/root cause remains unknown. No endpoint, rate,
+cash classification or source selection changed. [Audit](history/PUBLIC_BOOK_BACKOFF_2026-09-12.md).
 
 The bot has two permanent, explicitly selected account modes:
 [WebSocket and REST](ACCOUNT_SOURCE_ARCHITECTURE.md).

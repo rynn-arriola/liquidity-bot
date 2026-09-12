@@ -114,3 +114,37 @@ terminal events, covered executions and complete flat positions applied.
 At 00:02:28Z September 12, the ledger had zero working orders, unresolved
 intents, unknown orders and nonzero positions. No venue mutation or risk reset
 was used for this repair. Deployment/start acceptance remains to be recorded.
+
+## Authorized deployment and live acceptance
+
+Reviewed release `1273a90a5` was pushed before deployment. WSL's direct GitHub
+fetch stalled, so a verified Git bundle transported the already-pushed exact
+commit for a clean fast-forward. All **176** source/test/script/web/config hashes
+matched. The complete native suite passed **1,352 tests in 109.488 seconds**.
+The deployment marker matches the release. Windows/GitHub/WSL parity passed;
+the offline desktop peer is explicitly pending. The 00:09:02Z online recovery
+copy was verified; it remains an ignored cold backup, never writable authority.
+
+At **00:09:31.203345Z September 12** (20:09 ET September 11), authenticated
+orders/positions and local working/position/unresolved/unknown counts were all
+zero. The authorized `auto 10 32 rest-fallback` restart started supervisor
+**290335**, runner **290344**. The live account-state line confirms bulk proof
+enabled, normal/active 5/1-second targets, 30-second proof age, max-30 pending
+entries and four read workers. Official maintenance state was HEALTHY/NORMAL.
+
+A natural fill in `aec-setkamecz-kukzde-bridav-2026-09-12` caused builder cancel
+at 00:11:27.991Z and reducer placement at 00:11:47.143Z. A subsequent reducer
+reprice canceled at 00:11:54.580Z and replaced at 00:12:14.160Z: **19.58 seconds**,
+without an intervening flat entry. Unrelated entries resumed at 00:12:56Z.
+This accepts the live continuation path, not instant REST service or a claim
+that every latency source is eliminated. The 900-second hard-timeout/three-IOC
+path still requires a natural event; no position/failure was induced.
+
+At **00:13:28.238355Z**, authenticated venue state had **eight orders across
+eight markets and one position**; local state also had eight working orders,
+one position, zero unresolved intents and zero unknown orders. The first API
+window counted 314 attempts, two failed requests, zero rate limits, maximum
+queue one and zero cooldown. No terminal runner failure occurred; the two
+requests are not attributed to a venue outage. This is startup/partial-width
+acceptance, not full-width performance proof. Remaining measured REST delay
+must stay visible and must not be described as one-second fill/exit latency.

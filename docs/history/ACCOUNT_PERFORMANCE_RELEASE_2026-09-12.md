@@ -266,3 +266,15 @@ venue orders/positions and zero unresolved/unknown/working/nonzero ledger state.
 No runner/supervisor was present. No restart or venue mutation was made in
 this follow-up. Operator approval of a concurrency-aware acceptance criterion
 has not been received; the old peak-only criterion was not silently removed.
+
+### Renewed conditional restart instruction
+
+After receiving the queue reproduction, deployed-suite result and explanation
+that no rate-limit failure was observed, the operator renewed: "We can restart
+if good." The AI stated before acting that this would be a monitored restart
+with normal four-reader admission not mislabeled as API failure, retaining
+actual delay/rate-limit/position checks and REST size 10 / 32, max 30 flat
+entries and $90 HARD. This renewed instruction is treated as conditional
+canary restart authority, not unconditional long-term capacity acceptance.
+The earlier pending-approval hold is superseded for this bounded restart;
+no new API budget, proof timeout or trading/risk threshold is introduced.

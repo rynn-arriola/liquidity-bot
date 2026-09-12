@@ -137,6 +137,7 @@ class AsyncAccountSnapshotGateway:
 
     async def fetch_open_orders(
         self, *, slugs: Iterable[str] = (), observed_at: datetime,
+        require_complete_fields: bool = False,
     ) -> tuple[OrderState, ...]:
         clean = list(dict.fromkeys(str(slug).strip() for slug in slugs
                                    if str(slug).strip()))
@@ -148,6 +149,17 @@ class AsyncAccountSnapshotGateway:
         if not isinstance(response, dict) or not isinstance(
                 response.get("orders"), list):
             raise AdapterError("open-order response has no orders list")
+        if require_complete_fields:
+            # Retail documents one complete list, not pagination. Do not use a
+            # partial future response or a defaulted fill quantity to skip an
+            # exact order read in optimized REST mode.
+            if (clean or response.get("eof", True) is not True
+                    or response.get("nextCursor") or response.get("next_cursor")):
+                raise AdapterError("bulk order proof is not a complete account list")
+            for row in response["orders"]:
+                if (not isinstance(row, dict)
+                        or row.get("cumQuantity", row.get("cum_quantity")) is None):
+                    raise AdapterError("bulk order proof lacks cumulative quantity")
         return tuple(normalize_order(
             row, observed_at=observed_at,
             resolve_client_id=self.resolve_client_id)

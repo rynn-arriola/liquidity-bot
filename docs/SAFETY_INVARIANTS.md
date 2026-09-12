@@ -897,9 +897,15 @@ These are implementation requirements, not suggestions.
     known-live or lifecycle-unproven position based on a future schedule.
 103. Experimental REST account-source mode is restart-scoped and opt-in; normal
     WebSocket behavior remains default. It supplies no fabricated private event
-    or heartbeat. Every account-wide proof strictly reads all owned
-    working/ambiguous orders, complete open orders, exact positions and
-    mandatory execution history. A risk-reducing hard-exit confirmation may
+    or heartbeat. Strict account-wide proof reads all owned working/ambiguous
+    orders, complete open orders, exact positions and mandatory execution
+    history. Explicit restart-scoped bulk optimization may substitute two
+    matching complete order lists only for unchanged flat, unambiguous,
+    OPEN/zero-fill entries. Missing/changed rows and positioned/ambiguous owners
+    retain exact reads; incomplete fields, duplicate/foreign identities fail
+    closed. Positive foreign risk must not disappear between proof attempts.
+    Startup/rebind/recovery/shutdown and failed/expired proof remain strict.
+    A risk-reducing position-transition confirmation may
     limit individual order GETs to the exact position owner, but must still
     consume complete open-order, position and mandatory-history snapshots. It
     cannot renew the account-wide entry gate or the ordinary poll clock; a
@@ -925,6 +931,8 @@ These are implementation requirements, not suggestions.
     positive history can survive expired proof, never entry authority. Equity
     freshness uses the current clock after account reconciliation, not its
     pre-await timestamp. Stable mode capacity and trading policy are unchanged.
+    Configured normal/active polling is bounded to 3–5 / 1–normal seconds after
+    completion, never a freshness guarantee or permission to raise API limits.
 105. REST position priority is scheduling only: exact quantity, order and
     unresolved/absent ownership changes may interrupt flat-owner work through
     the same guarded decision path. Snapshot timestamps cannot cause repeated
@@ -935,5 +943,11 @@ These are implementation requirements, not suggestions.
     scheduling token so an IOC that opens and expires between polls receives
     its next exact retry before unrelated flat owners. Same-owner service is
     finite and cannot exceed the existing hard-exit attempt/deadline authority.
+    Confirmed reducer cancellation continues through the same guarded path;
+    an exhausted uncovered/due owner defers flat work while preserving other
+    held owners. Successful held service cannot inherit flat reward dwell.
+    Inventory/tiny/kickoff deadline crossings are scheduling tokens, not new
+    exit rules. Discovery yields during reducer gaps/ambiguity and within 60
+    seconds of existing position deadlines; exact venue proof remains required.
     Non-selected exposure remains exit-only; normal WebSocket scheduling and
     every pricing, sizing, entry-cap, risk and lifecycle rule are unchanged.

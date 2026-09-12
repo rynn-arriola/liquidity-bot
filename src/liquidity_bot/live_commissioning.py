@@ -2302,6 +2302,10 @@ class CommissioningRunner:
     async def _fetch_execution_history(self, now: datetime):
         return await self.account.fetch_executions(observed_at=now)
 
+    async def _fetch_rest_order_snapshot(self, now: datetime):
+        """Account-source hook; normal WebSocket reconciliation is unchanged."""
+        return await self.account.fetch_open_orders(observed_at=now)
+
     async def _rest_reconcile(
         self, now: datetime, *, tag: str = "",
         strict_order_markets: frozenset[str] | None = None,
@@ -2468,7 +2472,7 @@ class CommissioningRunner:
         self._absent_asked_at = {
             key: at for key, at in self._absent_asked_at.items()
             if key in absent_ids}
-        orders = await self.account.fetch_open_orders(observed_at=now)
+        orders = await self._fetch_rest_order_snapshot(now)
         positions = await self.account.fetch_positions(observed_at=now)
         # Recent venue-retained fills backfill gaps while available. The local
         # ledger is the only execution history this project controls across a
@@ -6035,6 +6039,10 @@ class CommissioningRunner:
         attempts = self.reconciler.hard_exit_attempts(slug)
         return float(min(2 ** max(attempts - 1, 0), 5))
 
+    def _position_priority_must_yield(self, slug: str) -> bool:
+        """Optional bounded-sweep handoff; never authorizes an extra mutation."""
+        return False
+
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
     ) -> str | None:
@@ -6115,6 +6123,19 @@ class CommissioningRunner:
             if slug in priorities:
                 priority_seen[slug] = priorities[slug]
             else:
+                # A bounded position budget must not strand an uncovered or
+                # newly due owner behind the remaining flat slate. Yield to a
+                # fresh outer pass instead of increasing mutation/visit limits.
+                exhausted = next((owner for owner, token in priorities.items()
+                                  if priority_seen.get(owner) != token
+                                  and priority_visits.get(owner, 0)
+                                  >= self._position_priority_visit_limit(owner)
+                                  and self._position_priority_must_yield(owner)), None)
+                if exhausted is not None:
+                    self._mark_market_dirty(exhausted, self._now())
+                    pending_slugs = [owner for owner in pending_slugs
+                                     if owner in priorities and owner != exhausted]
+                    continue
                 urgent = next((owner for owner, token in priorities.items()
                                if priority_seen.get(owner) != token
                                and priority_visits.get(owner, 0)
@@ -6166,6 +6187,7 @@ class CommissioningRunner:
             # path when it changed. Unknown intents are still rejected at the
             # top of the loop, and the per-owner limit prevents starvation.
             priority_after = self._position_priority_tokens()
+            continued_position = False
             if (slug in priority_seen and slug in priority_after
                     and priority_seen[slug] != priority_after[slug]
                     and self._position_priority_replan_immediately(
@@ -6177,15 +6199,29 @@ class CommissioningRunner:
                 priority_dispatches.add(slug)
                 pending_slugs = [slug, *(
                     owner for owner in pending_slugs if owner != slug)]
+                continued_position = True
             # A normal full sweep can reach a market whose REST terminal proof
             # queued priority earlier in this same loop. Its replan has now
             # happened, so do not service it again next iteration.
             self._priority_replan_slugs.discard(slug)
             if outcome:
                 return outcome
+            if (not continued_position and slug in priority_after
+                    and priority_visits.get(slug, 0)
+                    >= self._position_priority_visit_limit(slug)
+                    and self._position_priority_must_yield(slug)):
+                self._mark_market_dirty(slug, self._now())
+                # Preserve service for other held owners; only flat work is
+                # deferred. One busy position must not starve another exit.
+                pending_slugs = [owner for owner in pending_slugs
+                                 if owner in priority_after and owner != slug]
             if delay > 0:
                 self._next_decision_at[slug] = (
                     self._now() + timedelta(seconds=delay))
+            elif slug in priority_after:
+                # REST position service must not inherit a flat quote's reward
+                # dwell timer. Explicit failure backoff above remains binding.
+                self._next_decision_at.pop(slug, None)
             else:
                 resting_sides = frozenset(
                     order.side for order in self._working_orders(slug))
@@ -9695,7 +9731,7 @@ class CommissioningRunner:
                         # id here made the ten-second freshness task itself a
                         # twenty-slot head-of-line blocker.
                         await self._rest_reconcile(
-                            now, strict_order_markets=frozenset())
+                            now, tag="periodic", strict_order_markets=frozenset())
                     except Exception:
                         # Preserve the last proven state briefly. If both the
                         # private stream and REST remain quiet/unavailable, the
@@ -10135,8 +10171,17 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     if account_state_mode not in {"websocket", "rest-fallback"}:
         raise CommissioningRefused("invalid account-state mode")
     runner_type = CommissioningRunner
+    runner_options = {}
     if account_state_mode == "rest-fallback":
         from .rest_fallback import RestFallbackRunner
+        from .rest_polling_policy import (
+            DEFAULT_REST_POLLING_POLICY_PATH, load_rest_polling_policy)
+        try:
+            runner_options["rest_polling_policy"] = load_rest_polling_policy(
+                Path(getattr(args, "rest_polling_policy",
+                             DEFAULT_REST_POLLING_POLICY_PATH)))
+        except ValueError as exc:
+            raise CommissioningRefused(str(exc)) from exc
         runner_type = RestFallbackRunner
     secrets = load_runtime_secrets(require_polymarket=True)
     if not (secrets.discord_configured and secrets.discord_errors_configured):
@@ -10150,7 +10195,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     ledger = ExecutionLedger(args.database)
     runner = runner_type(
         client, config, ledger, DiscordNotifier(secrets),
-        limiter=shared_api_limiter(float(config.rest_requests_per_second)))
+        limiter=shared_api_limiter(float(config.rest_requests_per_second)),
+        **runner_options)
     loop = asyncio.get_running_loop()
     installed_signals: list[signal.Signals] = []
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -10192,6 +10238,10 @@ def main() -> int:
         "--account-state-mode", choices=("websocket", "rest-fallback"),
         default="websocket",
         help="restart-scoped account source; REST fallback is experimental",
+    )
+    parser.add_argument(
+        "--rest-polling-policy", type=Path, default=argparse.SUPPRESS,
+        help="validated restart-scoped REST optimization JSON (REST mode only)",
     )
     parser.add_argument(
         "--quote-size", type=int,

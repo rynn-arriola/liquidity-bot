@@ -15,6 +15,15 @@ It retains the same strategy and risk rules but has additional polling latency
 and stricter account-proof requirements. It must not activate automatically on
 a socket error or be treated as full-width live acceptance.
 
+Temporary REST polling loads strict restart-scoped
+`config/rest_polling_policy.json` (optional `--rest-polling-policy` override).
+Enabled bulk proof skips only unchanged flat OPEN/zero-fill individual reads
+after two complete matching lists; positions/history and all ambiguity checks
+remain required. Normal/active targets are five/one seconds after completion,
+not a response-time guarantee. Disabling restores strict ordinary polling, not
+the canceled-reducer scheduling defect. Default WebSocket mode ignores this
+file. [Safety and verification](history/REST_BULK_CONTINUITY_2026-09-11.md).
+
 ## Fixed execution envelope
 
 - join every executable active sports market to its liquidity rewards and

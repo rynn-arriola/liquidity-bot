@@ -26,6 +26,13 @@ local alternative: [REST account source](history/REST_ACCOUNT_FALLBACK_2026-09-1
 It is bot implementation policy, not a venue guarantee of REST freshness or
 equivalence to the private stream. Public books still require market data.
 
+The [September 11 bulk/continuity repair](history/REST_BULK_CONTINUITY_2026-09-11.md)
+uses complete Retail open-order lists to avoid repeated individual reads only
+for unchanged flat OPEN/zero-fill entries. The Retail
+[open-orders contract](https://docs.polymarket.us/api-reference/orders/get-open-orders)
+was rechecked for the complete-list interface. Missing/changed/ambiguous orders
+still require exact proof; successful lists do not guarantee source freshness.
+
 The [September 11 REST review](history/REST_FALLBACK_REVIEW_2026-09-11.md)
 adds a temporary-only 30 pending-entry maximum and bounded concurrent exact
 reads without changing the shared rate limit. The Retail

@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "normal_poll_seconds": 5,
+  "active_poll_seconds": 1
+}

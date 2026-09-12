@@ -177,7 +177,9 @@ class RestPositionPriorityTests(IsolatedAsyncioTestCase):
 
         visited, _ = await self.sweep(runner, slugs, refresh=poll)
         self.assertEqual([s for s, _ in visited].count("outside"), 4)
-        self.assertEqual([s for s, _ in visited if s != "outside"], list(slugs))
+        # Keep the same finite visit bound, but defer flat entries rather than
+        # parking this continuously changing, uncovered position behind them.
+        self.assertEqual([s for s, _ in visited if s != "outside"], [])
 
     async def test_default_websocket_and_empty_sweeps_unchanged(self):
         runner, _, slugs = await self.build(rest=False, count=3)
@@ -378,7 +380,9 @@ class RestPositionPriorityTests(IsolatedAsyncioTestCase):
                 patch.object(runner, "_decide_for_market", decide):
             await runner._decision_sweep(runner.active_slugs)
         self.assertEqual(visited[:3], [held, held, held])
-        self.assertTrue(pending_after_cancel)  # ACK alone did not allow a reducer.
+        # The REST continuation now obtains exact terminal evidence before
+        # returning. No reducer was created in the cancel decision itself.
+        self.assertFalse(pending_after_cancel)
         self.assertEqual(len(client.orders.cancel_calls), 2)
         self.assertEqual(len(client.orders.create_calls), 1)
         self.assertEqual(Decimal(str(client.orders.create_calls[0]["quantity"])), Decimal("8.41"))

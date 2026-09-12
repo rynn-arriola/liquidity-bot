@@ -5,6 +5,7 @@ history, not current instructions or runtime truth.
 
 | Archive | Purpose |
 |---|---|
+| [REST bulk proof and reducer continuity — 2026-09-11](REST_BULK_CONTINUITY_2026-09-11.md) | Recurrence evidence, guarded bulk optimization, cancel-confirm-replacement continuity and final edge audit |
 | [REST hard-exit retry repair — 2026-09-11](REST_HARD_EXIT_RETRY_2026-09-11.md) | Incident evidence, scoped confirmation proof, same-owner retry scheduling and stopped activation boundary |
 | [AI engineering through 2026-08-27](AI_ENGINEERING_THROUGH_2026-08-27.md) | Former combined engineering and historical status reference |
 | [Status pre-compaction](STATUS_2026-08-27_PRE_COMPACTION.md) | Last long-form operational snapshot before compact status |

@@ -8,14 +8,17 @@ trades latency for availability, and cannot detect silently stale venue data.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 
 from .adapters import AdapterError, ApiAdmissionDeferred
 from .errors import RuntimeInvariantViolation
+from .execution_ledger import LedgerConflict
 from .commissioning import CommissioningUnavailable
 from .live_commissioning import CommissioningRunner
 from .live_orders import AsyncTradingGateway
 from .live_session import PrivateStateGate
+from .rest_polling_policy import RestPollingPolicy
 
 
 class RestStateGate(PrivateStateGate):
@@ -77,8 +80,10 @@ class RestProofTradingGateway(AsyncTradingGateway):
 class RestFallbackRunner(CommissioningRunner):
     """Shared strategy/lifecycle, with a strict REST-only account source.
 
-    Account-wide proofs read all owned working/ambiguous orders individually,
-    then complete open orders, exact positions and execution history. A hard
+    Strict proofs read all owned working/ambiguous orders individually. The
+    optional steady-state optimization substitutes two matching complete order
+    snapshots only for unchanged, flat, unambiguous OPEN entries. Positions
+    and execution history remain complete and mandatory on every proof. A hard
     exit may use an explicitly market-scoped order proof; it cannot grant new
     entry authority, and a failed scoped proof revokes existing authority. No
     failed poll retains entry authority. Proof age includes the entire serial
@@ -92,7 +97,10 @@ class RestFallbackRunner(CommissioningRunner):
     PENDING_ENTRY_ORDER_CEILING = 30
     ORDER_READ_CONCURRENCY = 4
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, rest_polling_policy=None, **kwargs):
+        self.rest_polling_policy = rest_polling_policy or RestPollingPolicy()
+        self._bulk_order_proof = False
+        self._bulk_skipped = {}
         kwargs["private_stream_factory"] = DisabledPrivateStream
         super().__init__(*args, **kwargs)
         self.gate = RestStateGate(max_silence_seconds=30)
@@ -108,6 +116,90 @@ class RestFallbackRunner(CommissioningRunner):
             lambda: self.gate.session_ready(self.ledger, now=self._now()))
 
     async def _read_owned_order_states(self, exchange_ids, now):
+        if self._bulk_order_proof and exchange_ids:
+            orders = await self.account.fetch_open_orders(
+                observed_at=now, require_complete_fields=True)
+            by_id = self._checked_bulk_orders(orders)
+            local = {str(row["exchange_order_id"]): row
+                     for row in self.ledger.working_orders(owned_only=True)}
+            uncertain = {str(row["market_slug"])
+                         for row in self.ledger.unresolved_intents()}
+            uncertain.update(str(row["market_slug"])
+                             for row in self.ledger.absent_orders())
+            read_ids = []
+            for exchange_id in exchange_ids:
+                order, row = by_id.get(exchange_id), local.get(exchange_id)
+                if (order is not None and row is not None
+                        and order.market_slug not in uncertain
+                        and self.ledger.position(order.market_slug) == 0
+                        and order.status == "OPEN" and order.filled_qty == 0
+                        and order.event_at >= datetime.fromisoformat(row["event_at"])
+                        and self._order_matches_row(order, row)):
+                    self._bulk_skipped[exchange_id] = order
+                else:
+                    read_ids.append(exchange_id)
+            exchange_ids = read_ids
+        return await self._read_exact_order_states(exchange_ids, now)
+
+    @staticmethod
+    def _order_matches_row(order, row):
+        return (
+            order.client_order_id == row["client_order_id"]
+            and order.exchange_order_id == row["exchange_order_id"]
+            and order.market_slug == row["market_slug"]
+            and order.side.upper() == row["side"]
+            and order.status == row["status"]
+            and order.price == Decimal(row["price"])
+            and order.original_qty == Decimal(row["original_qty"])
+            and order.filled_qty == Decimal(row["filled_qty"]))
+
+    def _checked_bulk_orders(self, orders):
+        """A transient foreign/duplicate row must not disappear between reads."""
+        by_id = {}
+        clients = set()
+        for order in orders:
+            if order.client_order_id.startswith("venue:"):
+                # Preserve the positive ownership violation even if the next
+                # response omits this row. Throwing before recording it would
+                # let a later clean response silently forget foreign risk.
+                observed = self._now()
+                self.ledger.apply_order_event(
+                    "rest-bulk-foreign",
+                    f"{observed.isoformat()}:{order.exchange_order_id}",
+                    order, received_at=observed)
+                raise LedgerConflict("unowned order in REST bulk proof")
+            if (not order.exchange_order_id
+                    or order.exchange_order_id in by_id
+                    or order.client_order_id in clients):
+                raise LedgerConflict("duplicate or missing identity in REST bulk proof")
+            by_id[order.exchange_order_id] = order
+            clients.add(order.client_order_id)
+        return by_id
+
+    async def _fetch_rest_order_snapshot(self, now):
+        if not self._bulk_order_proof:
+            return await super()._fetch_rest_order_snapshot(now)
+        orders = await self.account.fetch_open_orders(
+            observed_at=now, require_complete_fields=True)
+        by_id = self._checked_bulk_orders(orders)
+        changed = []
+        for exchange_id, before in self._bulk_skipped.items():
+            after = by_id.get(exchange_id)
+            # Compare economic/ownership fields, not snapshot receipt times.
+            # A missing row still needs exact positive terminal evidence.
+            if (after is None
+                    or after.event_at < before.event_at
+                    or any(getattr(after, field) != getattr(before, field)
+                           for field in ("client_order_id", "market_slug", "side",
+                                         "status", "price", "original_qty", "filled_qty"))):
+                changed.append(exchange_id)
+        failures = await self._read_exact_order_states(changed, now)
+        if failures:
+            raise AdapterError("changed/missing order lacks exact REST proof: "
+                               + "; ".join(f"{key}: {detail}" for key, detail in failures))
+        return orders
+
+    async def _read_exact_order_states(self, exchange_ids, now):
         # Only independent reads overlap. All still share the unchanged host
         # governor; no mutation is parallelized and every owner is checked.
         semaphore = asyncio.Semaphore(self.ORDER_READ_CONCURRENCY)
@@ -146,6 +238,18 @@ class RestFallbackRunner(CommissioningRunner):
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
         started = self._now()
+        ready = self.gate.session_ready(self.ledger, now=started)
+        if (self.rest_polling_policy.enabled and tag == "periodic"
+                and ready and not self._rest_poll_due(started)):
+            return
+        if self._bulk_order_proof:
+            raise RuntimeInvariantViolation("rest_proof_overlap", "overlapping account proofs")
+        # Startup, rebind, recovery, shutdown and a failed/expired prior proof
+        # retain every exact read. A scoped caller never selects this shortcut.
+        self._bulk_order_proof = bool(
+            self.rest_polling_policy.enabled and ready
+            and tag in {"rest-source-decision", "periodic"})
+        self._bulk_skipped = {}
         self.gate.on_reconciliation_conflict()
         try:
             # History, including conflicts, is mandatory without private fills.
@@ -163,6 +267,9 @@ class RestFallbackRunner(CommissioningRunner):
         except BaseException:
             self.gate.on_reconciliation_conflict()
             raise
+        finally:
+            self._bulk_order_proof = False
+            self._bulk_skipped = {}
         self._rest_poll_completed_at = self._now()
         # REST has no event to dirty an owner after a partial fill, position
         # quantity change or terminal order. Re-evaluate the bounded slate.
@@ -176,11 +283,19 @@ class RestFallbackRunner(CommissioningRunner):
         if not self.gate.session_ready(self.ledger, now=self._now()):
             raise CommissioningUnavailable("REST account source is not ready")
 
-    async def _refresh_execution_state_for_decision(self, now):
+    def _rest_poll_due(self, now):
         completed = self._rest_poll_completed_at
+        interval = self.REST_POLL_SECONDS
+        if self.rest_polling_policy.enabled:
+            interval = (self.rest_polling_policy.active_poll_seconds
+                        if self._has_open_position() or self.ledger.unresolved_intents()
+                        else self.rest_polling_policy.normal_poll_seconds)
+        return (completed is None
+                or not 0 <= (now - completed).total_seconds() < interval)
+
+    async def _refresh_execution_state_for_decision(self, now):
         if (not self.gate.session_ready(self.ledger, now=now)
-                or completed is None
-                or not 0 <= (now - completed).total_seconds() < self.REST_POLL_SECONDS):
+                or self._rest_poll_due(now)):
             await self._rest_reconcile(now, tag="rest-source-decision")
 
     async def _reconcile_hard_exit_state(self, slug):
@@ -194,12 +309,15 @@ class RestFallbackRunner(CommissioningRunner):
         REST entry authority or the normal poll clock.
         """
 
+        await self._reconcile_position_state(slug, tag="hard-exit")
+
+    async def _reconcile_position_state(self, slug, *, tag):
         observed_at = self._now()
         try:
             await CommissioningRunner._rest_reconcile(
                 self,
                 observed_at,
-                tag=f"hard-exit:{slug}",
+                tag=f"{tag}:{slug}",
                 strict_order_markets=frozenset({str(slug)}),
                 advance_gate=False,
             )
@@ -214,6 +332,77 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_history_seen = (
             (self._rest_history_seen or frozenset())
             | self._rest_history_pending)
+
+    async def _decide_for_market(self, slug, now, *, replanned=False):
+        before = self._market_action_generation.get(slug, 0)
+        outcome, delay = await super()._decide_for_market(
+            slug, now, replanned=replanned)
+        if (outcome or delay or self._stop_requested
+                or self._market_action_generation.get(slug, 0) == before
+                or self.ledger.position(slug) == 0):
+            return outcome, delay
+        if (any(row["operation"] == "CANCEL"
+                for row in self.ledger.unresolved_intents(slug))
+                or self.reconciler.hard_exit_schedule_token(slug)[1] is not None):
+            # Repricing is still cancel-confirm-replace, but confirmation may
+            # not wait behind an unrelated flat slate or discovery. This does
+            # no second plan/apply: the normal scheduler owns the next action.
+            try:
+                await self._reconcile_position_state(slug, tag="position-transition")
+            except (LedgerConflict, RuntimeInvariantViolation):
+                raise
+            except Exception as exc:
+                await self._report_runtime_error("position_transition_proof", exc)
+                return None, 1.0
+        return outcome, delay
+
+    def _position_exit_deadline(self, slug):
+        """Scheduling mirror of existing exit clocks, not exit authorization."""
+        quantity = abs(self.ledger.position(slug))
+        state = self._markets.get(slug)
+        market = getattr(state, "market", None)
+        basis = self.ledger.inventory_basis(slug)
+        if market is None or basis is None:
+            return None
+        policy = self.reconciler.policy
+        age_limit = policy.max_inventory_age_seconds
+        minimum = getattr(market, "minimum_trade_qty", None)
+        minimum = Decimal(str(minimum)) if minimum is not None else None
+        if (policy.small_residual_min_qty <= quantity <= policy.small_residual_max_qty
+                and minimum is not None and minimum > 0
+                and quantity >= minimum and quantity % minimum == 0):
+            age_limit = min(age_limit, policy.small_residual_timeout_seconds)
+        deadline = basis.opened_at + timedelta(seconds=age_limit)
+        if market.game_start is not None:
+            deadline = min(deadline, market.game_start - timedelta(
+                seconds=policy.force_exit_before_start_seconds))
+        return deadline
+
+    def _position_priority_must_yield(self, slug):
+        if (self.ledger.position(slug) == 0
+                or slug in self._isolated_unexecutable_slugs()):
+            return False
+        deadline = self._position_exit_deadline(slug)
+        return (not self.ledger.working_orders(slug)
+                or deadline is None or self._now() >= deadline)
+
+    def _position_near_its_flatten_deadline(self, now):
+        if super()._position_near_its_flatten_deadline(now):
+            return True
+        for row in self.ledger.query(
+                "SELECT market_slug FROM execution_positions WHERE CAST(net_qty AS REAL)!=0"):
+            slug = str(row["market_slug"])
+            if slug in self._isolated_unexecutable_slugs():
+                continue
+            # A gap or pending cancel needs a replacement, not a blocking
+            # catalog scan. Include inventory/tiny deadlines as well as kickoff.
+            if (not self.ledger.working_orders(slug)
+                    or self.ledger.unresolved_intents(slug)):
+                return True
+            deadline = self._position_exit_deadline(slug)
+            if deadline is None or (deadline - now).total_seconds() <= 60:
+                return True
+        return False
 
     def _hard_exit_retry_delay(self, slug):
         # The focused proof above is the delay. Re-enter immediately while its
@@ -231,9 +420,12 @@ class RestFallbackRunner(CommissioningRunner):
         return super()._position_priority_visit_limit(slug)
 
     def _position_priority_replan_immediately(self, slug, before, after):
-        # The final token element is reconciler-only hard-exit state. Other
-        # position/order changes retain the established bounded scheduler path.
-        return bool(before and after and before[-1] != after[-1])
+        # Complete a positively confirmed cancel before another flat entry.
+        # A new resting reducer ends this continuation; do not churn it in an
+        # unbounded reprice loop. Hard IOC continuation retains its prior token.
+        return bool(before and after and (
+            before[-1] != after[-1]
+            or (before[1] and not after[1] and not after[2] and not after[3])))
 
     def _position_priority_tokens(self):
         # Ignore snapshot timestamps: an unchanged proof must not repeatedly
@@ -261,10 +453,14 @@ class RestFallbackRunner(CommissioningRunner):
             # Non-selected exposure still belongs to the existing exit-only
             # service path; creating its state does not grant entry eligibility.
             self.state_for(slug)
+            deadline = self._position_exit_deadline(slug)
             priorities[slug] = (
                 self.ledger.position(slug), tuple(sorted(orders.get(slug, ()))),
                 tuple(sorted(unresolved.get(slug, ()))),
                 tuple(sorted(absent.get(slug, ()))),
+                # Time crossing a real exit boundary must wake an already
+                # visited owner even when its quantity and order never change.
+                (deadline is None or self._now() >= deadline),
                 self.reconciler.hard_exit_schedule_token(slug))
         return priorities
 
@@ -298,7 +494,10 @@ class RestFallbackRunner(CommissioningRunner):
         if result == "RECOVERY_ONLY":
             await self._wait_for_initial_private_state()
         print("[account-state] mode=rest-fallback private_socket=disabled "
-              "decision_poll_seconds=5 idle_poll_seconds=10 "
+              f"bulk_order_proof={str(self.rest_polling_policy.enabled).lower()} "
+              f"decision_poll_seconds={self.rest_polling_policy.normal_poll_seconds if self.rest_polling_policy.enabled else 5} "
+              f"active_poll_seconds={self.rest_polling_policy.active_poll_seconds if self.rest_polling_policy.enabled else 5} "
+              "idle_poll_seconds=10 "
               "max_proof_age_seconds=30 max_pending_entries=30 "
               "order_read_concurrency=4 experimental=yes", flush=True)
         return result

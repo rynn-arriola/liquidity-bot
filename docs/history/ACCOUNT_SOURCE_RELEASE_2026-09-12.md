@@ -120,3 +120,44 @@ and genuine venue private data passes verification. Do not induce fills, outages
 HARD losses or source changes to manufacture acceptance. No architecture can
 guarantee executable liquidity or detect every stale-but-successful REST response
 without an authoritative venue publication watermark.
+
+### Final REST restart and initial live evidence
+
+- A fresh parity backup captured at **07:11:50Z** is 361,873,408 bytes with
+  SHA-256 `ae9ee78b6867e640d81099f65a630b403cecbb3a19ba95aa8b9de58a5dcd7b13f`.
+  The **07:12:40Z** authenticated start gate then proved venue and ledger zero
+  orders, positions, unresolved intents and unknown orders.
+- The explicit REST restart retained size 10 / 32 and every existing risk and
+  strategy rule. Runner `600164` is supervised by `600149`; startup logged max
+  30 flat pending entries, positions/reducers excluded, 5-second normal and
+  1-second positioned polling, four read workers, healthy official maintenance
+  status and no automatic source switch.
+- At **07:16:53Z**, authenticated evidence found 28 venue orders across 28
+  markets, zero positions, unresolved intents or unknown orders. All first 30
+  PLACE intents were `RECONCILED`.
+- The first API window ended at **07:17:06Z** after 264.3 seconds: 514 attempts
+  (484 reads / 30 mutations), 1.945/s, zero 429s and six failed responses. Ledger
+  and log inspection proves all 30 mutations reconciled without an action-failure
+  or recovery record, so the six were read attempts. The next three windows
+  recorded zero failures. The **07:23:06Z** window recorded one further failed
+  response alongside four logged cancel actions, three place actions and one
+  additional positive-OPEN-driven retry of a just-submitted cancel. Every intent
+  reconciled, but aggregate evidence cannot identify whether the failure was the
+  duplicate cancel or one of that window's reads. This retry pattern predates the
+  permanent source runner: the ledger contains 88 same-order cancel pairs under
+  two seconds from September 11 through the prior runner, versus six after this
+  restart at the time of review.
+- The current limiter evidence retains aggregate attempts by category but only
+  an aggregate failure count. Contained paths do not necessarily log the
+  underlying exception, so the exact failed endpoint/status cannot always be
+  recovered from this run and is deliberately not inferred. The official September 12
+  status page reported production operational with no incident; that does not
+  disprove an isolated request failure.
+- A natural position appeared at 07:22:20Z and the existing reducer path detected
+  it, cancelled the building order and began repricing the passive reducing order.
+  This is useful detection/soft-reducer evidence, not yet acceptance of the
+  unchanged 900-second hard-exit path or unfilled-IOC continuation.
+
+No code, configuration, source selection or process state changed during the
+failure investigation. Exact per-category/status failure telemetry is a proposed
+observability improvement, not deployed behavior.

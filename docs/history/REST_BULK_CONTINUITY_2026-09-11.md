@@ -251,3 +251,44 @@ venue and local state matched at **21 orders across 21 markets**, zero positions
 zero unresolved intents and zero unknown orders. This accepts deployment,
 startup and ordinary entries only. A naturally unfilled IOC sequence is still
 required to accept the repaired path; none was induced.
+
+## Natural acceptance failure and second repair
+
+Natural evidence later rejected `39df87915` as a complete repair. For
+`aec-setkameua-pruser-kuzvol-2026-09-12`, the runner canceled the passive
+reducer at 03:11:25.556Z and submitted an exact BUY-10 IOC at 03:11:41.448Z.
+The immediate `position-transition` path then positively proved that IOC
+terminal and the exact -10 position still present. Nevertheless, the same-owner
+priority revisit entered the general account/equity refresh before consuming
+that cached proof. At 03:12:20.282Z it logged
+`hard_exit_retry_window_exceeded`; the position remained without a reducer.
+The operator manually flattened all positions and requested a safe immediate
+stop. Authenticated state after the stop proved zero positions and zero orders;
+the supervisor and runner are stopped.
+
+Prepared follow-up `447e798f0` makes exact post-IOC transition proof visible to
+the scheduler. Only a priority-dispatched owner with a current, unchanged hard-
+exit token, nonzero exact position and no working, absent or unresolved order
+may skip the unrelated general refresh. Terminal confirmation carries the
+original proof completion time—not a renewed timestamp—into the next bounded
+attempt. At the final POST boundary, a one-shot owner-scoped check requires the
+planner's exact next attempt and its single durable unsent PLACE intent. It
+cannot authorize a flat entry, another owner or a retry after proof expiry.
+Every incomplete, stale, changed, working, absent, unresolved, restart or
+backward-clock state takes the original fail-closed proof path. Default private-
+WebSocket behavior is unchanged, as are the three-attempt/30-second retry
+authority, 900-second deadline, sizing, ranking, pricing and risk policy.
+
+The production-width regression has 30 unrelated flat entry orders, expires
+global entry authority after each scoped proof and injects 31 seconds whenever
+the obsolete general refresh is attempted. With the scheduler bypass removed,
+the exact position remains open and the test fails; restored code performs all
+three exact IOCs, fills on the third and reaches flat inside the unchanged
+window with no redundant refresh. Separate checks cover partial remaining
+quantity, stale/changed proof, working/absent/unknown state, flat-entry and
+other-owner refusal, and mutation-boundary expiry. The temporary max-30 count
+is also proven to include only flat working entries plus unresolved flat entry
+reservations: a working reducer and unresolved reducer reservation on a nonzero
+position consume zero entry slots. The canonical pinned-WSL suite compiles and
+passes all **1,356 tests**. No deployment or restart followed this repair;
+production remains stopped on marker `39df87915`.

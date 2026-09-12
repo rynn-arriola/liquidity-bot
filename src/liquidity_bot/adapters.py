@@ -382,7 +382,13 @@ def parse_trade_response(response: Any, *, expected_slug: str | None = None) -> 
 
 @dataclass(frozen=True)
 class LimiterTelemetry:
-    """Bounded, secret-free request-attempt evidence from one limiter."""
+    """Bounded, secret-free request-attempt evidence from one limiter.
+
+    ``max_waiting`` includes deliberately concurrent read admission, including
+    the caller currently claiming a slot. It is not a sustained-backlog or
+    deadline-miss measurement. Interpret it with configured concurrency,
+    waiting_now, actual wait times and completed account/exit proof.
+    """
 
     elapsed_seconds: float
     attempts: int

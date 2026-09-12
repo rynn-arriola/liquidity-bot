@@ -34,6 +34,10 @@ BATCHED_API_CATEGORIES = frozenset({
     "market_contract_batch",
 })
 SLOT_SCALED_API_CATEGORIES = frozenset({
+    # Parent-event batches are bounded to 100, not the eight-owner contract
+    # batches above. Logs do not retain distinct parent counts, so use the
+    # conservative width ratio rather than inventing batch occupancy.
+    "event_contract_batch",
     "execution_history",
     "incentive_discovery",
     "market_book",

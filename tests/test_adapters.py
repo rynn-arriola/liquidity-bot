@@ -208,6 +208,28 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(limiter.calls, 2)
         self.assertEqual(sleeps, [0.25])
 
+    def test_parallel_read_queue_peak_is_not_evidence_of_overload(self):
+        """Four bounded readers trip the old peak>1 rule without any API IO."""
+        async def exercise():
+            limiter = AsyncIntervalLimiter.from_rate(4)
+            for _ in range(2):
+                # Occupy the current pacing slot, then start the same bounded
+                # fan-out used by exact REST order proof. All requests are
+                # local; no credential, socket or venue is involved.
+                await limiter.wait(operation="GET /v1/orders/example")
+                limiter.telemetry(reset=True)
+                await asyncio.gather(*(limiter.wait(
+                    operation="GET /v1/orders/example") for _ in range(4)))
+                evidence = limiter.telemetry()
+                self.assertEqual(evidence.attempts, 4)
+                self.assertEqual(evidence.max_waiting, 4)
+                self.assertEqual(evidence.waiting_now, 0)
+                self.assertEqual(evidence.failed_responses, 0)
+                self.assertEqual(evidence.rate_limited_responses, 0)
+                self.assertEqual(evidence.mutation_attempts, 0)
+
+        self.run_async(exercise())
+
     def test_limiter_telemetry_counts_each_429_attempt_and_response(self):
         class Client(FakeClient):
             async def get(self, path, *, query=None, authenticated=False):

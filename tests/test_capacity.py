@@ -99,6 +99,25 @@ class CapacityTests(unittest.TestCase):
             "rate_limited=0 max_waiting=0 categories=none")
         self.assertEqual(empty.attempts_by_category, {})
 
+    def test_event_lifecycle_reads_are_included_in_current_capacity_evidence(self):
+        from liquidity_bot.adapters import _request_category
+        category = _request_category("events.list(lifecycle-batch)", "read")
+        self.assertEqual(category, "event_contract_batch")
+        window = parse_api_budget_line(
+            "[api-budget] slots=24 seconds=60 attempts=12 failures=0 "
+            f"rate_limited=0 max_waiting=4 categories={category}:6,balance:6")
+        self.assertEqual(window.attempts_by_category[category], 6)
+        # Parent occupancy is not logged. Width scaling is conservative for
+        # expansion; this is not the unrelated eight-market contract batch.
+        projected = project_api_budget_window(window, 32)
+        self.assertEqual(projected.projected_by_category[category], 8)
+        self.assertEqual(projected.projected_by_category["balance"], 6)
+        self.assertEqual(projected.projected_runner_attempts, 14)
+        with self.assertRaisesRegex(ValueError, "unclassified"):
+            parse_api_budget_line(
+                "[api-budget] slots=32 seconds=60 attempts=1 failures=0 "
+                "rate_limited=0 max_waiting=1 categories=future_unknown:1")
+
     def test_empirical_projection_counts_fixed_batched_scaled_and_peer_work(self):
         window = parse_api_budget_line(
             "[api-budget] slots=24 seconds=60 attempts=30 failures=0 "

@@ -218,6 +218,9 @@ def main() -> int:
     print(
         f"maximum limiter queue        {max(row.max_waiting for row in windows):>8}")
     print(
+        "  queue peak includes concurrent read admission; compare configured "
+        "readers, actual wait times and drained queues before calling overload")
+    print(
         f"failures / confirmed 429s    "
         f"{sum(row.failures for row in windows)} / "
         f"{sum(row.rate_limited for row in windows)}")

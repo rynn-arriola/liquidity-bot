@@ -292,3 +292,38 @@ reservations: a working reducer and unresolved reducer reservation on a nonzero
 position consume zero entry slots. The canonical pinned-WSL suite compiles and
 passes all **1,356 tests**. No deployment or restart followed this repair;
 production remains stopped on marker `39df87915`.
+
+## End-to-end review, deployment and restart — September 12
+
+The operator authorized a complete open-position-path review and restart. The
+review followed fills through exact decimal position snapshots, builder-first
+cancellation, reducer creation and cancel-confirm-replace, ordinary and HARD
+timeouts, pre-kickoff/live-event evacuation, maintenance handling, recovery and
+shutdown. Shutdown retains an independent attempt budget per positioned owner,
+so one failing market cannot consume another owner's exit attempts. The
+temporary 30-order ceiling counts only flat working entries and flat unresolved
+entry reservations; every positioned reducer, IOC, recovery and shutdown order
+is excluded. No additional position defect was found.
+
+The focused position/REST suite passed **318 tests** and included a full-width
+case with 30 unrelated flat entry orders, one reducer cancellation and three
+exact IOC attempts, with the third flattening in 12.5 simulated seconds. The
+complete current checkout passed **1,356 tests**. Before deployment, the bot was
+stopped and authenticated venue/ledger proof was flat, order-free and clear. A
+stopped-state backup was written to
+`backups/commissioning-20260912T054613Z.db`; SQLite integrity was `ok`, size was
+350,507,008 bytes and SHA-256 was
+`91e3a12027ee4897f6fa25acd6c6ddfc66d95034442083889d74ecc981eef9c7`.
+
+WSL fast-forwarded to release `576f47f3a8b053ced19942a0b50b25f782300b75`
+and the exact deployed checkout again passed all **1,356 tests**. A fresh
+authenticated start gate at 05:50:45Z was flat/order-free/clear. The bot then
+started unchanged at size 10 / 32 in REST-fallback mode as runner `529535` under
+supervisor `529523`. Startup safely dropped two markets whose pregame state
+could not be proven, recovered in-process, loaded `max_pending_entries=30` with
+`positions_and_reducers=excluded`, and began quoting. At 05:55:22Z authenticated
+acceptance showed 12 venue orders, zero venue/ledger positions and zero
+unresolved or unknown state. The non-atomic live snapshot had 14 local working
+rows while the runner was actively placing/canceling; it is not an ownership
+ambiguity. Natural unfilled-IOC acceptance remains pending and must not be
+induced.

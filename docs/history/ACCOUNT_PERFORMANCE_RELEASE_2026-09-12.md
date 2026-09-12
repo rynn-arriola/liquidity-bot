@@ -338,3 +338,44 @@ snapshot times are retained. Both positions remain open, not claimed closed.
 Natural final-flat and unfilled hard-IOC acceptance remain outstanding. The
 observed timestamps measure local observation-to-action, not venue fill-delivery
 latency or equivalence to the prior private WebSocket.
+
+## Read-only longer-run review, 17:13Z
+
+The operator asked for logs/status, not a change or restart. Runner 1216411
+and supervisor 1216388 remained alive for about 43 minutes. Loaded source,
+size 10 / 32, REST selection, max 30 flat entries and $90 HARD were unchanged.
+
+Natural final-flat observations now exist: Masyev/Tuzole residual at
+16:50:10.071637Z, ITF at 16:50:28.463734Z, Kormyk/Kulole at
+16:52:09.520893Z. ITF hard IOC actions occurred at 16:50:21.371939Z and
+16:50:26.134484Z. Kormyk first IOC acknowledgement was 16:52:04.115609Z,
+retry confirmation 16:52:07.363364Z, second acknowledgement
+16:52:07.443945Z, then flat 5.405284 seconds after the first acknowledgement.
+That first acknowledgement was 6.651737 seconds beyond the configured
+deadline. This proves natural bounded retry/closure, not exact-deadline or
+guaranteed execution, and does not infer P&L from prices alone.
+
+Authenticated venue reads at 17:09:37.429117–17:09:44.776956Z showed
+32 orders: 30 flat entries, plus BUY 10 remaining at 0.51 on each of
+Bulale/Buiedu and Ciumir/Iskchr, both positions -10. There were zero
+unresolved intents and zero unknown orders. Reads are not atomic across
+endpoints. The earlier ITF/Kormyk positions were absent and had matching
+flat observations; the newer two positions were not claimed closed.
+
+Across 29 completed API windows through 17:11:59Z: 8,798 attempts, 31
+failed calls including FOUR actual HTTP 429s. Failure windows ended at
+16:42:59Z (balance), 17:07:48Z (cash history), 17:08:50Z (balance),
+17:10:27Z (balance). These are window timestamps, not exact response times.
+Maximum interval rate was 3.881/s and maximum admission wait 6.833s.
+The 17:11:59Z lifecycle-scan window had response max 13.534s, admission
+max 4.513s and no 429; the next 17:13:24Z window had no failures/429,
+max wait 0.965s. Reported end queues drained. These real venue responses
+are distinct from the previously corrected concurrent-reader queue alarm.
+They invalidate extrapolation of the initial seven-minute no-429 result
+to the full run and leave endpoint budgeting/latency diagnosis open.
+
+Polymarket's official changelog was reopened; its latest visible maintenance
+entry concerned September 11. The linked live status page failed to load
+in this check, so no current outage/no-outage conclusion is claimed.
+No live code/configuration, source switch, process control or venue mutation
+was performed by this review. Operational documentation only was updated.

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Accounting that reconciles against the account, not against itself.
+"""Legacy ledger/account diagnostics, not the daily trading-P&L authority.
+
+Use reward_table.py for account-marked daily trading with non-trading cash
+removed. This command does not classify deposits/withdrawals or reconcile the
+change in open-position marks. Its unexplained remainder is neither trading
+profit/loss nor proven settlement proceeds.
 
 The ledger's `realized_pnl` reported -$143.59 on 2026-08-17 when the account had
 actually moved -$48.69 -- wrong by 3x, in the number the loss stops read.
@@ -22,11 +27,10 @@ Three sources, made to agree:
      `outcome` -- the side we hold -- so payout is `qty` if ours won, else 0.
      One venue call per market, hence opt-in.
 
-  3. **The account**, from marked equity. Ground truth.
+  3. **The account**, from bracketed marked equity. Changes can include
+     deposits, withdrawals, reward credits, fees and open-position marks.
 
-        equity_change = -(paid for fills) + settlements + rewards_paid
-
-Everything except `--settlements` is two venue calls; the rest is local. An
+Account snapshots use several bounded reads; other calculations are local. An
 earlier version paged the venue's trade history and triggered rate limiting --
 analysis shares one 4 req/s governor with the live runner, so a report that
 walks history competes with the bot for the budget it needs to quote.
@@ -201,6 +205,30 @@ async def _price_settlements(gateway, per_market, cache_path: Path):
     return priced, unknown, fetched
 
 
+def snapshot_change_lines(last, *, equity: Decimal, spent: Decimal,
+                          paid_reward: Decimal,
+                          settled_pnl: Decimal | None = None) -> list[str]:
+    """Describe incomplete attribution without turning cash into trading P&L."""
+    d_equity = equity - Decimal(last["equity"])
+    d_spent = spent - Decimal(last["spent"])
+    d_paid = paid_reward - Decimal(last["reward_paid"])
+    remainder = d_equity + d_spent - d_paid
+    lines = [
+        f"--- since {last['at']} ---",
+        f"  equity moved           : {d_equity:+12.2f}",
+        f"  paid for fills         : {d_spent:12.2f}",
+        f"  paid-status reward change: {d_paid:+12.2f}",
+        f"  unattributed remainder : {remainder:+12.2f}",
+        "  NOT trading P&L or settlement proof: cash flows, fees, open marks",
+        "  and incomplete history can contribute. Use reward_table.py for daily trading.",
+    ]
+    if settled_pnl is not None and "settled_pnl" in last:
+        measured = settled_pnl - Decimal(last["settled_pnl"])
+        lines.append(f"  resolution-priced P&L change: {measured:+12.2f}")
+        lines.append("  Ledger resolution estimate; not comparable to the unattributed remainder.")
+    return lines
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
@@ -312,34 +340,11 @@ async def main() -> int:
             history = []
     if history:
         last = history[-1]
-        d_equity = equity - Decimal(last["equity"])
-        d_spent = spent - Decimal(last["spent"])
-        d_paid = paid_reward - Decimal(last["reward_paid"])
-        derived = d_equity + d_spent - d_paid
         print("")
-        print(f"--- since {last['at']} ---")
-        print(f"  equity moved           : {float(d_equity):+12.2f}")
-        print(f"  paid for fills         : {float(d_spent):12.2f}")
-        print(f"  reward actually paid   : {float(d_paid):+12.2f}")
-        print(f"  => settlements derived : {float(derived):+12.2f}")
-        if settled_pnl is not None and "settled_pnl" in last:
-            # Compare like with like: the derived figure covers the window
-            # between snapshots, so the measured one must be a delta too.
-            # Comparing a window against an all-time total is meaningless and
-            # the first version of this printed exactly that.
-            measured = settled_pnl - Decimal(last["settled_pnl"])
-            print(f"  settlements measured   : {float(measured):+12.2f}"
-                  "   (from resolutions, same window)")
-            gap = derived - measured
-            print(f"  gap                    : {float(gap):+12.2f}")
-            if abs(gap) > Decimal("1"):
-                print("  GAP: the account moved by more than the fills and "
-                      "resolutions explain.")
-                print("  Fills are still missing from the ledger, or a market "
-                      "resolved that we did not price.")
-        elif settled_pnl is not None:
-            print("  (run with --settlements again next time to cross-check "
-                  "the derived figure)")
+        for line in snapshot_change_lines(
+                last, equity=equity, spent=spent, paid_reward=paid_reward,
+                settled_pnl=settled_pnl):
+            print(line)
     else:
         print("")
         print("no previous snapshot -- this run sets the baseline.")

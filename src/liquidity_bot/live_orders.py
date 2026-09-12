@@ -263,6 +263,19 @@ class AsyncTradingGateway:
                 raise ApiAdmissionDeferred(
                     "event pregame evidence expired; request not sent",
                     error_code="LOCAL_EVENT_ENTRY_BLOCKED", retry_after_seconds=1.0)
+            check_entry = getattr(self.gateway, "entry_admission_check", None)
+            if not reducing and callable(check_entry):
+                try:
+                    check_entry(payload)
+                except ApiAdmissionDeferred:
+                    raise
+                except Exception as exc:
+                    # This callback executes before call(): even a broken or
+                    # contradictory local input cannot invent a sent order.
+                    raise ApiAdmissionDeferred(
+                        f"entry admission failed locally ({type(exc).__name__}); request not sent",
+                        error_code="LOCAL_ENTRY_CHECK_FAILED", retry_after_seconds=1.0,
+                    ) from exc
 
         traffic_class = (
             "safety"

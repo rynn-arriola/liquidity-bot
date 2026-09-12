@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from polymarket_us import AsyncPolymarketUS
 
@@ -475,6 +475,7 @@ class CommissioningRunner:
             float(config.rest_requests_per_second))
         self.gateway = EventAwareGateway(
             client, limiter=limiter, ledger=ledger, now=lambda: self._now())
+        self.gateway.entry_admission_check = self._check_entry_admission
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
         self.reward_selector = reward_selector
         if self.reward_selector is None and config.auto_select_reward_markets:
@@ -2504,19 +2505,10 @@ class CommissioningRunner:
         try:
             execution_batch = await self._fetch_execution_history(now)
             for execution in execution_batch:
-                try:
-                    self.ledger.apply_execution(execution, received_at=now)
-                except LedgerConflict:
-                    if self.REQUIRE_EXECUTION_BACKFILL:
-                        raise
-                    # Already recorded. The dedupe hashes the whole payload, so
-                    # adding a field to Execution -- `outcome` did exactly this
-                    # -- makes a replay of an existing fill look like a
-                    # conflicting rewrite. It is not: the execution id is the
-                    # identity and we already hold it. Aborting the sweep here
-                    # left the position unprovable and the runner exited
-                    # non-flat, refusing to restart. Observed 2026-08-15T21:24Z.
-                    continue
+                # The ledger accepts identical replay and outcome enrichment.
+                # A raised conflict is immutable identity disagreement in BOTH
+                # account modes, not optional missing history.
+                self.ledger.apply_execution(execution, received_at=now)
             # Trade lifecycle is independent of execution delivery. In
             # particular, BUSTED can appear after a fill was already recorded;
             # apply it after linking all execution legs in this batch.
@@ -2677,10 +2669,17 @@ class CommissioningRunner:
         if not callable(drain):
             return 0
         count = 0
-        for event in drain():
-            await self._observe_private(event, self._now())
-            count += 1
-        return count
+        # Project one item before requesting the next: a later queued error
+        # must not discard the valid prefix of a bulk drain. The pool is
+        # bounded; this extra bound also protects injected/custom streams.
+        for _ in range(16384):
+            events = drain(limit=1)
+            if not events:
+                return count
+            for event in events:
+                await self._observe_private(event, self._now())
+                count += 1
+        raise AdapterError("private event drain exceeded its bounded backlog")
 
     def _take_priority_replans(self) -> tuple[str, ...]:
         """Take exact cancel-confirmed owners in stable managed order."""
@@ -4075,6 +4074,39 @@ class CommissioningRunner:
                 self._scheduled_maintenance_flatten_required()),
         )
 
+    def _check_entry_admission(self, payload: Mapping[str, Any]) -> None:
+        """Recheck entry authority after governor wait, without any I/O.
+
+        The executor has already reserved THIS create as SUBMITTING. Do not
+        call gate.ready(), which would reject that very intent, or count it
+        twice against the cap. Source wrappers independently recheck their
+        generation and exact proof. Reducers/cancels do not use this gate.
+        """
+        now = self._now()
+        slug = str(payload.get("marketSlug") or "")
+        frame = self._frame(now, slug)
+        working, reservations = self._flat_entry_orders_and_reservations()
+        seconds_to_event = (
+            (frame.market.game_start - now).total_seconds()
+            if frame.market.game_start is not None else None)
+        allowed = (
+            not self._stop_requested
+            and frame.position == 0
+            and frame.new_risk_allowed
+            and self.gate.session_ready(self.ledger, now=now)
+            and frame.market.active and not frame.market.closed
+            and frame.market.is_supported_moneyline
+            and seconds_to_event is not None
+            and seconds_to_event > self.reconciler.policy.force_exit_before_start_seconds
+            and 0 <= (now - frame.book_observed_at).total_seconds()
+            <= self.reconciler.policy.max_book_age_seconds
+            and len(working) + reservations <= self._effective_entry_order_cap(now)
+        )
+        if not allowed:
+            raise ApiAdmissionDeferred(
+                "entry safety evidence expired or changed; request not sent",
+                error_code="LOCAL_ENTRY_STATE_CHANGED", retry_after_seconds=1.0)
+
     def _quote_observation_for_action(
         self,
         state: MarketState,
@@ -4362,10 +4394,10 @@ class CommissioningRunner:
         # realised, and one market is not all of them.
         self._roll_realized_baseline()
 
-        # Freshness begins only after every cash input is proven, not when the
-        # first balance request entered the shared governor. A failed activity
-        # scan therefore lets the existing 15-second risk freshness expire and
-        # disables new risk instead of silently falling back to masked cash.
+        # Publication waits for the complete bracket, but DATA age begins at
+        # its oldest contributing observation. Equal final cash does not
+        # refresh the earlier position mark. Slow reads must not manufacture
+        # another 15 seconds of entry authority.
         observed_at = self._now()
         # Fiat cash plus each open position's documented cashValue is the
         # account mark.  Retail's balance-row assetNotional has been observed
@@ -4374,7 +4406,7 @@ class CommissioningRunner:
         # they are from the realised sensor.
         adjusted_equity = snapshot.marked_equity - self._nontrading_cash
         self.risk_guard.observe_equity(
-            adjusted_equity, observed_at=observed_at)
+            adjusted_equity, observed_at=snapshot.observed_at)
         self._refresh_loss_entry_order_cap(observed_at)
         self._refresh_overnight_entry_order_cap(observed_at)
         self._publish_live_pnl_snapshot()
@@ -6311,10 +6343,7 @@ class CommissioningRunner:
                 await self._observe_private(private_task.result(), self._now())
                 # Private updates cannot be coalesced safely (fills and order
                 # transitions are ordered), so drain in wire order.
-                drain_events = getattr(self.private_stream, "drain_events", None)
-                if callable(drain_events):
-                    for event in drain_events():
-                        await self._observe_private(event, self._now())
+                await self._drain_private_events()
             except Exception as exc:
                 stop = await self._recover_private_stream(exc)
                 if stop:
@@ -6340,10 +6369,8 @@ class CommissioningRunner:
             except Exception as exc:
                 liveness_errors[name] = exc
         if len(liveness_errors) == 2:
-            for task in (market_task, private_task):
-                task.cancel()
-            await asyncio.gather(
-                market_task, private_task, return_exceptions=True)
+            await self._settle_stream_readers(
+                market_task, private_task, recovery_pending=True)
             combined = AdapterError(
                 "both WebSockets exceeded the independent silence limit: "
                 f"market={liveness_errors['market']}; "
@@ -6363,14 +6390,61 @@ class CommissioningRunner:
             private_task = asyncio.create_task(self.private_stream.next_event())
             market_task = asyncio.create_task(self.market_stream.next_book())
         elif "private" in liveness_errors:
-            private_task.cancel()
-            await asyncio.gather(private_task, return_exceptions=True)
+            await self._settle_stream_readers(
+                None, private_task, recovery_pending=True)
             stop = await self._recover_private_stream(liveness_errors["private"])
             if stop:
                 return market_task, private_task, stop
             private_task = asyncio.create_task(self.private_stream.next_event())
 
         return market_task, private_task, None
+
+    async def _settle_stream_readers(
+        self, market_task, private_task, *, recovery_pending: bool = False,
+    ) -> None:
+        """Release readers without losing their already-consumed evidence.
+
+        Callers replace these readers only after this method completes. It
+        never reconnects or submits orders; normal recovery/shutdown owns that.
+        A market error cannot prevent projection of a returned private event.
+        """
+        named = [(name, task) for name, task in (
+            ("market", market_task), ("private", private_task)) if task is not None]
+        for _, task in named:
+            if not task.done():
+                task.cancel()
+        results = await asyncio.gather(
+            *(task for _, task in named), return_exceptions=True)
+        errors = []
+        for (name, _), result in zip(named, results):
+            if isinstance(result, asyncio.CancelledError):
+                continue
+            if isinstance(result, BaseException):
+                errors.append(result)
+                continue
+            try:
+                if result is not None:
+                    if name == "private":
+                        await self._observe_private(result, self._now())
+                    else:
+                        self._accept_book(result)
+            except Exception as exc:
+                errors.append(exc)
+        try:
+            await self._drain_private_events()
+        except Exception as exc:
+            errors.append(exc)
+        if errors:
+            self.gate.on_disconnect()
+            if not recovery_pending:
+                self._streams_need_rebind = True
+            for exc in errors:
+                if isinstance(exc, (LedgerConflict, RuntimeInvariantViolation)):
+                    self.gate.on_reconciliation_conflict()
+                    raise exc
+                if not isinstance(exc, Exception):
+                    raise exc
+            await self._report_runtime_error("stream_reader_teardown", errors[0])
 
     async def _refresh_bound_books(self, now: datetime) -> None:
         """Prove a book for every bound market, dropping the ones that fail.
@@ -9735,10 +9809,9 @@ class CommissioningRunner:
                     # Drop them before rebinding: the recovery replaces both
                     # stream objects, and a task holding the old one would
                     # otherwise be recreated against a stream nobody owns.
-                    stream_tasks = (market_task, private_task)
-                    for task in stream_tasks:
-                        task.cancel()
-                    await asyncio.gather(*stream_tasks, return_exceptions=True)
+                    old_market, old_private = market_task, private_task
+                    market_task = private_task = None
+                    await self._settle_stream_readers(old_market, old_private)
                     stop_reason = await self._recover_bound_streams(
                         RuntimeError("stream bind left both streams closed")
                     ) or ""
@@ -9920,11 +9993,9 @@ class CommissioningRunner:
                         self._post_flat_top_up_requested_at)
                     post_flat_requested = consumed_post_flat_at is not None
                     normal_scan_due = now >= next_selection
-                    stream_tasks = (market_task, private_task)
-                    for task in stream_tasks:
-                        task.cancel()
-                    await asyncio.gather(
-                        *stream_tasks, return_exceptions=True)
+                    old_market, old_private = market_task, private_task
+                    market_task = private_task = None
+                    await self._settle_stream_readers(old_market, old_private)
                     try:
                         await self._top_up_active_markets(
                             now,
@@ -9984,11 +10055,9 @@ class CommissioningRunner:
                         and now >= next_selection
                         and not self._entry_pause_active()
                         and self._safe_to_scan()):
-                    stream_tasks = (market_task, private_task)
-                    for task in stream_tasks:
-                        task.cancel()
-                    await asyncio.gather(
-                        *stream_tasks, return_exceptions=True)
+                    old_market, old_private = market_task, private_task
+                    market_task = private_task = None
+                    await self._settle_stream_readers(old_market, old_private)
                     try:
                         await self._rotate_reward_market(now)
                         self._runtime_error_counts.pop(
@@ -10153,12 +10222,16 @@ class CommissioningRunner:
                 await asyncio.gather(
                     self._ui_availability_task, return_exceptions=True)
                 self._ui_availability_task = None
-            stream_tasks = tuple(
-                task for task in (market_task, private_task) if task is not None)
-            for task in stream_tasks:
-                task.cancel()
-            if stream_tasks:
-                await asyncio.gather(*stream_tasks, return_exceptions=True)
+            old_market, old_private = market_task, private_task
+            market_task = private_task = None
+            try:
+                await self._settle_stream_readers(old_market, old_private)
+            except Exception as exc:
+                # An integrity error still requires attempted safe shutdown;
+                # never let teardown skip cancels/exits or claim flatness.
+                self.gate.on_reconciliation_conflict()
+                stop_reason = f"stream_teardown_failure:{type(exc).__name__}"
+                await self._report_runtime_error("shutdown_stream_teardown", exc)
             try:
                 if preflight_complete:
                     await self._shutdown(stop_reason)

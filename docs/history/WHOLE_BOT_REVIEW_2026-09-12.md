@@ -267,3 +267,8 @@ unchanged baseline tests, not the absence of the newly reproduced gaps.
 
 No production repair is claimed here. R1–R5 and the responsiveness implementation
 remain open work; this report is the evidence and scope for that next phase.
+
+Later September 12 update: R1–R5 were implemented and verified offline in the
+[repair audit](WHOLE_BOT_FIXES_2026-09-12.md), without deployment/restart.
+The separate responsiveness implementation remains pending; the preceding text
+preserves the original review-time state.

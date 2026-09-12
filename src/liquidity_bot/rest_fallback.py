@@ -55,7 +55,7 @@ class DisabledPrivateStream:
     async def next_event(self, timeout=None):
         await asyncio.wait_for(asyncio.Event().wait(), timeout=timeout)
 
-    def drain_events(self):
+    def drain_events(self, *, limit=None):
         return ()
 
 

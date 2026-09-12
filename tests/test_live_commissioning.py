@@ -2172,7 +2172,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
-    async def test_balance_freshness_is_stamped_when_the_response_arrives(self):
+    async def test_balance_freshness_keeps_the_oldest_bracket_observation(self):
         moment = [NOW]
         runner, _, _ = self.build_runner(clock=lambda: moment[0])
         await runner.preflight()
@@ -2188,8 +2188,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             runner.risk_guard.equity_observed_at,
-            NOW + timedelta(seconds=21),
+            NOW,
         )
+        self.assertFalse(runner.risk_guard.can_add_new_risk(now=moment[0]))
         await runner.private_stream.close()
         await runner.market_stream.close()
 
@@ -8564,7 +8565,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                     "recovery-cancel-event")
                 buffered = []
 
-                def drain():
+                def drain(*, limit=None):
                     events = tuple(buffered)
                     buffered.clear()
                     return events
@@ -9724,7 +9725,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             }},
             "buffered-shutdown-cancel")]
 
-        def drain_events():
+        def drain_events(*, limit=None):
             drained = tuple(buffered)
             buffered.clear()
             return drained
@@ -11223,7 +11224,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.code, 2)
 
     async def test_ambiguous_place_is_adopted_instead_of_unowned(self):
-        runner, client, _ = self.build_runner(clock=TickingClock())
+        # Keep the entry inputs fresh; this tests a sent-but-unanswered create,
+        # not the separate NOT-SENT refusal after data expires.
+        runner, client, _ = self.build_runner()
         await runner.preflight()
         slug = runner.config.market_slug
 

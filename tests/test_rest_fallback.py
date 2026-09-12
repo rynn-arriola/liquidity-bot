@@ -93,7 +93,10 @@ class RestFallbackTests(IsolatedAsyncioTestCase):
                 self.now += timedelta(seconds=31)
 
         runner.gateway.limiter = SlowAdmission()
-        with patch.object(runner.gateway, "event_entry_allowed", return_value=True):
+        # Isolate the REST-proof layer; the shared final entry validator has
+        # its own cross-mode regressions and can refuse even sooner.
+        with patch.object(runner.gateway, "event_entry_allowed", return_value=True), \
+                patch.object(runner.gateway, "entry_admission_check", return_value=None):
             with self.assertRaisesRegex(ApiAdmissionDeferred, "REST account proof"):
                 await runner.driver.apply_one(
                     actions, market=runner.market, position=Decimal(0), now=self.now)

@@ -222,3 +222,32 @@ failure, stop/restart behavior, 30-order capacity, API load, exact sizing,
 attempt/time budgets and default-source isolation. No deployment or restart had
 occurred when this review completed; the operator then authorized the normal
 safe restart workflow. Natural unfilled-IOC acceptance remains required.
+
+## Follow-up deployment and restart acceptance
+
+Release `39df87915` was pushed before deployment. The stopped old runner's
+terminal record was truthfully `flat=false`: two positions remained with exact
+reducing orders. At 01:36:39Z authenticated venue and local state agreed on two
+orders/two positions with zero unresolved or unknown state. The operator then
+manually closed both. Stopped reconciliation at 01:42:23Z positively applied
+both terminal order states and two new fills; gates at 01:42:34Z and 01:43:34Z
+independently proved zero venue orders/positions and zero ledger working,
+position, unresolved or unknown state. No absence was inferred as cancellation.
+
+The stopped-safe 349.2 MB pre-deployment backup passed SQLite integrity `ok`
+with SHA-256 `5c51b0e55346430c224985fc145d7d49063ddf132bcdaabb961f20193f96b853`.
+Because WSL's GitHub fetch stalled, the verified 6,040-byte Git bundle carried
+the already-pushed one-commit fast-forward. Exact WSL HEAD and deployed marker
+match `39df87915`; its native checkout passed all **1,354 tests in 106.766
+seconds**. Windows/GitHub/WSL parity passed; the offline peer remains pending.
+
+The authorized `auto 10 32 rest-fallback` restart began as supervisor **348491**
+and runner **348502**. It logged the unchanged max-30 temporary entry ceiling,
+five/one-second normal/position poll targets, 30-second proof age and four read
+workers. Official maintenance was HEALTHY/NORMAL. The first startup window made
+305 read attempts with zero mutations, failures or rate limits; one market with
+unavailable pregame evidence was dropped fail-closed. At 01:49:06Z authenticated
+venue and local state matched at **21 orders across 21 markets**, zero positions,
+zero unresolved intents and zero unknown orders. This accepts deployment,
+startup and ordinary entries only. A naturally unfilled IOC sequence is still
+required to accept the repaired path; none was induced.

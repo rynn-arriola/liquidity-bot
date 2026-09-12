@@ -4562,6 +4562,19 @@ class CommissioningRunner:
         if age < 0 or age >= refresh_at:
             await self._refresh_balance(now)
 
+    async def _refresh_periodic_balance(self, now: datetime) -> datetime:
+        """Coalesce a just-completed bracket without changing the 5s cadence."""
+        guard = self.risk_guard
+        observed_at = guard.equity_observed_at if guard is not None else None
+        if (observed_at is not None
+                and risk_day(now) == risk_day(observed_at)
+                and 0 <= (now - observed_at).total_seconds() < 5):
+            # Keep the original due time: skipping a duplicate at age four
+            # seconds must not postpone the next periodic check by five more.
+            return observed_at + timedelta(seconds=5)
+        await self._refresh_balance(now)
+        return now + timedelta(seconds=5)
+
     def _refresh_loss_entry_order_cap(self, observed_at: datetime) -> None:
         """Tighten the durable ET-day entry-order budget from marked HARD use."""
 
@@ -6165,12 +6178,18 @@ class CommissioningRunner:
         """Optional bounded-sweep handoff; never authorizes an extra mutation."""
         return False
 
+    async def _service_urgent_positions(self) -> str | None:
+        """Optional source-specific exit pass before unrelated periodic work."""
+        return None
+
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
+        *, position_only: bool = False,
     ) -> str | None:
         """Plan every due market without cross-slot intent/backoff blocking."""
 
         state_refresh_failed = False
+        equity_refresh_failed = False
         planned_slugs = self.active_slugs if slugs is None else slugs
         pending_slugs = list(planned_slugs)
         priority_seen: dict[str, tuple[Any, ...]] = {}
@@ -6189,6 +6208,8 @@ class CommissioningRunner:
             if self._stop_requested:
                 return self._stop_requested
             if slug not in self._markets:
+                continue
+            if position_only and self.ledger.position(slug) == 0:
                 continue
             if self.ledger.market_has_unresolved_intent(slug):
                 # The exact intent-resolution path re-dirties this owner. Do
@@ -6241,7 +6262,7 @@ class CommissioningRunner:
             # already visited (notably cancel-confirm -> exact reducer).
             # Bound extra visits so changing inventory cannot starve the slate.
             priorities = self._position_priority_tokens()
-            if priority_dispatch and slug not in priorities:
+            if (priority_dispatch or position_only) and slug not in priorities:
                 # Inventory can flatten during the proof above. A position
                 # interruption must not turn into an extra flat entry pass.
                 self._mark_market_dirty(slug, self._now())
@@ -6277,12 +6298,16 @@ class CommissioningRunner:
             try:
                 # Account reconciliation can take seconds. Its pre-await time
                 # must not make an expired equity mark appear fresh.
-                if not transition_proved:
+                if not transition_proved and not equity_refresh_failed:
                     await self._refresh_equity_for_decision(self._now())
             except Exception:
                 # Preserve the last observation until its 15-second bound;
                 # once stale, `_frame` removes entry eligibility fail-closed.
-                pass
+                # A failed account-wide bracket is not repaired by hammering
+                # it once per remaining flat market in this same sweep.
+                equity_refresh_failed = True
+            if position_only and self.ledger.position(slug) == 0:
+                continue
             previous_action_generation = self._market_action_generation.get(
                 slug, 0)
             outcome, delay = await self._decide_for_market(slug, self._now())
@@ -9900,14 +9925,20 @@ class CommissioningRunner:
                     await self._log_api_budget(now)
                     next_api_budget_log = now + timedelta(
                         seconds=API_BUDGET_LOG_SECONDS)
+                stop_reason = await self._service_urgent_positions() or ""
+                if stop_reason:
+                    break
+                now = self._now()
                 if now >= next_balance:
                     try:
-                        await self._refresh_balance(now)
+                        # A decision/exit pass may just have published a full
+                        # bracket. Use its ORIGINAL data age, not an unrelated
+                        # periodic timer, to avoid an immediate duplicate walk.
+                        next_balance = await self._refresh_periodic_balance(now)
                     except Exception:
                         # Freshness expires in 15 seconds and then triggers the
                         # normal risk stop. Never substitute buying power.
-                        pass
-                    next_balance = now + timedelta(seconds=5)
+                        next_balance = now + timedelta(seconds=5)
                 if now >= next_state_reconcile:
                     try:
                         # Fresh complete snapshots renew account visibility.

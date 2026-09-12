@@ -150,6 +150,15 @@ source. Operator intervention is required to change sources after an outage.
 
 ## REST responsiveness and configuration
 
+The [September 12 read/exit follow-up](history/REST_THROTTLE_EXIT_SCHEDULING_2026-09-12.md)
+adds a REST-only early pass for due/uncovered, non-isolated positions not blocked
+by an unknown intent or owner backoff. It uses the unchanged service/proof/action
+path and cannot become a flat entry pass. Periodic equity work coalesces only a
+complete same-day mark younger than five seconds and retains its original next
+due time; a failed equity bracket is attempted only once per decision sweep.
+Data ages, cash classification, HARD and source-switch proof are not renewed by
+this scheduling. Deployment/live acceptance remain separate operator decisions.
+
 1. Watch resting entries as potential fills. Share one complete account polling
    job among consumers; permit at most one in flight and never stack missed polls.
 2. Process completed observations and wake affected owners promptly. Keep

@@ -21,6 +21,12 @@ implemented.
 
 ## Interface actually used by this project
 
+September 12 read-throttle follow-up: official changelog/rate guidance were
+reopened; the status-page fetch failed. The prepared local repair coalesces only
+already-complete fresh equity brackets and schedules due REST positions earlier.
+It changes no endpoint, quota, cash classification or source selection, and does
+not claim the venue's exact 429 cause is known. [Audit](history/REST_THROTTLE_EXIT_SCHEDULING_2026-09-12.md).
+
 The bot has two permanent, explicitly selected account modes:
 [WebSocket and REST](ACCOUNT_SOURCE_ARCHITECTURE.md).
 It is bot implementation policy, not a venue guarantee of REST freshness or

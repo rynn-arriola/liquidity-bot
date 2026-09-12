@@ -595,6 +595,30 @@ class RestFallbackRunner(CommissioningRunner):
         return (not self.ledger.working_orders(slug)
                 or deadline is None or self._now() >= deadline)
 
+    async def _service_urgent_positions(self):
+        if not self._using_rest_source():
+            return await super()._service_urgent_positions()
+        if self._stop_requested:
+            return self._stop_requested
+        # The ordinary decision sweep already prioritizes positions, but used
+        # to start only AFTER periodic reads and full-slate book service. A
+        # known due/uncovered owner must enter that same guarded path first.
+        # This adds no parallel executor or new mutation/proof authority.
+        now = self._now()
+        slugs = tuple(slug for slug in self._position_priority_tokens()
+                      if self._position_priority_must_yield(slug)
+                      and not self.ledger.market_has_unresolved_intent(slug)
+                      and (self._next_decision_at.get(slug) is None
+                           or now >= self._next_decision_at[slug]))
+        if not slugs:
+            return None
+        outcome = await self._service_bound_markets(slugs)
+        if outcome or self._stop_requested:
+            return outcome or self._stop_requested
+        # Service/proof may discover flatness. Never turn this extra exit pass
+        # into another entry opportunity when that happens.
+        return await self._decision_sweep(slugs, position_only=True)
+
     def _position_near_its_flatten_deadline(self, now):
         if super()._position_near_its_flatten_deadline(now):
             return True

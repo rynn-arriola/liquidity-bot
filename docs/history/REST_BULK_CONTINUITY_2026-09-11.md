@@ -148,3 +148,20 @@ queue one and zero cooldown. No terminal runner failure occurred; the two
 requests are not attributed to a venue outage. This is startup/partial-width
 acceptance, not full-width performance proof. Remaining measured REST delay
 must stay visible and must not be described as one-second fill/exit latency.
+
+## Natural hard-exit observation
+
+The position in `aec-setkameua-tuzole-pysyev-2026-09-12` naturally reached
+the 900-second inventory deadline. The runner canceled its last working order
+at 00:25:47.404Z, obtained focused proof at 00:25:54.648Z and submitted the
+exact IOC at 00:26:03.841Z. It was absent from the authenticated position list
+at 00:27:11.403Z. This accepts one filled hard-exit path. It does not accept an
+unfilled IOC retry sequence or promise the same latency when venue responses or
+liquidity differ.
+
+At 00:28:27.501Z two newer positions remained: 10 contracts in
+`aec-setkameua-derdmy-gomole-2026-09-12` with an exact SELL-10 reducer, and
+5 contracts in `aec-setkameua-paldmy-slomyk-2026-09-12` with an exact SELL-5
+reducer. At 00:28:41.804Z authenticated venue and local state agreed on 29
+working orders and two positions, with zero unresolved intents or unknown
+orders. They are being worked passively, not yet closed.

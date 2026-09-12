@@ -79,6 +79,34 @@ pre-existing temporary-directory ResourceWarnings; these are not venue errors.
 
 ## Limits and remaining acceptance
 
+### Verified stopped deployment
+
+- Code commit `eb06d1b9cdc25fa3954778cbda55d93de1ce12ed` was pushed before
+  deployment. The clean WSL checkout fast-forwarded to that exact reviewed commit;
+  direct WSL HTTPS fetch stalled, so it fetched the already GitHub-verified Windows
+  checkout locally. No tracked files or user changes were overwritten.
+- All **181 source/test/script/web/config hashes** match after line-ending
+  normalization. `DEPLOYED_COMMIT` names the code release. The complete exact
+  deployed suite passed **1,467 tests in 125.093 seconds**; shell syntax and runner
+  CLI smoke checks passed. No live runner was active during deployment/tests.
+- Graceful shutdown ended at **07:03:14Z**, reporting `flat=false` with two
+  parked positions/reducers. Authenticated **07:04:05Z** proof found two orders,
+  two positions and zero unresolved/unknown state. Restart was withheld.
+- The operator manually closed the positions. At **07:07:55Z**, complete venue
+  reads proved zero orders/positions; the inactive ledger still had the prior two
+  rows. A leased, disarmed prestart helper first required flat venue and exact
+  terminal responses for both owned order IDs, disabled every mutation entry
+  point, then invoked the normal complete REST reconciler. It finished ledger
+  flat/clear with **zero venue mutations**; no guessed cancellation, raw row edit,
+  baseline reset or hard-stop/loss-cap reset was used.
+- The verified stopped recovery copy captured at **07:03:45Z** is 351,232,000
+  bytes, integrity `ok`, SHA-256
+  `64a41cdba1546dd1bed978b4fb4ec9479743d71832e2ef5c89312d22d7ddccb8`.
+  It predates the prestart reconciliation; a fresh parity copy and final gate
+  must precede restart. The offline desktop peer remains explicitly pending.
+
+### Remaining measurement
+
 The first release overlaps independent reads inside one serial proof cycle. It
 does not yet run a separate background fill-watch job or promise one-second fill
 detection. Chunked catalog work and comparable cross-source end-to-end latency

@@ -238,7 +238,9 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         runner.state_for(held).book_observed_at = self.now
         start = self.now
         original_decide = runner._decide_for_market
+        original_proof = runner._reconcile_position_state
         visited = []
+        proof_tags = []
 
         class GovernedClock:
             async def wait(inner):
@@ -270,8 +272,13 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
             self.now += timedelta(seconds=.25)
             return result
 
+        async def proof(slug, *, tag):
+            proof_tags.append(tag)
+            return await original_proof(slug, tag=tag)
+
         with patch.object(client.orders, "create", create), \
-                patch.object(runner, "_decide_for_market", decide):
+                patch.object(runner, "_decide_for_market", decide), \
+                patch.object(runner, "_reconcile_position_state", proof):
             await runner._decision_sweep((held, "flat"))
         self.assertEqual(len(client.orders.cancel_calls), 1)
         self.assertEqual(len(client.orders.create_calls), 3)
@@ -280,3 +287,60 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         self.assertLess((self.now - start).total_seconds(), 30)
         self.assertTrue(all(p["tif"] == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"
                             for p in client.orders.create_calls))
+        self.assertEqual(proof_tags, ["position-transition"] * 4)
+
+    async def test_recent_terminal_transition_proof_allows_exact_partial_retry(self):
+        runner, _, held = await self.build()
+        runner.ledger.connection.execute(
+            "UPDATE execution_orders SET status='CANCELED' WHERE market_slug=?", (held,))
+        self.now = runner._position_exit_deadline(held)
+        # The scoped post-IOC proof never renews global entry authority. In
+        # production the regular account poll remains current independently;
+        # represent that here after advancing the deterministic clock 15m.
+        runner.gate.on_rest_reconciled(self.now)
+        runner.state_for(held).book_observed_at = self.now
+        runner.reconciler._hard_exit_attempts[held] = 1
+        runner.reconciler._hard_exit_started_at[held] = self.now
+        runner.reconciler._hard_exit_sent[held] = self.now
+        token = runner.reconciler.hard_exit_schedule_token(held)
+        runner._hard_exit_terminal_proofs[held] = (token, self.now)
+        with patch.object(runner, "_reconcile_position_state", AsyncMock()) as proof, \
+                patch.object(runner.ledger, "position", return_value=Decimal(6)):
+            outcome = await runner._reconcile_pending_hard_exit(held)
+            proof.assert_not_awaited()
+            self.assertEqual(outcome, "retry")
+            self.assertNotIn(held, runner._hard_exit_terminal_proofs)
+            retry = runner.reconciler.plan(runner._frame(self.now, held))
+        self.assertEqual(retry[0].kind.value, "place_ioc", retry[0])
+        self.assertEqual(retry[0].qty, Decimal(6))
+
+    async def test_cached_terminal_proof_cannot_bypass_changed_stale_or_working_state(self):
+        runner, _, held = await self.build()
+        runner.ledger.connection.execute(
+            "UPDATE execution_orders SET status='CANCELED' WHERE market_slug=?", (held,))
+        runner.reconciler._hard_exit_attempts[held] = 1
+        runner.reconciler._hard_exit_sent[held] = self.now
+        token = runner.reconciler.hard_exit_schedule_token(held)
+        with patch.object(runner, "_reconcile_position_state", AsyncMock()) as proof:
+            runner._hard_exit_terminal_proofs[held] = (
+                (token[0] + 1, token[1], token[2]), self.now)
+            await runner._reconcile_hard_exit_state(held)
+            runner._hard_exit_terminal_proofs[held] = (
+                token, self.now - timedelta(seconds=11))
+            await runner._reconcile_hard_exit_state(held)
+            runner.reconciler._hard_exit_sent[held] = self.now - timedelta(seconds=11)
+            old_token = runner.reconciler.hard_exit_schedule_token(held)
+            runner._hard_exit_terminal_proofs[held] = (old_token, self.now)
+            await runner._reconcile_hard_exit_state(held)
+            runner.reconciler._hard_exit_sent[held] = self.now
+            token = runner.reconciler.hard_exit_schedule_token(held)
+            runner.ledger.connection.execute(
+                "UPDATE execution_orders SET status='OPEN' WHERE market_slug=?", (held,))
+            runner._hard_exit_terminal_proofs[held] = (token, self.now)
+            await runner._reconcile_hard_exit_state(held)
+            runner.ledger.connection.execute(
+                "UPDATE execution_orders SET status='UNKNOWN_ABSENT' WHERE market_slug=?",
+                (held,))
+            runner._hard_exit_terminal_proofs[held] = (token, self.now)
+            await runner._reconcile_hard_exit_state(held)
+        self.assertEqual(proof.await_count, 5)

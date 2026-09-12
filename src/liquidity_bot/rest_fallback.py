@@ -101,6 +101,7 @@ class RestFallbackRunner(CommissioningRunner):
         self.rest_polling_policy = rest_polling_policy or RestPollingPolicy()
         self._bulk_order_proof = False
         self._bulk_skipped = {}
+        self._hard_exit_terminal_proofs = {}
         kwargs["private_stream_factory"] = DisabledPrivateStream
         super().__init__(*args, **kwargs)
         self.gate = RestStateGate(max_silence_seconds=30)
@@ -309,6 +310,24 @@ class RestFallbackRunner(CommissioningRunner):
         REST entry authority or the normal poll clock.
         """
 
+        token = self.reconciler.hard_exit_schedule_token(slug)
+        cached = self._hard_exit_terminal_proofs.pop(slug, None)
+        if cached is not None:
+            proof_token, proved_at = cached
+            age = (self._now() - proved_at).total_seconds()
+            sent_age = ((self._now() - token[1]).total_seconds()
+                        if token[1] is not None else None)
+            if (proof_token == token and token[1] is not None
+                    and 0 <= age <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
+                    and 0 <= sent_age <= self.reconciler.policy.hard_exit_confirmation_timeout_seconds
+                    and not self.ledger.unresolved_intents(slug)
+                    and not self.ledger.working_orders(slug)
+                    and not self.ledger.absent_orders(slug)):
+                # The post-mutation transition proof already consumed exact
+                # order state plus complete open-order, position and history
+                # snapshots. Repeating that same proof here used the entire
+                # retry window even though this IOC was positively terminal.
+                return
         await self._reconcile_position_state(slug, tag="hard-exit")
 
     async def _reconcile_position_state(self, slug, *, tag):
@@ -354,6 +373,14 @@ class RestFallbackRunner(CommissioningRunner):
             except Exception as exc:
                 await self._report_runtime_error("position_transition_proof", exc)
                 return None, 1.0
+            token = self.reconciler.hard_exit_schedule_token(slug)
+            if (token[1] is not None and self.ledger.position(slug) != 0
+                    and not self.ledger.unresolved_intents(slug)
+                    and not self.ledger.working_orders(slug)
+                    and not self.ledger.absent_orders(slug)):
+                self._hard_exit_terminal_proofs[slug] = (token, self._now())
+            else:
+                self._hard_exit_terminal_proofs.pop(slug, None)
         return outcome, delay
 
     def _position_exit_deadline(self, slug):

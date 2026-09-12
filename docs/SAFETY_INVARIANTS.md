@@ -943,6 +943,10 @@ These are implementation requirements, not suggestions.
     scheduling token so an IOC that opens and expires between polls receives
     its next exact retry before unrelated flat owners. Same-owner service is
     finite and cannot exceed the existing hard-exit attempt/deadline authority.
+    A completed post-IOC proof may be consumed once without repeating network
+    reads only for the identical schedule token, within the existing ten-second
+    confirmation limit and with no working, absent or unresolved owner state.
+    Any mismatch, stale clock or ambiguity requires another exact proof.
     Confirmed reducer cancellation continues through the same guarded path;
     an exhausted uncovered/due owner defers flat work while preserving other
     held owners. Successful held service cannot inherit flat reward dwell.

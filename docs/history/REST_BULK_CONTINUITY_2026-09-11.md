@@ -183,3 +183,42 @@ hard retry. The runner stayed alive and ownership stayed known, but the safety
 outcome is incomplete. This is positive evidence of local proof/scheduling
 delay, not a claim of venue ambiguity or outage. Do not represent
 `1273a90a5` as accepting unfilled-IOC continuity.
+
+## Reviewed unfilled-IOC follow-up
+
+The terminal IOC proof was not missing. After every IOC mutation,
+`position-transition` reconciliation retrieved that owner's exact order and
+complete open-order, position and execution-history snapshots. Production
+recorded each IOC `EXPIRED` with zero fill in under one second. On the next
+decision, `_reconcile_pending_hard_exit` nevertheless started the same focused
+network proof again. At production width that redundant work consumed the
+confirmation/retry window, so the owner retired and was revisited minutes later.
+
+Prepared REST-only source records a successful post-IOC proof against the exact
+hard-exit schedule token and consumes it at most once. Reuse is allowed only
+while both the proof and IOC send are within the existing ten-second
+confirmation timeout, the token is unchanged, the exact position remains
+nonzero and the owner has no unresolved intent, working order or
+`UNKNOWN_ABSENT` order. A partial fill therefore retries only the authoritative
+remaining quantity. Stale/backward time, a new attempt, restart, working or
+missing state, ambiguity or proof failure takes the original exact-proof path.
+The scoped proof still cannot renew entry authority or the ordinary poll clock.
+Default WebSocket mode, API limits, size, capacity, strategy, pricing, exit
+attempt/deadline and risk policy are unchanged.
+
+The dedicated production-width rehearsal proves one cancel and three terminal
+IOC attempts finish in 12.5 simulated seconds with 30 unrelated entry orders;
+only the four required immediate `position-transition` proofs occur. A separate
+partial-fill regression proves the next IOC uses exactly six remaining
+contracts. Changed token, stale proof, stale IOC send, working order and absent
+order each force a fresh proof. The six affected modules pass **202 tests in
+24.102 seconds**; the complete pinned-WSL suite passes **1,354 tests in 152.359
+seconds**. Deliberately restoring the duplicate proof fails the production-width
+regression; all **10/10** cumulative reversals were detected and restored.
+
+The final edge review covered terminal/partial/flat outcomes, stale and backward
+clocks, changed attempt tokens, working/absent/unresolved ownership, proof
+failure, stop/restart behavior, 30-order capacity, API load, exact sizing,
+attempt/time budgets and default-source isolation. No deployment or restart had
+occurred when this review completed; the operator then authorized the normal
+safe restart workflow. Natural unfilled-IOC acceptance remains required.

@@ -125,3 +125,89 @@ Preserved: size 10 / 32, $90 HARD and durable ET state, 30 flat pending REST
 entries excluding positioned-market orders/reducers/exits, manual account
 source selection, ranking/entry quality, lifecycle, price/quantity, 900-second
 inventory deadline, three-attempt/30-second IOC authority and shared 4/s.
+
+## Follow-up: investigate the initial throttle, 22:12Z
+
+The operator asked to investigate the initial rate limit, rather than equate
+retry containment with prevention. This follow-up changed no trading code,
+configuration, ledger or venue order and did not deploy or restart anything.
+The old runner/supervisor remained absent. The last complete exposure proof is
+still the 21:41Z zero-order/position snapshot above, not the later balance test.
+
+Read-only log reconstruction found the first **reported** public-book 429 at
+**20:47:40.227070Z / 16:47:40 ET**, for
+`GET /v1/markets/aec-cs2-war-spo-2026-09-12/book`, operation
+`markets.book(...)`, through the public gateway. Its Cloudflare error 1015
+carried Ray ID **`a3a1c4c42ccfeeee`**. The report follows the old gateway's
+bounded retries, so it is not asserted to be the first wire request's timestamp.
+Three subsequent market errors were logged about three seconds apart with Ray
+IDs `a3a1c4d77ff5eeee`, `a3a1c4eabcdaeeee`, `a3a1c4fdfb25eeee`.
+
+Across the **108 completed windows before the first book-failure window**:
+
+- 10,020.7 seconds, 35,001 requests, average **3.493/s**, maximum completed-window
+  rate **3.873/s**; these are interval averages, not per-second packet capture.
+- **13,303 book reads**, about 38% of requests and 1.328/s over the window sum.
+- Other leading reads: 6,292 exact orders, 3,770 execution-history, 3,449 open
+  orders, 2,867 positions and 1,951 balances. Creates plus cancels were only 821.
+- Failures were 101 exact-order 404s and one earlier cash-history 429; there
+  were no categorized book 429s yet. This is not an all-endpoint-clean sample.
+
+A lifecycle scan ended at 20:46:00Z after 43 seconds, ranking 36 books and
+finding 19 viable markets; top-up committed the 32-owner scope at 20:46:26Z.
+Its completed window had 166 book calls and zero 429s. The next 62.2-second
+window had 96 book calls, 235 total requests (3.781/s), and zero 429s. The first
+reported failure followed about 12 seconds after that window closed. Temporal
+proximity does not prove the scan triggered the edge rule.
+
+The **14 completed windows from the first book-failure window through
+21:33:08Z** total 2,739.6 seconds and 5,928 requests (2.164/s), including 2,196
+book requests and **1,400 book 429s**. Runtime error reports cover 32 different
+book operations. One balance 429 and 42 exact-order 404s also occurred. This
+proves severe repeated rejected traffic even after aggregate RPS fell, not a
+specific undisclosed rolling quota or an account-wide permanent block.
+
+Installed official Python SDK 0.1.2 `AsyncPolymarketUS._request` contains one
+`httpx` request and direct HTTP-status classification, with no hidden retry
+loop. Book calls use the unauthenticated gateway; account calls use the
+authenticated API. The production factory and adapters retain the shared
+0.25-second aggregate admission clock. Logged `shared=1` is evidence of that
+configuration, not proof of every external process's traffic. Windows currently
+had no Python process and none of five Node command lines referenced the trading
+projects; that cannot reconstruct prior browser/other-device activity.
+
+The visible reward service journal ran **20:07:08–20:07:15Z**, about 40 minutes
+before onset. The 20:23 changelog poll was an isolated public documentation
+request, not a book/account scan. No second scheduled book scanner was found in
+the timer list. Historical unlogged/manual/browser traffic on the public IP
+cannot be excluded, and no full-IP packet log exists in this evidence.
+
+After the bot had remained stopped, exactly three report-lane reads, spaced
+about four seconds apart with application retries disabled, returned:
+
+| UTC | Resource | HTTP | Safe diagnostic evidence |
+|---|---|---|---|
+| 22:12:44.668692 | Same incident book | 200 | `cf-cache-status=HIT`, Ray `a3a24162d8a6d73b-EWR` |
+| 22:12:48.637662 | Same market's metadata | 200 | `cf-cache-status=DYNAMIC`, Ray `a3a2417b5f87d73b-EWR` |
+| 22:12:52.724284 | Authenticated account balances | 200 | `cf-cache-status=DYNAMIC`, Ray `a3a241951bb65e6d-EWR` |
+
+No `Retry-After` or rate-limit threshold/remaining/reset header appeared in
+these responses. A cached 200 book response proves endpoint access, not current
+executable depth or sustained live-load health. No response payload, credential
+or address was logged. Public status again reported operational; the changelog
+still named September 11 maintenance, not an incident explaining September 12.
+
+Conclusion: confirmed Cloudflare temporary throttling plus proven local retry
+amplification. The normal public-book demand is substantial, but the visible
+request rates and published 20/s ceilings do not establish the initial edge
+threshold. [Cloudflare's official 1015 guidance](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1015/)
+states the site owner sets the rules and repeated retries may extend a block.
+Only Polymarket can identify the exact matched rule from the incident Ray ID.
+Ask for its endpoint/IP/key scope, threshold, counting window, cooldown and
+whether it differs from the published Retail limits. Do not stress-test the
+limit, rotate IP/key or relax price/account freshness to infer the answer.
+
+Further preventive work, if authorized, should measure and remove redundant
+quiet-book REST reads without treating a silent/stale book as fresh. No polling
+interval or slot reduction was selected here. The reviewed backoff fix remains
+pushed but undeployed; its natural load/exit acceptance remains pending.

@@ -98,3 +98,56 @@ only through the normal reviewed stopped-safe deployment gates, never live file
 replacement. Complete source-switch, recovery and shutdown regressions remain
 required. Position service may consume existing reads earlier; actual busy-run
 API/exit acceptance is deferred until an independently authorized deployment.
+
+## Authorized force-stop, deployment and restart (18:00Z)
+
+The operator subsequently explicitly requested force-stop and restart, saying
+they would manually cancel orders and close positions. This overrides the prior
+no-restart decision for this release only; it creates no standing force policy.
+The exact old supervisor 1216388 and runner 1216411 were verified, then stopped
+through the supported force script with zero grace. Both processes were absent.
+No graceful final-flat record was obtained and none is claimed.
+
+Authenticated 17:53:37Z proof still found two orders and zero positions, so
+restart was withheld. At 17:54:26Z the venue was order-free and flat, but the
+ledger retained a working order and acknowledged PLACE. Under the exclusive
+stopped-runner lease, the ordinary REST reconciliation path confirmed both
+exact exchange orders terminal, matching client/market ownership. It cleared
+the local records with zero venue mutations and no direct SQL correction.
+The 17:55:30Z and final 18:00:15.862025Z authenticated gates proved zero venue
+orders/positions, working ledger orders/positions, unresolved intents and
+unknown orders.
+
+Clean production checkout fast-forwarded to reviewed/pushed `a8888b5e5`.
+All 186 normalized deployed source/test/script/web/config hashes matched;
+the complete exact native checkout suite passed all 1,544 tests in 141.609s.
+Only afterward was DEPLOYED_COMMIT updated. Parity matched Windows, GitHub,
+WSL and marker; the stopped-ledger backup was verified at 378,671,104 bytes,
+SHA-256 prefix `86dcefa2e070`. The offline desktop remains explicitly pending.
+
+The fresh gate preceded `start_commissioning.sh auto 10 32 rest`. Supervisor
+1336728 and runner 1336746 started with unchanged size/slots/manual REST,
+$90 HARD and max 30 flat pending entries excluding positioned-market orders.
+The first selection scan at 18:01:20Z completed in 51.5 seconds and found
+35 viable markets. Live acceptance follows below; startup is not evidence of
+sustained API capacity, natural exit timing or WebSocket-equivalent speed.
+
+### Bounded live acceptance
+
+At 18:02:01Z one market's unprovable pregame state entered normal local
+recovery; the runner continued and began quoting at 18:02:14Z. First two
+completed API windows through 18:04:22Z: 735 attempts, 11 `order_retrieve@404`
+failures, zero rate limits/cooldown, maximum admission wait 0.720s. A startup
+response took 18.871s; this is not a claim that every request is fast.
+
+A natural +10 Volana/Shevik fill was observed at 18:04:14.562227Z and its
+SELL reducer acknowledged at 18:04:14.671428Z, 0.109201s after observation.
+This measures observed-position-to-acknowledgement, not venue-fill detection.
+Normal cancel-confirm/repricing followed. The non-atomic 18:04:12-18:04:19Z
+snapshot crossed this transition and showed two pending/one unknown record;
+none was manually cleared. The 18:05:10.780870-18:05:20.515111Z authenticated
+snapshot showed 30 orders: 29 flat pending entries plus one SELL-10 remaining
+at 0.51 for the +10 position, zero unresolved intents and zero unknown orders.
+The exit was working, not yet filled; natural hard-deadline/flat acceptance is
+not established by this five-minute startup observation. No induced trade,
+source switch, risk change or second restart was performed.

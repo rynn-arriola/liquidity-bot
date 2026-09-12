@@ -165,3 +165,21 @@ At 00:28:27.501Z two newer positions remained: 10 contracts in
 reducer. At 00:28:41.804Z authenticated venue and local state agreed on 29
 working orders and two positions, with zero unresolved intents or unknown
 orders. They are being worked passively, not yet closed.
+
+## Later contrary live evidence
+
+The initial filled-IOC observation did not validate unfilled retry continuity.
+`aec-setkameua-krydmy-komvad-2026-09-12` remained -10 after IOCs at
+01:04:50.882Z, 01:11:47.248Z and 01:14:50.334Z. The ledger positively recorded
+each IOC EXPIRED with zero fill in under one second, yet each
+`hard_exit_confirmation` continued until about 30 seconds and logged
+`hard_exit_retry_window_exceeded`. The attempts were minutes apart, not the
+intended bounded sequence inside one 30-second window.
+
+At 01:16:19.043Z venue and ledger agreed on 31 working orders and three
+positions with zero unresolved intents/unknown orders. Two other positions had
+exact passive reducers. This -10 owner had no reducer while waiting for another
+hard retry. The runner stayed alive and ownership stayed known, but the safety
+outcome is incomplete. This is positive evidence of local proof/scheduling
+delay, not a claim of venue ambiguity or outage. Do not represent
+`1273a90a5` as accepting unfilled-IOC continuity.

@@ -209,7 +209,11 @@ class AsyncAccountSnapshotGateway:
         page_limit = (self.gateway.max_pages if require_coverage
                       else max(1, min(max_pages, self.gateway.max_pages)))
         for page_number in range(page_limit):
-            params: dict[str, Any] = {"limit": 100}
+            # This collector consumes only trade executions/lifecycle. Keep
+            # unrelated cash/resolution history on its own existing readers.
+            # The venue's unfiltered activity query can time out even while
+            # its documented trade-filtered query remains available.
+            params: dict[str, Any] = {"limit": 100, "types": ["ACTIVITY_TYPE_TRADE"]}
             if require_coverage:
                 params["sortOrder"] = "SORT_ORDER_DESCENDING"
             if cursor:

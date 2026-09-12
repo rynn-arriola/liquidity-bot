@@ -269,7 +269,30 @@ class SnapshotGatewayTests(unittest.TestCase):
 
         self.assertEqual(tuple(executions), ())
         self.assertEqual(executions.trade_states, ())
-        self.assertEqual(client.portfolio.calls, [{"limit": 100}])
+        self.assertEqual(client.portfolio.calls, [
+            {"limit": 100, "types": ["ACTIVITY_TYPE_TRADE"]}])
+
+    def test_execution_history_filters_every_page_and_retains_busted_states(self):
+        for strict in (False, True):
+            client = Client({}, [
+                {"activities": [], "eof": False, "nextCursor": "second"},
+                {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": {
+                    "id": "busted", "marketSlug": "market-one",
+                    "state": "TRADE_STATE_BUSTED", "updateTime": NOW.isoformat()}}],
+                 "eof": True}])
+            account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(
+                client, limiter=CountingLimiter()))
+            batch = self.run_async(account.fetch_executions(
+                observed_at=NOW, require_coverage=strict))
+            self.assertEqual(len(batch.trade_states), 1)
+            self.assertEqual(batch.trade_states[0].state, "TRADE_STATE_BUSTED")
+            self.assertEqual(len(client.portfolio.calls), 2)
+            for params in client.portfolio.calls:
+                self.assertEqual(params["types"], ["ACTIVITY_TYPE_TRADE"])
+                self.assertEqual(params["limit"], 100)
+                if strict:
+                    self.assertEqual(params["sortOrder"], "SORT_ORDER_DESCENDING")
+            self.assertEqual(client.portfolio.calls[1]["cursor"], "second")
 
     def test_busted_trade_is_observed_even_without_an_execution_leg(self):
         client = Client({"orders": []}, [{"activities": [{

@@ -26,6 +26,14 @@ The bot has two permanent, explicitly selected account modes:
 It is bot implementation policy, not a venue guarantee of REST freshness or
 equivalence to the private stream. Public books still require market data.
 
+September 12 release follow-up: the execution collector requests documented
+`types=[ACTIVITY_TYPE_TRADE]` on every activity page. It already consumes only
+trade executions and trade lifecycle, including BUSTED; cash accounting remains
+separate. Unfiltered queries timed out while the same endpoint's trade-filtered
+queries succeeded. Pagination/coverage and exact-account proofs are unchanged.
+This is an observed query-path difference, not a claim that all REST or private
+WebSocket service recovered. [Evidence](history/ACCOUNT_PERFORMANCE_RELEASE_2026-09-12.md).
+
 The [September 11 bulk/continuity repair](history/REST_BULK_CONTINUITY_2026-09-11.md)
 uses complete Retail open-order lists to avoid repeated individual reads only
 for unchanged flat OPEN/zero-fill entries. The Retail

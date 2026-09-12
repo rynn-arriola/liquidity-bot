@@ -288,6 +288,7 @@ def _rest_variant(name):
 
 
 for _name in (
+    "test_shutdown_local_not_sent_does_not_spend_ioc_attempts",
     "test_event_live_cancels_flat_quote_despite_future_clock",
     "test_event_live_forces_exit_without_waiting_inventory_timeout",
     "test_event_unknown_blocks_entry_but_not_passive_reduction",

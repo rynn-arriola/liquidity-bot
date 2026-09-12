@@ -9701,9 +9701,17 @@ class CommissioningRunner:
                             price=exit_result.worst_price, qty=abs(position),
                             attempt=attempts,
                             budget=self.config.max_shutdown_exit_attempts)
-                        await self.driver.apply_one(
-                            [action], market=state.market,
-                            position=position, now=now)
+                        try:
+                            await self.driver.apply_one(
+                                [action], market=state.market,
+                                position=position, now=now)
+                        except ApiAdmissionDeferred:
+                            # Positive local NOT-SENT proof is not an IOC
+                            # attempt. Keep the shutdown deadline/backoff and
+                            # repeat full reconciliation before another try.
+                            # All sent/ambiguous outcomes retain their budget.
+                            exit_attempts[market_slug] -= 1
+                            raise
                         delay = max(delay, min(2 ** max(attempts - 1, 0), 5))
                     except AdapterError as exc:
                         # A scoped read/mutation failure cannot starve another

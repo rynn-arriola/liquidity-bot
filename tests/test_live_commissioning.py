@@ -197,9 +197,12 @@ class FakePortfolio:
     async def activities(self, params):
         if params.get("types"):
             allowed = set(params["types"])
+            activities = self.cash_activities + [
+                {"type": "ACTIVITY_TYPE_TRADE", "trade": trade}
+                for trade in self.trades]
             return {
                 "activities": [
-                    row for row in self.cash_activities
+                    row for row in activities
                     if row.get("type") in allowed],
                 "eof": True,
             }
@@ -10497,6 +10500,34 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "shutdown exit budget" in message and critical
             for message, critical in notifier.messages))
         self.assertFalse(runner._shutdown_proved_flat)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_shutdown_local_not_sent_does_not_spend_ioc_attempts(self):
+        runner, client, _ = self.build_runner(clock=TickingClock())
+        await runner.preflight()
+        self._force_kickoff_window(runner)
+        slug = runner.config.market_slug
+        self._hold_one_contract(client, slug)
+        self._expire_every_created_order(runner, client, slug)
+        runner.config = replace(runner.config, max_shutdown_seconds=180)
+        create = runner.executor.gateway.create
+        refused = 0
+
+        async def defer_then_create(payload, *, reducing=False):
+            nonlocal refused
+            if refused < 4:
+                refused += 1
+                raise ApiAdmissionDeferred("local proof expired", retry_after_seconds=1)
+            return await create(payload, reducing=reducing)
+
+        runner.executor.gateway.create = defer_then_create
+        await runner._shutdown("operator_sigterm")
+        self.assertEqual(refused, 4)
+        self.assertEqual(len(client.orders.create_calls), 3)
+        self.assertFalse(runner._shutdown_proved_flat)
+        self.assertEqual(len(runner.ledger.query(
+            "SELECT intent_id FROM execution_intents WHERE operation='PLACE' AND state='FAILED'")), 4)
         await runner.private_stream.close()
         await runner.market_stream.close()
 

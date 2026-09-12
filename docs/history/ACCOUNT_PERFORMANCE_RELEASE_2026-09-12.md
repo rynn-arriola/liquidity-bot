@@ -256,3 +256,13 @@ Final combined isolated suite: **1,533 tests passed in 144.084s**, with all
 queue-only addition passed 1,532 tests in 141.981s. Final diff, dedicated edge
 review, documentation audit and whitespace checks passed. This follow-up fixes
 diagnostic coverage and interpretation only, not live execution behavior.
+
+The reviewed follow-up was pushed as **`2f7ba0222499124286ec0c631297d5d48012cfb6`**
+and deployed while the bot remained stopped. WSL HEAD/marker matched; all 185
+normalized hashes matched; the exact production checkout passed **1,533 tests
+in 142.559s**. Saved quantity/width remain 10/32 and the configuration derives
+exactly $90 HARD. The **16:27:30.969202Z** authenticated gate again proved zero
+venue orders/positions and zero unresolved/unknown/working/nonzero ledger state.
+No runner/supervisor was present. No restart or venue mutation was made in
+this follow-up. Operator approval of a concurrency-aware acceptance criterion
+has not been received; the old peak-only criterion was not silently removed.

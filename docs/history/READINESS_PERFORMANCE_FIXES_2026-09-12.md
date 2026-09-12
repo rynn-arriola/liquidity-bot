@@ -154,3 +154,11 @@ these observations alone. Do not widen the price cap, reset the live ledger or
 manually close under review-only authority. The operator was explicitly told
 the position remained open. Preserve this incident for the remaining exit and
 scheduling work; it is not a successful flatten/healthy-live sign-off.
+
+### Later follow-up
+
+The bot closed this residual at 14:27:02.981074Z (6.03 BUY_LONG at 0.33), and an
+authenticated 14:31:03Z position read was flat. The slow scan/serial collector
+work is now prepared separately; see [account watch, exit follow-up and final
+audit](ACCOUNT_WATCH_EXIT_REVIEW_2026-09-12.md). These later facts do not change
+the earlier observation or prove the new code is loaded.

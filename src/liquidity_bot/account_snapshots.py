@@ -11,7 +11,7 @@ from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError
 from .execution_ledger import OrderState, PositionState, TradeStateObservation
 from .models import AccountBalance
-from .execution_ledger import Execution
+from .execution_ledger import Execution, LedgerConflict
 from .venue_state import (
     ClientIdResolver, normalize_execution, normalize_order, normalize_position)
 
@@ -308,6 +308,17 @@ class AsyncAccountSnapshotGateway:
                             # whose record was lost. Dropping those discarded
                             # our own fills -- the original double-counting bug
                             # is prevented by taking exactly one leg here.
+                            prior = rows.get(execution.execution_id)
+                            if prior is not None:
+                                if (any(getattr(prior, name) != getattr(execution, name)
+                                        for name in ("exchange_order_id", "market_slug", "side",
+                                            "price", "qty", "fee", "intent", "event_at"))
+                                        or (prior.trade_id and execution.trade_id
+                                            and prior.trade_id != execution.trade_id)):
+                                    raise LedgerConflict("history pages changed immutable fill content")
+                                execution = replace(execution,
+                                    trade_id=execution.trade_id or prior.trade_id,
+                                    outcome=execution.outcome or prior.outcome)
                             rows[execution.execution_id] = execution
                             page_execution_ids.add(execution.execution_id)
             cursor = str(response.get("nextCursor") or "").strip() or None
@@ -352,8 +363,10 @@ class AsyncAccountSnapshotGateway:
                     response.get("positions"), dict):
                 raise AdapterError("position response has no positions map")
             for slug, raw in response["positions"].items():
-                rows[str(slug)] = normalize_position(
-                    slug, raw, observed_at=observed_at)
+                position = normalize_position(slug, raw, observed_at=observed_at)
+                if str(slug) in rows and rows[str(slug)] != position:
+                    raise AdapterError("position changed across pagination pages")
+                rows[str(slug)] = position
             eof = response.get("eof")
             next_cursor = response.get("nextCursor")
             if eof is True:

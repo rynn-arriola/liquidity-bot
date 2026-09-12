@@ -64,6 +64,39 @@ class SnapshotGatewayTests(unittest.TestCase):
     def run_async(self, coro):
         return asyncio.run(coro)
 
+    def test_conflicting_position_pages_are_not_last_row_wins(self):
+        for quantity, valid in (("1", True), ("0", False), ("-1", False)):
+            client = Client({}, [
+                {"positions": {"one": {"netPositionDecimal": "1"}},
+                 "eof": False, "nextCursor": "next"},
+                {"positions": {"one": {"netPositionDecimal": quantity}}, "eof": True}])
+            account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(
+                client, limiter=CountingLimiter()))
+            if valid:
+                self.assertEqual(len(self.run_async(account.fetch_positions(observed_at=NOW))), 1)
+            else:
+                with self.assertRaises(AdapterError):
+                    self.run_async(account.fetch_positions(observed_at=NOW))
+
+    def test_conflicting_fill_pages_are_not_last_row_wins(self):
+        from tests.test_venue_state import raw_execution
+        from liquidity_bot.execution_ledger import LedgerConflict
+        for quantity, valid in (("0.75", True), ("1", False)):
+            def activity(qty):
+                return {"type": "ACTIVITY_TYPE_TRADE", "trade": {
+                    "id": "trade-one", "isAggressor": False,
+                    "passiveExecution": raw_execution(lastShares=qty)}}
+            client = Client({}, [
+                {"activities": [activity("0.75")], "eof": False, "nextCursor": "next"},
+                {"activities": [activity(quantity)], "eof": True}])
+            account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(
+                client, limiter=CountingLimiter()))
+            if valid:
+                self.assertEqual(len(self.run_async(account.fetch_executions(observed_at=NOW))), 1)
+            else:
+                with self.assertRaises(LedgerConflict):
+                    self.run_async(account.fetch_executions(observed_at=NOW))
+
     def test_order_and_paginated_positions_share_one_limiter(self):
         client = Client(
             {"orders": [raw_order()]},

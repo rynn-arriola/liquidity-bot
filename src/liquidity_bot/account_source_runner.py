@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
 from .account_source import AccountSourceControl, AccountSourcePolicy
-from .account_observations import AccountSnapshotReader
+from .account_observations import AccountSnapshotReader, PositionWatch, DeferredIdentityResolver
+from .account_snapshots import AsyncAccountSnapshotGateway
 from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
 from .execution_ledger import LedgerConflict, ACTIVE_ORDER_STATES
 from .venue_state import normalize_order, normalize_position
@@ -59,7 +61,7 @@ class PrivateCandidate:
 
     MAX_EVENTS = 4096
 
-    def __init__(self, stream, scope, *, timeout=45, resolve_client_id=None):
+    def __init__(self, stream, scope, *, timeout=45):
         self.stream = stream
         self.scope = tuple(scope)
         self.timeout = timeout
@@ -70,7 +72,6 @@ class PrivateCandidate:
         self.order_scopes = set()
         self.position_scopes = set()
         self.partial_requests = set()
-        self.resolve_client_id = resolve_client_id
         self.orders = {}
         self.positions = {}
         self._order_pages = {}
@@ -103,8 +104,7 @@ class PrivateCandidate:
                 if not isinstance(rows, list):
                     raise AdapterError("candidate order page is malformed")
                 page = self._order_pages.setdefault(key, [])
-                page.extend(normalize_order(row, observed_at=event.received_at,
-                    resolve_client_id=self.resolve_client_id) for row in rows)
+                page.extend(normalize_order(row, observed_at=event.received_at) for row in rows)
                 if (any(order.market_slug not in event.market_scope for order in page)
                         or len({order.exchange_order_id for order in page}) != len(page)):
                     raise AdapterError("candidate order page scope/identity conflict")
@@ -133,8 +133,7 @@ class PrivateCandidate:
                     del self._position_pages[key]
         elif event.kind == PrivateEventKind.ORDER_UPDATE:
             raw = event.payload.get("execution", {})
-            order = normalize_order(raw.get("order"), observed_at=event.received_at,
-                                    resolve_client_id=self.resolve_client_id)
+            order = normalize_order(raw.get("order"), observed_at=event.received_at)
             self.orders[order.exchange_order_id] = order
         elif event.kind == PrivateEventKind.POSITION_UPDATE:
             raw = event.payload.get("afterPosition", event.payload.get("after_position",
@@ -179,7 +178,11 @@ class PrivateCandidate:
                     if order.status in ACTIVE_ORDER_STATES}
         if set(working) != set(reported):
             return False
-        if any(not RestFallbackRunner._order_matches_row(reported[key], row)
+        # Called by the serial owner after positive candidate projection. Only
+        # look up the established binding here; never adopt in the collector.
+        if any(not RestFallbackRunner._order_matches_row(replace(reported[key],
+                   client_order_id=(ledger.resolve_client_order_id(key)
+                                    or reported[key].client_order_id)), row)
                for key, row in working.items()):
             return False
         expected_positions = {str(row["market_slug"]): Decimal(row["net_qty"])
@@ -229,6 +232,91 @@ class AccountSourceRunner(RestFallbackRunner):
         self._snapshot_reader = AccountSnapshotReader()
         self._collected_history = None
 
+    def _catalog_positions(self):
+        return {str(row["market_slug"]): Decimal(row["net_qty"])
+                for row in self.ledger.query(
+                    "SELECT market_slug,net_qty FROM execution_positions")
+                if Decimal(row["net_qty"]) != 0}
+
+    async def _replacement_candidates_for_top_up(self, *args, **kwargs):
+        # The caller has settled task-held stream events before entering top-up.
+        # Keep this scope around collection only, never around release/commit.
+        if not self.active_slugs or self.driver is None:
+            return await super()._replacement_candidates_for_top_up(*args, **kwargs)
+        source = self.account_state_mode
+        generation = self.source_control.generation
+        scope = tuple(self.active_slugs)
+        initial_positions = self._catalog_positions()
+        watch = PositionWatch(self.account.fetch_positions, self._now)
+
+        async def checkpoint():
+            if (self._stop_requested or source != self.account_state_mode
+                    or generation != self.source_control.generation
+                    or scope != tuple(self.active_slugs)):
+                raise ApiAdmissionDeferred("catalog interrupted by owner state",
+                    error_code="LOCAL_CATALOG_INTERRUPTED", retry_after_seconds=1)
+            if not self._using_rest_source():
+                try:
+                    await self._drain_private_events()
+                except AdapterError as exc:
+                    self.gate.on_disconnect()
+                    self._streams_need_rebind = True
+                    raise ApiAdmissionDeferred("catalog yielded to private recovery",
+                        error_code="LOCAL_CATALOG_PRIVATE_RECOVERY", retry_after_seconds=1) from exc
+                current_positions = self._catalog_positions()
+                if (current_positions != initial_positions
+                        or set(current_positions) & self._priority_replan_slugs):
+                    raise ApiAdmissionDeferred("catalog yielded to private position service",
+                        error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
+            else:
+                try:
+                    observation = watch.take_ready()
+                except BaseException as exc:
+                    self.gate.on_reconciliation_conflict()
+                    self._rest_poll_completed_at = None
+                    if isinstance(exc, AdapterError):
+                        raise ApiAdmissionDeferred("catalog account watch failed",
+                            error_code="LOCAL_CATALOG_WATCH_FAILED", retry_after_seconds=1) from exc
+                    raise
+                if observation is not None:
+                    positions = {row.market_slug: row.net_qty
+                                 for row in observation.positions if row.net_qty != 0}
+                    age = (self._now() - observation.started_at).total_seconds()
+                    if (not 0 <= age <= 30
+                            or positions != self._catalog_positions()):
+                        # A change/absence is a wakeup, never authoritative
+                        # flatness or quantity. The unchanged full proof runs
+                        # before the ordinary position handler may mutate.
+                        self.gate.on_reconciliation_conflict()
+                        self._rest_poll_completed_at = None
+                        print(f"[account-watch] at={self._now().isoformat()} "
+                              f"source={source} outcome=reconcile_required "
+                              f"observation_age_seconds={age:.3f}", flush=True)
+                        raise ApiAdmissionDeferred("catalog yielded to account observation",
+                            error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
+                interval = (self.rest_polling_policy.active_poll_seconds
+                            if self._has_open_position() or self.ledger.unresolved_intents()
+                            else self.rest_polling_policy.normal_poll_seconds)
+                if not self.rest_polling_policy.enabled:
+                    interval = self.REST_POLL_SECONDS
+                # Background collection must inherit neither the catalog
+                # callback (which reads the ledger) nor its lower-priority lane.
+                with self.gateway.read_checkpoints(None), self.gateway.traffic_class("safety"):
+                    watch.start_if_due(source=source, generation=generation, scope=scope,
+                                       interval=interval)
+            if self._position_near_its_flatten_deadline(self._now()):
+                raise ApiAdmissionDeferred("catalog yielded to position service",
+                    error_code="LOCAL_CATALOG_POSITION_PRIORITY", retry_after_seconds=1)
+
+        try:
+            with self.gateway.read_checkpoints(checkpoint):
+                await checkpoint()
+                result = await super()._replacement_candidates_for_top_up(*args, **kwargs)
+                await checkpoint()
+                return result
+        finally:
+            await watch.close()
+
     def _set_source_descriptions(self):
         super()._set_source_descriptions()
         if self._using_rest_source():
@@ -239,7 +327,10 @@ class AccountSourceRunner(RestFallbackRunner):
 
         async def read(exchange_id):
             async with semaphore:
-                return await self.executor.read_order_state(exchange_id, observed_at=now)
+                identities = DeferredIdentityResolver()
+                order = await self.executor.read_order_state(
+                    exchange_id, observed_at=now, resolve_client_id=identities)
+                return order, identities
 
         tasks = [asyncio.create_task(read(item)) for item in exchange_ids]
         try:
@@ -259,7 +350,11 @@ class AccountSourceRunner(RestFallbackRunner):
                     raise result
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
             else:
-                self.executor.apply_order_state(exchange_id, result, observed_at=now)
+                order, identities = result
+                resolved = identities.project(self.ledger.resolve_client_order_id)
+                order = replace(order, client_order_id=(resolved.get(exchange_id)
+                                                       or order.client_order_id))
+                self.executor.apply_order_state(exchange_id, order, observed_at=now)
         return failures
 
     async def _collect_rest_snapshots(self, now):
@@ -269,12 +364,14 @@ class AccountSourceRunner(RestFallbackRunner):
         # foreign/terminal facts, so it remains on the serial owner. Only the
         # pure complete account reads below may overlap.
         orders = await self._fetch_rest_order_snapshot(now)
+        identities = DeferredIdentityResolver()
+        history_reader = AsyncAccountSnapshotGateway(self.gateway, resolve_client_id=identities)
 
         async def already_read_orders():
             return orders
 
         async def history():
-            return await self.account.fetch_executions(
+            return await history_reader.fetch_executions(
                 observed_at=now, require_coverage=True,
                 known_execution_ids=self._rest_history_seen)
 
@@ -288,7 +385,12 @@ class AccountSourceRunner(RestFallbackRunner):
                 or observation.source != self.account_state_mode
                 or observation.scope != tuple(self.active_slugs)):
             raise AdapterError("obsolete account observation")
-        self._collected_history = observation.history
+        # Projection/adoption resumes on the serial owner, never in a worker.
+        resolved = identities.project(self.ledger.resolve_client_order_id)
+        self._collected_history = replace(observation.history, executions=tuple(
+            replace(item, client_order_id=(resolved.get(item.exchange_order_id)
+                                          or item.client_order_id))
+            for item in observation.history))
         return observation.orders, observation.positions
 
     async def _fetch_execution_history(self, now):
@@ -420,8 +522,7 @@ class AccountSourceRunner(RestFallbackRunner):
             if request.target == "websocket":
                 self._source_candidate = PrivateCandidate(
                     self._websocket_factory(self.client), self._source_scope,
-                    timeout=self.source_policy.verification_seconds,
-                    resolve_client_id=self.ledger.resolve_client_order_id)
+                    timeout=self.source_policy.verification_seconds)
                 self._source_candidate.task = asyncio.create_task(
                     self._source_candidate.run())
             await self._source_notice("verifying", "operator_request")

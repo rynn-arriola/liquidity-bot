@@ -267,12 +267,33 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
             candidate.collect(PrivateEvent(Kind.HEARTBEAT, {}))
 
     async def test_rest_collector_is_single_writer_and_failure_revokes_proof(self):
-        runner, _, _ = await self.build()
-        with patch.object(runner.account, "fetch_executions", AsyncMock(side_effect=AdapterError("503"))):
+        runner, client, _ = await self.build()
+        with patch.object(client.portfolio, "activities", AsyncMock(side_effect=AdapterError("503"))):
             with self.assertRaises(AdapterError):
                 await runner._rest_reconcile(self.now)
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
         self.assertIsNone(runner._snapshot_reader.task)
+
+    async def test_candidate_worker_does_not_adopt_orphan_order(self):
+        from test_venue_state import raw_order
+        runner, client, _ = await self.build()
+        raw = raw_order(id="orphan-order", marketSlug=runner.market_slug)
+        client.orders.rows["orphan-order"] = raw
+        runner.ledger.prepare_intent("orphan", "PLACE", runner.market_slug,
+            "owned-client", raw, created_at=self.now)
+        runner.ledger.transition_intent("orphan", "SUBMITTING", updated_at=self.now)
+        request(runner.source_control, self.now, "websocket")
+        await runner._source_checkpoint(None)
+        candidate = runner._source_candidate
+        self.assertIsNotNone(candidate)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await candidate.freeze()
+        self.assertTrue(candidate.orders)
+        self.assertIsNone(runner.ledger.resolve_client_order_id("orphan-order"))
+        await runner._project_candidate_events(candidate)
+        self.assertEqual(runner.ledger.resolve_client_order_id("orphan-order"), "owned-client")
+        self.assertTrue(candidate.agrees(runner.ledger))
 
     async def test_generation_change_during_admission_prevents_submission(self):
         runner, client, _ = await self.build()

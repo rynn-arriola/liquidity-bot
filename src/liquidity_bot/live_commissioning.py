@@ -55,6 +55,7 @@ from .execution_ledger import (
     LedgerConflict,
     QuoteObservation,
 )
+from .execution_timing import ExecutionTimings
 from .entry_quality import (
     DEFAULT_ENTRY_QUALITY_POLICY_PATH, load_entry_quality_policy)
 from .entry_order_policy import (
@@ -489,6 +490,7 @@ class CommissioningRunner:
             self.gateway, resolve_client_id=ledger.resolve_client_order_id)
         self.executor = LiveOrderExecutor(
             AsyncTradingGateway(self.gateway), ledger)
+        self._execution_timings = ExecutionTimings()
         self.driver: ControlledActionDriver | None = None
         self.kill_switch = MarketKillSwitch(self.executor, ledger)
         self.projector = PrivateLedgerProjector(ledger)
@@ -2535,6 +2537,7 @@ class CommissioningRunner:
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
+        self._record_execution_timing("positions")
         orphan_places_resolved = await self._advance_orphan_place_clear_proofs(
             observed_at=now,
             open_orders=orders,
@@ -2622,6 +2625,7 @@ class CommissioningRunner:
             self._mark_market_dirty(slug, self._now())
             if operation == "CANCEL":
                 self._priority_replan_slugs.add(slug)
+                self._record_execution_timing("cancel", slug=slug, intent_id=intent_id)
 
     def _record_resolved_cancel_owners(
         self, unresolved_cancels: dict[str, str],
@@ -2642,6 +2646,9 @@ class CommissioningRunner:
             self._position_near_its_flatten_deadline(now))
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
+        if getattr(event, "kind", None) in {
+                "order_snapshot", "order_update", "position_snapshot", "position_update"}:
+            self._record_execution_timing("positions")
         if self._settlement_wait_slugs:
             self._sync_settlement_wait_positions(self._now())
         if self._inactive_market_wait_slugs:
@@ -2654,6 +2661,33 @@ class CommissioningRunner:
                 self._execution_owner_slugs()))
         for slug in affected_slugs:
             self._mark_market_dirty(slug, received_at)
+
+    def _record_execution_timing(self, event, **fields):
+        # Local evidence only: no API call, no strategy input, no exception may
+        # turn an acknowledged mutation into an apparent execution failure.
+        try:
+            at = self._now()
+            source = getattr(self, "account_state_mode", "websocket")
+            if event == "positions":
+                quantities = {str(row["market_slug"]): Decimal(row["net_qty"])
+                    for row in self.ledger.query("SELECT market_slug,net_qty FROM "
+                        "execution_positions WHERE CAST(net_qty AS REAL)!=0")}
+                self._execution_timings.observe(quantities, at=at, source=source, complete=True)
+            elif event == "cancel":
+                rows = self.ledger.query("SELECT state FROM execution_intents WHERE intent_id=?",
+                                         (fields["intent_id"],))
+                if rows and rows[0]["state"] == "RECONCILED":
+                    self._execution_timings.cancel_confirmed(fields["slug"], at=at, source=source)
+            elif event == "action":
+                deadline = None
+                if fields["action"].kind == ActionKind.PLACE_IOC:
+                    get_deadline = getattr(self, "_position_exit_deadline", None)
+                    if get_deadline is not None:
+                        deadline = get_deadline(fields["action"].market_slug)
+                self._execution_timings.action(at=at, source=source, deadline=deadline, **fields)
+        except Exception:
+            # A missing timing row remains missing; never report fabricated 0s.
+            pass
 
     async def _drain_private_events(self) -> int:
         """Apply private events already buffered by a connected stream.
@@ -6041,6 +6075,9 @@ class CommissioningRunner:
                 actions, market=state.market,
                 position=position, now=now,
                 quote_observation=quote_observation)
+            if actions and result is not None:
+                self._record_execution_timing("action", action=actions[0],
+                                              result=result, position=position)
             if (actions and result is not None
                     and getattr(result, "cancel_intent_id", None) is not None
                     and actions[0].reason
@@ -7692,6 +7729,9 @@ class CommissioningRunner:
                         # Backpressure is not evidence that the cache failed.
                         # Do not immediately replace bounded entry revalidation
                         # with a much larger background discovery scan.
+                        raise
+                    except (LedgerConflict, RuntimeInvariantViolation):
+                        self.gate.on_reconciliation_conflict()
                         raise
                     except Exception as exc:
                         print(
@@ -10044,6 +10084,11 @@ class CommissioningRunner:
                         self._top_up_retry_not_before = max(
                             self._top_up_retry_not_before, retry_at)
                         next_selection = retry_at
+                    except (LedgerConflict, RuntimeInvariantViolation) as exc:
+                        self.gate.on_reconciliation_conflict()
+                        await self._report_runtime_error("market_top_up_terminal", exc)
+                        stop_reason = self._terminal_exception_reason("market_top_up", exc)
+                        break
                     except Exception as exc:
                         self._clear_incremental_top_up_requests(
                             consumed_post_flat_at)

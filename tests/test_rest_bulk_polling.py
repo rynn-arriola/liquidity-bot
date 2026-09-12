@@ -58,7 +58,7 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
         with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact, \
                 patch.object(client.orders, "list", wraps=client.orders.list) as bulk, \
                 patch.object(runner.account, "fetch_positions", wraps=runner.account.fetch_positions) as positions, \
-                patch.object(runner.account, "fetch_executions", wraps=runner.account.fetch_executions) as history:
+                patch.object(client.portfolio, "activities", wraps=client.portfolio.activities) as history:
             await self.poll(runner)
         self.assertEqual(exact.await_count, 0)
         self.assertEqual(bulk.await_count, 2)
@@ -254,8 +254,8 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
         self.assertFalse(runner._rest_poll_due(self.now + timedelta(seconds=1)))
 
     async def test_failed_history_still_revokes_optimized_proof(self):
-        runner, _ = await self.build(2)
-        with patch.object(runner.account, "fetch_executions", AsyncMock(side_effect=AdapterError("history"))):
+        runner, client = await self.build(2)
+        with patch.object(client.portfolio, "activities", AsyncMock(side_effect=AdapterError("history"))):
             with self.assertRaises(AdapterError):
                 await self.poll(runner)
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))

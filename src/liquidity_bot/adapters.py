@@ -1213,7 +1213,27 @@ class AsyncReadOnlyGateway:
         self.last_upcoming_event_pages = 0
         self._traffic_class_override: ContextVar[str | None] = ContextVar(
             f"api_traffic_class_{id(self)}", default=None)
+        self._read_checkpoint = ContextVar(f"api_read_checkpoint_{id(self)}", default=None)
         self._sleep = sleep
+
+    @contextmanager
+    def read_checkpoints(self, callback):
+        """Yield composed read work to its serial owner between requests.
+
+        The checkpoint runs outside request retry/error accounting. Nested
+        safety reads cannot recursively invoke it or inherit the scan lane.
+        """
+        token = self._read_checkpoint.set(callback)
+        try:
+            yield
+        finally:
+            self._read_checkpoint.reset(token)
+
+    async def _checkpoint_before_read(self):
+        callback = self._read_checkpoint.get()
+        if callback is not None:
+            with self.read_checkpoints(None), self.traffic_class("safety"):
+                await callback()
 
     @contextmanager
     def traffic_class(self, value: str):
@@ -1308,6 +1328,7 @@ class AsyncReadOnlyGateway:
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
+            await self._checkpoint_before_read()
             traffic_class = (
                 self._traffic_class_override.get()
                 or self.default_traffic_class)

@@ -225,6 +225,24 @@ is not assumed for this Retail account.
 Stable boundaries and replayable incidents reduce future rework. They cannot
 guarantee that the venue never changes or that every exit has available liquidity.
 
+## Prepared scan-watch and timing follow-up
+
+The [September 12 follow-up](history/ACCOUNT_WATCH_EXIT_REVIEW_2026-09-12.md)
+implements bounded checkpoints during incremental candidate discovery and a
+single-flight REST position watch in that scope. It is a wakeup only, never a
+substitute for full order/position/history proof. WebSocket uses serial private
+event draining instead. Concurrent history/order/candidate collectors cannot
+adopt identities; projection stays on the owner. The existing shared rate,
+5/1-second targets, disabled-optimization five-second cadence and manual source
+selection remain. There is no always-running second full-account reconciler.
+
+`[execution-timing]` JSON is evidence only. Compare source/action/reason and
+`observation_kind` separately; initial/restarted observations are not confirmed
+fill-delivery times. Report sample counts and null coverage with any percentiles.
+`deadline_offset_seconds` is signed and only present when the existing deadline
+can be recovered; acknowledgements are not proof of execution or flatness.
+Live measurements require the prepared code to be deployed with operator authority.
+
 ## Implemented operator control
 
 The launcher accepts `websocket`, `rest` or compatible `rest-fallback` as its

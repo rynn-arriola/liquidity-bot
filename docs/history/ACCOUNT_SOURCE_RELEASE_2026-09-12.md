@@ -238,4 +238,7 @@ CANCEL intent during the new session, so the immediate duplicate pattern did not
 recur. The open position is still inside the unchanged passive phase; this proves
 continuous reducer coverage, not a forced 900-second exit or final close. Both
 processes remained alive after the requested 7:15 observation, so no corrective
-second restart was warranted.
+second restart was warranted. A later authenticated 08:11:48Z proof found 28
+flat entry orders plus one reducer on each of two natural positions (+10 and -4),
+with zero unresolved intents or unknown orders; both position paths remained
+covered while the flat-entry count stayed below its independent ceiling.

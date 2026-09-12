@@ -1,5 +1,9 @@
 # Prepared-change live-readiness review — September 12, 2026
 
+Follow-up: findings A/B were subsequently repaired offline, together with the
+profiled ownership-lookup bottleneck. See the [repair and performance audit](READINESS_PERFORMANCE_FIXES_2026-09-12.md).
+The original review below is retained as dated evidence, not current open status.
+
 ## Verdict and scope
 
 Reviewed prepared commit `f449df27d` against its parent and the unchanged loaded

@@ -180,6 +180,13 @@ WebSocket cannot reset the loss ratchet. Do not hot-reload during position handl
 
 ## Delivery and acceptance
 
+September 12 performance checkpoint: the measured identity-lookup scan is fixed
+offline by an additive ordered intent index, benefiting both sources without
+new requests. This is not the independent account-watch/catalog implementation.
+Current normalization may adopt an unresolved intent through its identity resolver
+and therefore write the ledger; raw fetches must be separated from that projection
+before background collection. [Measurements and remaining work](history/READINESS_PERFORMANCE_FIXES_2026-09-12.md).
+
 First extract source collection/projection contracts and replay both existing
 modes to prove behavior parity. Next implement the coordinator and handoffs using
 fake feeds with the real ledger/planner/executor. Then introduce asynchronous

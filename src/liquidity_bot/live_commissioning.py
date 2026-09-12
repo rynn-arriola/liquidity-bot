@@ -4033,17 +4033,7 @@ class CommissioningRunner:
                 hard_stop_flatten_required=self._hard_stop_hold_day is not None,
                 maintenance_flatten_required=(
                     self._scheduled_maintenance_flatten_required()))
-        today = date.fromisoformat(risk_day(now))
-        new_risk_allowed = (
-            self.risk_guard is not None
-            and self.risk_guard.can_add_new_risk(now=now)
-            and self._provisional_hard_stop_at is None
-            and self._baseline_day == today
-            and self._nontrading_cash is not None
-            and self._nontrading_cash_day == today
-            and not self._entry_pause_active()
-            and state.market.event_allows_entry(now)
-        )
+        new_risk_allowed = self._entry_risk_allowed(now, state.market)
         eligible = state.reward_eligible
         if position == 0 and not new_risk_allowed:
             # A stale/unknown marked balance is recoverable, but existing flat-
@@ -4074,31 +4064,57 @@ class CommissioningRunner:
                 self._scheduled_maintenance_flatten_required()),
         )
 
+    def _entry_risk_allowed(self, now: datetime, market: MarketMetadata) -> bool:
+        """Shared clock-sensitive entry policy; no ledger or network reads."""
+        today = date.fromisoformat(risk_day(now))
+        return (
+            self.risk_guard is not None
+            and self.risk_guard.can_add_new_risk(now=now)
+            and self._provisional_hard_stop_at is None
+            and self._baseline_day == today
+            and self._nontrading_cash is not None
+            and self._nontrading_cash_day == today
+            and not self._entry_pause_active()
+            and market.event_allows_entry(now)
+        )
+
     def _check_entry_admission(self, payload: Mapping[str, Any]) -> None:
-        """Recheck entry authority after governor wait, without any I/O.
+        """Recheck entry authority after governor wait, without network I/O.
 
         The executor has already reserved THIS create as SUBMITTING. Do not
         call gate.ready(), which would reject that very intent, or count it
         twice against the cap. Source wrappers independently recheck their
         generation and exact proof. Reducers/cancels do not use this gate.
         """
-        now = self._now()
         slug = str(payload.get("marketSlug") or "")
-        frame = self._frame(now, slug)
+        self._assert_runtime_scope()
+        state = self.state_for(slug)
+        if state.market is None or state.book is None or state.book_observed_at is None:
+            raise RuntimeInvariantViolation(
+                "entry_admission_incomplete", "entry market evidence is incomplete")
+        if isinstance(self.gateway, EventAwareGateway):
+            state.market = self.gateway.apply_event_status(state.market)
+        position = self.ledger.position(slug)
+        ownership_known = self.ledger.ownership_is_known()
         working, reservations = self._flat_entry_orders_and_reservations()
+        # Do every ledger read before sampling send-time authority. Rebuilding
+        # a planner frame here also computed unused basis/portfolio/quote data.
+        now = self._now()
+        market = state.market
         seconds_to_event = (
-            (frame.market.game_start - now).total_seconds()
-            if frame.market.game_start is not None else None)
+            (market.game_start - now).total_seconds()
+            if market.game_start is not None else None)
         allowed = (
             not self._stop_requested
-            and frame.position == 0
-            and frame.new_risk_allowed
-            and self.gate.session_ready(self.ledger, now=now)
-            and frame.market.active and not frame.market.closed
-            and frame.market.is_supported_moneyline
+            and position == 0
+            and self._entry_risk_allowed(now, market)
+            and ownership_known
+            and self.gate.session_evidence_ready(now=now)
+            and market.active and not market.closed
+            and market.is_supported_moneyline
             and seconds_to_event is not None
             and seconds_to_event > self.reconciler.policy.force_exit_before_start_seconds
-            and 0 <= (now - frame.book_observed_at).total_seconds()
+            and 0 <= (now - state.book_observed_at).total_seconds()
             <= self.reconciler.policy.max_book_age_seconds
             and len(working) + reservations <= self._effective_entry_order_cap(now)
         )

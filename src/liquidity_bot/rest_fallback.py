@@ -28,10 +28,9 @@ from .streams import PrivateStreamPool
 class RestStateGate(PrivateStateGate):
     """Account-source lifecycle and complete REST proof, NOT socket health."""
 
-    def session_ready(self, ledger, *, now: datetime) -> bool:
+    def session_evidence_ready(self, *, now: datetime) -> bool:
         if not (self.connected and self.rest_reconciled
-                and self.last_reconcile_at is not None
-                and ledger.ownership_is_known()):
+                and self.last_reconcile_at is not None):
             return False
         age = (now - self.last_reconcile_at).total_seconds()
         return 0 <= age <= self.max_silence_seconds
@@ -80,8 +79,6 @@ class RestProofTradingGateway(AsyncTradingGateway):
     async def _mutation(self, operation, call, *, traffic_class="safety",
                         admission_check=None):
         def check():
-            if admission_check is not None:
-                admission_check()
             scoped_market = self._reducing_market.get()
             scoped_reduction_proved = (
                 operation == "POST /v1/orders"
@@ -96,6 +93,10 @@ class RestProofTradingGateway(AsyncTradingGateway):
                     "REST account proof expired; request not sent",
                     error_code="LOCAL_REST_STATE_EXPIRED",
                     retry_after_seconds=1.0)
+            # The shared entry callback samples the final clock after all
+            # proof/ownership reads, including this wrapper's checks.
+            if admission_check is not None:
+                admission_check()
 
         return await super()._mutation(
             operation, call, traffic_class=traffic_class, admission_check=check)

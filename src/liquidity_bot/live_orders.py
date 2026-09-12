@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
-from .errors import AdapterError, ApiAdmissionDeferred
+from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
 from .venue_state import normalize_execution, normalize_order
@@ -29,6 +29,16 @@ class OrderValidationError(ValueError):
 
 class OrderOutcomeUncertain(RuntimeError):
     """The remote result is ambiguous and the market remains quarantined."""
+
+
+class OrderAdmissionFailed(RuntimeInvariantViolation):
+    """Critical local failure with positive proof the request was NOT sent."""
+
+    def __init__(self, cause: Exception):
+        code = (cause.code if isinstance(cause, RuntimeInvariantViolation)
+                else "order_admission_failed")
+        super().__init__(
+            code, f"local order admission failed ({type(cause).__name__}); request not sent")
 
 
 class OrderMutationRejected(AdapterError):
@@ -203,7 +213,14 @@ class AsyncTradingGateway:
             await self.gateway.limiter.wait()
         if admission_check is not None:
             # A local veto before network I/O is exact, never UNCERTAIN.
-            admission_check()
+            try:
+                admission_check()
+            except ApiAdmissionDeferred:
+                raise
+            except Exception as exc:
+                # Preserve critical escalation separately from normal stale
+                # proof/rate deferral, without inventing a remotely sent order.
+                raise OrderAdmissionFailed(exc) from exc
         started_at = time.monotonic()
         try:
             result = await call()
@@ -265,17 +282,7 @@ class AsyncTradingGateway:
                     error_code="LOCAL_EVENT_ENTRY_BLOCKED", retry_after_seconds=1.0)
             check_entry = getattr(self.gateway, "entry_admission_check", None)
             if not reducing and callable(check_entry):
-                try:
-                    check_entry(payload)
-                except ApiAdmissionDeferred:
-                    raise
-                except Exception as exc:
-                    # This callback executes before call(): even a broken or
-                    # contradictory local input cannot invent a sent order.
-                    raise ApiAdmissionDeferred(
-                        f"entry admission failed locally ({type(exc).__name__}); request not sent",
-                        error_code="LOCAL_ENTRY_CHECK_FAILED", retry_after_seconds=1.0,
-                    ) from exc
+                check_entry(payload)
 
         traffic_class = (
             "safety"
@@ -396,7 +403,7 @@ class LiveOrderExecutor:
             exchange_id = str(response.get("id") or "").strip()
             if not exchange_id:
                 raise AdapterError("create-order response has no exchange order id")
-        except ApiAdmissionDeferred as exc:
+        except (ApiAdmissionDeferred, OrderAdmissionFailed) as exc:
             # The limiter declined this entry before gateway.create performed
             # any network IO.  FAILED is exact; UNCERTAIN would falsely claim
             # that an order might exist and unnecessarily quarantine market
@@ -451,7 +458,7 @@ class LiveOrderExecutor:
             intent_id, "SUBMITTING", updated_at=now)
         try:
             await self.gateway.cancel(exchange_order_id, market_slug)
-        except ApiAdmissionDeferred as exc:
+        except (ApiAdmissionDeferred, OrderAdmissionFailed) as exc:
             self.ledger.transition_intent(
                 intent_id, "FAILED", updated_at=now,
                 exchange_order_id=exchange_order_id,

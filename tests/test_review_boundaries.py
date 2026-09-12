@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
 from liquidity_bot.account_source_runner import AccountSourceRunner
-from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
+from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
 from liquidity_bot.execution_ledger import Execution, LedgerConflict, PositionState
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind as Kind
 from liquidity_bot.streams import PrivateReadOnlyStream
+from liquidity_bot.live_orders import OrderAdmissionFailed, OrderOutcomeUncertain
 from scripts.accounting import snapshot_change_lines
 
 
@@ -140,10 +141,151 @@ class ReviewBoundaryTests(IsolatedAsyncioTestCase):
         def broken(_payload):
             raise ValueError("invalid local state")
         runner.gateway.entry_admission_check = broken
+        with self.assertRaises(OrderAdmissionFailed) as raised:
+            await self.send_with_wait(runner, lambda: None)
+        self.assertFalse(client.orders.create_calls)
+        self.assertFalse(runner.ledger.unresolved_intents())
+        stop = await runner._handle_action_failure(raised.exception, runner.market_slug)
+        self.assertEqual(stop, "critical:order_admission_failed")
+
+    async def send_with_validation_work(self, runner, work):
+        original = runner._check_entry_admission
+        collect = runner._flat_entry_orders_and_reservations
+        def delayed_collect():
+            result = collect()
+            work()
+            return result
+        def validate(payload):
+            with patch.object(runner, "_flat_entry_orders_and_reservations", delayed_collect):
+                original(payload)
+        runner.gateway.entry_admission_check = validate
+        return await self.send_with_wait(runner, lambda: None)
+
+    async def test_final_check_uses_time_after_ledger_work_in_both_modes(self):
+        for mode in ("websocket", "rest"):
+            for seconds in (0, 4.99, 5, 5.01, 16):
+                with self.subTest(mode=mode, seconds=seconds):
+                    self.now = fixtures.NOW
+                    runner, client = await self.build(mode)
+                    def delay():
+                        self.now += timedelta(seconds=seconds)
+                    if seconds <= 5:
+                        await self.send_with_validation_work(runner, delay)
+                        self.assertEqual(len(client.orders.create_calls), 1)
+                    else:
+                        with self.assertRaises(ApiAdmissionDeferred):
+                            await self.send_with_validation_work(runner, delay)
+                        self.assertFalse(client.orders.create_calls)
+                        self.assertFalse(runner.ledger.unresolved_intents())
+
+    async def test_source_wrapper_work_precedes_the_final_entry_clock(self):
+        runner, client = await self.build("rest")
+        gateway = runner.executor.gateway
+        original = gateway.proof_current
+        def slow_proof():
+            result = original()
+            self.now += timedelta(seconds=6)
+            return result
+        gateway.proof_current = slow_proof
         with self.assertRaises(ApiAdmissionDeferred):
             await self.send_with_wait(runner, lambda: None)
         self.assertFalse(client.orders.create_calls)
         self.assertFalse(runner.ledger.unresolved_intents())
+
+    async def test_final_check_rechecks_source_event_risk_and_stop_after_collection(self):
+        for mode in ("websocket", "rest"):
+            for boundary in ("source", "event", "risk", "kickoff", "stop", "cap"):
+                with self.subTest(mode=mode, boundary=boundary):
+                    self.now = fixtures.NOW
+                    runner, client = await self.build(mode)
+                    def cross_boundary():
+                        state = runner.state_for(runner.market_slug)
+                        if boundary == "source":
+                            runner.gate.last_reconcile_at = self.now - timedelta(seconds=29)
+                            runner.gate.last_message_at = self.now - timedelta(seconds=29)
+                        elif boundary == "event":
+                            state.market = replace(state.market, event_guard_required=True,
+                                event_not_started=True, event_started_at=None,
+                                event_checked_at=self.now - timedelta(seconds=29))
+                        elif boundary == "risk":
+                            runner.risk_guard.equity_observed_at = self.now - timedelta(seconds=14)
+                        elif boundary == "kickoff":
+                            state.market = replace(state.market, game_start=self.now + timedelta(
+                                seconds=runner.reconciler.policy.force_exit_before_start_seconds + 1))
+                        elif boundary == "stop":
+                            runner.request_stop("operator_stop")
+                        elif boundary == "cap":
+                            runner._loss_entry_order_cap = 0
+                        self.now += timedelta(seconds=2)
+                    with self.assertRaises(ApiAdmissionDeferred):
+                        await self.send_with_validation_work(runner, cross_boundary)
+                    self.assertFalse(client.orders.create_calls)
+                    self.assertFalse(runner.ledger.unresolved_intents())
+
+    async def test_final_check_refuses_et_rollover_during_collection(self):
+        self.now = fixtures.NOW.replace(hour=3, minute=59, second=59)
+        with patch.object(fixtures, "NOW", self.now), patch.object(
+                fixtures, "GAME_START", self.now + timedelta(hours=5)):
+            runner, client = await self.build()
+            def midnight():
+                self.now += timedelta(seconds=2)
+            with self.assertRaises(ApiAdmissionDeferred):
+                await self.send_with_validation_work(runner, midnight)
+            self.assertFalse(client.orders.create_calls)
+
+    async def test_final_check_does_not_rebuild_unused_planner_frame(self):
+        runner, _ = await self.build()
+        original = runner._check_entry_admission
+        def validate(payload):
+            with patch.object(runner, "_frame", side_effect=AssertionError("duplicate frame")), \
+                    patch.object(runner, "_portfolio_worst_loss", side_effect=AssertionError("duplicate risk")):
+                original(payload)
+        runner.gateway.entry_admission_check = validate
+        await self.send_with_wait(runner, lambda: None)
+
+    async def test_critical_admission_preserves_code_and_failed_intent_both_modes(self):
+        for mode in ("websocket", "rest"):
+            with self.subTest(mode=mode):
+                runner, client = await self.build(mode)
+                cause = RuntimeInvariantViolation("unowned_working_order", "injected ownership conflict")
+                def critical(_payload):
+                    raise cause
+                runner.gateway.entry_admission_check = critical
+                with self.assertRaises(OrderAdmissionFailed) as raised:
+                    await self.send_with_wait(runner, lambda: None)
+                self.assertIs(raised.exception.__cause__, cause)
+                self.assertEqual(raised.exception.code, cause.code)
+                self.assertFalse(client.orders.create_calls)
+                self.assertFalse(runner.ledger.unresolved_intents())
+                self.assertEqual(runner.ledger.query(
+                    "SELECT state FROM execution_intents WHERE operation='PLACE'")[-1]["state"], "FAILED")
+                self.assertEqual(await runner._handle_action_failure(
+                    raised.exception, runner.market_slug), "critical:unowned_working_order")
+
+    async def test_unexpected_error_after_network_send_still_is_uncertain(self):
+        runner, client = await self.build()
+        client.orders.create = AsyncMock(side_effect=RuntimeInvariantViolation(
+            "simulated_client_error", "response failed after network boundary"))
+        with self.assertRaises(OrderOutcomeUncertain):
+            await self.send_with_wait(runner, lambda: None)
+        client.orders.create.assert_awaited_once()
+        self.assertEqual(runner.ledger.unresolved_intents()[0]["state"], "UNCERTAIN")
+
+    async def test_critical_cancel_admission_marks_only_the_cancel_failed(self):
+        runner, client = await self.build()
+        await self.send_with_wait(runner, lambda: None)
+        placed = runner.ledger.unresolved_intents()[0]
+        cause = RuntimeInvariantViolation("source_integrity", "invalid source")
+        runner.executor.gateway.cancel = AsyncMock(side_effect=OrderAdmissionFailed(cause))
+        with self.assertRaises(OrderAdmissionFailed):
+            await runner.executor.cancel(
+                client_order_id=placed["client_order_id"], exchange_order_id="fake-order-1",
+                market_slug=runner.market_slug, now=self.now)
+        self.assertFalse(client.orders.cancel_calls)
+        self.assertEqual(runner.ledger.query(
+            "SELECT state FROM execution_intents WHERE operation='CANCEL'")[-1]["state"], "FAILED")
+        self.assertEqual(runner.ledger.query(
+            "SELECT state FROM execution_intents WHERE operation='PLACE'")[-1]["state"], "ACKNOWLEDGED")
 
     async def test_changed_position_blocks_the_previously_flat_entry(self):
         runner, client = await self.build()

@@ -145,10 +145,15 @@ class PrivateStateGate:
         pass. See BUGFIXES 2026-08-16.
         """
 
+        return (self.session_evidence_ready(now=now)
+                and ledger.ownership_is_known())
+
+    def session_evidence_ready(self, *, now: datetime) -> bool:
+        """Check in-memory source evidence; ownership must be proven separately."""
+
         if not (self.connected and self.rest_reconciled
                 and not self.order_snapshot_in_progress
                 and self.balance_snapshot_seen
-                and ledger.ownership_is_known()
                 and self.last_message_at
                 and self.last_reconcile_at):
             return False

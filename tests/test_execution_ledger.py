@@ -118,6 +118,51 @@ class ExecutionLedgerTests(unittest.TestCase):
         self.assertIn("SEARCH execution_orders", details)
         self.assertIn("idx_execution_orders_status", details)
 
+    def test_exchange_identity_lookup_uses_ordered_index(self):
+        plan = self.ledger.query(
+            "EXPLAIN QUERY PLAN SELECT client_order_id FROM execution_intents "
+            "WHERE exchange_order_id=? ORDER BY created_at LIMIT 1", ("x",))
+        details = " ".join(str(row["detail"]) for row in plan)
+        self.assertIn("SEARCH execution_intents", details)
+        self.assertIn("idx_execution_intents_exchange_created", details)
+        self.assertNotIn("TEMP B-TREE", details)
+
+    def test_exchange_identity_index_preserves_earliest_intent_and_fallback(self):
+        # The index must preserve first-by-time (then insertion order for ties),
+        # not prefer a later cancellation or sort client identities differently.
+        with self.ledger.connection:
+            for intent_id, client_id, seconds in (
+                    ("late", "client-late", 2),
+                    ("first", "z-client-first", 0),
+                    ("tie", "a-client-tie", 0)):
+                stamp = (T0 + timedelta(seconds=seconds)).isoformat()
+                self.ledger.connection.execute(
+                    "INSERT INTO execution_intents "
+                    "(intent_id,operation,market_slug,client_order_id,exchange_order_id,"
+                    "payload_json,payload_hash,state,created_at,updated_at) "
+                    "VALUES (?,'PLACE','market-one',?,'x','{}','hash','CONFIRMED',?,?)",
+                    (intent_id, client_id, stamp, stamp))
+        self.assertEqual(self.ledger.resolve_client_order_id(" x "), "z-client-first")
+        self.assertIsNone(self.ledger.resolve_client_order_id("unknown"))
+        self.assertIsNone(self.ledger.resolve_client_order_id(" "))
+        self.ledger.apply_order_snapshot(
+            "identity-fallback", [order()], as_of=T0, observed_at=T0, complete=True)
+        self.assertEqual(self.ledger.resolve_client_order_id("exchange-one"), "client-one")
+        self.ledger.connection.execute("DROP INDEX idx_execution_intents_exchange_created")
+        self.assertEqual(self.ledger.resolve_client_order_id("x"), "z-client-first")
+
+    def test_existing_ledger_adds_identity_index_only_on_writable_open(self):
+        self.ledger.connection.execute("DROP INDEX idx_execution_intents_exchange_created")
+        self.ledger.connection.commit()
+        with ExecutionLedger.open_read_only(self.path).connection as reader:
+            self.assertIsNone(reader.execute(
+                "SELECT name FROM sqlite_master WHERE name=?",
+                ("idx_execution_intents_exchange_created",)).fetchone())
+        reader.close()
+        self.ledger.close()
+        self.ledger = ExecutionLedger(self.path)
+        self.test_exchange_identity_lookup_uses_ordered_index()
+
     def test_market_fill_lookup_uses_market_leading_index(self):
         plan = self.ledger.query(
             "EXPLAIN QUERY PLAN SELECT price,qty,fee,intent,event_at "

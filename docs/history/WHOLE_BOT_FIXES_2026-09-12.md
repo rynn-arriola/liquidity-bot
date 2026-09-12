@@ -1,5 +1,9 @@
 # Whole-bot review repairs — September 12, 2026
 
+Later review update: [live-readiness review](LIVE_READINESS_REVIEW_2026-09-12.md)
+found two additional final-entry boundary cases and withholds sign-off. The
+verification below remains evidence for this patch, not complete live approval.
+
 ## Scope and operational boundary
 
 The operator authorized the confirmed fixes from the

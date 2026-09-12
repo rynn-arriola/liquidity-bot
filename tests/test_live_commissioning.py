@@ -6424,6 +6424,158 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("private gateway detail", output.getvalue())
                 self.assertGreater(state.next_book_refresh, NOW)
 
+    async def test_jit_book_service_reads_once_per_owner_after_slow_account_proof(self):
+        moment = [NOW]
+        runner, client, _ = self.build_runner(clock=lambda: moment[0], max_markets=32)
+        slugs = tuple(f"market-{index}" for index in range(32))
+        runner._bind_markets(slugs)
+        for slug in slugs:
+            await runner._refresh_contracts(NOW, slug)
+            state = runner.state_for(slug)
+            state.next_contract_refresh = NOW + timedelta(minutes=10)
+            state.book_observed_at = NOW - timedelta(seconds=10)
+        events = []
+        original_book = client.markets.book
+
+        async def book(slug):
+            events.append(("book", slug))
+            moment[0] += timedelta(seconds=.5)
+            return await original_book(slug)
+
+        async def proof(now):
+            moment[0] += timedelta(seconds=3)
+
+        async def decide(slug, now):
+            events.append(("decide", slug))
+            self.assertTrue(runner._book_is_fresh_enough_to_plan(slug))
+            self.assertEqual(runner.state_for(slug).book_observed_at, moment[0])
+            self.assertTrue(runner.state_for(slug).expected_net_by_side)
+            return None, 0.0
+
+        with patch.object(client.markets, "book", side_effect=book), \
+                patch.object(runner, "_refresh_execution_state_for_decision", side_effect=proof), \
+                patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_decide_for_market", side_effect=decide):
+            self.assertEqual(await runner._service_bound_markets(
+                slugs, refresh_books=False), "")
+            self.assertEqual(client.markets.book_calls, 0)
+            self.assertIsNone(await runner._decision_sweep(slugs))
+        self.assertEqual(client.markets.book_calls, 32)
+        self.assertEqual(events, [(kind, slug) for slug in slugs
+                                  for kind in ("book", "decide")])
+        self.assertEqual(client.orders.create_calls, [])
+
+    async def test_jit_book_service_reuses_stream_receipt_arriving_during_proof(self):
+        moment = [NOW]
+        runner, client, _ = self.build_runner(clock=lambda: moment[0])
+        await runner._refresh_contracts(NOW)
+        state = runner.state_for(runner.market_slug)
+        state.next_contract_refresh = NOW + timedelta(minutes=10)
+        streamed = BookSnapshot(runner.market_slug,
+                                (BookLevel(.49, 100),), (BookLevel(.51, 100),),
+                                received_at=NOW + timedelta(seconds=8))
+
+        async def proof(now):
+            moment[0] = streamed.received_at
+            runner._accept_book(streamed)
+
+        with patch.object(runner, "_refresh_execution_state_for_decision", side_effect=proof), \
+                patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_decide_for_market", new=AsyncMock(return_value=(None, 0))):
+            await runner._service_bound_markets((runner.market_slug,), refresh_books=False)
+            await runner._decision_sweep((runner.market_slug,))
+        self.assertEqual(client.markets.book_calls, 0)
+        self.assertIs(state.book, streamed)
+        self.assertEqual(state.book_observed_at, streamed.received_at)
+
+    async def test_jit_book_service_does_not_read_for_backed_off_unknown_or_stopped_owner(self):
+        runner, client, _ = self.build_runner()
+        slug = runner.market_slug
+        runner._next_decision_at[slug] = NOW + timedelta(seconds=10)
+        await runner._decision_sweep((slug,))
+        runner._next_decision_at.clear()
+        with patch.object(runner.ledger, "market_has_unresolved_intent", return_value=True):
+            await runner._decision_sweep((slug,))
+        runner._stop_requested = "operator_stop"
+        self.assertEqual(await runner._decision_sweep((slug,)), "operator_stop")
+        self.assertEqual(client.markets.book_calls, 0)
+
+    async def test_jit_book_service_stop_during_read_prevents_decision(self):
+        runner, _, _ = self.build_runner()
+
+        async def service(slug, now):
+            runner._stop_requested = "operator_stop"
+
+        with patch.object(runner, "_refresh_execution_state_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_service_market_book", side_effect=service), \
+                patch.object(runner, "_decide_for_market", new=AsyncMock()) as decide:
+            self.assertEqual(await runner._decision_sweep((runner.market_slug,)), "operator_stop")
+        decide.assert_not_awaited()
+
+    async def test_jit_book_service_retains_read_during_economic_replacement_dwell(self):
+        runner, client, _ = self.build_runner()
+        await runner._refresh_contracts(NOW)
+        state = runner.state_for(runner.market_slug)
+        state.next_contract_refresh = NOW + timedelta(minutes=1)
+        # Retain the read even before the dwell deadline: later bulk service
+        # can cross it before the selection/replacement pass.
+        state.economically_ineligible_since = NOW - timedelta(seconds=1)
+        await runner._service_bound_markets((runner.market_slug,), refresh_books=False)
+        self.assertEqual(client.markets.book_calls, 1)
+        self.assertEqual(state.book_observed_at, NOW)
+        self.assertTrue(state.expected_net_by_side)
+        self.assertIsNone(state.economically_ineligible_since)
+
+    async def test_jit_book_service_does_not_add_reads_ahead_of_pause_cancellation(self):
+        runner, _, _ = self.build_runner()
+        with patch.object(runner, "_refresh_execution_state_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                patch.object(runner, "_service_market_book", new=AsyncMock()) as service, \
+                patch.object(runner, "_decide_for_market", new=AsyncMock(return_value=(None, 0))) as decide:
+            await runner._decision_sweep((runner.market_slug,), service_books=False)
+        service.assert_not_awaited()
+        decide.assert_awaited_once()
+
+    async def test_jit_book_service_keeps_quiet_boundary_and_rejects_future_receipt(self):
+        for age, expected_reads in ((None, 1), (-1, 1), (0, 0), (2.999, 0), (3, 1), (5.001, 1)):
+            with self.subTest(age=age):
+                runner, client, _ = self.build_runner()
+                await runner._refresh_contracts(NOW)
+                state = runner.state_for(runner.market_slug)
+                state.book = await runner.gateway.fetch_book(runner.market_slug)
+                client.markets.book_calls = 0
+                state.book_observed_at = None if age is None else NOW - timedelta(seconds=age)
+                original_receipt = state.book_observed_at
+                state.next_contract_refresh = NOW + timedelta(minutes=1)
+                with patch.object(runner, "_refresh_execution_state_for_decision", new=AsyncMock()), \
+                        patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                        patch.object(runner, "_decide_for_market", new=AsyncMock(return_value=(None, 0))):
+                    await runner._service_bound_markets((runner.market_slug,), refresh_books=False)
+                    self.assertEqual(state.book_observed_at, original_receipt)
+                    await runner._decision_sweep((runner.market_slug,))
+                self.assertEqual(client.markets.book_calls, expected_reads)
+                self.assertTrue(runner._book_is_fresh_enough_to_plan(runner.market_slug))
+
+    async def test_jit_book_service_preserves_scoped_and_terminal_failure_handling(self):
+        for error, terminal in ((ValueError("invalid economics"), False),
+                                (RuntimeInvariantViolation("unowned_working_order", "test"), True)):
+            with self.subTest(terminal=terminal):
+                runner, _, _ = self.build_runner()
+                with patch.object(runner, "_refresh_execution_state_for_decision", new=AsyncMock()), \
+                        patch.object(runner, "_refresh_equity_for_decision", new=AsyncMock()), \
+                        patch.object(runner, "_service_market_book", new=AsyncMock(side_effect=error)), \
+                        patch.object(runner, "_retire_market", new=AsyncMock(return_value=None)) as retire, \
+                        patch.object(runner, "_decide_for_market", new=AsyncMock()) as decide:
+                    result = await runner._decision_sweep((runner.market_slug,))
+                decide.assert_not_awaited()
+                if terminal:
+                    self.assertIn("unowned_working_order", result)
+                    retire.assert_not_awaited()
+                else:
+                    self.assertIsNone(result)
+                    retire.assert_awaited_once_with(runner.market_slug, "service_failed_ValueError")
+
     async def test_book_backoff_recovery_does_not_quarantine_or_escalate(self):
         runner, _, _ = self.build_runner()
         slug = runner.market_slug

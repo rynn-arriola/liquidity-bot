@@ -704,6 +704,12 @@ These are implementation requirements, not suggestions.
     durable intent as exact `FAILED`, while later shutdown safety calls remain
     available. An authenticated executable that cannot join POSIX coordination
     must fail closed rather than create another host budget.
+    Ordinary slate service defers quiet books to their guarded owner decision,
+    after account/equity proof, retaining the three-second quiet check and
+    five-second maximum book age. Lifecycle and economic-replacement dwell reads
+    remain serviced; fresh stream receipts can avoid REST without renewal.
+    Pause cancellation acquires no extra price read. Deferred, failed, absent
+    or future-dated books never create fresh-price or mutation authority.
 88. ET-day rollover must establish its durable opening mark before scanning
     non-trading cash whose boundary and day-equality proof depend on that mark.
     A raw balance/position candidate may be published only to create the new

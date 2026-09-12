@@ -55,7 +55,8 @@ class ReviewSafetyRegressions(unittest.IsolatedAsyncioTestCase):
             release.set()
             result = await asyncio.wait_for(task, timeout=2)
             self.assertEqual(result.stop_reason, "review_complete")
-            runner._decision_sweep.assert_awaited_once_with(("market-one",))
+            runner._decision_sweep.assert_awaited_once_with(
+                ("market-one",), service_books=False)
         finally:
             release.set()
             if not task.done():

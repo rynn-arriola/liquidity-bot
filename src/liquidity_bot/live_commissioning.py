@@ -6184,7 +6184,7 @@ class CommissioningRunner:
 
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
-        *, position_only: bool = False,
+        *, position_only: bool = False, service_books: bool = True,
     ) -> str | None:
         """Plan every due market without cross-slot intent/backoff blocking."""
 
@@ -6306,6 +6306,30 @@ class CommissioningRunner:
                 # A failed account-wide bracket is not repaired by hammering
                 # it once per remaining flat market in this same sweep.
                 equity_refresh_failed = True
+            if position_only and self.ledger.position(slug) == 0:
+                continue
+            # Fetch this owner's quiet book AFTER account/equity proof, not
+            # at the front of a full-slate service pass. Thirty-two sequential
+            # reads can age the first book past five seconds before planning,
+            # forcing a second read in book_stale recovery. Contract timers,
+            # economics and all failure/retirement gates remain unchanged.
+            try:
+                if service_books:
+                    await self._refresh_event_guard()
+                    if self._stop_requested:
+                        return self._stop_requested
+                    await self._service_market_book(slug, self._now())
+            except RuntimeInvariantViolation as invariant:
+                return await self._handle_strategy_plan_failure(invariant)
+            except Exception as exc:
+                await self._report_runtime_error(f"market_service:{slug}", exc)
+                stop = await self._retire_market(
+                    slug, f"service_failed_{type(exc).__name__}")
+                if stop:
+                    return stop
+                continue
+            if self._stop_requested:
+                return self._stop_requested
             if position_only and self.ledger.position(slug) == 0:
                 continue
             previous_action_generation = self._market_action_generation.get(
@@ -6596,6 +6620,7 @@ class CommissioningRunner:
 
     async def _service_bound_markets(
         self, slugs: tuple[str, ...] | None = None,
+        *, refresh_books: bool = True,
     ) -> str:
         """Visit every bound market, surviving any one of them failing.
 
@@ -6631,7 +6656,11 @@ class CommissioningRunner:
             if slug not in self._markets:
                 continue
             try:
-                await self._service_market_state(slug, self._now())
+                if refresh_books:
+                    await self._service_market_state(slug, self._now())
+                else:
+                    await self._service_market_state(
+                        slug, self._now(), refresh_book=False)
             except RuntimeInvariantViolation as invariant:
                 # About the process, not this market. Stays terminal.
                 return await self._handle_strategy_plan_failure(invariant)
@@ -6646,7 +6675,9 @@ class CommissioningRunner:
                 return ""
         return ""
 
-    async def _service_market_state(self, slug: str, now: datetime) -> None:
+    async def _service_market_state(
+        self, slug: str, now: datetime, *, refresh_book: bool = True,
+    ) -> None:
         """Bring one market's contracts, book and economics up to date.
 
         Each market carries its own REST cadence. A shared schedule would let a
@@ -6692,6 +6723,15 @@ class CommissioningRunner:
                     if f"market_incentive_refresh:{slug}"
                     not in self._runtime_error_counts
                     else self._contract_refresh_delay(slug)))
+        await self._service_market_book(
+            slug, self._now(), refresh_book=refresh_book)
+
+    async def _service_market_book(
+        self, slug: str, now: datetime, *, refresh_book: bool = True,
+    ) -> None:
+        """Service book/economics without repeating bulk contract requests."""
+
+        state = self.state_for(slug)
         if (slug in self._inactive_market_wait_slugs
                 or (self._market_metadata_proves_not_open(state.market)
                     and self._owner_is_flat_and_clear(slug))):
@@ -6699,6 +6739,17 @@ class CommissioningRunner:
             # flat clear owner is already queued for replacement; an exact
             # positioned owner is isolated above. The next scheduled contract
             # refresh is the only useful recovery read for either state.
+            return
+        if not refresh_book and state.economically_ineligible_since is None:
+            # Bulk lifecycle service still runs before stream draining,
+            # selection and risk gates. Only the book read is deferred to the
+            # guarded per-owner decision; no receipt timestamp is renewed.
+            # An economic replacement dwell is already a book consumer before
+            # the decision sweep (it can cross its deadline during service).
+            # Retain its normal refresh so an old price refusal cannot release
+            # a newly viable market.
+            self._release_retired_if_flat(slug)
+            self._evaluate_rewards(self._now(), slug)
             return
         # Keep the book last among this market's REST work so metadata latency
         # cannot age the book before the decision that follows.
@@ -9913,8 +9964,10 @@ class CommissioningRunner:
                     break
                 pause_cancel_slugs = self._take_entry_pause_cancel_slugs()
                 if pause_cancel_slugs:
+                    # Cancellation needs ownership, not a new price. Preserve
+                    # the existing fast pause path without adding book reads.
                     stop_reason = await self._decision_sweep(
-                        pause_cancel_slugs) or ""
+                        pause_cancel_slugs, service_books=False) or ""
                     if stop_reason:
                         break
                 if self._streams_need_rebind:
@@ -10005,7 +10058,7 @@ class CommissioningRunner:
                 if priority_replans:
                     priority_started_at = self._now()
                     stop_reason = await self._service_bound_markets(
-                        priority_replans)
+                        priority_replans, refresh_books=False)
                     if stop_reason:
                         break
                     # Priority service can itself yield for REST. Apply any
@@ -10025,7 +10078,7 @@ class CommissioningRunner:
                     # per-market timers; it synchronizes those derived gates
                     # with the just-applied stream state.
                     stop_reason = await self._service_bound_markets(
-                        priority_replans)
+                        priority_replans, refresh_books=False)
                     if stop_reason:
                         break
                     stop_reason = await self._decision_sweep(
@@ -10050,7 +10103,8 @@ class CommissioningRunner:
                     () if scheduler_preempted
                     else self._scheduled_market_slugs(self._now()))
                 service_cpu_started = time.process_time()
-                stop_reason = await self._service_bound_markets(scheduled)
+                stop_reason = await self._service_bound_markets(
+                    scheduled, refresh_books=False)
                 self._scheduler_service_cpu_seconds += max(
                     0.0, time.process_time() - service_cpu_started)
                 if stop_reason:
@@ -10086,7 +10140,8 @@ class CommissioningRunner:
                 )
                 if resync:
                     service_cpu_started = time.process_time()
-                    stop_reason = await self._service_bound_markets(resync)
+                    stop_reason = await self._service_bound_markets(
+                        resync, refresh_books=False)
                     self._scheduler_service_cpu_seconds += max(
                         0.0, time.process_time() - service_cpu_started)
                     if stop_reason:

@@ -85,7 +85,8 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
         self.position(runner)
         events = []
 
-        async def service(slugs):
+        async def service(slugs, *, refresh_books):
+            self.assertFalse(refresh_books)
             events.append(("service", slugs))
             return ""
 
@@ -109,11 +110,12 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
         self.assertEqual(events[-1][1], "market-one")
 
     async def test_flat_during_service_or_proof_cannot_become_extra_entry(self):
-        for where in ("service", "proof", "equity"):
+        for where in ("service", "proof", "equity", "book"):
             runner, client = await self.build()
             self.position(runner)
 
-            async def service(slugs):
+            async def service(slugs, *, refresh_books):
+                self.assertFalse(refresh_books)
                 if where == "service":
                     self.position(runner, "0")
                 return ""
@@ -126,9 +128,14 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
                 if where == "equity":
                     self.position(runner, "0")
 
+            async def book(slug, now):
+                if where == "book":
+                    self.position(runner, "0")
+
             with patch.object(runner, "_service_bound_markets", service), \
                     patch.object(runner, "_refresh_execution_state_for_decision", proof), \
                     patch.object(runner, "_refresh_equity_for_decision", equity), \
+                    patch.object(runner, "_service_market_book", book), \
                     patch.object(runner, "_decide_for_market", AsyncMock()) as decide:
                 await runner._service_urgent_positions()
                 decide.assert_not_awaited()
@@ -138,7 +145,8 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
         runner, _ = await self.build()
         self.position(runner)
 
-        async def service(slugs):
+        async def service(slugs, *, refresh_books):
+            self.assertFalse(refresh_books)
             runner.request_stop("operator_stop")
             return ""
 
@@ -159,7 +167,7 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
             service.assert_not_awaited()
             self.now = deadline
             await runner._service_urgent_positions()
-            service.assert_awaited_once_with(("market-one",))
+            service.assert_awaited_once_with(("market-one",), refresh_books=False)
             sweep.assert_awaited_once_with(("market-one",), position_only=True)
 
     async def test_unknown_backoff_and_isolated_owners_do_not_add_service_reads(self):

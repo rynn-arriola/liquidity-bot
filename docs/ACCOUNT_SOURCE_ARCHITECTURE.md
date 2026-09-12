@@ -159,6 +159,14 @@ due time; a failed equity bracket is attempted only once per decision sweep.
 Data ages, cash classification, HARD and source-switch proof are not renewed by
 this scheduling. Deployment/live acceptance remain separate operator decisions.
 
+The [quiet-book follow-up](history/JUST_IN_TIME_BOOK_SERVICE_2026-09-12.md)
+keeps bulk lifecycle work but services ordinary quiet books at the owner
+decision, after account/equity proof. This avoids aging early slate reads before
+they are used. Economic-replacement dwell retains its normal book checks, and
+fast pause cancellation adds no price read. The three-second quiet threshold,
+five-second book age limit and original stream receipts remain unchanged in
+both account modes. Startup, shutdown and selection keep explicit validation.
+
 1. Watch resting entries as potential fills. Share one complete account polling
    job among consumers; permit at most one in flight and never stack missed polls.
 2. Process completed observations and wake affected owners promptly. Keep

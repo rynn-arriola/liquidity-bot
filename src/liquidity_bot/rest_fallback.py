@@ -612,7 +612,7 @@ class RestFallbackRunner(CommissioningRunner):
                            or now >= self._next_decision_at[slug]))
         if not slugs:
             return None
-        outcome = await self._service_bound_markets(slugs)
+        outcome = await self._service_bound_markets(slugs, refresh_books=False)
         if outcome or self._stop_requested:
             return outcome or self._stop_requested
         # Service/proof may discover flatness. Never turn this extra exit pass

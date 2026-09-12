@@ -240,6 +240,10 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(evidence.successful_responses, 1)
         self.assertEqual(evidence.rate_limited_responses, 1)
         self.assertEqual(evidence.attempts_by_category, (("earnings", 2),))
+        self.assertEqual(
+            evidence.failed_responses_by_category_status,
+            (("earnings@429", 1),),
+        )
 
     def test_429_honors_retry_after_and_preserves_diagnostics(self):
         class Client(FakeClient):

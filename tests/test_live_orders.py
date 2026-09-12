@@ -268,6 +268,23 @@ class LiveOrderExecutorTests(unittest.TestCase):
         self.assertEqual(
             evidence.attempts_by_category, (("mutation_create", 1),))
 
+    def test_real_limiter_attributes_failed_mutation_category_and_status(self):
+        limiter = AsyncIntervalLimiter()
+        gateway = AsyncTradingGateway(AsyncReadOnlyGateway(
+            self.client, limiter=limiter))
+        self.client.orders.create_results = [ResponseError(
+            "venue unavailable", status_code=503)]
+
+        with self.assertRaises(AdapterError):
+            self.run_async(gateway.create({"marketSlug": "market-one"}))
+
+        evidence = limiter.telemetry()
+        self.assertEqual(evidence.failed_responses, 1)
+        self.assertEqual(
+            evidence.failed_responses_by_category_status,
+            (("mutation_create@503", 1),),
+        )
+
     def test_reducers_and_ioc_exits_keep_safety_priority(self):
         class RecordingLimiter(AsyncIntervalLimiter):
             def __init__(self):

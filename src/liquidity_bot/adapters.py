@@ -392,6 +392,7 @@ class LimiterTelemetry:
     failed_responses: int
     rate_limited_responses: int
     attempts_by_category: tuple[tuple[str, int], ...]
+    failed_responses_by_category_status: tuple[tuple[str, int], ...]
     attempted_requests_per_second: float
     wait_p50_seconds: float
     wait_p95_seconds: float
@@ -530,6 +531,7 @@ class AsyncIntervalLimiter:
         self._failed_responses = 0
         self._rate_limited_responses = 0
         self._attempts_by_category: Counter[str] = Counter()
+        self._failed_responses_by_category_status: Counter[str] = Counter()
         self._wait_samples: deque[float] = deque(maxlen=4096)
         self._response_samples: deque[float] = deque(maxlen=4096)
         self._waiting = 0
@@ -1002,6 +1004,7 @@ class AsyncIntervalLimiter:
         self, *, duration_seconds: float, status_code: int | None = None,
         failed: bool = False, retry_after_seconds: float | None = None,
         traffic_class: str = "safety",
+        operation: str = "", request_kind: str = "read",
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
@@ -1010,6 +1013,10 @@ class AsyncIntervalLimiter:
         self._response_samples.append(duration)
         if failed:
             self._failed_responses += 1
+            category = _request_category(operation, request_kind)
+            status = str(status_code) if status_code is not None else "unknown"
+            self._failed_responses_by_category_status[
+                f"{category}@{status}"] += 1
         else:
             self._successful_responses += 1
         if status_code == 429:
@@ -1064,6 +1071,8 @@ class AsyncIntervalLimiter:
             failed_responses=self._failed_responses,
             rate_limited_responses=self._rate_limited_responses,
             attempts_by_category=tuple(sorted(self._attempts_by_category.items())),
+            failed_responses_by_category_status=tuple(sorted(
+                self._failed_responses_by_category_status.items())),
             attempted_requests_per_second=(
                 self._attempts / elapsed if elapsed > 0 else 0.0
             ),
@@ -1094,6 +1103,7 @@ class AsyncIntervalLimiter:
             self._failed_responses = 0
             self._rate_limited_responses = 0
             self._attempts_by_category.clear()
+            self._failed_responses_by_category_status.clear()
             self._wait_samples.clear()
             self._response_samples.clear()
             self._max_waiting = self._waiting
@@ -1319,7 +1329,8 @@ class AsyncReadOnlyGateway:
                 if isinstance(self.limiter, AsyncIntervalLimiter):
                     await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
-                        traffic_class=traffic_class)
+                        traffic_class=traffic_class,
+                        operation=operation, request_kind="read")
                 return result
             except AdapterError as exc:
                 if isinstance(self.limiter, AsyncIntervalLimiter):
@@ -1330,6 +1341,7 @@ class AsyncReadOnlyGateway:
                         retry_after_seconds=getattr(
                             exc, "retry_after_seconds", None),
                         traffic_class=traffic_class,
+                        operation=operation, request_kind="read",
                     )
                 raise
             except Exception as exc:
@@ -1340,6 +1352,7 @@ class AsyncReadOnlyGateway:
                         failed=True,
                         retry_after_seconds=self._retry_after_seconds(exc),
                         traffic_class=traffic_class,
+                        operation=operation, request_kind="read",
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text

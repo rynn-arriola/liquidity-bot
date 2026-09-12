@@ -2246,7 +2246,7 @@ class CommissioningRunner:
         retries all clear together on the terminal state.
         """
 
-        seen: set[str] = set()
+        latest_by_exchange_id: dict[str, Any] = {}
         for row in self.ledger.unresolved_intents():
             if str(row["operation"]).upper() != "CANCEL":
                 continue
@@ -2256,15 +2256,30 @@ class CommissioningRunner:
             exchange_id = str(row["exchange_order_id"] or "")
             if not exchange_id:
                 continue
-            seen.add(exchange_id)
+            prior = latest_by_exchange_id.get(exchange_id)
+            if (prior is None
+                    or str(row["updated_at"]) > str(prior["updated_at"])):
+                latest_by_exchange_id[exchange_id] = row
+
+        seen = set(latest_by_exchange_id)
+        for exchange_id, row in latest_by_exchange_id.items():
             if (markets is not None
                     and str(row["market_slug"]) not in markets):
                 continue
             if not self.ledger.order_is_active(exchange_id):
                 continue
-            last = self._cancel_retried_at.get(exchange_id)
-            if (last is not None
-                    and (now - last).total_seconds() < self.CANCEL_RETRY_SECONDS):
+            # A successful cancel response can be followed briefly by an
+            # authoritative-but-stale OPEN read. Give the venue one bounded
+            # publication window before treating that OPEN as proof the
+            # cancel did not land. This also makes the throttle survive an
+            # in-process retry-map miss because the intent time is durable.
+            intent_at = datetime.fromisoformat(str(row["updated_at"]))
+            last = max(
+                (value for value in (
+                    intent_at, self._cancel_retried_at.get(exchange_id))
+                 if value is not None),
+            )
+            if (now - last).total_seconds() < self.CANCEL_RETRY_SECONDS:
                 continue
             self._cancel_retried_at[exchange_id] = now
             try:
@@ -5476,6 +5491,10 @@ class CommissioningRunner:
             f"{name}:{count}"
             for name, count in evidence.attempts_by_category
         ) or "none"
+        failure_categories = ",".join(
+            f"{name}:{count}"
+            for name, count in evidence.failed_responses_by_category_status
+        ) or "none"
         print(
             f"[api-budget] at={now.isoformat()} "
             f"slots={self.config.max_markets} "
@@ -5500,7 +5519,8 @@ class CommissioningRunner:
             f"cooldown_background={evidence.background_cooldown_remaining_seconds:.1f} "
             f"cooldown_report={evidence.report_cooldown_remaining_seconds:.1f} "
             f"shared={int(evidence.shared_across_processes)} "
-            f"categories={categories}",
+            f"categories={categories} "
+            f"failure_categories={failure_categories}",
             flush=True,
         )
 

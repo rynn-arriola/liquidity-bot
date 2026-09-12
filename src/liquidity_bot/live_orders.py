@@ -210,7 +210,8 @@ class AsyncTradingGateway:
             if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
                 await self.gateway.limiter.record_result(
                     duration_seconds=time.monotonic() - started_at,
-                    traffic_class=traffic_class)
+                    traffic_class=traffic_class,
+                    operation=operation, request_kind="mutation")
             return result
         except Exception as exc:
             if isinstance(self.gateway.limiter, AsyncIntervalLimiter):
@@ -223,6 +224,7 @@ class AsyncTradingGateway:
                         if isinstance(exc, AdapterError)
                         else self.gateway._retry_after_seconds(exc)),
                     traffic_class=traffic_class,
+                    operation=operation, request_kind="mutation",
                 )
             # Preserve structured metadata if the SDK boundary has already
             # normalized the exception. Re-normalizing an AdapterError would

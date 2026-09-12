@@ -163,3 +163,43 @@ without an authoritative venue publication watermark.
 No code, configuration, source selection or process state changed during the
 failure investigation. Exact per-category/status failure telemetry is a proposed
 observability improvement, not deployed behavior.
+
+## Cancel-publication and WebSocket follow-up
+
+The later failure investigation found a separate local defect in uncertain-cancel
+recovery. After a clean cancel acknowledgement, an authoritative REST read could
+briefly continue to publish `OPEN`; recovery then re-sent the same cancel after
+only 0.06-0.32 seconds because its throttle began only after that retry. The
+reviewed repair groups unresolved cancel intents by exchange order, uses the newest
+durable intent timestamp together with any in-memory retry time, and waits the
+existing ten-second publication window. It still requires positive active-order
+evidence; absent or unknown state cannot authorize a mutation. The focused
+regression failed under a deliberate restoration of the old behavior and passed
+again after the repair.
+
+The same follow-up preserves failed call category/status in bounded, redacted
+limiter telemetry. Examples are `market_book@503` and `mutation_create@503`; raw
+operation arguments such as market slugs are never logged, and collecting the
+field makes no API request. Read and mutation gateway regressions verify both
+attribution paths. The complete WSL suite passed **1,469 tests in 175.442 seconds**.
+
+Two new read-only private-stream probes completed the handshake and protocol Pong.
+The ordinary order subscription produced one order snapshot/update frame. A second
+probe using both ordinary order and the raw guide's newly listed explicit order-
+snapshot type produced two frames for each order request, while balance and
+position subscriptions still produced none. Inspection of the installed SDK and
+latest package found the same pinned version, `polymarket-us==0.1.2`, with the
+documented camelCase subscription payload and a raw-message event emitted before
+typed handlers. Therefore the stream is partially publishing order data, but is
+still not sufficient for complete account-state authority; REST remains selected
+and no automatic source switch or SDK change is included.
+
+The prior runner was stopped before release work. Graceful shutdown truthfully
+parked one four-contract position with its bot-owned reducer because kickoff was
+about 5.4 hours away. Exact ledger ownership and fresh authenticated venue reads
+proved that reducer was the account's sole open order and the position was the sole
+exposure. Under the operator's explicit flatten authorization, only that exact
+order was cancelled, then the official market-scoped synchronous close-position
+operation executed three fills. Fresh authenticated proof returned zero open
+orders and zero positions. Account-wide cancel-all was not used. Deployment,
+restart and the requested live observation are appended only after completion.

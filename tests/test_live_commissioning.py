@@ -1311,6 +1311,13 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             operation="markets.book(secret-market-slug)",
             request_kind="read",
         )
+        await limiter.record_result(
+            duration_seconds=0.1,
+            status_code=503,
+            failed=True,
+            operation="markets.book(secret-market-slug)",
+            request_kind="read",
+        )
         output = io.StringIO()
 
         with patch("sys.stdout", output):
@@ -1320,6 +1327,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[api-budget]", output.getvalue())
         self.assertIn("slots=20", output.getvalue())
         self.assertIn("categories=market_book:1", output.getvalue())
+        self.assertIn(
+            "failure_categories=market_book@503:1", output.getvalue())
         self.assertNotIn("secret-market-slug", output.getvalue())
         self.assertEqual(limiter.telemetry().attempts, 0)
 
@@ -4797,7 +4806,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(runner.ledger.unresolved_intents()), 1)
         before = len(client.orders.cancel_calls)
 
-        await runner._rest_reconcile(runner._now())
+        await runner._rest_reconcile(
+            runner._now() + timedelta(
+                seconds=runner.CANCEL_RETRY_SECONDS + 1))
 
         # Re-sent, because the venue had just confirmed the order still live.
         self.assertTrue(
@@ -4832,11 +4843,37 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 "WHERE intent_id='cancel-stuck'")
         before = len(client.orders.cancel_calls)
 
-        await runner._retry_uncertain_cancels(runner._now())
+        await runner._retry_uncertain_cancels(
+            runner._now() + timedelta(
+                seconds=runner.CANCEL_RETRY_SECONDS + 1))
 
         self.assertTrue(any(
             "exchange-stuck" in str(call)
             for call in client.orders.cancel_calls[before:]))
+        self.assertTrue(runner.ledger.unresolved_intents())
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_a_fresh_cancel_is_not_immediately_duplicated_by_stale_open(self):
+        """A clean cancel ACK can precede REST publication of terminal state."""
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        await self._uncertain_cancel(
+            runner, client, venue_state="ORDER_STATE_NEW")
+        with runner.ledger.connection:
+            runner.ledger.connection.execute(
+                "UPDATE execution_intents SET state='ACKNOWLEDGED' "
+                "WHERE intent_id='cancel-stuck'")
+        before = len(client.orders.cancel_calls)
+
+        await runner._retry_uncertain_cancels(runner._now())
+
+        self.assertEqual(
+            client.orders.cancel_calls[before:], [],
+            "a fresh cancel must get one publication window before retry",
+        )
         self.assertTrue(runner.ledger.unresolved_intents())
         await runner.private_stream.close()
         await runner.market_stream.close()

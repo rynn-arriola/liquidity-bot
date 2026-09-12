@@ -2306,6 +2306,12 @@ class CommissioningRunner:
         """Account-source hook; normal WebSocket reconciliation is unchanged."""
         return await self.account.fetch_open_orders(observed_at=now)
 
+    async def _collect_rest_snapshots(self, now: datetime):
+        """Collection boundary; the reconciliation owner alone projects data."""
+        orders = await self._fetch_rest_order_snapshot(now)
+        positions = await self.account.fetch_positions(observed_at=now)
+        return orders, positions
+
     async def _rest_reconcile(
         self, now: datetime, *, tag: str = "",
         strict_order_markets: frozenset[str] | None = None,
@@ -2472,8 +2478,7 @@ class CommissioningRunner:
         self._absent_asked_at = {
             key: at for key, at in self._absent_asked_at.items()
             if key in absent_ids}
-        orders = await self._fetch_rest_order_snapshot(now)
-        positions = await self.account.fetch_positions(observed_at=now)
+        orders, positions = await self._collect_rest_snapshots(now)
         # Recent venue-retained fills backfill gaps while available. The local
         # ledger is the only execution history this project controls across a
         # restart plus a venue-side history reset. Without this sweep the
@@ -8111,6 +8116,8 @@ class CommissioningRunner:
         venue_failure_streak = 0
         self.gate.on_disconnect()
         while True:
+            if await self._account_source_recovery_checkpoint():
+                return None
             attempt += 1
             stream_listening = False
             await self._report_runtime_error("private_stream", exc, attempt)
@@ -8552,6 +8559,10 @@ class CommissioningRunner:
             await self.sleep(step)
             remaining -= step
         return self._maintenance_stop_reason()
+
+    async def _account_source_recovery_checkpoint(self) -> bool:
+        """Optional serial manual handoff; never an automatic source switch."""
+        return False
 
     async def _wait_for_venue_recovery(
         self, component: str, initial: Exception, *, planned: bool = False,
@@ -10184,22 +10195,22 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
-    account_state_mode = getattr(args, "account_state_mode", "websocket")
-    if account_state_mode not in {"websocket", "rest-fallback"}:
-        raise CommissioningRefused("invalid account-state mode")
-    runner_type = CommissioningRunner
-    runner_options = {}
-    if account_state_mode == "rest-fallback":
-        from .rest_fallback import RestFallbackRunner
-        from .rest_polling_policy import (
-            DEFAULT_REST_POLLING_POLICY_PATH, load_rest_polling_policy)
-        try:
-            runner_options["rest_polling_policy"] = load_rest_polling_policy(
-                Path(getattr(args, "rest_polling_policy",
-                             DEFAULT_REST_POLLING_POLICY_PATH)))
-        except ValueError as exc:
-            raise CommissioningRefused(str(exc)) from exc
-        runner_type = RestFallbackRunner
+    from .account_source import load_source_policy, startup_mode
+    from .account_source_runner import AccountSourceRunner
+    from .rest_polling_policy import (
+        DEFAULT_REST_POLLING_POLICY_PATH, load_rest_polling_policy)
+    try:
+        source_policy = load_source_policy(Path(getattr(args, "account_source_policy",
+            Path(__file__).resolve().parents[2] / "config/account_source_policy.json")))
+        account_state_mode = startup_mode(getattr(args, "account_state_mode", None),
+            Path(args.database).parent, default=source_policy.default_mode)
+        polling_policy = load_rest_polling_policy(Path(getattr(args, "rest_polling_policy",
+            DEFAULT_REST_POLLING_POLICY_PATH)))
+    except (ValueError, TypeError, OSError) as exc:
+        raise CommissioningRefused(str(exc)) from exc
+    runner_type = AccountSourceRunner
+    runner_options = dict(account_state_mode=account_state_mode,
+                          source_policy=source_policy, rest_polling_policy=polling_policy)
     secrets = load_runtime_secrets(require_polymarket=True)
     if not (secrets.discord_configured and secrets.discord_errors_configured):
         raise CommissioningRefused(
@@ -10252,14 +10263,16 @@ def main() -> int:
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
     parser.add_argument(
-        "--account-state-mode", choices=("websocket", "rest-fallback"),
-        default="websocket",
-        help="restart-scoped account source; REST fallback is experimental",
+        "--account-state-mode", choices=("websocket", "rest", "rest-fallback"),
+        default=None,
+        help="explicit account source; otherwise use the last verified selection",
     )
     parser.add_argument(
         "--rest-polling-policy", type=Path, default=argparse.SUPPRESS,
-        help="validated restart-scoped REST optimization JSON (REST mode only)",
+        help="validated restart-scoped REST optimization JSON",
     )
+    parser.add_argument("--account-source-policy", type=Path, default=argparse.SUPPRESS,
+                        help="validated restart-scoped source/handoff configuration")
     parser.add_argument(
         "--quote-size", type=int,
         choices=range(int(MIN_QUOTE_SIZE), int(MAX_QUOTE_SIZE) + 1),

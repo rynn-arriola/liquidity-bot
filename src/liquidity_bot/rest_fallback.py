@@ -1,4 +1,4 @@
-"""Explicit, experimental REST account-state mode; never an automatic bypass.
+"""REST account-state proof hooks; never an automatic bypass.
 
 Public books still use the normal market stream. No private events or transport
 heartbeats are manufactured. The normal runner remains the default. This mode
@@ -21,6 +21,8 @@ from .live_commissioning import CommissioningRunner
 from .live_orders import AsyncTradingGateway
 from .live_session import PrivateStateGate
 from .rest_polling_policy import RestPollingPolicy
+from .account_source import normalize_mode
+from .streams import PrivateStreamPool
 
 
 class RestStateGate(PrivateStateGate):
@@ -112,22 +114,27 @@ class RestFallbackRunner(CommissioningRunner):
     read duration.
     """
 
-    ACCOUNT_STATE_DESCRIPTION = "complete REST account state (temporary mode)"
+    ACCOUNT_STATE_DESCRIPTION = "complete REST account state"
     SOURCE_REBOUND_DESCRIPTION = "rebound market/REST sources"
     REQUIRE_EXECUTION_BACKFILL = True
     REST_POLL_SECONDS = 5.0
     PENDING_ENTRY_ORDER_CEILING = 30
     ORDER_READ_CONCURRENCY = 4
 
-    def __init__(self, *args, rest_polling_policy=None, **kwargs):
+    def __init__(self, *args, rest_polling_policy=None,
+                 account_state_mode="rest", **kwargs):
+        self.account_state_mode = normalize_mode(account_state_mode)
         self.rest_polling_policy = rest_polling_policy or RestPollingPolicy()
         self._bulk_order_proof = False
         self._bulk_skipped = {}
         self._hard_exit_terminal_proofs = {}
         self._hard_exit_retry_authorizations = {}
-        kwargs["private_stream_factory"] = DisabledPrivateStream
+        self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
+        if self._using_rest_source():
+            kwargs["private_stream_factory"] = DisabledPrivateStream
         super().__init__(*args, **kwargs)
-        self.gate = RestStateGate(max_silence_seconds=30)
+        if self._using_rest_source():
+            self.gate = RestStateGate(max_silence_seconds=30)
         self._rest_poll_completed_at = None
         # Durable fills are the restart anchor, not an instruction to replay
         # the venue's entire retained account history at every restart.
@@ -137,10 +144,28 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_history_pending: frozenset[str] = frozenset()
         self.executor.gateway = RestProofTradingGateway(
             self.gateway,
-            lambda: self.gate.session_ready(self.ledger, now=self._now()),
+            lambda: (not self._using_rest_source()
+                     or self.gate.session_ready(self.ledger, now=self._now())),
             self._scoped_reducing_mutation_proof_current)
+        self._set_source_descriptions()
+
+    def _using_rest_source(self):
+        return self.account_state_mode == "rest"
+
+    def _set_source_descriptions(self):
+        rest = self._using_rest_source()
+        self.PENDING_ENTRY_ORDER_CEILING = 30 if rest else None
+        self.REQUIRE_EXECUTION_BACKFILL = rest
+        self.ACCOUNT_STATE_DESCRIPTION = (
+            "complete REST account state" if rest else
+            CommissioningRunner.ACCOUNT_STATE_DESCRIPTION)
+        self.SOURCE_REBOUND_DESCRIPTION = (
+            "rebound market/REST sources" if rest else
+            CommissioningRunner.SOURCE_REBOUND_DESCRIPTION)
 
     async def _read_owned_order_states(self, exchange_ids, now):
+        if not self._using_rest_source():
+            return await super()._read_owned_order_states(exchange_ids, now)
         if self._bulk_order_proof and exchange_ids:
             orders = await self.account.fetch_open_orders(
                 observed_at=now, require_complete_fields=True)
@@ -254,6 +279,8 @@ class RestFallbackRunner(CommissioningRunner):
         return failures
 
     async def _fetch_execution_history(self, now):
+        if not self._using_rest_source():
+            return await super()._fetch_execution_history(now)
         batch = await self.account.fetch_executions(
             observed_at=now, require_coverage=True,
             known_execution_ids=self._rest_history_seen)
@@ -262,6 +289,9 @@ class RestFallbackRunner(CommissioningRunner):
         return batch
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
+        if not self._using_rest_source():
+            return await super()._rest_reconcile(
+                now, tag=tag, strict_order_markets=strict_order_markets)
         started = self._now()
         ready = self.gate.session_ready(self.ledger, now=started)
         if (self.rest_polling_policy.enabled and tag == "periodic"
@@ -302,6 +332,8 @@ class RestFallbackRunner(CommissioningRunner):
             self._mark_market_dirty(slug, self._now())
 
     async def _wait_for_initial_private_state(self, timeout_seconds=15):
+        if not self._using_rest_source():
+            return await super()._wait_for_initial_private_state(timeout_seconds)
         # A REST-only proof replaces this bind step explicitly, never by
         # toggling fake balance-snapshot or private-message flags.
         await self._rest_reconcile(self._now(), tag="rest-source-bind")
@@ -319,6 +351,8 @@ class RestFallbackRunner(CommissioningRunner):
                 or not 0 <= (now - completed).total_seconds() < interval)
 
     async def _refresh_execution_state_for_decision(self, now):
+        if not self._using_rest_source():
+            return await super()._refresh_execution_state_for_decision(now)
         if (not self.gate.session_ready(self.ledger, now=now)
                 or self._rest_poll_due(now)):
             await self._rest_reconcile(now, tag="rest-source-decision")
@@ -334,6 +368,8 @@ class RestFallbackRunner(CommissioningRunner):
         REST entry authority or the normal poll clock.
         """
 
+        if not self._using_rest_source():
+            return await super()._reconcile_hard_exit_state(slug)
         proved_at = self._usable_hard_exit_terminal_proof(
             slug, consume=True)
         if proved_at is not None:
@@ -382,6 +418,8 @@ class RestFallbackRunner(CommissioningRunner):
         return proved_at
 
     def _position_priority_has_fresh_transition_proof(self, slug):
+        if not self._using_rest_source():
+            return super()._position_priority_has_fresh_transition_proof(slug)
         return self._usable_hard_exit_terminal_proof(slug) is not None
 
     def _scoped_reducing_mutation_proof_current(self, slug):
@@ -418,6 +456,8 @@ class RestFallbackRunner(CommissioningRunner):
         )
 
     def _frame(self, now, slug=None):
+        if not self._using_rest_source():
+            return super()._frame(now, slug)
         frame = super()._frame(now, slug)
         owner = slug or self.market_slug
         proved_at = self._usable_hard_exit_terminal_proof(owner)
@@ -442,6 +482,9 @@ class RestFallbackRunner(CommissioningRunner):
 
     async def _reconcile_pending_hard_exit(self, slug=None):
         """Confirm one IOC and carry its exact proof to the bounded retry."""
+
+        if not self._using_rest_source():
+            return await super()._reconcile_pending_hard_exit(slug)
 
         slug = slug or self.market_slug
         proved_at = await self._reconcile_hard_exit_state(slug)
@@ -487,6 +530,8 @@ class RestFallbackRunner(CommissioningRunner):
             | self._rest_history_pending)
 
     async def _decide_for_market(self, slug, now, *, replanned=False):
+        if not self._using_rest_source():
+            return await super()._decide_for_market(slug, now, replanned=replanned)
         before = self._market_action_generation.get(slug, 0)
         outcome, delay = await super()._decide_for_market(
             slug, now, replanned=replanned)
@@ -540,6 +585,8 @@ class RestFallbackRunner(CommissioningRunner):
         return deadline
 
     def _position_priority_must_yield(self, slug):
+        if not self._using_rest_source():
+            return super()._position_priority_must_yield(slug)
         if (self.ledger.position(slug) == 0
                 or slug in self._isolated_unexecutable_slugs()):
             return False
@@ -550,6 +597,8 @@ class RestFallbackRunner(CommissioningRunner):
     def _position_near_its_flatten_deadline(self, now):
         if super()._position_near_its_flatten_deadline(now):
             return True
+        if not self._using_rest_source():
+            return False
         for row in self.ledger.query(
                 "SELECT market_slug FROM execution_positions WHERE CAST(net_qty AS REAL)!=0"):
             slug = str(row["market_slug"])
@@ -566,11 +615,15 @@ class RestFallbackRunner(CommissioningRunner):
         return False
 
     def _hard_exit_retry_delay(self, slug):
+        if not self._using_rest_source():
+            return super()._hard_exit_retry_delay(slug)
         # The focused proof above is the delay. Re-enter immediately while its
         # terminal position facts and displayed book are still fresh.
         return 0.0
 
     def _position_priority_visit_limit(self, slug):
+        if not self._using_rest_source():
+            return super()._position_priority_visit_limit(slug)
         attempts, sent_at, started_at = (
             self.reconciler.hard_exit_schedule_token(slug))
         if attempts or sent_at is not None or started_at is not None:
@@ -581,6 +634,8 @@ class RestFallbackRunner(CommissioningRunner):
         return super()._position_priority_visit_limit(slug)
 
     def _position_priority_replan_immediately(self, slug, before, after):
+        if not self._using_rest_source():
+            return super()._position_priority_replan_immediately(slug, before, after)
         # Complete a positively confirmed cancel before another flat entry.
         # A new resting reducer ends this continuation; do not churn it in an
         # unbounded reprice loop. Hard IOC continuation retains its prior token.
@@ -589,6 +644,8 @@ class RestFallbackRunner(CommissioningRunner):
             or (before[1] and not after[1] and not after[2] and not after[3])))
 
     def _position_priority_tokens(self):
+        if not self._using_rest_source():
+            return super()._position_priority_tokens()
         # Ignore snapshot timestamps: an unchanged proof must not repeatedly
         # interrupt reward-ranked entries. Exact quantity/working-order changes
         # do matter, including positive terminal proof after a cancel.
@@ -626,6 +683,8 @@ class RestFallbackRunner(CommissioningRunner):
         return priorities
 
     def _accept_book(self, book):
+        if not self._using_rest_source():
+            return super()._accept_book(book)
         # The outer scheduler may hold one older completed next_book result
         # while a REST poll drains newer queued books. Do not roll back to it.
         state = self._markets.get(book.slug)
@@ -637,6 +696,8 @@ class RestFallbackRunner(CommissioningRunner):
 
     async def _refresh_event_guard(self):
         await super()._refresh_event_guard()
+        if not self._using_rest_source():
+            return
         # A complete REST proof can take longer than the book entry lifetime.
         # Consume actual queued public updates immediately before planning;
         # never relabel an old price with the poll's completion timestamp.
@@ -652,13 +713,15 @@ class RestFallbackRunner(CommissioningRunner):
 
     async def preflight(self):
         result = await super().preflight()
+        if not self._using_rest_source():
+            return result
         if result == "RECOVERY_ONLY":
             await self._wait_for_initial_private_state()
-        print("[account-state] mode=rest-fallback private_socket=disabled "
+        print("[account-state] mode=rest private_socket=disabled "
               f"bulk_order_proof={str(self.rest_polling_policy.enabled).lower()} "
               f"decision_poll_seconds={self.rest_polling_policy.normal_poll_seconds if self.rest_polling_policy.enabled else 5} "
               f"active_poll_seconds={self.rest_polling_policy.active_poll_seconds if self.rest_polling_policy.enabled else 5} "
               "idle_poll_seconds=10 "
-              "max_proof_age_seconds=30 max_pending_entries=30 "
-              "order_read_concurrency=4 experimental=yes", flush=True)
+              f"max_proof_age_seconds=30 max_pending_entries={self.PENDING_ENTRY_ORDER_CEILING} "
+              f"order_read_concurrency={self.ORDER_READ_CONCURRENCY} auto_switch=disabled", flush=True)
         return result

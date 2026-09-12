@@ -8,9 +8,9 @@ cd "$(dirname "$0")/.." || exit 1
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-5}
 SLOT_CAPACITY=${3:-20}
-ACCOUNT_STATE_MODE=${4:-websocket}
+ACCOUNT_STATE_MODE=${4:-saved}
 case "$ACCOUNT_STATE_MODE" in
-    websocket|rest-fallback) ;;
+    websocket|rest|rest-fallback|saved) ;;
     *) echo "[supervisor] refused invalid account-state mode"; exit 2 ;;
 esac
 PY=.venv/bin/python
@@ -57,7 +57,13 @@ echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots
 alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote across up to $SLOT_CAPACITY markets; account source: $ACCOUNT_STATE_MODE."
 
 while true; do
+    SOURCE_ARGS=()
+    if [ "$ACCOUNT_STATE_MODE" != "saved" ]; then
+        SOURCE_ARGS=(--account-state-mode "$ACCOUNT_STATE_MODE")
+    fi
     STARTED=$(date -u +%s)
+    LIQUIDITY_ACCOUNT_SOURCE_RUN_ID=$("$PY" -c 'import uuid; print(uuid.uuid4())') || exit 2
+    export LIQUIDITY_ACCOUNT_SOURCE_RUN_ID
     # -u matters: stdout to a file is block-buffered, so during the
     # 2026-08-14 incident the log was four minutes stale while the process was
     # actively failing. Only the prints that pass flush=True got through, and
@@ -71,9 +77,14 @@ while true; do
         --exclusive-api-key \
         --maker-lab-stopped \
         --quote-size "$QUOTE_SIZE" \
-        --account-state-mode "$ACCOUNT_STATE_MODE" \
+        "${SOURCE_ARGS[@]}" \
         --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1
     CODE=$?
+    # A successful in-process handoff persists the new source. Relaunch must
+    # not replay the original CLI choice and undo the operator's switch.
+    if "$PY" -B -m liquidity_bot.account_source relaunch-ready; then
+        ACCOUNT_STATE_MODE=saved
+    fi
     RAN=$(( $(date -u +%s) - STARTED ))
 
     case "$CODE" in

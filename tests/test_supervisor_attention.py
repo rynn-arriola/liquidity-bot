@@ -9,7 +9,7 @@ import unittest
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash runtime required")
 class SupervisorAttentionTests(unittest.TestCase):
-    def run_supervisor(self, code):
+    def run_supervisor(self, code, *, mode=None, relaunch_proven=False):
         with tempfile.TemporaryDirectory(prefix="supervisor-test-") as directory:
             root = Path(directory)
             for subdir in ("scripts", ".venv/bin", "logs", "bin"):
@@ -20,10 +20,12 @@ class SupervisorAttentionTests(unittest.TestCase):
             fake_python = root / ".venv/bin/python"
             fake_python.write_text("""#!/usr/bin/env bash
 case "$*" in
+  *'import uuid;'*) echo 4e7a4a2a-81ce-4545-9ef1-87db7564c5b4; exit 0;;
+  *liquidity_bot.account_source*) exit "$TEST_RELAUNCH_CODE";;
   *liquidity_bot.quote_size*) echo 5; exit 0;;
   *liquidity_bot.slot_capacity*) echo 20; exit 0;;
   *liquidity_bot.supervisor_alert*) exit 0;;
-  *liquidity_bot.live_commissioning*) echo run >> calls; exit "$TEST_RUNNER_CODE";;
+  *liquidity_bot.live_commissioning*) echo "$*" >> calls; exit "$TEST_RUNNER_CODE";;
 esac
 exit 99
 """)
@@ -36,8 +38,12 @@ exit 0
 """)
             sleeper.chmod(0o755)
             env = dict(os.environ, TEST_RUNNER_CODE=str(code),
+                       TEST_RELAUNCH_CODE="0" if relaunch_proven else "1",
                        PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
-            result = subprocess.run(["bash", str(script)], cwd=root, env=env,
+            args = ["bash", str(script)]
+            if mode:
+                args += ["auto", "10", "32", mode]
+            result = subprocess.run(args, cwd=root, env=env,
                                     text=True, capture_output=True, timeout=10)
             calls = (root / "calls").read_text().splitlines()
             return result, calls
@@ -62,3 +68,11 @@ exit 0
         self.assertEqual(len(calls), 3)
         self.assertEqual(result.returncode, -15)
         self.assertIn("state=ATTENTION_REQUIRED reason=3 fast process deaths", result.stdout)
+
+    def test_only_verified_run_may_replace_explicit_launch_choice(self):
+        for proven in (False, True):
+            with self.subTest(proven=proven):
+                _, calls = self.run_supervisor(5, mode="rest", relaunch_proven=proven)
+                self.assertIn("--account-state-mode rest", calls[0])
+                self.assertEqual("--account-state-mode" in calls[1], not proven)
+                self.assertEqual("--account-state-mode" in calls[2], not proven)

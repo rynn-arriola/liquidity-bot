@@ -895,8 +895,8 @@ These are implementation requirements, not suggestions.
     replies may retain independently proven owners; transport failure never
     proves cancellation, flatness or free capacity. Shutdown cannot park a
     known-live or lifecycle-unproven position based on a future schedule.
-103. Experimental REST account-source mode is restart-scoped and opt-in; normal
-    WebSocket behavior remains default. It supplies no fabricated private event
+103. REST account-source mode is explicitly selected under invariant 106;
+    WebSocket is the unsaved policy default. REST supplies no fabricated private event
     or heartbeat. Strict account-wide proof reads all owned working/ambiguous
     orders, complete open orders, exact positions and mandatory execution
     history. Explicit restart-scoped bulk optimization may substitute two
@@ -920,7 +920,7 @@ These are implementation requirements, not suggestions.
     retried, and source selection cannot reset the ledger or assume ownership.
     REST success is not proof of source timeliness or full-width capacity; live
     activation requires separate operator authority and acceptance evidence.
-104. Temporary REST mode has a 30 pending-entry ceiling, combined by minimum
+104. REST mode has a configurable ceiling no higher than 30 pending entries, combined by minimum
     with existing clock/loss rules; position orders and exact reducers do not
     consume it. Unresolved entry reservations still count. At most four
     independent exact-order reads overlap under the unchanged shared governor;
@@ -939,7 +939,7 @@ These are implementation requirements, not suggestions.
     interruptions. Extra visits are bounded per owner/sweep; unknown intents,
     isolation, backoff, stop and complete proof/admission checks remain binding.
     A priority owner that flattens during proof cannot gain an extra entry pass.
-    In temporary REST mode, bounded hard-exit send/terminal state is also a
+    In REST mode, bounded hard-exit send/terminal state is also a
     scheduling token so an IOC that opens and expires between polls receives
     its next exact retry before unrelated flat owners. Same-owner service is
     finite and cannot exceed the existing hard-exit attempt/deadline authority.
@@ -955,3 +955,19 @@ These are implementation requirements, not suggestions.
     seconds of existing position deadlines; exact venue proof remains required.
     Non-selected exposure remains exit-only; normal WebSocket scheduling and
     every pricing, sizing, entry-cap, risk and lifecycle rule are unchanged.
+106. Account sources change only on explicit startup selection or a fresh
+    operator request bound to the current process/source generation. No silent
+    failover/failback or permanent inactive-source probe is permitted. One serial
+    ledger projector and mutation executor remain authoritative. Independent
+    read workers cannot submit orders or write the ledger; cancellation joins
+    them before proof returns. Promotion requires bounded complete account proof,
+    real per-shard private delivery for WebSocket, exact matching order/position
+    evidence, unchanged scope and no overlapping mutation or urgent exit. Empty
+    state is not fabricated from Ping/Pong. Partial, stale or overflowing queues
+    revoke proof. Task-held events precede later queued events; positive retired
+    source evidence is retained without carrying its old mutation authority.
+    A switch never resets position clocks, IOC budgets, ownership, loss tiers,
+    HARD, maintenance or operator pause, and never itself cancels healthy orders.
+    Only a successfully verified selection persists; restart never replays a
+    pending request or reuses a previous process's selection proof. Manual stop
+    supersedes the request and retains the existing shutdown/flatness gates.

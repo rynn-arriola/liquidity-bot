@@ -188,7 +188,7 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
         runner, client = await self.build(1)
         first = await client.orders.list(None)
         with patch.object(client.orders, "list", AsyncMock(side_effect=[first, {"orders": []}])), \
-                patch.object(runner.executor, "reconcile_order", AsyncMock(side_effect=AdapterError("404"))):
+                patch.object(client.orders, "retrieve", AsyncMock(side_effect=AdapterError("404"))):
             with self.assertRaises(AdapterError):
                 await self.poll(runner)
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))

@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS execution_intents (
 );
 CREATE INDEX IF NOT EXISTS idx_execution_intents_state
     ON execution_intents(state, market_slug);
+CREATE INDEX IF NOT EXISTS idx_execution_intents_client_operation_created
+    ON execution_intents(client_order_id, operation, created_at DESC);
 CREATE TABLE IF NOT EXISTS execution_events (
     source TEXT NOT NULL,
     event_id TEXT NOT NULL,

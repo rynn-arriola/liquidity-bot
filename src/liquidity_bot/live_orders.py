@@ -495,10 +495,20 @@ class LiveOrderExecutor:
 
     async def reconcile_order(self, exchange_order_id: str, *,
                               observed_at: datetime) -> None:
+        order = await self.read_order_state(exchange_order_id, observed_at=observed_at)
+        self.apply_order_state(exchange_order_id, order, observed_at=observed_at)
+
+    async def read_order_state(self, exchange_order_id: str, *, observed_at: datetime):
+        """Read/normalize only; the serial owner separately projects this result."""
         response = await self.gateway.retrieve(exchange_order_id)
         order = normalize_order(
             response["order"], observed_at=observed_at,
             resolve_client_id=self.ledger.resolve_client_order_id)
+        if order.exchange_order_id != exchange_order_id:
+            raise OrderValidationError("retrieved order identity does not match request")
+        return order
+
+    def apply_order_state(self, exchange_order_id: str, order, *, observed_at: datetime):
         # The status is part of the event identity, not just the timestamp.
         # The venue can change an order's STATE without advancing its event
         # time: measured 2026-08-18, BYTCVSJ4EDJT was read as PARTIAL at

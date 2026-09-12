@@ -3,8 +3,16 @@
 Design prepared September 12, 2026 against `c44d3aef1`. The operator authorized
 permanent configurable fallback, requested architecture first, then rejected
 automatic switching in either direction. This is the
-implementation blueprint, not deployed behavior. Implementation remains pending;
-the prior completed restart does not activate this design.
+implementation blueprint. The September 12 implementation adds the shared runner,
+explicit verified handoffs, immutable independent REST reads and an indexed hot
+lookup. Deployment/live acceptance are recorded only in STATUS.md and the
+[release audit](history/ACCOUNT_SOURCE_RELEASE_2026-09-12.md).
+
+The first release overlaps independent positions/history reads inside the existing
+serial proof cycle; it does **not** move reconciliation or decisions into a second
+writer/background worker. A fully independent polling watch, chunked catalog work
+and cross-source end-to-end latency percentiles remain follow-on measurement work.
+There is no claim that a one-second target guarantees one-second fill detection.
 
 The design-session read-only snapshot at 06:15:39Z returned 30 venue orders
 across 21 markets and zero venue positions. Subsequent local counts within the
@@ -209,3 +217,28 @@ is not assumed for this Retail account.
 
 Stable boundaries and replayable incidents reduce future rework. They cannot
 guarantee that the venue never changes or that every exit has available liquidity.
+
+## Implemented operator control
+
+The launcher accepts `websocket`, `rest` or compatible `rest-fallback` as its
+fourth argument. If omitted, it loads the last successfully verified selection;
+without a saved selection it uses validated `config/account_source_policy.json`.
+An explicit startup argument wins. Failed startup cannot replace that explicit
+choice with an earlier process's saved selection. Configuration is restart-scoped.
+
+On the active laptop, run `PYTHONPATH=src .venv/bin/python -B -m liquidity_bot.account_source status`
+to read local control status, not venue proof. The same command with `rest` or
+`websocket` instead of `status` submits one explicit request; operators must have
+authorization before invoking it. Requests expire in five minutes and bind to one
+process/source generation. WebSocket verification lasts at most 45 seconds by
+default; final account proof has a 30-second deadline. No new order or cancellation
+is submitted by the handoff itself. Urgent exits, partial/disagreeing state or a
+changed scope abort the request, requiring a new operator request. Regular private
+recovery services the control checkpoint; startup without a bound market and
+prolonged venue-health holds do not bypass their existing gates to service a switch.
+A stale status refuses the request.
+
+The inactive private WebSocket is closed in REST steady state. Returning to REST
+retains positive old-stream tail evidence and expires pre-tail proof. Status files
+and selection/request controls live beside the active ledger under ignored `data/`;
+they contain no credentials and are not synchronized as live authority.

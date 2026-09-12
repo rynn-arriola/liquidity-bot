@@ -1,0 +1,6 @@
+{
+  "default_mode": "websocket",
+  "verification_seconds": 45,
+  "read_concurrency": 4,
+  "rest_pending_entry_ceiling": 30
+}

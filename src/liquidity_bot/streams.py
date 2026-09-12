@@ -293,9 +293,12 @@ class TradeReadOnlyStream:
 class PrivateReadOnlyStream:
     """Authenticated order, position, and balance state events."""
 
+    MAX_PENDING_EVENTS = 8192
+
     def __init__(self, client: Any):
         self._socket = client.ws.private()
         self._queue: asyncio.Queue[PrivateEvent | Exception] = asyncio.Queue()
+        self.overflowed = False
         self._started = False
         self._order_snapshot_complete = False
         self._balance_snapshot_seen = False
@@ -308,7 +311,18 @@ class PrivateReadOnlyStream:
         self._socket.on("error", self._on_error)
         self._socket.on("close", self._on_close)
 
+    def _enqueue_private(self, item: PrivateEvent | Exception) -> None:
+        if self.overflowed:
+            return
+        if self._queue.qsize() >= self.MAX_PENDING_EVENTS:
+            self.overflowed = True
+            self._queue.put_nowait(AdapterError("private event queue overflow; proof lost"))
+            return
+        self._queue.put_nowait(item)
+
     def _on_message(self, message: Any) -> None:
+        if self.overflowed:
+            return
         try:
             event = decode_private_message(message)
             event = replace(event, received_at=datetime.now(timezone.utc))
@@ -317,17 +331,17 @@ class PrivateReadOnlyStream:
                     event,
                     market_scope=self._market_scope_by_request_id[event.request_id],
                 )
-            self._queue.put_nowait(event)
+            self._enqueue_private(event)
         except Exception as exc:
-            self._queue.put_nowait(
+            self._enqueue_private(
                 exc if isinstance(exc, AdapterError)
                 else AdapterError(f"private stream decode failed: {exc}"))
 
     def _on_error(self, error: Any) -> None:
-        self._queue.put_nowait(AdapterError(f"private WebSocket error: {error}"))
+        self._enqueue_private(AdapterError(f"private WebSocket error: {error}"))
 
     def _on_close(self, *_: Any) -> None:
-        self._queue.put_nowait(AdapterError("private WebSocket disconnected"))
+        self._enqueue_private(AdapterError("private WebSocket disconnected"))
 
     @property
     def last_transport_at(self) -> datetime | None:
@@ -453,7 +467,7 @@ class PrivateReadOnlyStream:
     def initial_state_ready(self) -> bool:
         """Whether this connection proved it is receiving private state."""
 
-        return self._balance_snapshot_seen
+        return self._balance_snapshot_seen and not self.overflowed
 
     @property
     def initial_state_status(self) -> str:
@@ -658,6 +672,8 @@ class PrivateStreamPool:
     Losing the feed loudly is the safe direction.
     """
 
+    MAX_PENDING_EVENTS = 8192
+
     def __init__(self, client: Any, *, factory: Any = None,
                  markets_per_connection: int = MARKETS_PER_PRIVATE_CONNECTION):
         if markets_per_connection <= 0:
@@ -674,6 +690,7 @@ class PrivateStreamPool:
         self._queue: asyncio.Queue[
             tuple[int, PrivateEvent | Exception]] = asyncio.Queue()
         self._started = False
+        self.overflowed = False
 
     @property
     def connection_count(self) -> int:
@@ -684,6 +701,9 @@ class PrivateStreamPool:
         while True:
             try:
                 event = await stream.next_event()
+                if self.overflowed or self._queue.qsize() >= self.MAX_PENDING_EVENTS:
+                    self.overflowed = True
+                    raise AdapterError("private pool queue overflow; proof lost")
                 self._shard_last_message_at[shard_index] = datetime.now(
                     timezone.utc)
                 self._queue.put_nowait((shard_index, event))
@@ -758,6 +778,9 @@ class PrivateStreamPool:
     ) -> None:
         """Fail the whole pool loudly when even one shard goes dark."""
 
+        if self.overflowed or any(getattr(stream, "overflowed", False)
+                                  for stream in self._streams):
+            raise AdapterError("private queue overflow; reconciliation required")
         stale = self.stale_shards(
             now=now, max_silence_seconds=max_silence_seconds)
         if not stale:
@@ -784,6 +807,8 @@ class PrivateStreamPool:
 
         return (
             bool(self._streams)
+            and not self.overflowed
+            and not any(getattr(stream, "overflowed", False) for stream in self._streams)
             and len(self._shard_balance_snapshot_delivered) == len(self._streams)
             and all(self._shard_balance_snapshot_delivered)
         )
@@ -909,6 +934,35 @@ class PrivateStreamPool:
             raise item
         self._mark_delivered(shard_index, item)
         return item
+
+    async def retire_with_events(self) -> tuple[PrivateEvent, ...]:
+        """Stop readers and return positive tail evidence before releasing scope.
+
+        Used only by the serial operator source handoff. Existing pool events
+        precede the not-yet-pumped per-shard tail. There is no shared venue
+        sequence across shards; each shard's wire order is preserved.
+        """
+        for reader in self._readers:
+            reader.cancel()
+        await asyncio.gather(*self._readers, return_exceptions=True)
+        self._readers.clear()
+        events = []
+        while not self._queue.empty():
+            _, item = self._queue.get_nowait()
+            if isinstance(item, PrivateEvent):
+                events.append(item)
+        for stream in self._streams:
+            await stream.close()
+            # Closing has stopped the callback producer. Keep positive queued
+            # events; close notifications themselves carry no execution fact.
+            queue = getattr(stream, "_queue", None)
+            if queue is not None:
+                while not queue.empty():
+                    item = queue.get_nowait()
+                    if isinstance(item, PrivateEvent):
+                        events.append(item)
+        await self.close()
+        return tuple(events)
 
     def drain_events(self, *, limit: int | None = None) -> tuple[PrivateEvent, ...]:
         """Drain the merged shard backlog while preserving its queue order."""

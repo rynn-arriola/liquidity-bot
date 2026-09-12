@@ -278,3 +278,63 @@ entries and $90 HARD. This renewed instruction is treated as conditional
 canary restart authority, not unconditional long-term capacity acceptance.
 The earlier pending-approval hold is superseded for this bounded restart;
 no new API budget, proof timeout or trading/risk threshold is introduced.
+
+### Restart and 7:17 live acceptance
+
+Post-push parity passed on the laptop; peer PC remained offline/pending.
+WSL safely fast-forwarded documentation only to `5363a8122`; deployed source
+marker stayed `2f7ba0222`, all 185 hashes matching. The online backup at
+16:29:50.773231Z was verified (375,787,520 bytes, SHA prefix `aaeb66a1bd66`).
+The fresh **16:30:39.781135Z** authenticated gate proved all venue/ledger
+flat/order/ownership counters zero. The normal launcher started supervisor
+**1216388**, runner **1216411**, around 16:30:41Z with `auto 10 32 rest`.
+Persisted source status later confirmed REST active, generation zero, no
+pending switch. No force-kill, new limiter/capacity/risk setting or ledger repair.
+
+Startup discovery used two event pages, 67 book candidates and 56.1 seconds,
+finding 41 viable markets. One market's unavailable pregame proof was refused;
+its later fresh event proof restored eligibility before quoting it. The
+16:34:03–16:34:11Z authenticated snapshot showed 30 flat entries, no positions
+or unresolved/unknown state.
+
+| Window end UTC | Seconds | Attempts | Failures | 429 | Max queued | Wait p99 / max s |
+|---|---:|---:|---|---:|---:|---|
+| 16:33:34 | 173.4 | 500 | 11 exact-order 404s | 0 | 3 | 0.623 / 0.699 |
+| 16:34:38 | 64.3 | 244 | 1 exact-order 404 | 0 | 2 | 0.626 / 0.711 |
+| 16:35:46 | 67.9 | 255 | 1 exact-order 404 | 0 | 3 | 0.661 / 0.708 |
+| 16:37:36 | 109.9 | 409 | 1 exact-order 404 | 0 | 4 | 0.709 / 0.960 |
+
+Every window ended with queue zero and no cooldown. Exact-order 404s are not
+silently declared success, but no persistent unknown/unresolved ownership
+remained at final proof. No execution-history failure or missed exit deadline
+was observed. Raw queue peaks are consistent with bounded parallel readers;
+the same limiter rate/counters and proof/exit deadlines remain in force.
+This is bounded canary acceptance, not a long busy-period capacity guarantee.
+
+Natural position evidence:
+
+- ITF `amijamyoulal-vaspradiomor`: -10 first recorded 16:35:18.491742Z;
+  initial buy reducer acknowledged 16:35:19.824891Z, **1.333149s** after
+  observation. Later reprice: cancel acknowledgement 16:36:03.561082Z,
+  terminal proof 16:36:06.739650Z, replacement acknowledgement
+  16:36:08.286679Z (**1.547029s** after terminal proof). The later
+  49.794937-second position-observation age is the age of the same already
+  managed episode, not its initial reducer delay.
+- Kormyk/Kulole: +5 partial position first recorded 16:37:00.664807Z;
+  building cancel acknowledged 16:37:02.263360Z (**1.598553s**). Terminal
+  proof preceded cancel of the now-wrong reducing order, then terminal proof
+  at 16:37:10.178597Z preceded the exact reducer acknowledgement
+  at 16:37:10.533199Z (**0.354602s** after the final confirmation).
+- A 16:37:04–16:37:10Z diagnostic sampled that normal in-flight cancellation
+  and saw one unresolved intent; subsequent positive terminal/replacement
+  evidence cleared it. It was not inferred cancelled from absence.
+
+Final authenticated **16:37:46.128935–16:37:57.678384Z** proof: 32 total
+orders = **30 flat entries + two positioned reducers**, -10 ITF with BUY
+remaining 10 at 0.60, +5 Kormyk/Kulole with SELL remaining 5 at 0.60,
+zero unresolved intents and zero unknown orders. The runner remained alive at
+437 seconds (7:17). These reads are not atomic across endpoints; their exact
+snapshot times are retained. Both positions remain open, not claimed closed.
+Natural final-flat and unfilled hard-IOC acceptance remain outstanding. The
+observed timestamps measure local observation-to-action, not venue fill-delivery
+latency or equivalence to the prior private WebSocket.

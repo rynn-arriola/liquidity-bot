@@ -113,3 +113,56 @@ This is prepared-code acceptance, not deployed-runtime or natural-load proof.
 - Limits: no live stress test, key/IP change or limit increase. This fixes local
   waste, not Polymarket's undocumented matched Cloudflare rule. Sustained live
   request/exit/reward performance and the external private stream remain unproven.
+
+## Authorized deployment and restart
+
+The operator subsequently said **Restart once all clear**. Read-only proof at
+23:06:43Z confirmed all 21 retained ledger orders CANCELED, including the one
+acknowledged PLACE intent. Parity captured and verified the stopped ledger at
+23:07:11Z (385,630,208 bytes, SHA-256 prefix `713ce12c114b`). Normal stopped
+reconciliation, with venue mutation entry points disabled, then cleared the
+historical working orders/intent from positive exact venue proof. No SQL repair,
+create, cancel or position-close request was used.
+
+The combined reviewed change from WSL `6b17c5416` to `4a166336a` was fast-forwarded
+through a local git bundle after its GitHub push. All 187 normalized
+source/test/script/web/config hashes matched. The exact deployed native WSL
+suite passed **1,565 tests in 154.420 seconds**; the deployment marker now names
+`4a166336a340f99003c6e4d5810283f02e363eda`. No source change was added during
+release. The 23:11:54.924582Z fresh authenticated gate proved zero orders,
+positions, unresolved intents, unknown orders, ledger working orders and ledger
+positions. The existing launcher started size 10 / 32 in REST mode at about
+23:12:05Z: supervisor 1789434, runner 1789455. Risk and policy files are unchanged.
+Startup/live acceptance follows; the prestart gate is not later exposure proof.
+
+### Startup acceptance: public-book throttling persists
+
+The process remained alive, but preflight repeatedly deferred discovery before
+placing any order. Logs at 23:12:37, 23:13:22, 23:14:02 and later recorded
+`component=startup delay=10.0s requests_sent=0`. That local message describes
+the deferred call, not zero requests across the entire scan.
+
+Read-only observation of the host limiter proved actual fresh public-book 429s:
+`book_last_429_at` advanced to 23:14:41.597610Z and 23:15:22.794350Z with
+10-second book-only cooldowns. A successful recovery probe cleared the circuit
+between them, then a subsequent book request was throttled again. Safety-lane
+cooldown did not advance with these book failures. This demonstrates circuit
+containment, not restored venue access or sustainable quoting. No manual API
+stress, key/IP rotation, limiter-state edit or strategy bypass was performed.
+
+The current [changelog](https://docs.polymarket.us/changelog) still ends with the
+September 11 maintenance announcement; the [official live status](https://status.polymarketexchange.com/)
+reported All Systems Operational at the 23:16Z check. Those public summaries
+cannot override actual endpoint failures or prove an account/IP exemption.
+The exact venue rule/threshold remains unknown. No regular API-budget window
+has completed because preflight has not entered the trading loop; no live
+performance reduction or exit acceptance can be claimed yet.
+
+After 5:09 of process uptime, the 23:17:10-23:17:14Z authenticated account
+check proved **zero orders, zero positions, zero unresolved intents and zero
+unknown orders**. The run suffix contained seven startup backpressure records
+and no actions, position transitions or normal API-budget windows. Both exact
+processes remained alive. Leave the existing safe preflight retry active; no
+manual restart loop or risk/freshness bypass was used. Deployed-code and
+retry-containment acceptance pass, but quoting and live performance/exit
+acceptance remain blocked by persistent public-book throttling.

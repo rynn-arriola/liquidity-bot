@@ -243,16 +243,16 @@ orders, working ledger orders and ledger positions.
 
 The normal launcher started supervisor **2542129** and runner **2542150** with
 `auto 10 32 rest`, retaining $90 HARD and max 30 flat pending entries. The
-runner did not reach a selection result during the first 5.5 minutes. Its first
+runner did not reach a selection result during the first eight minutes. Its first
 public-book attempt received HTTP429, and every later single recovery probe,
-spaced roughly 28–48 seconds apart, received the same endpoint response.
+spaced roughly 28–49 seconds apart, received the same endpoint response.
 Adaptive book delay rose from 10 to 16 and then 30 seconds. The runner and
 supervisor stayed alive, no mutation/order was sent, and the endpoint circuit
 continued self-recovery rather than restarting or busy-looping. Since the
 current attempts are isolated single probes, this observation is not a startup
 request burst; the exact external quota/block duration remains unknown.
 
-At 06:41:13.001240Z, a fresh complete authenticated account and read-only ledger
+At 06:43:25.348969Z, a fresh complete authenticated account and read-only ledger
 check still proved zero orders, positions and ambiguity. The local lifecycle
 misclassification is reviewed, tested and loaded, but the intended shorter
 nonzero-viable scan and order buildup cannot be naturally accepted until the

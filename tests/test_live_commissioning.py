@@ -6424,6 +6424,81 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("private gateway detail", output.getvalue())
                 self.assertGreater(state.next_book_refresh, NOW)
 
+    async def test_startup_book_pacing_separates_entries_from_recovery(self):
+        runner, _, _ = self.build_runner(max_markets=32)
+        runner._bind_markets(("recovering", "candidate"))
+        runner._recovery_slugs = ("recovering",)
+        seen = []
+
+        async def book_read(now, slug):
+            seen.append((slug, runner.gateway._traffic_class_override.get()))
+
+        with patch.object(runner, "_refresh_contracts", new=AsyncMock()), \
+                patch.object(runner, "_refresh_book", side_effect=book_read), \
+                patch.object(runner, "_validate_entry_book"):
+            await runner._refresh_bound_books(NOW)
+        self.assertEqual(seen, [("recovering", None), ("candidate", "entry")])
+        self.assertIsNone(runner.gateway._traffic_class_override.get())
+
+    async def test_routine_book_scope_excludes_position_ambiguity_and_recovery(self):
+        runner, _, _ = self.build_runner()
+        slug = runner.market_slug
+        for kind in ("flat", "position", "absent", "unresolved", "recovery", "stop", "dwell"):
+            runner._recovery_slugs = (slug,) if kind == "recovery" else ()
+            runner._stop_requested = "operator_stop" if kind == "stop" else ""
+            runner.state_for(slug).economically_ineligible_since = NOW if kind == "dwell" else None
+            with patch.object(runner.ledger, "position", return_value=Decimal(10 if kind == "position" else 0)), \
+                    patch.object(runner.ledger, "absent_orders", return_value=[{}] if kind == "absent" else []), \
+                    patch.object(runner.ledger, "market_has_unresolved_intent", return_value=kind == "unresolved"):
+                with runner._routine_book_scope(slug):
+                    self.assertEqual(runner.gateway._defer_optional_book.get(), kind == "flat", kind)
+            self.assertFalse(runner.gateway._defer_optional_book.get())
+
+    async def test_flat_stale_recovery_cannot_bypass_routine_book_pacing(self):
+        from liquidity_bot.adapters import AsyncIntervalLimiter
+        runner, client, _ = self.build_runner()
+        slug = runner.market_slug
+        await runner._refresh_contracts(NOW, slug)
+        state = runner.state_for(slug)
+        state.book = await runner.gateway.fetch_book(slug)
+        receipt = NOW - timedelta(seconds=10)
+        state.book_observed_at = receipt
+        self.seed_working_order(runner, slug=slug, side="bid", suffix="paced")
+        before = tuple(dict(row) for row in runner.ledger.working_orders(slug))
+        limiter = AsyncIntervalLimiter(optional_book_interval_seconds=4)
+        runner.gateway.limiter = limiter
+        await limiter.wait(operation="markets.book(other)", traffic_class="entry")
+        count = client.markets.book_calls
+        with patch.object(runner, "_quarantine_working_orders", new=AsyncMock()) as quarantine:
+            await runner._service_market_book(slug, NOW)
+            await runner._recover_strategy_state("book_stale", slug)
+        self.assertEqual(client.markets.book_calls, count)
+        quarantine.assert_not_awaited()
+        self.assertEqual(state.book_observed_at, receipt)
+        self.assertEqual(tuple(dict(row) for row in runner.ledger.working_orders(slug)), before)
+        self.assertFalse(runner._book_is_fresh_enough_to_plan(slug))
+        # Identical endpoint, now needed by a held position: optional pacing
+        # does not delay it. The separate actual-429 endpoint gate still does.
+        with patch.object(runner.ledger, "position", return_value=Decimal(10)):
+            await runner._recover_strategy_state("book_stale", slug)
+        self.assertEqual(client.markets.book_calls, count + 1)
+        self.assertTrue(runner._book_is_fresh_enough_to_plan(slug))
+
+    async def test_startup_book_limit_preserves_scope_and_stops_fanout(self):
+        for error in (ApiAdmissionDeferred("wait", retry_after_seconds=10),
+                      AdapterError("limited", status_code=429)):
+            runner, _, _ = self.build_runner(max_markets=32)
+            runner._bind_markets(("first", "second", "third"))
+            with patch.object(runner, "_refresh_contracts", new=AsyncMock()), \
+                    patch.object(runner, "_refresh_book", new=AsyncMock(side_effect=[None, error])) as read, \
+                    patch.object(runner, "_validate_entry_book"), \
+                    patch.object(runner, "_report_runtime_error", new=AsyncMock()) as report:
+                with self.assertRaises(type(error)):
+                    await runner._refresh_bound_books(NOW)
+            self.assertEqual(read.await_count, 2)
+            report.assert_not_awaited()
+            self.assertEqual(runner.active_slugs, ("first", "second", "third"))
+
     async def test_jit_book_service_reads_once_per_owner_after_slow_account_proof(self):
         moment = [NOW]
         runner, client, _ = self.build_runner(clock=lambda: moment[0], max_markets=32)

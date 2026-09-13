@@ -160,6 +160,47 @@ class FixedFillHazard:
         )
 
 
+class PacedSelectionClockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_and_revalidation_drop_games_started_during_book_wait(self):
+        for revalidate in (False, True):
+            moment = [NOW]
+            gateway = FakeGateway({"one": market("one")},
+                {"one": incentive("one", pool=20000)}, {"one": book("one")})
+            original = gateway.fetch_book
+
+            async def delayed(slug):
+                result = await original(slug)
+                moment[0] = NOW + timedelta(hours=1)
+                return result
+
+            gateway.fetch_book = delayed
+            selector = RewardMarketSelector(gateway, RewardSelectionPolicy(), clock=lambda: moment[0])
+            if revalidate:
+                self.assertEqual(await selector.revalidate_viable(("one",), now=NOW), ())
+            else:
+                result = await selector.select(now=NOW)
+                self.assertIsNone(result.selected)
+                self.assertEqual(result.books_evaluated, 1)
+                self.assertEqual(result.opportunities, ())
+
+    async def test_scan_drops_reward_expired_while_reading_and_retains_future_game(self):
+        moment = [NOW]
+        gateway = FakeGateway({"one": market("one", starts_in_hours=2)},
+            {"one": incentive("one", pool=20000, starts_at=NOW-timedelta(minutes=1),
+                              ends_at=NOW+timedelta(seconds=10))}, {"one": book("one")})
+        original = gateway.fetch_book
+
+        async def delayed(slug):
+            result = await original(slug)
+            moment[0] = NOW + timedelta(seconds=10)
+            return result
+
+        gateway.fetch_book = delayed
+        result = await RewardMarketSelector(gateway, RewardSelectionPolicy(),
+            clock=lambda: moment[0]).select(now=NOW)
+        self.assertIsNone(result.selected)
+
+
 class OpportunityTests(unittest.TestCase):
     def test_opportunity_projection_is_bounded_by_explicit_program_end(self):
         reward = incentive(

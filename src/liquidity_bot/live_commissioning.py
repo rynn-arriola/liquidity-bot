@@ -20,6 +20,7 @@ import signal
 import time
 import socket
 import traceback
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -6589,7 +6590,12 @@ class CommissioningRunner:
                     # bounded contract refresh is the recovery probe.
                     healthy.append(slug)
                     continue
-                await self._refresh_book(now, slug)
+                scope = getattr(self.gateway, "traffic_class", None)
+                # New startup candidates are optional price discovery, not
+                # position safety. Recovering owners retain the safety lane.
+                with (scope("entry") if callable(scope) and slug not in recovering
+                      else nullcontext()):
+                    await self._refresh_book(now, slug)
                 if slug not in recovering:
                     self._validate_entry_book(slug)
                 healthy.append(slug)
@@ -6604,6 +6610,11 @@ class CommissioningRunner:
                     f"startup_market_dropped:{slug}", exc)
             except Exception as exc:
                 if slug in recovering:
+                    raise
+                if isinstance(exc, ApiAdmissionDeferred) or (
+                        isinstance(exc, AdapterError) and exc.status_code == 429):
+                    # A shared endpoint limit is not evidence that each
+                    # remaining market is bad. Preserve scope and yield once.
                     raise
                 if self._is_transient_recovery_error(exc):
                     transient_failure = exc
@@ -6726,6 +6737,19 @@ class CommissioningRunner:
         await self._service_market_book(
             slug, self._now(), refresh_book=refresh_book)
 
+    def _routine_book_scope(self, slug: str):
+        """Pace only unambiguous flat quoting, never held/recovery risk."""
+        scope = getattr(self.gateway, "optional_book_reads", None)
+        state = self.state_for(slug)
+        if (scope is not None and not self._stop_requested
+                and slug not in self._recovery_slugs and slug not in self._retired
+                and state.economically_ineligible_since is None
+                and self.ledger.position(slug) == 0
+                and not self.ledger.absent_orders(slug)
+                and not self.ledger.market_has_unresolved_intent(slug)):
+            return scope()
+        return nullcontext()
+
     async def _service_market_book(
         self, slug: str, now: datetime, *, refresh_book: bool = True,
     ) -> None:
@@ -6754,8 +6778,9 @@ class CommissioningRunner:
         # Keep the book last among this market's REST work so metadata latency
         # cannot age the book before the decision that follows.
         try:
-            state.next_book_refresh = await self._refresh_quiet_book_if_due(
-                state.next_book_refresh or now, slug)
+            with self._routine_book_scope(slug):
+                state.next_book_refresh = await self._refresh_quiet_book_if_due(
+                    state.next_book_refresh or now, slug)
             # Only a refresh that actually RAN proves the book is readable. A
             # "not due yet" return proves nothing, and clearing the counter on
             # it stopped consecutive failures from ever accumulating to
@@ -8951,7 +8976,11 @@ class CommissioningRunner:
         try:
             if reason in {"book_stale", "book_market_mismatch",
                           "hard_exit_deferred_thin_book"}:
-                await self._refresh_book(self._now(), slug)
+                # A normal flat stale-book replan cannot bypass the optional
+                # allowance used moments earlier by quiet-book service.
+                with (self._routine_book_scope(slug) if reason == "book_stale"
+                      else nullcontext()):
+                    await self._refresh_book(self._now(), slug)
                 if reason == "book_stale":
                     # Refreshing the book IS the recovery. Quarantining below
                     # cancels every resting quote, and a stale book does not

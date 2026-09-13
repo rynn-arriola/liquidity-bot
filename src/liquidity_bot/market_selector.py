@@ -554,6 +554,8 @@ class RewardMarketSelector:
             except (AdapterError, ValueError) as exc:
                 failures.append(f"{market.slug}:book:{type(exc).__name__}")
 
+        books_evaluated = len(opportunities)
+        opportunities = self._refresh_opportunity_times(opportunities, now)
         opportunities.sort(key=_opportunity_key)
         result = RewardMarketSelection(
             selected=next(
@@ -567,7 +569,7 @@ class RewardMarketSelector:
             executable_catalog_markets=len(executable_catalog),
             unsupported_programs=unsupported,
             eligible_pregame_markets=len(candidates),
-            books_evaluated=len(opportunities),
+            books_evaluated=books_evaluated,
             deferred_markets=deferred,
             failures=tuple(failures),
             catalog_spread_filtered_markets=catalog_spread_filtered,
@@ -653,8 +655,30 @@ class RewardMarketSelector:
                 continue
             if opportunity.viable_sides:
                 opportunities.append(opportunity)
+        opportunities = self._refresh_opportunity_times(opportunities, now)
         opportunities.sort(key=_opportunity_key)
-        return tuple(opportunities)
+        return tuple(item for item in opportunities if item.viable_sides)
+
+    def _refresh_opportunity_times(
+        self, opportunities: list[RewardMarketOpportunity], now: datetime,
+    ) -> list[RewardMarketOpportunity]:
+        """A paced scan ranks at completion, not at its pre-await clock.
+
+        These remain selection observations, never fresh executable books.
+        Startup/replacement/decision validation still acquires current proof.
+        """
+        if self.clock is None:
+            return opportunities
+        now = self.clock()
+        refreshed = []
+        for item in opportunities:
+            period = self._applicable_period(item.market, item.incentive, now)
+            if period is not None:
+                refreshed.append(evaluate_market_opportunity(
+                    item.market, item.incentive, item.book, period=period,
+                    now=now, policy=self.policy,
+                    fill_hazard_model=self.fill_hazard_model))
+        return refreshed
 
     def _catalog_market_is_executable(
         self,

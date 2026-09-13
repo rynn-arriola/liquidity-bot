@@ -502,6 +502,7 @@ class AsyncIntervalLimiter:
     REPORT_IDLE_INTERVAL_SECONDS = 0.30
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
     BOOK_PROBE_LEASE_SECONDS = 20.0  # Longer than the owned 15s HTTP timeout.
+    OPTIONAL_BOOK_INTERVAL_SECONDS = 4.0
 
     def __init__(
         self,
@@ -509,9 +510,13 @@ class AsyncIntervalLimiter:
         *,
         shared_state_path: str | os.PathLike[str] | None = None,
         shared_global_interval_seconds: float | None = None,
+        optional_book_interval_seconds: float = 0.0,
     ):
         if minimum_interval_seconds < 0:
             raise ValueError("minimum interval cannot be negative")
+        if not math.isfinite(optional_book_interval_seconds) or not 0 <= optional_book_interval_seconds <= 60:
+            raise ValueError("optional book interval must be finite and in [0, 60]")
+        self.optional_book_interval_seconds = float(optional_book_interval_seconds)
         if (shared_global_interval_seconds is not None
                 and shared_global_interval_seconds < 0):
             raise ValueError("shared global interval cannot be negative")
@@ -560,6 +565,9 @@ class AsyncIntervalLimiter:
         self._interrupt_generation = 0
         self._interrupt_event = asyncio.Event()
         self._book_backoff: dict[str, Any] = {}
+        # Fairness for serial, nonwaiting flat-owner callers only. Expiring
+        # demand is not a reservation of a host slot or a safety request.
+        self._optional_book_waiters: dict[str, float] = {}
 
     @classmethod
     def from_rate(
@@ -568,6 +576,7 @@ class AsyncIntervalLimiter:
         *,
         shared_state_path: str | os.PathLike[str] | None = None,
         shared_global_interval_seconds: float | None = None,
+        optional_book_interval_seconds: float = 0.0,
     ) -> "AsyncIntervalLimiter":
         rate = float(requests_per_second)
         # The current documented retail ceiling is 20/s. Reject a higher
@@ -578,6 +587,7 @@ class AsyncIntervalLimiter:
             1.0 / rate,
             shared_state_path=shared_state_path,
             shared_global_interval_seconds=shared_global_interval_seconds,
+            optional_book_interval_seconds=optional_book_interval_seconds,
         )
 
     @staticmethod
@@ -779,8 +789,26 @@ class AsyncIntervalLimiter:
                 # A transport/5xx failure is not recovery from the earlier 429.
                 state["book_cooldown_until"] = now + self._cooldown_delay(None, 1)
             else:
-                state.update(book_rate_limited=False, book_429_streak=0,
-                             book_last_429_at=0.0, book_cooldown_until=0.0)
+                # One cached success is not sustained recovery. Keep the last
+                # rejection/streak until the existing quiet-time reset so
+                # alternating success/429 cannot reset every delay to base.
+                state.update(book_rate_limited=False, book_cooldown_until=0.0)
+
+    def _optional_book_due(self, state: Mapping[str, Any], now: float,
+                           traffic_class: str) -> float:
+        if traffic_class == "safety" or self.optional_book_interval_seconds == 0:
+            return 0.0
+        return self._shared_timestamp(
+            state.get("next_optional_book_at"), now,
+            maximum_future_seconds=self.optional_book_interval_seconds)
+
+    def _record_book_claim(self, state: dict[str, Any], now: float,
+                           traffic_class: str) -> None:
+        if self.optional_book_interval_seconds and traffic_class != "safety":
+            # Reserve only optional book allowance, never a future global or
+            # safety slot. Safety reads must not repeatedly move this clock:
+            # active positions could otherwise starve refill indefinitely.
+            state["next_optional_book_at"] = now + self.optional_book_interval_seconds
 
     def _record_shared_book_result(self, **result: Any) -> None:
         path = self.shared_state_path
@@ -799,6 +827,7 @@ class AsyncIntervalLimiter:
 
     def _claim_shared_slot(
         self, interval: float, traffic_class: str, book_token: str | None = None,
+        *, defer_optional_book: bool = False,
     ) -> tuple[float, float]:
         """Try one host claim; return total delay and its cooldown portion."""
 
@@ -825,6 +854,14 @@ class AsyncIntervalLimiter:
                         if traffic_class == "safety" else
                         self.RATE_LIMIT_MAX_COOLDOWN_SECONDS))
                 due = max(now, aggregate_due, cooldown_due)
+                if book_token is not None:
+                    optional_due = self._optional_book_due(state, now, traffic_class)
+                    if defer_optional_book and optional_due > now:
+                        raise ApiAdmissionDeferred(
+                            "optional book pacing; request not sent",
+                            error_code="LOCAL_OPTIONAL_BOOK_PACING",
+                            retry_after_seconds=optional_due - now)
+                    due = max(due, optional_due)
                 if traffic_class == "report" and aggregate_due > 0.0:
                     # ``aggregate_due`` is written by old and new runners.
                     # Waiting beyond it proves one aggregate slot stayed
@@ -851,6 +888,7 @@ class AsyncIntervalLimiter:
                     return delay, max(0.0, cooldown_due - now)
                 if book_token is not None:
                     self._book_admission(state, now, book_token, claim=True)
+                    self._record_book_claim(state, now, traffic_class)
                 state["next_request_at"] = (
                     now + self.shared_global_interval_seconds)
                 if lane_clock is not None:
@@ -954,6 +992,8 @@ class AsyncIntervalLimiter:
     async def wait(
         self, *, operation: str = "", request_kind: str = "read",
         traffic_class: str | None = None,
+        checkpoint: Callable[[], Awaitable[Any]] | None = None,
+        defer_optional_book: bool = False,
     ) -> str | None:
         if request_kind not in {"read", "mutation"}:
             raise ValueError("request_kind must be read or mutation")
@@ -971,12 +1011,37 @@ class AsyncIntervalLimiter:
                       else None)
         try:
             while True:
+                if self._interrupt_generation != interrupt_generation:
+                    raise asyncio.CancelledError
+                if checkpoint is not None:
+                    # No lock/lease is held. A scan can yield to a changed
+                    # position or urgent deadline while it is being paced.
+                    await checkpoint()
+                if self._interrupt_generation != interrupt_generation:
+                    raise asyncio.CancelledError
+                nonwaiting_book = (defer_optional_book and book_token is not None
+                                   and chosen_class != "safety"
+                                   and self.optional_book_interval_seconds > 0)
+                if nonwaiting_book:
+                    now = time.monotonic()
+                    self._optional_book_waiters = {
+                        key: deadline for key, deadline in self._optional_book_waiters.items()
+                        if deadline > now}
+                    if operation in self._optional_book_waiters or len(self._optional_book_waiters) < 128:
+                        self._optional_book_waiters[operation] = now + max(
+                            5.0, self.optional_book_interval_seconds + 1.0)
+                    if next(iter(self._optional_book_waiters), None) != operation:
+                        raise ApiAdmissionDeferred(
+                            "another flat book is due first; request not sent",
+                            error_code="LOCAL_OPTIONAL_BOOK_PACING",
+                            retry_after_seconds=1)
                 if self.shared_state_path is not None:
                     # The POSIX transaction is already the atomic claim across
                     # both processes and coroutines. Do not hold the local
                     # asyncio lock while a worker waits for that file lock.
                     delay, cooldown_delay = await asyncio.to_thread(
-                        self._claim_shared_slot, interval, chosen_class, book_token)
+                        self._claim_shared_slot, interval, chosen_class, book_token,
+                        **({"defer_optional_book": True} if nonwaiting_book else {}))
                 else:
                     async with self._lock:
                         now = time.monotonic()
@@ -997,6 +1062,15 @@ class AsyncIntervalLimiter:
                             lane_due,
                             cooldown_due,
                         )
+                        if book_token is not None:
+                            optional_due = self._optional_book_due(
+                                self._book_backoff, now, chosen_class)
+                            if nonwaiting_book and optional_due > now:
+                                raise ApiAdmissionDeferred(
+                                    "optional book pacing; request not sent",
+                                    error_code="LOCAL_OPTIONAL_BOOK_PACING",
+                                    retry_after_seconds=optional_due - now)
+                            due = max(due, optional_due)
                         if chosen_class == "report" and self._next_at > 0.0:
                             due = max(
                                 due,
@@ -1012,6 +1086,7 @@ class AsyncIntervalLimiter:
                             if book_token is not None:
                                 self._book_admission(
                                     self._book_backoff, now, book_token, claim=True)
+                                self._record_book_claim(self._book_backoff, now, chosen_class)
                             self._next_at = now + self.shared_global_interval_seconds
                             if chosen_class == "entry":
                                 self._next_entry_at = now + interval
@@ -1022,6 +1097,8 @@ class AsyncIntervalLimiter:
                 if self._interrupt_generation != interrupt_generation:
                     raise asyncio.CancelledError
                 if delay <= 0.0:
+                    if nonwaiting_book:
+                        self._optional_book_waiters.pop(operation, None)
                     break
                 # This runner is intentionally serial.  Sleeping here for a
                 # background/entry 429 cooldown would prevent it from reaching
@@ -1041,7 +1118,8 @@ class AsyncIntervalLimiter:
                     )
                 try:
                     await asyncio.wait_for(
-                        interrupt_event.wait(), timeout=delay)
+                        interrupt_event.wait(), timeout=(
+                            min(delay, 0.25) if checkpoint is not None else delay))
                 except TimeoutError:
                     continue
                 raise asyncio.CancelledError
@@ -1268,6 +1346,7 @@ def shared_api_limiter(
         requests_per_second,
         shared_state_path=state_path,
         shared_global_interval_seconds=0.25,
+        optional_book_interval_seconds=AsyncIntervalLimiter.OPTIONAL_BOOK_INTERVAL_SECONDS,
     )
 
 
@@ -1324,7 +1403,18 @@ class AsyncReadOnlyGateway:
         self._traffic_class_override: ContextVar[str | None] = ContextVar(
             f"api_traffic_class_{id(self)}", default=None)
         self._read_checkpoint = ContextVar(f"api_read_checkpoint_{id(self)}", default=None)
+        self._defer_optional_book = ContextVar(f"api_defer_book_{id(self)}", default=False)
         self._sleep = sleep
+
+    @contextmanager
+    def optional_book_reads(self):
+        """Yield flat price work instead of sleeping through the owner sweep."""
+        token = self._defer_optional_book.set(True)
+        try:
+            with self.traffic_class("entry"):
+                yield
+        finally:
+            self._defer_optional_book.reset(token)
 
     @contextmanager
     def read_checkpoints(self, callback):
@@ -1450,6 +1540,10 @@ class AsyncReadOnlyGateway:
                     operation=operation,
                     request_kind="read",
                     traffic_class=traffic_class,
+                    **({"checkpoint": self._checkpoint_before_read}
+                       if self._read_checkpoint.get() is not None else {}),
+                    **({"defer_optional_book": True}
+                       if self._defer_optional_book.get() else {}),
                 )
             else:
                 # Test doubles and externally supplied compatible gates retain

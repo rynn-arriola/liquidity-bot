@@ -710,6 +710,15 @@ These are implementation requirements, not suggestions.
     remain serviced; fresh stream receipts can avoid REST without renewal.
     Pause cancellation acquires no extra price read. Deferred, failed, absent
     or future-dated books never create fresh-price or mutation authority.
+    Optional discovery/startup and routine flat books share one four-second
+    allowance. Flat service and its stale-book recovery defer without sleeping
+    through that allowance; bounded expiring demand prevents first-owner
+    monopolization. Waiting scans retain stop/position checkpoints outside
+    locks. Held/ambiguous/recovery owners and economic-dwell proof retain safety;
+    safety reads neither reserve nor extend the optional clock. One successful
+    book probe cannot erase recent 429 streak history before its quiet reset.
+    Paced selection rechecks time-dependent eligibility at completion without
+    turning old observations into executable freshness.
 88. ET-day rollover must establish its durable opening mark before scanning
     non-trading cash whose boundary and day-equality proof depend on that mark.
     A raw balance/position candidate may be published only to create the new

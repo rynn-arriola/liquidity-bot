@@ -113,3 +113,70 @@ exposure query. Pre-work parity found laptop/GitHub/WSL documentation HEAD
 `b4b3211b9`, intentional local source drafts and offline desktop; its verified
 private ledger recovery copy was captured 05:33:19Z, 388,657,152 bytes,
 SHA-256 prefix `63c773d6be11`. No copy became a writable ledger.
+
+## Subsequent authorized deployment — September 13
+
+The operator subsequently said **“Ok restart bot”**, superseding the earlier
+hold for this reviewed release only. Keep every persisted business/risk choice,
+explicit REST mode and flat/known-state startup gate; no automatic source switch.
+At **05:50:40.093071Z**, the fresh read-only account/ledger gate proved zero
+venue orders, positions, unresolved intents, unknown orders and ledger exposure.
+Pre-work parity captured a new verified stopped-runtime recovery copy at
+05:50:26Z (388,657,152 bytes, unchanged hash prefix `63c773d6be11`); desktop was
+offline/pending. No recovery copy was activated.
+
+After GitHub push, native WSL fast-forwarded via a local git bundle to
+`bd85a88023dbcc85cdb6a7eeeddbac8214c69fa2`. All **188** normalized tracked
+source/test/script/web/config hashes matched the reviewed Windows checkout.
+The deployment diff contains exactly the previously reviewed governor, runner
+read-classification, selector clock repair and tests; no additional source,
+configuration or launcher changes. The full native suite and final fresh
+start gate remain required before launching; live results follow below.
+
+The native WSL suite passed **1,580 tests in 151.350 seconds**. The marker was
+then installed as `bd85a88023dbcc85cdb6a7eeeddbac8214c69fa2`; the independent
+**05:54:02.873020Z** final gate again proved zero venue orders/positions and
+zero unresolved/unknown/ledger exposure. At approximately **05:54:08Z**, the
+normal launcher started supervisor **2461591** and runner **2461614** with
+`auto 10 32 rest`. Saved REST selection, max30 flat entries and completion-based
+5/1 polling were retained. The dashboard was already healthy and remained
+separate/read-only. Acceptance reads begin at log byte offset `71121015`;
+no authenticated diagnostic was stacked onto the initial selection scan.
+
+### Live acceptance failed: completion-time lifecycle expiry
+
+At **06:01:02.300417Z**, the first scan finished in **411.6 seconds**:
+3 event pages, 22,767 event markets, 373 executable, 361 rewarded, 100 books
+ranked and **zero viable**. The process entered normal market-wait; no order
+action or startup exception was recorded. Shared governor reads through
+06:01Z showed no new book429 or active book cooldown; the last book429 timestamp
+remained the earlier 04:34:55Z incident. This is not proof of sustainable
+full-trading capacity.
+
+Offline reproduction at 06:02Z identified a local release defect. The production
+runner builds `EventAwareGateway`, whose market records require positive event
+status younger than 30 seconds. `_refresh_opportunity_times` now calls
+`_applicable_period` at scan completion using those original records. After a
+411.6-second scan, every original event receipt has expired. An otherwise valid
+two-hours-pregame fixture gives viable=1 without the production guard but
+viable=0 with that guard; the scheduled kickoff is still in the future in both.
+The old test gateway did not enable the production guard. The earlier clean
+read-only paced scan likewise did not establish this integrated lifecycle path.
+Passing 1,580 tests therefore missed this integration case; this release is
+**not live accepted** and the zero result must not be attributed to bad market
+economics or an API ban.
+
+Do not remove the actual-live guard or renew its timestamp locally. The next
+repair must refresh genuine lifecycle evidence at the appropriate scan boundary
+or separate non-executable ranking from fresh live authorization, cover the
+production EventAwareGateway path with a greater-than-30-second scan regression,
+and revisit full-scan latency/position interruption before another deployment.
+No such additional source fix or restart was performed during this diagnosis.
+
+At **06:03:12.981224Z**, a fresh authenticated read-only check after the scan
+proved zero venue orders/positions and zero unresolved/unknown/ledger exposure.
+Supervisor2461591/runner2461614 remain alive but idle in market-wait; the next
+normal startup retry waits 900 seconds. Full scans are not startup-only: normal
+safe rotation/top-up is scheduled on the 900-second cadence, and urgent
+lifecycle/post-flat replacement can scan sooner when bounded recent-cache
+revalidation is unavailable. Existing per-owner book refresh is separate.

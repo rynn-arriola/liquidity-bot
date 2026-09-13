@@ -200,3 +200,22 @@ zero orders, zero positions, zero unresolved intents and zero unknown orders.
 Both processes remained alive after 2:19. The run suffix had four startup
 deferrals and no actions or ordinary API-budget windows. The bot is running
 but not trading; this is not sustained rate-limit recovery acceptance.
+
+### Operator stop after continued book throttling
+
+The operator then said "Just stop the bot." The normal stop script stopped
+supervisor 2085653 and sent SIGTERM to runner 2085674. It completed without
+force-kill; the final log reports `operator stopped during API admission
+backpressure`. Both processes are absent. Independent complete authenticated
+reads at September 13 02:27:09–02:27:13Z confirm zero orders, zero positions,
+zero unresolved intents and zero unknown orders. Startup deferrals continued
+through 02:26:02Z; no trading action was recorded in this run.
+
+The operator also asked where the persistent429 originates. Prior raw captured
+evidence identifies HTTP429 / Cloudflare1015 on public gateway
+`GET /v1/markets/<slug>/book`, not the private account WebSocket. Reopened
+[Cloudflare1015 guidance](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1015/)
+warns repeated requests in a short period may extend the restriction. This is
+a possible explanation for persistence, not proof of this account/IP's matched
+rule, reset duration or a permanent account ban. No additional venue probe,
+code/config/risk change or restart was performed. Leave stopped.

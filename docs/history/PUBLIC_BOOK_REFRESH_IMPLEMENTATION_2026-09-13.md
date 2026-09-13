@@ -244,3 +244,31 @@ exit/API acceptance passed; continued hard-exit, reconnect/maintenance,
 full-capacity and long-duration performance acceptance remains observational.
 No runtime source was edited during release, and no additional restart,
 manual order, induced fill/failure, private-source flip or risk reset occurred.
+
+## Read-only status follow-up, September13 19:29Z
+
+Same supervisor4022391 / runner4022412 remained up55 minutes with unchanged
+size10/32 REST command and source marker; all192 normalized deployed hashes
+match. Authenticated19:29:12.304136Z:30 flat-market orders across21 markets,
+zero positions, unresolved intents and unknown orders; ledger agrees.
+The latest+10 Marant/Iskchr position was observed19:26:49.335404Z, passive
+reducer acknowledged19:26:49.472474Z (0.137s after observation), and flat
+observed19:28:47.458019Z. Observation latency is not venue-fill latency.
+
+All46 completed API windows from18:36:08Z through19:29:30Z total10,067
+attempts/3,331.3s and109 failures:107 individual-order404s and two429s.
+No window contains a REST market-book call. Positions429 appeared in the
+window ending18:47:35.752179Z, and balance429 in19:22:00.315107Z; these
+timestamps identify telemetry windows, not exact request times. The following
+18:48:48Z/19:23:02Z windows show zero429 and all cooldowns zero, with the same
+runner continuing. The latter window had zero failures altogether. This
+qualifies the initial seven-minute clean-rate-limit result; public-book renewal
+does not eliminate account endpoint rejection. Root cause/quota remains
+unproven; no limit increase or source flip is justified by this status check.
+
+Latest19:28:29Z steady scheduler decision p95 was3.314s; lifecycle/top-up
+window19:26:27Z was44.288s, including42.6s lifecycle replacement elapsed.
+Pregame/risk/ownership gates remain unchanged. Longer-duration account API
+reliability and lifecycle performance remain follow-up items, not a claim of
+private-WebSocket equivalence. No runtime/config/order mutation or restart was
+performed by the status check; only local evidence/handoff documentation changed.

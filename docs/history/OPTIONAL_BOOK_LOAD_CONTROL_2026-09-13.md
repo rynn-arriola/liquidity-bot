@@ -269,3 +269,18 @@ present and no mutation was sent. This proves that the earlier Cloudflare 1015
 block had cleared for that single request; it does not establish full-scan or
 normal-running capacity. The bot remains stopped and must not be restarted
 without separate authorization.
+
+## Stopped startup-pattern reproduction
+
+At **13:19:52Z**, the operator authorized one bounded read-only startup-pattern
+test while the bot remained absent. The diagnostic used the production
+background lane, allowed no mutation and stopped at the first failure. It made
+14 GETs: two event pages, six incentive reads and six public books. The first
+five books returned HTTP200; the sixth returned **HTTP429** with
+`Retry-After: 10` and `CF-Ray a3a7728cf871ff90-EWR` at **13:20:07Z**. The
+test immediately ended with zero mutation requests.
+
+This disproves using the earlier single-book 200 as a restart gate. It also
+gives support a current reproducible distinction: the failure is an HTTP429 on
+the public book GET, not an order rejection labeled `Global Rate Limit
+Exceeded`. The external threshold remains unknown, and the bot stays stopped.

@@ -284,3 +284,22 @@ This disproves using the earlier single-book 200 as a restart gate. It also
 gives support a current reproducible distinction: the failure is an HTTP429 on
 the public book GET, not an order rejection labeled `Global Rate Limit
 Exceeded`. The external threshold remains unknown, and the bot stays stopped.
+
+## Fresh private WebSocket comparison
+
+Two separate 45-second read-only tests followed while the bot remained absent.
+The first opened the private socket directly with the official SDK's signing
+helper and sent JSON text subscriptions for global account balance, orders and
+positions. The handshake succeeded and both initial and final protocol Pings
+received Pongs, but the socket delivered zero application frames, decode
+failures or errors from 13:23:32Z through 13:24:17Z.
+
+The second used the latest published official Python SDK end to end
+(`polymarket-us` 0.1.2) and its `ws.private()`, `subscribe_account_balance`,
+`subscribe_orders` and `subscribe_positions` methods. It connected and passed
+both Pongs from 13:25:42Z through 13:26:27Z, but emitted only the local `open`
+event: zero message, balance, order, position, heartbeat, error or close event.
+The official status API reported All Systems Operational with zero incidents
+and zero maintenance at 13:25:08Z. The current changelog still lists no private
+subscription-format change. No credential, ledger, order or runtime state was
+changed.

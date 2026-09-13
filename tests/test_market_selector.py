@@ -414,6 +414,22 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_429_stops_selection_and_revalidation_after_one_book(self):
+        for revalidate in (False, True):
+            with self.subTest(revalidate=revalidate):
+                slugs = ("one", "two", "three")
+                gateway = FakeGateway(
+                    {s: market(s) for s in slugs},
+                    {s: incentive(s, pool=1000) for s in slugs},
+                    {s: AdapterError("limited", status_code=429) for s in slugs})
+                selector = RewardMarketSelector(gateway)
+                with self.assertRaises(AdapterError):
+                    if revalidate:
+                        await selector.revalidate_viable(slugs, now=NOW)
+                    else:
+                        await selector.select(now=NOW)
+                self.assertEqual(len(gateway.book_calls), 1)
+
     async def test_empty_reward_universe_returns_without_metadata_or_books(self):
         gateway = FakeGateway(
             {"non-rewarded": market("non-rewarded")},

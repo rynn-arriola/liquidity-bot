@@ -997,3 +997,14 @@ These are implementation requirements, not suggestions.
     Only a successfully verified selection persists; restart never replays a
     pending request or reuses a previous process's selection proof. Manual stop
     supersedes the request and retains the existing shutdown/flatness gates.
+107. Public selection-book collection is market data only, never account proof.
+    Each bounded scope owns at most100 full-book markets and closes/joins its
+    reader before returning. Only exact-scope snapshots with original receipt
+    age in [0,3) seconds can replace a REST read; Pong, BBO, future/stale data
+    and disconnected caches cannot manufacture depth or freshness. Selection
+    checkpoints remain interruptible; recovery startup bypasses the optional
+    socket entirely. Missing data uses the normal gated REST path. Background
+    and entry books share conservative four-second optional pacing; position
+    safety bypasses that allowance, not actual endpoint429 backoff. Account
+    source choice, all pricing/ranking/lifecycle rules, ownership and exit
+    authority remain independent and unchanged.

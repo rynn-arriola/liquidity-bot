@@ -13,17 +13,17 @@ from liquidity_bot.errors import ApiAdmissionDeferred
 
 class OptionalBookPacingTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(fcntl is None, "production coordinator is POSIX")
-    def test_factory_uses_one_second_routine_allowance(self):
+    def test_factory_uses_four_second_fallback_allowance(self):
         with tempfile.TemporaryDirectory() as directory:
             limiter = shared_api_limiter(
                 state_path=Path(directory) / "state")
-        self.assertEqual(limiter.optional_book_interval_seconds, 1)
+        self.assertEqual(limiter.optional_book_interval_seconds, 4)
 
-    def test_background_books_do_not_use_routine_entry_allowance(self):
+    def test_background_books_share_fallback_allowance(self):
         limiter = AsyncIntervalLimiter(optional_book_interval_seconds=4)
         state = {"next_optional_book_at": 1004}
         self.assertEqual(limiter._optional_book_due(
-            state, 1000, "background"), 0)
+            state, 1000, "background"), 1004)
         limiter._record_book_claim(state, 1000, "background")
         self.assertEqual(state["next_optional_book_at"], 1004)
         self.assertEqual(limiter._optional_book_due(state, 1000, "entry"), 1004)
@@ -147,33 +147,33 @@ class OptionalBookPacingTests(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "state"
             first = shared_api_limiter(state_path=path)
             peer = shared_api_limiter(state_path=path)
-            self.assertEqual(first.optional_book_interval_seconds, 1)
+            self.assertEqual(first.optional_book_interval_seconds, 4)
             with patch("liquidity_bot.adapters.time.time", return_value=1000):
                 self.assertEqual(first._claim_shared_slot(.5, "background", "a"), (0, 0))
             with patch("liquidity_bot.adapters.time.time", return_value=1000.25):
                 # Account safety uses only the ordinary aggregate clock.
                 self.assertEqual(peer._claim_shared_slot(.25, "safety"), (0, 0))
             with patch("liquidity_bot.adapters.time.time", return_value=1000.5):
-                # Background scan books retain their independent 2/s lane and
-                # neither wait on nor write the routine-entry book allowance.
+                self.assertAlmostEqual(peer._claim_shared_slot(.5, "background", "b")[0], 3.5)
+            with patch("liquidity_bot.adapters.time.time", return_value=1004):
                 self.assertEqual(peer._claim_shared_slot(.5, "background", "b"), (0, 0))
-            with patch("liquidity_bot.adapters.time.time", return_value=1000.75):
+            with patch("liquidity_bot.adapters.time.time", return_value=1008):
                 self.assertEqual(peer._claim_shared_slot(.25, "entry", "c"), (0, 0))
                 before = path.read_bytes()
                 with self.assertRaises(ApiAdmissionDeferred):
                     peer._claim_shared_slot(.25, "entry", "d", defer_optional_book=True)
                 self.assertEqual(path.read_bytes(), before)
-            with patch("liquidity_bot.adapters.time.time", return_value=1001):
+            with patch("liquidity_bot.adapters.time.time", return_value=1012):
                 self.assertEqual(first._claim_shared_slot(.5, "background", "e"), (0, 0))
-            with patch("liquidity_bot.adapters.time.time", return_value=1001.25):
+            with patch("liquidity_bot.adapters.time.time", return_value=1012.25):
                 self.assertEqual(peer._claim_shared_slot(.25, "safety", "position"), (0, 0))
-            with patch("liquidity_bot.adapters.time.time", return_value=1001.5):
-                self.assertAlmostEqual(first._claim_shared_slot(.25, "entry", "f")[0], .25)
-            with patch("liquidity_bot.adapters.time.time", return_value=1001.75):
+            with patch("liquidity_bot.adapters.time.time", return_value=1012.5):
+                self.assertAlmostEqual(first._claim_shared_slot(.25, "entry", "f")[0], 3.5)
+            with patch("liquidity_bot.adapters.time.time", return_value=1016):
                 self.assertEqual(first._claim_shared_slot(.25, "entry", "f"), (0, 0))
             state = json.loads(path.read_text())
-            self.assertEqual(state["next_request_at"], 1002)
-            self.assertEqual(state["next_optional_book_at"], 1002.75)
+            self.assertEqual(state["next_request_at"], 1016.25)
+            self.assertEqual(state["next_optional_book_at"], 1020)
             self.assertNotIn("cooldown_until_safety", state)
 
     def test_invalid_interval_and_corrupt_deadlines_are_bounded(self):

@@ -502,11 +502,11 @@ class AsyncIntervalLimiter:
     REPORT_IDLE_INTERVAL_SECONDS = 0.30
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
     BOOK_PROBE_LEASE_SECONDS = 20.0  # Longer than the owned 15s HTTP timeout.
-    # Routine flat-owner REST books are optional entry work. One per second
-    # returns their measured load near the healthy overnight band without
-    # turning a bounded 100-book background selection into a seven-minute
-    # pause. Background discovery retains its independent 2/s lane.
-    OPTIONAL_BOOK_INTERVAL_SECONDS = 1.0
+    # Public full-book WebSocket collection handles normal selection. Missing
+    # books and routine flat-owner REST reads share one conservative allowance;
+    # discovery's non-book requests retain their independent 2/s lane. This
+    # is local load control, not a claim about the venue's unpublished limit.
+    OPTIONAL_BOOK_INTERVAL_SECONDS = 4.0
 
     def __init__(
         self,
@@ -800,7 +800,7 @@ class AsyncIntervalLimiter:
 
     def _optional_book_due(self, state: Mapping[str, Any], now: float,
                            traffic_class: str) -> float:
-        if traffic_class != "entry" or self.optional_book_interval_seconds == 0:
+        if traffic_class not in {"entry", "background"} or self.optional_book_interval_seconds == 0:
             return 0.0
         return self._shared_timestamp(
             state.get("next_optional_book_at"), now,
@@ -808,7 +808,7 @@ class AsyncIntervalLimiter:
 
     def _record_book_claim(self, state: dict[str, Any], now: float,
                            traffic_class: str) -> None:
-        if self.optional_book_interval_seconds and traffic_class == "entry":
+        if self.optional_book_interval_seconds and traffic_class in {"entry", "background"}:
             # Reserve only optional book allowance, never a future global or
             # safety slot. Safety reads must not repeatedly move this clock:
             # active positions could otherwise starve refill indefinitely.
@@ -1802,6 +1802,11 @@ class AsyncReadOnlyGateway:
         return _market(response["market"], expected_slug=slug, require_clock=True)
 
     async def fetch_book(self, slug: str) -> BookSnapshot:
+        source = getattr(self, "selection_books", None)
+        if source is not None:
+            book = await source.get(slug)
+            if book is not None:
+                return book
         response = await self._call(
             f"markets.book({slug})", lambda: self.client.markets.book(slug))
         return parse_book_response(response, expected_slug=slug)

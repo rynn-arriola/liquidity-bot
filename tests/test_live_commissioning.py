@@ -6940,6 +6940,32 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner._refresh_book(NOW)
         self.assertEqual(runner.book_observed_at, received)
 
+    async def test_collected_book_preserves_original_receipt_in_runner(self):
+        from liquidity_bot.selection_books import SelectionBookSource
+        from tests.test_selection_books import Stream
+        runner, client, _ = self.build_runner()
+        runner.market = await runner.gateway.fetch_market("market-one")
+        original = await runner.gateway.fetch_book("market-one")
+        received = NOW - timedelta(seconds=2)
+        snapshot = replace(original, received_at=received)
+        stream = Stream([snapshot])
+        runner.gateway.selection_books = SelectionBookSource(
+            client, stream_factory=lambda _: stream, clock=lambda: NOW)
+        with patch.object(client.markets, "book", new=AsyncMock(
+                side_effect=AssertionError("unexpected REST book"))):
+            await runner._refresh_bound_books(NOW)
+        self.assertEqual(runner.book_observed_at, received)
+        self.assertTrue(stream.closed)
+
+    async def test_recovery_startup_does_not_wait_for_collection_socket(self):
+        from liquidity_bot.selection_books import SelectionBookSource
+        runner, client, _ = self.build_runner()
+        runner._recovery_slugs = (runner.market_slug,)
+        factory = Mock(side_effect=AssertionError("recovery must not open collector"))
+        runner.gateway.selection_books = SelectionBookSource(client, stream_factory=factory)
+        await runner._refresh_bound_books(NOW)
+        factory.assert_not_called()
+
     async def test_one_sided_book_refresh_does_not_dereference_missing_side(self):
         runner, client, _ = self.build_runner()
         runner.market = await runner.gateway.fetch_market("market-one")
@@ -12581,6 +12607,24 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selector.select_calls, 0)
         await runner.private_stream.close()
         await runner.market_stream.close()
+
+    async def test_cached_revalidation_real_429_does_not_fallback_to_scan(self):
+        runner = await self.armed()
+        now = runner._now()
+        runner._market_selection = multi_selection("market-three", "market-four")
+        runner._market_selection_observed_at = now - timedelta(seconds=60)
+        runner.reward_selector = Mock()
+        runner.reward_selector.revalidate_viable = AsyncMock(
+            side_effect=AdapterError("limited", status_code=429))
+        runner.reward_selector.select = AsyncMock(return_value=runner._market_selection)
+        try:
+            with self.assertRaises(AdapterError):
+                await runner._replacement_candidates_for_top_up(
+                    now, exclude=set(), wanted=1, allow_cached_selection=True)
+            runner.reward_selector.select.assert_not_awaited()
+        finally:
+            await runner.private_stream.close()
+            await runner.market_stream.close()
 
     async def test_stale_cache_falls_back_to_complete_selector(self):
         runner = await self.armed()

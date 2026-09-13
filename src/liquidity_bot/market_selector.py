@@ -32,6 +32,7 @@ from .rewards import (
 from .risk import OpportunityEconomics
 from .shadow_math import cross_exit
 from .entry_quality import EntryQualityPolicy
+from .selection_books import book_scope
 
 
 SUPPORTED_EVENT_PERIODS = frozenset({
@@ -533,26 +534,19 @@ class RewardMarketSelector:
         ranked = sorted(candidates, key=_candidate_key)
         detailed, deferred = self._detailed_candidates(ranked)
         opportunities: list[RewardMarketOpportunity] = []
-        for market, incentive, period in detailed:
-            try:
-                book = await self.gateway.fetch_book(market.slug)
-                opportunities.append(evaluate_market_opportunity(
-                    market,
-                    incentive,
-                    book,
-                    period=period,
-                    now=now,
-                    policy=self.policy,
-                    fill_hazard_model=self.fill_hazard_model,
-                ))
-            except ApiAdmissionDeferred:
-                # Host backpressure is one scan-level outcome, not one broken
-                # market per remaining candidate. Stop immediately so the
-                # caller can honor the shared cooldown without inflating the
-                # operator-facing selection-failure count.
-                raise
-            except (AdapterError, ValueError) as exc:
-                failures.append(f"{market.slug}:book:{type(exc).__name__}")
+        async with book_scope(self.gateway, [m.slug for m, _, _ in detailed]):
+            for market, incentive, period in detailed:
+                try:
+                    book = await self.gateway.fetch_book(market.slug)
+                    opportunities.append(evaluate_market_opportunity(
+                        market, incentive, book, period=period, now=now,
+                        policy=self.policy, fill_hazard_model=self.fill_hazard_model))
+                except ApiAdmissionDeferred:
+                    raise
+                except (AdapterError, ValueError) as exc:
+                    if isinstance(exc, AdapterError) and exc.status_code == 429:
+                        raise
+                    failures.append(f"{market.slug}:book:{type(exc).__name__}")
 
         books_evaluated = len(opportunities)
         # A full background scan can outlive the execution guard's 30-second
@@ -588,12 +582,17 @@ class RewardMarketSelector:
     async def revalidate_viable(
         self, slugs: Iterable[str], *, now: datetime,
     ) -> tuple[RewardMarketOpportunity, ...]:
+        slugs = tuple(dict.fromkeys(
+            str(slug).strip() for slug in slugs if str(slug).strip()))
+        if len(slugs) > self.policy.max_book_candidates:
+            raise ValueError("cached revalidation exceeds the selector book budget")
         scope = getattr(self.gateway, "traffic_class", None)
         # This small cached-candidate refresh exists to restore an empty slot
         # promptly after flatness. Keep it on the independent entry lane rather
         # than queueing behind a full-universe background scan.
         with scope("entry") if callable(scope) else nullcontext():
-            return await self._revalidate_viable(slugs, now=now)
+            async with book_scope(self.gateway, slugs):
+                return await self._revalidate_viable(slugs, now=now)
 
     async def _revalidate_viable(
         self, slugs: Iterable[str], *, now: datetime,
@@ -657,7 +656,9 @@ class RewardMarketSelector:
                 # retry after the shared cooldown instead of silently treating
                 # this and every later candidate as nonviable.
                 raise
-            except (AdapterError, AmbiguousIncentiveError, ValueError):
+            except (AdapterError, AmbiguousIncentiveError, ValueError) as exc:
+                if isinstance(exc, AdapterError) and exc.status_code == 429:
+                    raise
                 continue
             if opportunity.viable_sides:
                 opportunities.append(opportunity)

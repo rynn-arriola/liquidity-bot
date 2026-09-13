@@ -1487,7 +1487,7 @@ class CommissioningRunner:
         state.book = await self.gateway.fetch_book(state.slug)
         # Stamp receipt, not request start. REST and limiter latency can be a
         # material fraction of the five-second decision freshness budget.
-        state.book_observed_at = self._now()
+        state.book_observed_at = state.book.received_at or self._now()
         state.observe_book_touch(
             state.book, observed_at=state.book_observed_at)
         self._leave_settlement_wait(
@@ -6556,6 +6556,15 @@ class CommissioningRunner:
             await self._report_runtime_error("stream_reader_teardown", errors[0])
 
     async def _refresh_bound_books(self, now: datetime) -> None:
+        from .selection_books import book_scope
+        # Recovery must not wait for an optional discovery socket to connect.
+        # Keep its existing direct safety reads, including exact empty-book
+        # evidence required for settlement handling.
+        slugs = () if set(self._recovery_slugs) & set(self.active_slugs) else self.active_slugs
+        async with book_scope(self.gateway, slugs):
+            await self._refresh_bound_books_inner(now)
+
+    async def _refresh_bound_books_inner(self, now: datetime) -> None:
         """Prove a book for every bound market, dropping the ones that fail.
 
         Every slot is best effort, including slot zero. Requiring all of them
@@ -7850,6 +7859,10 @@ class CommissioningRunner:
                         self.gate.on_reconciliation_conflict()
                         raise
                     except Exception as exc:
+                        if isinstance(exc, AdapterError) and exc.status_code == 429:
+                            # A venue limit needs the same no-fanout treatment
+                            # as local admission deferral, not a larger scan.
+                            raise
                         print(
                             f"[top-up-cache] at={self._now().isoformat()} "
                             f"outcome=fallback error={type(exc).__name__}",
@@ -10533,6 +10546,15 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         client, config, ledger, DiscordNotifier(secrets),
         limiter=shared_api_limiter(float(config.rest_requests_per_second)),
         **runner_options)
+    from .selection_books import SelectionBookSource
+
+    async def book_checkpoint():
+        if runner._stop_requested:
+            raise CommissioningRefused("operator stopped during book collection")
+        await runner.gateway._checkpoint_before_read()
+
+    runner.gateway.selection_books = SelectionBookSource(
+        client, clock=lambda: runner._now(), checkpoint=book_checkpoint)
     loop = asyncio.get_running_loop()
     installed_signals: list[signal.Signals] = []
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -21,16 +21,19 @@ implemented.
 
 ## Interface actually used by this project
 
-September 13 optional-book control is local load policy, not a changed venue
-quota: full-universe selection books use the existing background 2/s lane;
-startup-bound and routine flat-owner entry books share a 1/s allowance, while
-held-position/account safety retains its existing lane. Long-scan ranking does
+September 13 prepared public-book collection is local implementation, not a
+changed venue quota: full selection, cached revalidation and flat startup use
+bounded public full-book WebSocket scopes (at most100 markets). Missing/stale
+books use REST; optional background and entry books share a four-second
+allowance. Non-book discovery retains background2/s and safety/recovery keeps
+its existing lane. This supersedes the earlier background-book2/s and
+entry-book1/s split. Long-scan ranking does
 not treat an expired positive pregame receipt as bad economics; startup and
 actions still require newly fetched exact-parent lifecycle evidence. Recent
 book-429 history survives one successful probe. The 4/s aggregate ceiling,
 complete account proof and Retail interfaces are unchanged. No claim of
 unlimited capacity or private-stream recovery follows.
-[Implementation and limits](history/OPTIONAL_BOOK_LOAD_CONTROL_2026-09-13.md).
+[Implementation and limits](history/PUBLIC_SELECTION_BOOKS_2026-09-13.md).
 
 September 12 public-book follow-up: confirmed `market_book@429`/Cloudflare 1015
 responses exposed a local inline-retry amplifier despite sub-4/s aggregate

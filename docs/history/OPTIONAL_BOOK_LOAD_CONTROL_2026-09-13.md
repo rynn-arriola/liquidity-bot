@@ -259,3 +259,13 @@ nonzero-viable scan and order buildup cannot be naturally accepted until the
 public book endpoint permits a probe. Leave the bot running so its bounded
 backoff can recover automatically; do not stack diagnostic book requests or
 claim it is trading while venue orders remain zero.
+
+## Stopped-bot endpoint recovery check
+
+After the later graceful stop and flat/clear proof, one direct read-only
+`markets.book()` request at **13:15:39.575073Z** returned HTTP200 with JSON
+through Cloudflare (`CF-Ray a3a76c03e9b0d826-EWR`). No trading process was
+present and no mutation was sent. This proves that the earlier Cloudflare 1015
+block had cleared for that single request; it does not establish full-scan or
+normal-running capacity. The bot remains stopped and must not be restarted
+without separate authorization.

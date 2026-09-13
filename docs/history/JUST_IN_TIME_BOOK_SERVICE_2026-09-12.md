@@ -166,3 +166,37 @@ processes remained alive. Leave the existing safe preflight retry active; no
 manual restart loop or risk/freshness bypass was used. Deployed-code and
 retry-containment acceptance pass, but quoting and live performance/exit
 acceptance remain blocked by persistent public-book throttling.
+
+### Later position refusal and renewed authorized restart
+
+The first run subsequently observed `caoc-f434ee98d894e82d` +116.9400 at
+23:23:58Z. Exact market lookup repeatedly returned404, and the supervisor
+stopped relaunching after three fast process deaths. Authenticated23:37Z reads
+confirmed that position and zero orders. One paced book200 (cached HIT),
+metadata200 and balance200 did not prove sustained recovery. No code change,
+position-close request or restart occurred during that diagnostic check.
+
+After the operator again requested restart, complete authenticated reads at
+September13 02:20:04Z showed zero venue orders/positions and one stale ledger
+position. Stopped the attention-mode supervisor, verified a stopped-ledger
+backup at02:20:32Z (387100672 bytes, SHA256 prefix `fa1c71da422c`), then ran
+normal stopped REST reconciliation with all venue mutation entry points
+disabled. It cleared the stale position and proved ledger flat/clear. This
+does not attribute the original position or explain its external disappearance.
+
+All187 source/test/script/web/config hashes still matched; the unchanged native
+1565-test acceptance was reused. Fresh02:21:09Z proof found zero venue/ledger
+orders, positions, unresolved intents and unknown orders. The existing launcher
+started unchanged size10/32 REST around02:21:10Z, supervisor2085653 and
+runner2085674. At02:22:20Z both remained alive, but two startup deferrals and
+no actions were logged. Shared limiter state proved a fresh book429 at
+02:22:07.928037Z, with a ten-second endpoint cooldown and no new safety-lane
+cooldown. The position blocker cleared, but public-book access still prevents
+useful quoting. No source/config/risk/rate change, raw SQL repair, limiter-state
+reset or API mutation accompanied prestart reconciliation.
+
+At 02:23:25–02:23:29Z, independent authenticated acceptance again confirmed
+zero orders, zero positions, zero unresolved intents and zero unknown orders.
+Both processes remained alive after 2:19. The run suffix had four startup
+deferrals and no actions or ordinary API-budget windows. The bot is running
+but not trading; this is not sustained rate-limit recovery acceptance.

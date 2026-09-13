@@ -21,6 +21,13 @@ implemented.
 
 ## Interface actually used by this project
 
+September13 whole-bot transport review confirms public books are already streamed;
+the remaining major account reads depend on the private stream, which returned
+zero application frames in the19:34–19:35Z retest. Marked-equity REST/cash-history
+proof still runs in both account modes. No new Retail lifecycle/rewards or
+trading-command WebSocket substitute was identified in the current index and
+stream contracts. [Call-path audit and limits](history/REST_WEBSOCKET_TRANSPORT_AUDIT_2026-09-13.md).
+
 September 13 public-book renewal is deployed in `b2b0d017e`: active-owner reads
 use a shared current-generation public full-book subscription, renewed on demand
 at most once per three seconds. Candidate/startup collection uses the same

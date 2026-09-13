@@ -230,3 +230,32 @@ interrupt background scans; actual public-book 429 applies to every traffic
 class; local admission cannot renew a book or event receipt; and source choice
 remains manual. Push/deployment hashes, the exact deployed native suite, a fresh
 start gate and natural live scan/order/429 observation remain required.
+
+## Deployed repair and blocked live acceptance
+
+Commit `7dec98869000a9bafd6a487fada416f235e1a031` was pushed to GitHub and
+fast-forwarded into the clean tracked WSL checkout using the reviewed local
+bundle path. All 188 normalized source/test/script/web/config hashes matched.
+The exact deployed checkout passed all **1,584 tests in 151.457 seconds**; the
+deployment marker then matched HEAD. The final 06:35:10.941045Z authenticated
+start gate proved zero venue orders, positions, unresolved intents, unknown
+orders, working ledger orders and ledger positions.
+
+The normal launcher started supervisor **2542129** and runner **2542150** with
+`auto 10 32 rest`, retaining $90 HARD and max 30 flat pending entries. The
+runner did not reach a selection result during the first 5.5 minutes. Its first
+public-book attempt received HTTP429, and every later single recovery probe,
+spaced roughly 28–48 seconds apart, received the same endpoint response.
+Adaptive book delay rose from 10 to 16 and then 30 seconds. The runner and
+supervisor stayed alive, no mutation/order was sent, and the endpoint circuit
+continued self-recovery rather than restarting or busy-looping. Since the
+current attempts are isolated single probes, this observation is not a startup
+request burst; the exact external quota/block duration remains unknown.
+
+At 06:41:13.001240Z, a fresh complete authenticated account and read-only ledger
+check still proved zero orders, positions and ambiguity. The local lifecycle
+misclassification is reviewed, tested and loaded, but the intended shorter
+nonzero-viable scan and order buildup cannot be naturally accepted until the
+public book endpoint permits a probe. Leave the bot running so its bounded
+backoff can recover automatically; do not stack diagnostic book requests or
+claim it is trading while venue orders remain zero.

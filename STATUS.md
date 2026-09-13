@@ -1,4 +1,5 @@
 # Current operator status
+Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
 ## Verified state
 - **STOPPED; normal-paced read-only startup scan reproduced429 at September13 04:34:55Z.** One real selector pass used its existing background2/s lane under the shared4/s governor, no trading process or ledger. Three event pages, nine incentive calls and five books returned200; sixth book returned429 with `Retry-After:10`, Ray `a3a4713999a11906-EWR`. Test ended immediately after18 total GETs/17.22s; no retry/restart/mutation. This isolates a sufficient failing startup workload, not the venue's exact rule or a claim that six books is its quota. Latest code unchanged; earlier private/API comparison and zero exposure proof below remain the last account observations. [Diagnosis](docs/history/STARTUP_PATTERN_REPRODUCTION_2026-09-13.md).
 - **STOPPED; September 13 04:22–04:25Z two-key/API comparison completed without mutations.** Original and saved diagnostic keys each received HTTP200 for balances, complete open orders (0), complete positions (0), and one trade-history page (20 rows, not EOF). Public metadata/book also returned200; all10 GETs passed at report-lane0.25/s. Each private socket connected and answered initial/final Ping but delivered zero application frames over45s; public market socket delivered7 `marketData` frames over45s. This does not establish normal-startup capacity or a working private account feed. No key replacement, code/config/risk change or restart; source `4a166336a`, $90 HARD, size10/32 and REST max30 flat entries excluding position orders remain unchanged. Last ledger ambiguity proof was zero at04:16Z; ledger was not opened by this test. [Comparison](docs/history/STOPPED_API_KEY_COMPARISON_2026-09-13.md) · [Stop/incident](docs/history/STOPPED_BOOK_RECOVERY_TEST_2026-09-13.md).
@@ -65,8 +66,7 @@ retirement consumed all 20 owners. The deployed repair fails only the rejected
 intent, limits later entry probes, preserves cancels/reducers and repairs only
 legacy rows with exact persisted rejection proof.
 
-The 22:56Z server acceptance repaired 20 rows and kept zero unresolved/retired
-through three denied probes. The account stayed flat and no
+The 22:56Z server acceptance repaired 20 rows and kept zero unresolved/retired through three denied probes. The account stayed flat and no
 quote could rest. The laptop's 00:40Z startup then accepted 39 quotes across
 20 markets with no matching denial, so execution access works from the
 selected residential runtime. The containment remains installed. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).

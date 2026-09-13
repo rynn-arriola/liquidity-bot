@@ -96,3 +96,15 @@ At04:01:07–04:01:11Z, independent complete authenticated acceptance confirmed
 zero orders, zero positions, zero unresolved intents and zero unknown orders.
 Both processes remained alive after2:02; the run suffix contained four startup
 deferrals, no actions and no ordinary API-budget windows. Quoting is not accepted.
+
+## Latest operator stop
+
+After the normal startup kept failing, the operator said "Close bot again."
+The standard stop script ended supervisor2251387 and gracefully signaled
+runner2251414. Both are absent; the final log reports operator stop during API
+admission backpressure. No force-kill was used. Complete authenticated reads at
+04:15:58–04:16:02Z proved zero orders, zero positions, zero unresolved intents
+and zero unknown orders. Startup deferrals continued through04:15:19Z.
+The bot remains stopped with source/configuration/risk unchanged. The low-rate
+test was not representative of normal startup capacity; future investigation
+must not present it as that proof or reuse old restart authority.

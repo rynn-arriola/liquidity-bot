@@ -303,3 +303,20 @@ The official status API reported All Systems Operational with zero incidents
 and zero maintenance at 13:25:08Z. The current changelog still lists no private
 subscription-format change. No credential, ledger, order or runtime state was
 changed.
+
+## Second stopped reproduction
+
+At **16:33:12Z**, the operator requested another simultaneous read-only test of
+both issues while the bot remained absent. The startup-pattern test made 12
+GETs in 15.32 seconds: two event, four incentive and six public-book requests.
+The first five books returned HTTP200; the sixth returned HTTP429 with
+`Retry-After: 10` and `CF-Ray a3a88dc16ba63eb4-EWR` at 16:33:27Z. The test
+immediately stopped with zero mutation requests.
+
+In parallel, the latest official Python SDK 0.1.2 opened the private socket and
+subscribed to global account balance, orders and positions. The 45-second
+connection passed initial and final protocol Ping/Pong but emitted only the
+SDK's local `open` event: zero messages, snapshots, updates, heartbeats, errors
+or closes through 16:33:57Z. These are independent repeated reproductions, not
+the earlier samples. The bot remains stopped and no account, credential, risk
+or configuration state changed.

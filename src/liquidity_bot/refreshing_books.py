@@ -8,7 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from .adapters import parse_book_response
-from .errors import AdapterError
+from .errors import AdapterError, MarketStreamUnavailable
 from .streams import MarketReadOnlyStream
 
 
@@ -76,6 +76,12 @@ class RefreshingMarketStream(MarketReadOnlyStream):
             error.__cause__ = _error
         self._fail(error)
 
+    def _raise_if_failed(self):
+        if self._failure is not None:
+            # A fresh exception avoids accumulating a traceback for every
+            # consumer/owner on the one permanently stored failure object.
+            raise MarketStreamUnavailable(str(self._failure)) from self._failure
+
     def _on_close(self, *_):
         self._fail(AdapterError("market WebSocket disconnected"))
 
@@ -132,8 +138,7 @@ class RefreshingMarketStream(MarketReadOnlyStream):
         try:
             await asyncio.wait_for(self._socket.connect(), 5.0)
             await self._subscribe(None)
-            if self._failure is not None:
-                raise self._failure
+            self._raise_if_failed()
             self._started = True
             self._last_message_at = datetime.now(timezone.utc)
         except asyncio.CancelledError:
@@ -173,8 +178,7 @@ class RefreshingMarketStream(MarketReadOnlyStream):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.WAIT_SECONDS
         while True:
-            if self._failure is not None:
-                raise self._failure
+            self._raise_if_failed()
             if self._closing or not self.owns(slug):
                 raise AdapterError("public book stream closed during refresh")
             book = self._latest.get(slug)
@@ -203,13 +207,13 @@ class RefreshingMarketStream(MarketReadOnlyStream):
     async def next_book(self, *, timeout=None):
         async def read():
             while True:
-                if self._failure is not None:
-                    raise self._failure
+                self._raise_if_failed()
                 if self._closing:
                     raise AdapterError("public book stream closed")
                 item = await self._queue.get()
                 if isinstance(item, Exception):
-                    raise item
+                    self._raise_if_failed()
+                    raise MarketStreamUnavailable(str(item)) from item
                 self._queued_slugs.discard(item)
                 book = self._pending_books.pop(item, None)
                 if book is not None and self.accepts(book):
@@ -217,15 +221,15 @@ class RefreshingMarketStream(MarketReadOnlyStream):
         return await read() if timeout is None else await asyncio.wait_for(read(), timeout)
 
     def drain_books(self, *, limit=None):
-        if self._failure is not None:
-            raise self._failure
+        self._raise_if_failed()
         books = []
         for _ in range(self._queue.qsize() if limit is None else max(0, limit)):
             if self._queue.empty():
                 break
             item = self._queue.get_nowait()
             if isinstance(item, Exception):
-                raise item
+                self._raise_if_failed()
+                raise MarketStreamUnavailable(str(item)) from item
             self._queued_slugs.discard(item)
             book = self._pending_books.pop(item, None)
             if book is not None and self.accepts(book):

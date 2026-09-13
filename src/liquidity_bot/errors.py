@@ -22,6 +22,10 @@ class AdapterError(RuntimeError):
         super().__init__(message)
 
 
+class MarketStreamUnavailable(AdapterError):
+    """The shared public stream failed, not an individual market's book."""
+
+
 class ApiAdmissionDeferred(AdapterError):
     """A local limiter declined work before any network request was sent.
 

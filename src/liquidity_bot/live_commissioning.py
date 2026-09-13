@@ -47,7 +47,7 @@ from .commissioning import (
 from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import (
-    AdapterError, ApiAdmissionDeferred, EmptyBookError,
+    AdapterError, ApiAdmissionDeferred, EmptyBookError, MarketStreamUnavailable,
     RuntimeInvariantViolation)
 from .execution_ledger import (
     ACTIVE_ORDER_STATES,
@@ -504,6 +504,8 @@ class CommissioningRunner:
         # ever retries -- observed live 2026-08-16, 24 minutes of silent
         # downtime before an operator noticed. See BUGFIXES 2026-08-16.
         self._streams_need_rebind = False
+        # A synchronous consumer may observe shared failure before next_book.
+        self._pending_market_stream_error: MarketStreamUnavailable | None = None
         # Set once when fresh reward metadata positively proves that the exact
         # program which authorized a bound slot has ended. The run loop spends
         # it on one immediate incremental top-up attempt; a failed attempt then
@@ -6202,6 +6204,14 @@ class CommissioningRunner:
         """Optional source-specific exit pass before unrelated periodic work."""
         return None
 
+    def _request_market_stream_rebind(self, error: MarketStreamUnavailable) -> None:
+        # Only the outer owner can transfer task-held private evidence before
+        # reconnecting. Yield to it without per-market retirement/proof fanout.
+        self.gate.on_disconnect()
+        self._streams_need_rebind = True
+        if self._pending_market_stream_error is None:
+            self._pending_market_stream_error = error
+
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
         *, position_only: bool = False, service_books: bool = True,
@@ -6227,6 +6237,8 @@ class CommissioningRunner:
             # cancellation and flattening work that follows a stop.
             if self._stop_requested:
                 return self._stop_requested
+            if self._streams_need_rebind:
+                return None
             if slug not in self._markets:
                 continue
             if position_only and self.ledger.position(slug) == 0:
@@ -6341,6 +6353,9 @@ class CommissioningRunner:
                     await self._service_market_book(slug, self._now())
             except RuntimeInvariantViolation as invariant:
                 return await self._handle_strategy_plan_failure(invariant)
+            except MarketStreamUnavailable as exc:
+                self._request_market_stream_rebind(exc)
+                return None
             except Exception as exc:
                 await self._report_runtime_error(f"market_service:{slug}", exc)
                 stop = await self._retire_market(
@@ -6444,6 +6459,19 @@ class CommissioningRunner:
         mutations. This method preserves that order, then catches up fully
         before the decision gate is evaluated.
         """
+
+        if self._streams_need_rebind:
+            await self._settle_stream_readers(
+                market_task, private_task, recovery_pending=True)
+            error = (self._pending_market_stream_error
+                     or AdapterError("stream bind requires recovery"))
+            stop = await self._recover_bound_streams(error)
+            if stop:
+                return market_task, private_task, stop
+            self._pending_market_stream_error = None
+            market_task = asyncio.create_task(self.market_stream.next_book())
+            private_task = asyncio.create_task(self.private_stream.next_event())
+            return market_task, private_task, None
 
         if market_task.done():
             try:
@@ -6684,9 +6712,15 @@ class CommissioningRunner:
         """
 
         serviced_slugs = self.managed_slugs() if slugs is None else slugs
+        if self._streams_need_rebind or self._stop_requested:
+            return ""
         if slugs is None and self._post_flat_top_up_can_preempt(self._now()):
             return ""
-        await self._refresh_event_guard()
+        try:
+            await self._refresh_event_guard()
+        except MarketStreamUnavailable as exc:
+            self._request_market_stream_rebind(exc)
+            return ""
         if self._stop_requested:
             return ""
         await self._refresh_due_contract_batches(
@@ -6703,6 +6737,9 @@ class CommissioningRunner:
             except RuntimeInvariantViolation as invariant:
                 # About the process, not this market. Stays terminal.
                 return await self._handle_strategy_plan_failure(invariant)
+            except MarketStreamUnavailable as exc:
+                self._request_market_stream_rebind(exc)
+                return ""
             except Exception as exc:
                 await self._report_runtime_error(f"market_service:{slug}", exc)
                 stop = await self._retire_market(
@@ -6816,6 +6853,8 @@ class CommissioningRunner:
             if self._refreshed_book_this_call:
                 self._runtime_error_counts.pop(
                     f"quiet_book_rest_refresh:{slug}", None)
+        except MarketStreamUnavailable:
+            raise
         except ApiAdmissionDeferred as exc:
             # No book request was sent. Preserve the last receipt/failure
             # evidence; local endpoint backoff is not a broken market and
@@ -8645,7 +8684,7 @@ class CommissioningRunner:
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
     async def _recover_bound_streams(self, initial: Exception) -> str | None:
-        """Rebind both streams after a failed bind left them closed.
+        """Rebind streams after a failed bind or mid-pass shared failure.
 
         `_recover_private_stream` and `_recover_market_stream` each repair one
         side and assume the other is healthy. A failed
@@ -8666,9 +8705,9 @@ class CommissioningRunner:
         attempt = 0
         venue_failure_streak = 0
         await self.notifier.send_async(
-            "⚠️ Liquidity Bot lost both streams while rebinding the active "
-            "set. Quoting is stopped and no market can report state until "
-            "they are back. Retrying.")
+            "⚠️ Liquidity Bot is recovering shared stream coverage. "
+            "New entries are paused while streams and account state are "
+            "revalidated. Retrying.")
         while True:
             attempt += 1
             await self._report_runtime_error("bound_streams", exc, attempt)
@@ -9029,6 +9068,9 @@ class CommissioningRunner:
             await self._quarantine_working_orders(slug)
         except RuntimeInvariantViolation:
             raise
+        except MarketStreamUnavailable as exc:
+            self._request_market_stream_rebind(exc)
+            return
         except ApiAdmissionDeferred:
             # Book cooldown does not prove the resting orders unsafe and must
             # not turn one endpoint throttle into per-owner quarantine/error
@@ -10036,18 +10078,10 @@ class CommissioningRunner:
                     # Drop them before rebinding: the recovery replaces both
                     # stream objects, and a task holding the old one would
                     # otherwise be recreated against a stream nobody owns.
-                    old_market, old_private = market_task, private_task
-                    market_task = private_task = None
-                    await self._settle_stream_readers(old_market, old_private)
-                    stop_reason = await self._recover_bound_streams(
-                        RuntimeError("stream bind left both streams closed")
-                    ) or ""
+                    market_task, private_task, stop_reason = (
+                        await self._consume_ready_stream_tasks(market_task, private_task))
                     if stop_reason:
                         break
-                    market_task = asyncio.create_task(
-                        self.market_stream.next_book())
-                    private_task = asyncio.create_task(
-                        self.private_stream.next_event())
                     continue
                 await asyncio.wait(
                     {market_task, private_task}, timeout=.5,
@@ -10066,6 +10100,8 @@ class CommissioningRunner:
                 stop_reason = await self._service_urgent_positions() or ""
                 if stop_reason:
                     break
+                if self._streams_need_rebind:
+                    continue
                 now = self._now()
                 if now >= next_balance:
                     try:
@@ -10145,6 +10181,8 @@ class CommissioningRunner:
                         priority_replans) or ""
                     if stop_reason:
                         break
+                    if self._streams_need_rebind:
+                        continue
                     priority_finished_at = self._now()
                     print(
                         f"[priority-replan] "
@@ -10423,6 +10461,8 @@ class CommissioningRunner:
                 self._log_decision_scheduler(self._now())
                 if stop_reason:
                     break
+                if self._streams_need_rebind:
+                    continue
                 if now >= next_summary:
                     next_summary = await self._send_scheduled_summary(now)
         except asyncio.CancelledError:

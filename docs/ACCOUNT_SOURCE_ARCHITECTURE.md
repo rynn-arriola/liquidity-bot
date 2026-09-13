@@ -105,6 +105,15 @@ readiness until same-source recovery or an operator-requested replacement is
 proved. Public-book failure has
 independent price-freshness/recovery gates; switching private sources cannot fix it.
 
+Shared public-stream failure may surface through a synchronous book drain or
+freshness read before its background reader completes. `MarketStreamUnavailable`
+must yield to the outer recovery owner, not retire each market and repeat account
+proof for every slot. The owner joins old readers and applies held private evidence
+before queued evidence, then runs coordinated rebind/account proof. A pending
+handoff bars another decision sweep; failure never opens whole-slate REST-book
+fallback or promotes a different account source. Market-local book errors retain
+their existing scope. [September13 repair/evidence](history/SHARED_STREAM_RECOVERY_AND_REST_LOAD_2026-09-13.md).
+
 Source failure revokes new-risk authority and retains existing recovery behavior;
 it never issues a switch request. A requested handoff pauses new-entry admission
 at commit, retains all durable intents and performs complete REST reconciliation.

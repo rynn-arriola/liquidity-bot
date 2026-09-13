@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from .adapters import AdapterError, ApiAdmissionDeferred
-from .errors import RuntimeInvariantViolation
+from .errors import RuntimeInvariantViolation, MarketStreamUnavailable
 from .execution_ledger import LedgerConflict
 from .commissioning import CommissioningUnavailable
 from .live_commissioning import CommissioningRunner
@@ -731,10 +731,12 @@ class RestFallbackRunner(CommissioningRunner):
             try:
                 for book in drain():
                     self._accept_book(book)
-            except Exception:
+            except AdapterError as exc:
                 self.gate.on_disconnect()
                 self._streams_need_rebind = True
-                raise
+                if isinstance(exc, MarketStreamUnavailable):
+                    raise
+                raise MarketStreamUnavailable("public stream drain failed") from exc
 
     async def preflight(self):
         result = await super().preflight()

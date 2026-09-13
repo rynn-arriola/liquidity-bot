@@ -71,6 +71,17 @@ market selection. At minimum, preserve these rules:
 
 ## Change and verification rules
 
+- Before choosing a fix, review the bigger picture of the complete affected
+  workflow: producers, consumers, shared resources and safety dependencies,
+  from startup through steady operation, failure, recovery and shutdown.
+  Compare viable approaches using existing evidence and applicable official
+  contracts; do not assume the currently failing transport or component must
+  remain the solution. Consider API load, latency, entry/exit timing, configured
+  capacity, maintainability and rollback together. State the chosen approach,
+  tradeoffs and end-to-end acceptance evidence before implementation; a local
+  symptom disappearing is not proof that the overall problem is solved.
+  Keep this review proportional to the change, preserve business rules and
+  existing authorized work, and seek authority for any material scope expansion.
 - Before every fix is pushed or deployed, perform a dedicated final review and edge-case audit across success, failure, empty/full and boundary values, timing/races, partial/unknown state, ownership, API/load effects, recovery, shutdown, restart, rollback and configured-capacity interaction. No passing test suite or urgency waives this review.
 - Add focused regression coverage for every fix.
 - Deliberately reverse the important repair and prove the test fails; restore

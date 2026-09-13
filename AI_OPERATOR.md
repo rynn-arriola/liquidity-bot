@@ -163,8 +163,8 @@ are evidence the operator asked to see.
 1. Establish server process state and, when exposure matters, authenticated
    venue orders and positions.
 2. Search the existing findings before proposing a cause.
-3. Inspect the complete affected flow, including failure, recovery, shutdown,
-   restart and configured-capacity interactions.
+3. Apply the bigger-picture design review in `AI_ENGINEERING.md`: trace the
+   full affected flow, compare approaches and define end-to-end acceptance.
 4. Explain the diagnosis and recommendation clearly. Preserve the operator's
    decision point when the change affects business behavior or risk.
 5. For every fix, before push or deployment: add focused regressions, deliberately reverse the fix to prove a test fails, restore it, run the appropriate complete suite, perform the permanent dedicated edge-case audit in `AI_ENGINEERING.md`, and review the final diff. Tests passing or operational urgency never substitutes for this review.

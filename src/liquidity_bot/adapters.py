@@ -1802,6 +1802,11 @@ class AsyncReadOnlyGateway:
         return _market(response["market"], expected_slug=slug, require_clock=True)
 
     async def fetch_book(self, slug: str) -> BookSnapshot:
+        runtime_book = getattr(self, "runtime_book", None)
+        if runtime_book is not None:
+            book = await runtime_book(slug)
+            if book is not None:
+                return book
         source = getattr(self, "selection_books", None)
         if source is not None:
             book = await source.get(slug)

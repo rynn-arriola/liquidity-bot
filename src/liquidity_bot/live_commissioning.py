@@ -1539,7 +1539,12 @@ class CommissioningRunner:
         state = self._markets.get(book.slug)
         if state is None:
             return
+        accepts = getattr(self.market_stream, "accepts", None)
+        if accepts is not None and not accepts(book):
+            return
         observed_at = book.received_at or self._now()
+        if state.book_observed_at is not None and observed_at < state.book_observed_at:
+            return
         state.observe_book_touch(book, observed_at=observed_at)
         state.book = book
         state.book_observed_at = observed_at
@@ -4086,6 +4091,7 @@ class CommissioningRunner:
             now=now,
             book=state.book,
             book_observed_at=state.book_observed_at,
+            book_known=not self._public_book_invalid(state.slug),
             position=position,
             working_orders=self._working_orders(state.slug),
             # Scoped to this market. The gate stays account-wide because it
@@ -4148,6 +4154,7 @@ class CommissioningRunner:
         allowed = (
             not self._stop_requested
             and position == 0
+            and not self._public_book_invalid(slug)
             and self._entry_risk_allowed(now, market)
             and ownership_known
             and self.gate.session_evidence_ready(now=now)
@@ -5488,6 +5495,10 @@ class CommissioningRunner:
         anchor = state.book_observed_at or self._now()
         return anchor + timedelta(seconds=3)
 
+    def _public_book_invalid(self, slug: str) -> bool:
+        invalid = getattr(self.market_stream, "book_invalid", None)
+        return invalid is not None and invalid(slug)
+
     def _book_is_fresh_enough_to_plan(self, slug: str) -> bool:
         """Would the reconciler accept this book right now?
 
@@ -5501,6 +5512,8 @@ class CommissioningRunner:
         # quote -- a read that resurrects the key works against that contract.
         state = self._markets.get(slug)
         if state is None or state.book is None or state.book_observed_at is None:
+            return False
+        if self._public_book_invalid(slug):
             return False
         age = (self._now() - state.book_observed_at).total_seconds()
         return 0 <= age <= self.reconciler.policy.max_book_age_seconds
@@ -8553,8 +8566,7 @@ class CommissioningRunner:
                 stream = self.market_stream_factory(self.client)
                 self.market_stream = stream
                 await stream.start(list(self.active_slugs))
-                self.book = await stream.next_book(timeout=15)
-                self.book_observed_at = self._now()
+                self._accept_book(await stream.next_book(timeout=15))
                 await self.notifier.send_async(
                     "✅ Liquidity Bot market stream recovered with a fresh full book. "
                     "Quoting may resume.")
@@ -10529,9 +10541,11 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
             DEFAULT_REST_POLLING_POLICY_PATH)))
     except (ValueError, TypeError, OSError) as exc:
         raise CommissioningRefused(str(exc)) from exc
+    from .refreshing_books import RefreshingMarketStream, install_runtime_books
     runner_type = AccountSourceRunner
     runner_options = dict(account_state_mode=account_state_mode,
-                          source_policy=source_policy, rest_polling_policy=polling_policy)
+                          source_policy=source_policy, rest_polling_policy=polling_policy,
+                          market_stream_factory=RefreshingMarketStream)
     secrets = load_runtime_secrets(require_polymarket=True)
     if not (secrets.discord_configured and secrets.discord_errors_configured):
         raise CommissioningRefused(
@@ -10554,7 +10568,9 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         await runner.gateway._checkpoint_before_read()
 
     runner.gateway.selection_books = SelectionBookSource(
-        client, clock=lambda: runner._now(), checkpoint=book_checkpoint)
+        client, stream_factory=RefreshingMarketStream,
+        clock=lambda: runner._now(), checkpoint=book_checkpoint)
+    install_runtime_books(runner)
     loop = asyncio.get_running_loop()
     installed_signals: list[signal.Signals] = []
     for sig in (signal.SIGTERM, signal.SIGINT):

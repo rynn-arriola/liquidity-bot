@@ -60,7 +60,7 @@ class SelectionBookSource:
         if self._session.get() is not None:
             raise RuntimeError("nested candidate book scope")
         stream = self.stream_factory(self.client)
-        session = dict(slugs=set(clean), books={}, failed=False,
+        session = dict(slugs=set(clean), books={}, failed=False, stream=stream,
                        deadline=0.0, hits=0, misses=0)
         token = self._session.set(session)
         starter = asyncio.create_task(stream.start(clean))
@@ -109,6 +109,26 @@ class SelectionBookSource:
         session = self._session.get()
         if session is None or slug not in session["slugs"]:
             return None
+        fresh = getattr(session["stream"], "fresh_book", None)
+        if fresh is not None and not session["failed"]:
+            checkpoint_error = None
+            async def check():
+                nonlocal checkpoint_error
+                try:
+                    await self._check()
+                except BaseException as exc:
+                    checkpoint_error = exc
+                    raise
+            try:
+                await check()
+                book = await fresh(slug, clock=self.clock, checkpoint=check)
+            except (AdapterError, TimeoutError, OSError):
+                if checkpoint_error is not None:
+                    raise
+                session["misses"] += 1
+                return None
+            session["hits"] += 1
+            return book
         while True:
             await self._check()
             if "error" in session:

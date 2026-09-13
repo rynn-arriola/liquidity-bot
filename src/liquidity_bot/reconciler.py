@@ -167,6 +167,9 @@ class MarketFrame:
     # Confirmed account HARD: evacuate now using the same exact cancel/proof/
     # IOC sequence as scheduled evacuation, never a new entry or blind retry.
     hard_stop_flatten_required: bool = False
+    # Explicitly revoked public depth cannot remain usable just because its
+    # last valid receipt is young. This does not gate risk-removing cancels.
+    book_known: bool = True
 
     def __post_init__(self) -> None:
         for name, value in (("now", self.now),
@@ -471,7 +474,7 @@ class DesiredStateReconciler:
         if frame.book.slug != slug:
             return self._critical(frame, "book_market_mismatch")
         age = (frame.now - frame.book_observed_at).total_seconds()
-        if age < 0 or age > self.policy.max_book_age_seconds:
+        if not frame.book_known or age < 0 or age > self.policy.max_book_age_seconds:
             return self._critical(frame, "book_stale")
         if frame.position == 0:
             self._clear_hard_exit(slug)

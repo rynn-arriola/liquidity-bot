@@ -2211,6 +2211,78 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(runner.state_for("market-one").book_observed_at, received)
 
+    async def test_old_queued_book_cannot_overwrite_newer_direct_refresh(self):
+        runner, _, _ = self.build_runner(clock=lambda: NOW + timedelta(seconds=20))
+        runner._bind_markets(("market-one",))
+        fresh = BookSnapshot("market-one", (BookLevel(.49, 10),),
+            (BookLevel(.51, 10),), received_at=NOW + timedelta(seconds=19))
+        old = replace(fresh, received_at=NOW + timedelta(seconds=2))
+        runner._accept_book(fresh)
+        runner._accept_book(old)
+        self.assertIs(runner.state_for("market-one").book, fresh)
+        runner.market_stream.accepts = lambda _: False
+        runner._accept_book(replace(fresh, received_at=NOW + timedelta(seconds=20)))
+        self.assertIs(runner.state_for("market-one").book, fresh)
+
+    async def test_runtime_public_provider_refreshes_runner_even_during_stop(self):
+        from liquidity_bot.adapters import AsyncReadOnlyGateway, AsyncIntervalLimiter
+        from liquidity_bot.refreshing_books import RefreshingMarketStream, install_runtime_books
+        from tests.test_refreshing_books import Socket
+        from tests.test_streams import FakeClient as PublicClient
+        runner, _, _ = self.build_runner(clock=lambda: datetime.now(timezone.utc))
+        runner._bind_markets(("market-one",))
+        runner.state_for("market-one").market = fake_selection("market-one").selected.market
+        public_client = PublicClient()
+        socket = Socket()
+        public_client.ws.market_socket = socket
+        stream = RefreshingMarketStream(public_client)
+        runner.market_stream = stream
+        self.addAsyncCleanup(stream.close)
+        await stream.start(("market-one",))
+        runner.gateway = AsyncReadOnlyGateway(object(), limiter=AsyncIntervalLimiter())
+        runner.gateway._call = AsyncMock(side_effect=AssertionError("no REST book"))
+        install_runtime_books(runner)
+        runner._stop_requested = True
+        await runner._refresh_book(runner._now(), "market-one")
+        book = runner.state_for("market-one").book
+        self.assertIs(book, stream._latest["market-one"])
+        self.assertEqual(runner.state_for("market-one").book_observed_at, book.received_at)
+        runner.gateway._call.assert_not_awaited()
+
+    async def test_market_recovery_routes_first_book_to_exact_owner_with_receipt(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._bind_markets(("market-one", "market-two"))
+        book = BookSnapshot("market-two", (BookLevel(.49, 10),),
+            (BookLevel(.51, 10),), received_at=NOW - timedelta(seconds=1))
+        class Recovered(FakeMarketStream):
+            async def next_book(self, *, timeout=None):
+                return book
+        runner.market_stream_factory = Recovered
+        runner._quarantine_working_orders = AsyncMock()
+        self.assertIsNone(await runner._recover_market_stream(AdapterError("disconnected")))
+        self.assertIs(runner.state_for("market-two").book, book)
+        self.assertEqual(runner.state_for("market-two").book_observed_at, book.received_at)
+        self.assertIsNot(runner.state_for("market-one").book, book)
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_positive_bad_book_uses_existing_stale_recovery_not_old_price(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner.market_stream.book_invalid = lambda slug: slug == "market-one"
+        runner._recover_strategy_state = AsyncMock(return_value=None)
+        runner._refresh_event_guard = AsyncMock()
+        self.assertFalse(runner._book_is_fresh_enough_to_plan("market-one"))
+        await runner._decide_for_market("market-one", NOW)
+        runner._recover_strategy_state.assert_awaited()
+        self.assertEqual(client.orders.create_calls, [])
+        with self.assertRaises(ApiAdmissionDeferred):
+            runner._check_entry_admission({"marketSlug": "market-one"})
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_unresolved_create_prevents_shutdown_flat_proof(self):
         runner, _, _ = self.build_runner()
         runner.ledger.prepare_intent(

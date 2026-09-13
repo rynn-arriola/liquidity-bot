@@ -67,3 +67,32 @@ sustained full-speed quoting/exit performance. Keep the bot stopped unless the
 operator separately authorizes a normally gated restart. The last authenticated
 account proof remains September 13 02:27Z (zero orders/positions); this public
 test does not renew that exposure proof.
+
+## Subsequent authorized restart: normal startup still receives429
+
+After the successful low-rate test, the operator asked to run the bot. Fresh
+03:58:29Z account/ledger proof was completely flat and clear. Parity verified
+the stopped ledger backup at03:58:40Z (388288512 bytes, SHA256 prefix
+`0ec8bc10f6cb`); all187 deployed source/test/script/web/config hashes matched
+the already reviewed marker `4a166336a`. Its unchanged1565-test native acceptance
+was reused. No source/configuration or ledger repair was needed.
+
+The repeated03:59:08.929550Z gate proved zero venue orders/positions, zero
+ledger working orders/positions and zero unresolved/unknown state. The existing
+launcher started `auto 10 32 rest` around03:59:10Z, supervisor2251387 and
+runner2251414, retaining $90 HARD and max30 flat pending REST entries excluding
+position orders/reducers/exits. Log suffix begins at byte71117517.
+
+At04:00:13Z, both processes remained alive, but two startup deferrals and no
+actions or ordinary API-budget windows had been logged. Shared limiter state
+proved another book429 at04:00:02.308369Z with a ten-second endpoint cooldown;
+the safety-lane cooldown did not advance. Thus the low-rate test passed while
+normal startup did not. This demonstrates different observed outcomes at the
+two workloads, not the exact Cloudflare rule or a proven account ban. No rate,
+source, risk, freshness or retry-policy change was performed; the running bot
+retains its existing safe preflight retry, with no manual restart loop.
+
+At04:01:07–04:01:11Z, independent complete authenticated acceptance confirmed
+zero orders, zero positions, zero unresolved intents and zero unknown orders.
+Both processes remained alive after2:02; the run suffix contained four startup
+deferrals, no actions and no ordinary API-budget windows. Quoting is not accepted.

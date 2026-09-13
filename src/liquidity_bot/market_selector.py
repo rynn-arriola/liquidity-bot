@@ -555,7 +555,13 @@ class RewardMarketSelector:
                 failures.append(f"{market.slug}:book:{type(exc).__name__}")
 
         books_evaluated = len(opportunities)
-        opportunities = self._refresh_opportunity_times(opportunities, now)
+        # A full background scan can outlive the execution guard's 30-second
+        # lifecycle receipt. Keep positive started evidence and current
+        # schedule/reward clocks in ranking, but do not reinterpret an expired
+        # receipt as proof that every candidate is economically nonviable.
+        # Binding/action paths fetch genuine fresh lifecycle evidence again.
+        opportunities = self._refresh_opportunity_times(
+            opportunities, now, require_event_freshness=False)
         opportunities.sort(key=_opportunity_key)
         result = RewardMarketSelection(
             selected=next(
@@ -660,7 +666,8 @@ class RewardMarketSelector:
         return tuple(item for item in opportunities if item.viable_sides)
 
     def _refresh_opportunity_times(
-        self, opportunities: list[RewardMarketOpportunity], now: datetime,
+        self, opportunities: list[RewardMarketOpportunity], now: datetime, *,
+        require_event_freshness: bool = True,
     ) -> list[RewardMarketOpportunity]:
         """A paced scan ranks at completion, not at its pre-await clock.
 
@@ -672,7 +679,9 @@ class RewardMarketSelector:
         now = self.clock()
         refreshed = []
         for item in opportunities:
-            period = self._applicable_period(item.market, item.incentive, now)
+            period = self._applicable_period(
+                item.market, item.incentive, now,
+                require_event_freshness=require_event_freshness)
             if period is not None:
                 refreshed.append(evaluate_market_opportunity(
                     item.market, item.incentive, item.book, period=period,
@@ -769,12 +778,13 @@ class RewardMarketSelector:
         self,
         market: MarketMetadata,
         incentive: MarketIncentive,
-        now: datetime,
+        now: datetime, *, require_event_freshness: bool = True,
     ) -> IncentivePeriod | None:
         if (not market.active or market.closed
                 or market.status not in OPEN_MARKET_STATUSES
                 or market.game_start is None or market.game_start <= now
-                or not market.event_allows_entry(now)
+                or market.event_started_at is not None
+                or (require_event_freshness and not market.event_allows_entry(now))
                 or market.tick_size is None
                 or market.minimum_trade_qty is None
                 or market.minimum_trade_qty > self.policy.quote_size

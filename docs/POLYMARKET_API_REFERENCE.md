@@ -22,11 +22,14 @@ implemented.
 ## Interface actually used by this project
 
 September 13 optional-book control is local load policy, not a changed venue
-quota: production admission spaces optional discovery/startup/flat price reads
-four seconds apart; routine flat work defers while held-position/account safety
-retains its existing lane. Recent book-429 history survives one successful
-probe. The 4/s aggregate ceiling, complete account proof and Retail interfaces
-are unchanged. No claim of unlimited capacity or private-stream recovery follows.
+quota: full-universe selection books use the existing background 2/s lane;
+startup-bound and routine flat-owner entry books share a 1/s allowance, while
+held-position/account safety retains its existing lane. Long-scan ranking does
+not treat an expired positive pregame receipt as bad economics; startup and
+actions still require newly fetched exact-parent lifecycle evidence. Recent
+book-429 history survives one successful probe. The 4/s aggregate ceiling,
+complete account proof and Retail interfaces are unchanged. No claim of
+unlimited capacity or private-stream recovery follows.
 [Implementation and limits](history/OPTIONAL_BOOK_LOAD_CONTROL_2026-09-13.md).
 
 September 12 public-book follow-up: confirmed `market_book@429`/Cloudflare 1015

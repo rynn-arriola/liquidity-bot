@@ -502,7 +502,11 @@ class AsyncIntervalLimiter:
     REPORT_IDLE_INTERVAL_SECONDS = 0.30
     SHARED_CLOCK_SKEW_TOLERANCE_SECONDS = 1.0
     BOOK_PROBE_LEASE_SECONDS = 20.0  # Longer than the owned 15s HTTP timeout.
-    OPTIONAL_BOOK_INTERVAL_SECONDS = 4.0
+    # Routine flat-owner REST books are optional entry work. One per second
+    # returns their measured load near the healthy overnight band without
+    # turning a bounded 100-book background selection into a seven-minute
+    # pause. Background discovery retains its independent 2/s lane.
+    OPTIONAL_BOOK_INTERVAL_SECONDS = 1.0
 
     def __init__(
         self,
@@ -796,7 +800,7 @@ class AsyncIntervalLimiter:
 
     def _optional_book_due(self, state: Mapping[str, Any], now: float,
                            traffic_class: str) -> float:
-        if traffic_class == "safety" or self.optional_book_interval_seconds == 0:
+        if traffic_class != "entry" or self.optional_book_interval_seconds == 0:
             return 0.0
         return self._shared_timestamp(
             state.get("next_optional_book_at"), now,
@@ -804,7 +808,7 @@ class AsyncIntervalLimiter:
 
     def _record_book_claim(self, state: dict[str, Any], now: float,
                            traffic_class: str) -> None:
-        if self.optional_book_interval_seconds and traffic_class != "safety":
+        if self.optional_book_interval_seconds and traffic_class == "entry":
             # Reserve only optional book allowance, never a future global or
             # safety slot. Safety reads must not repeatedly move this clock:
             # active positions could otherwise starve refill indefinitely.

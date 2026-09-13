@@ -3413,6 +3413,43 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_preflight_refreshes_event_guard_after_final_bound_book_pass(self):
+        observed_at = [NOW]
+        runner, _, _ = self.build_runner(
+            clock=lambda: observed_at[0],
+            auto=True, reward_selector=FakeRewardSelector(
+                fake_selection("market-one")))
+        calls = []
+        original_bound = runner._refresh_bound_books
+        original_guard = runner._refresh_event_guard
+        original_private_start = runner.private_stream.start
+
+        async def bound(now):
+            await original_bound(now)
+            calls.append("bound")
+            # Simulate a paced startup pass outliving the 30-second parent
+            # event receipt acquired while loading contracts.
+            observed_at[0] += timedelta(seconds=31)
+
+        async def guard():
+            calls.append("event")
+            await original_guard()
+
+        async def private_start(slugs):
+            calls.append("private")
+            await original_private_start(slugs)
+
+        with patch.object(runner, "_refresh_bound_books", side_effect=bound), \
+                patch.object(runner, "_refresh_event_guard", side_effect=guard), \
+                patch.object(runner.private_stream, "start", side_effect=private_start):
+            await runner.preflight()
+        self.assertLess(calls.index("bound"), calls.index("event"))
+        self.assertLess(calls.index("event"), calls.index("private"))
+        self.assertTrue(runner.state_for("market-one").market.event_allows_entry(
+            observed_at[0]))
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_a_dud_primary_market_is_dropped_not_refused(self):
         """Observed 2026-08-16T21:36Z, on the restart after the crash fix.
 

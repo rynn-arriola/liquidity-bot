@@ -180,3 +180,53 @@ normal startup retry waits 900 seconds. Full scans are not startup-only: normal
 safe rotation/top-up is scheduled on the 900-second cadence, and urgent
 lifecycle/post-flat replacement can scan sooner when bounded recent-cache
 revalidation is unavailable. Existing per-owner book refresh is separate.
+
+## Prepared repair after failed acceptance
+
+The operator requested an immediate stop and authorized completing the repair
+and restarting after all gates pass. The supervisor was already stopped; the
+remaining runner PID was force-ended rather than represented as a graceful
+shutdown. A fresh authenticated 06:08:35Z read then proved zero venue orders,
+zero positions and zero unresolved/unknown/working ledger state. Process status
+also proves both runner and supervisor stopped. This post-stop proof, not the
+force end itself, establishes the safe implementation boundary.
+
+The repair separates two different kinds of book work. A bounded full selection
+is background ranking and returns to the existing 0.5-second lane, so 100 books
+have a nominal admission floor near 50 seconds rather than 400. Startup-bound
+and routine flat-owner books are entry work and share a one-second allowance.
+Held positions, recovery, ambiguity, cancels and exits keep their safety path.
+The host-wide 4/s aggregate ceiling and endpoint-specific 429 circuit remain.
+
+Selection completion still rechecks actual kickoff, reward period/end, active
+state and durable positive started evidence. It no longer treats age alone on a
+previously positive pregame receipt as proof of bad economics. That result is
+ranking evidence only: after final startup books, the runner fetches one genuine
+exact-parent lifecycle batch and updates every bound owner before streams and
+entry planning. Each service/decision/action path repeats the same guard. A
+failed, missing, stale or positively live lifecycle response therefore still
+blocks/cancels entry and never blocks reduction.
+
+Regression coverage uses the real `EventAwareGateway` and advances a full scan
+411.6 seconds. The candidate remains rankable while its old receipt cannot
+authorize entry; a genuine later lifecycle refresh restores authority. Startup
+coverage advances the clock beyond 30 seconds during its final book pass and
+requires a lifecycle refresh before private-stream startup. POSIX shared-limiter
+coverage proves background books neither read nor write the entry allowance,
+the production factory uses one second, safety bypass remains, and flat-owner
+fairness remains bounded. The affected group passed 513 tests. Nine deliberate
+reversals produced expected failures, including restoring four seconds,
+reapplying expired-event rejection and removing the final startup refresh.
+The complete production-Python suite then passed **1,584 tests in 212.684
+seconds** against the reviewed Windows-mount source; only the suite's known
+nonfatal temporary-directory cleanup warnings appeared.
+
+The dedicated edge audit found no business-policy expansion: $90 HARD, quote
+size 10, configured width 32, explicit REST account source, max 30 flat pending
+entries and the exclusion of positioned-market reducers/exits are unchanged.
+Old shared timestamps more than one second ahead are bounded as invalid rather
+than imposing a leftover four-second delay. Position/stop checkpoints still
+interrupt background scans; actual public-book 429 applies to every traffic
+class; local admission cannot renew a book or event receipt; and source choice
+remains manual. Push/deployment hashes, the exact deployed native suite, a fresh
+start gate and natural live scan/order/429 observation remain required.

@@ -3277,6 +3277,12 @@ class CommissioningRunner:
             await self._add_startup_markets_around_reserved_position(
                 self._now())
             await self._refresh_bound_books(self._now())
+        # Selection/startup book work may span the event guard's 30-second
+        # freshness window. Refresh exact parent lifecycle in one bounded batch
+        # after the final active tuple is known. This is real venue evidence;
+        # no local timestamp is renewed or inferred. Decisions repeat the same
+        # guard immediately before planning and sending any entry.
+        await self._refresh_event_guard()
         # A singleton private subscription makes the documented position
         # update (which omits marketSlug) attributable without guessing. Whole-
         # account REST reconciliation remains the authoritative safety check.

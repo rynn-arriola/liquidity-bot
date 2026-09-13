@@ -199,3 +199,28 @@ class EventGuardTests(unittest.IsolatedAsyncioTestCase):
         selection = await selector.select(now=NOW)
         self.assertEqual(selection.executable_catalog_markets, 1)
         self.assertIsNotNone(selection.selected)
+
+    async def test_long_full_scan_does_not_misclassify_expired_event_receipt_as_bad_economics(self):
+        from test_market_selector import incentive, book
+        gate = self.gateway()
+        gate.fetch_incentives = AsyncMock(return_value={
+            "aec-fixture": incentive("aec-fixture", pool=20000)})
+
+        async def delayed_book(_slug):
+            self.now = NOW + timedelta(seconds=411.6)
+            return book("aec-fixture")
+
+        gate.fetch_book = delayed_book
+        selection = await RewardMarketSelector(
+            gate, clock=lambda: self.now).select(now=NOW)
+
+        # Selection is ranking evidence only. The candidate stays visible, but
+        # its old event receipt cannot authorize an order.
+        self.assertIsNotNone(selection.selected)
+        self.assertFalse(selection.selected.market.event_allows_entry(self.now))
+        self.assertTrue(selection.selected.market.game_start > self.now)
+        # A real exact-parent refresh, not a local timestamp renewal, restores
+        # fresh execution authority at the later boundary.
+        await gate.refresh_event_states(["aec-fixture"], force=True)
+        refreshed = gate.apply_event_status(selection.selected.market)
+        self.assertTrue(refreshed.event_allows_entry(self.now))

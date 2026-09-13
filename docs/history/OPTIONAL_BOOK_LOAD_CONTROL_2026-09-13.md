@@ -320,3 +320,27 @@ SDK's local `open` event: zero messages, snapshots, updates, heartbeats, errors
 or closes through 16:33:57Z. These are independent repeated reproductions, not
 the earlier samples. The bot remains stopped and no account, credential, risk
 or configuration state changed.
+
+## Stable-release comparison
+
+The operator asked whether the public-book limit was introduced by the current
+implementation. The documented stable baseline `v1.2.0` at `a3defc014` was
+checked out separately; the live checkout, deployment marker and process state
+were untouched. Its older credential loader initially refused the current
+worktree-relative path before any request, so the retry pointed it explicitly
+at the existing protected production credential file without reading or
+displaying a secret.
+
+At **16:45:52Z**, the same no-mutation startup-pattern harness loaded the stable
+release's selector, gateway and limiter. It made 12 GETs in 15.58 seconds: two
+event, four incentive and six public-book requests. The first five books
+returned HTTP200 and the sixth—the same selected market as the 16:33 current-
+source test—returned HTTP429 with `Retry-After: 10` and
+`CF-Ray a3a8a0551c4a80d4-EWR` at 16:46:08Z. It stopped immediately with zero
+mutations.
+
+The matching current/stable outcomes strongly rule out the new REST account
+source and today's pacing/position changes as the mechanism for this public-
+gateway threshold. This does not make stable runnable: `v1.2.0` intentionally
+requires the private balance/position feed that remains silent. The bot stays
+stopped; no rollback, deployment, configuration or account state changed.

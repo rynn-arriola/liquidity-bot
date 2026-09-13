@@ -3,16 +3,14 @@
 ## Authority and operating state
 
 The operator asked to optimize the elevated REST request count after the bot
-was stopped for the shared public-stream recovery repair. This is an offline
-source change only. The bot remains stopped and no restart or deployment is
-authorized. Preserve manual REST account mode, size 10 / 32, the $90 HARD
-limit, and the maximum 30 flat pending entries excluding every position order,
-reducer and exit.
+was stopped for the shared public-stream recovery repair. The operator later
+authorized deployment and restart after review. Preserve manual REST account
+mode, size 10 / 32, the $90 HARD limit, and the maximum 30 flat pending entries
+excluding every position order, reducer and exit.
 
-The last authenticated account proof at 21:07:34Z showed zero venue orders and
-positions and zero unresolved/unknown ledger state. The runtime remains on the
-older loaded source; neither this optimization nor the preceding shared-stream
-repair is deployed.
+The stopped authenticated proof at 21:07:34Z showed zero venue orders and
+positions and zero unresolved/unknown ledger state. Subsequent release evidence
+is recorded below.
 
 ## Bigger-picture review and rejected alternatives
 
@@ -90,11 +88,40 @@ separately authorized deployment and restart acceptance.
   or credential. Rollback is additive and simple, but restores the measured
   extra history page per stable-flat proof.
 
+## Deployment and seven-minute acceptance
+
+- Commits `70a273743` and `87ad2df28` were pushed before deployment. Windows,
+  GitHub, WSL `HEAD` and `DEPLOYED_COMMIT` matched `87ad2df28`; all 193 reviewed
+  source/test/script/web/config hashes matched.
+- The exact runtime checkout passed all 1,647 tests in 156.445 seconds.
+- Authenticated gates at 21:54:14Z and 21:58:30Z each proved zero venue orders,
+  zero positions and zero unresolved/unknown ledger state before startup.
+- The standard manual-REST size-10/32 launcher started supervisor `346475` and
+  runner `346508` at 21:58Z. The first selection used public-stream books for
+  all 45 candidates and no REST-book fallback.
+- Five complete API windows reported 3.336, 3.233, 3.214, 2.952 and 2.581
+  requests/second, followed by 1.708/s in the sixth window. Every window had
+  zero HTTP 429 and zero cooldown. The latest three had zero failures. Early
+  `order_retrieve` confirmation work dominated the startup windows and fell
+  from 112 to zero by the 1.708/s window.
+- The optimized stable-flat path is directly visible in the last window:
+  execution history used 10 requests in 60.3 seconds. Active/uncertain windows
+  correctly remained deeper, reaching 29–34 history requests while positions
+  were open.
+- Two natural positions were detected and managed. One reducer was acknowledged
+  1.36 seconds after observation. A later position first encountered
+  `execution_state_unknown`, recovered and received its reducer after 26.09
+  seconds; it was continuously managed afterward. This is safe recovery evidence
+  but not WebSocket-equivalent latency acceptance.
+- At 22:06:01Z both positions had naturally returned flat. Authenticated venue
+  and ledger proof agreed on exactly 30 flat entry orders across 28 markets,
+  zero position-market orders, zero positions and zero unresolved/unknown state.
+  This proves the 30-entry ceiling excludes reducers/position orders.
+
 ## Remaining acceptance
 
-The optimization is reviewed offline, not deployed or live-accepted. A later
-authorized deployment must first prove the account flat/order-free and known,
-verify exact source hashes and the native server suite, then observe several
-complete API windows including natural positions. Acceptance requires lower
-history-page traffic without new 429s, stale/unknown state, missed reducer or
-exit deadlines, or drift from the $90 HARD and max-30-flat-entry rules.
+Continue sustained natural observation for reconnects, hard exits and endpoint
+rate behavior. Do not claim that the optimization guarantees no future 429 or
+that every reducer matches former WebSocket latency; the 26.09-second recovered
+episode remains explicit evidence. No further tuning is justified from the
+short acceptance window alone.

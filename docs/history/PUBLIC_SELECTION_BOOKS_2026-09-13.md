@@ -1,6 +1,6 @@
 # Public full-book selection preparation — September 13, 2026
 
-## Authority and state
+## Preparation authority and state (superseded by release below)
 
 The operator accepted the public WebSocket-first book recommendation after
 asking about the repeated REST book limit and supported order count. Prepare
@@ -121,3 +121,71 @@ for100 missing books before other latency). The fix does not bypass stale-book
 refusals to hide that limitation. Venue account polling/exit latency remains
 separate. Rollback requires a reviewed source revert while stopped and normal
 deployment gates; no ledger repair or HARD baseline reset is involved.
+
+## Authorized deployment and restart
+
+After confirming unchanged strategy, scan rules and counts, the operator
+requested final checks so the bot could restart. The17:16:28Z read-only gate
+proved zero venue orders/positions and zero unresolved/unknown/working/position
+ledger state. The17:16:00Z stopped-safe parity backup remained integrity/hash
+verified (389,189,632 bytes). Local/GitHub matched, with only the expected
+reviewed-code deployment gap in WSL; remote peer remained unverified.
+
+The clean tracked WSL checkout was fast-forwarded through a local Git bundle
+to `927676d14134fc6d3e0b176af6f301f4961c6b3b`. All190 normalized
+source/test/script/web/config hashes matched. The exact deployed Python3.12
+suite passed all1,602 tests in152.516s; `DEPLOYED_COMMIT` was then updated to
+that commit. The deployment diff equals the already-reviewed source/test set;
+the dedicated boundary/load/ownership/recovery/rollback audit above was reused.
+
+The final17:20:14.063120Z authenticated gate again proved zero orders,
+positions, unresolved intents, unknown orders, working ledger orders and
+ledger positions. No ledger repair, risk reset, config/credential change or
+new strategy rule was used. The normal launcher started supervisor3862462
+and runner3862493 with `auto 10 32 rest`, retaining $90 HARD and max30 flat
+pending entries excluding position orders. Acceptance reads use log offset
+71,170,148 and the shared opportunistic report lane; no stacked startup probe.
+
+## Live scan success, failed steady-state acceptance, safe stop
+
+Live public scans evaluated39 books each at17:20:39Z and17:21:13Z, finishing
+15.9s and17.5s, each with39 stream hits/zero REST book fallbacks and nine viable
+markets. Bound startup used seven stream books/two REST fallbacks. This is
+the same candidate/eligibility policy, not a nine-market cap. The runtime
+reported explicit REST/private-socket-disabled, max30 entries and automatic
+source switching disabled. Maintenance feed was healthy/NORMAL.
+
+Sixteen post-only entries were submitted. Two ordinary economic cancellations
+occurred; subsequent shutdown canceled remaining orders. No position transition
+or runtime-recovery failure was logged, but HTTP429 repeated on runtime book
+reads at17:22:05.739Z,17:23:50.914Z and17:24:12.291Z, across two markets.
+The limiter entered endpoint backoff and later reads resumed; that recovery
+does not make the run rate-free or remove steady-state load dependence.
+
+The three completed API windows recorded:
+
+| Window | Attempts | Aggregate/s | Book attempts | Book429 | Other failures |
+|---|---:|---:|---:|---:|---|
+| 94.1s ending17:21:56Z | 197 | 2.094 | 14 | 0 | 7 order-retrieve404 |
+| 60.2s ending17:22:56Z | 114 | 1.894 | 15 | 1 | 1 order-retrieve404 |
+| 60.1s ending17:23:56Z | 120 | 1.997 | 16 | 1 | none |
+
+The third book429 occurred after these completed windows. Maximum admission
+waits were2.685/0.692/0.707s. Order-publication reconciliation resolved without
+retained ambiguity. Quiet-book stale logs show freshness refusals, not authority
+to weaken freshness; no position-exit performance claim follows from this run.
+
+Because the conditional final check required no renewed rate-limit failure,
+the agent ended the validation run safely: supervisor stopped first, runner
+received SIGTERM, no force-kill or extra code/config/risk change. Runner final
+record reports `flat=true`, `operator_sigterm`, start17:20:22.222126Z and
+stop17:24:57.296550Z. The17:25:11.553058Z complete authenticated/read-only-ledger
+gate proved zero venue orders/positions, unresolved intents, unknown orders,
+working ledger orders and ledger positions.
+
+Leave stopped. Public scanning is measurably improved, but ongoing quiet-book
+refresh still depends on REST and sustained operation is not accepted. Next
+investigation should assess a bounded fresh public-book refresh path for
+active markets and exact necessary REST use; this is not permission to change
+strategy, freshness, account-source choice, risk, quotas or restart. The venue's
+counting window/root cause remains unknown; repeated429 does not prove a ban.

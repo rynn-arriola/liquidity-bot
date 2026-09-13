@@ -21,7 +21,7 @@ implemented.
 
 ## Interface actually used by this project
 
-September 13 public-book renewal is prepared, not deployed: active-owner reads
+September 13 public-book renewal is deployed in `b2b0d017e`: active-owner reads
 use a shared current-generation public full-book subscription, renewed on demand
 at most once per three seconds. Candidate/startup collection uses the same
 renewable adapter. Exceptional unbound/recovery/teardown reads retain bounded
@@ -32,7 +32,7 @@ control traffic. Account mode and all trading rules remain unchanged. This
 supersedes routine quiet-book REST acquisition described below, not its limits
 on retained fallback paths. [Review and evidence](history/PUBLIC_BOOK_REFRESH_IMPLEMENTATION_2026-09-13.md).
 
-September 13 prepared public-book collection is local implementation, not a
+September 13 public-book collection is bot implementation, not a
 changed venue quota: full selection, cached revalidation and flat startup use
 bounded public full-book WebSocket scopes (at most100 markets). Missing/stale
 books use REST; optional background and entry books share a four-second

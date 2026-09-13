@@ -3,11 +3,12 @@
 ## Authority and release boundary
 
 The operator explicitly requested implementation after the stopped mechanism
-probe and the bigger-picture design review. This is source preparation only:
+probe and the bigger-picture design review. That stage was source preparation only:
 no production checkout deployment, marker change, order mutation or restart.
 The last authenticated flat/clear proof remains17:25:11Z; implementation probes
 check process absence but do not make account reads. Current exposure is not
 re-proven by those process checks. Remote workstation parity is unverified.
+The subsequent authorized deployment/restart is recorded at the end of this file.
 
 Pre-work Windows/GitHub matched `f61e20242`. WSL remained at `7c7e6f21f`, with
 loaded marker `927676d14`; the parity checker refused its newer instruction-file
@@ -152,10 +153,94 @@ day/loss state or active ownership.
 
 ## Remaining acceptance
 
-Deployment and restart need fresh authority, exact-source hashes/native tests
-and current authenticated account/ownership gates. Subsequently observe normal
-startup, scans, useful order progress, public renewal/API load, maintenance and
-natural position exits. Do not induce fills or faults. The nine-market20-second
+The operator subsequently authorized restart; deployment and startup evidence
+is recorded below. Continue observing scans, useful order progress, public
+renewal/API load, maintenance and natural position exits. Do not induce fills
+or faults. The nine-market20-second
 probe plus synthetic32-owner tests cannot establish full-day/32-market venue
 capacity, eliminate external429s, prove private WebSocket recovery or promise
 WebSocket-era end-to-end latency.
+
+## Authorized deployment and restart, September 13
+
+The operator requested "Ok restart the bot". The graceful stop script confirmed
+the old bot stopped. Authenticated gate18:29:43Z proved zero venue orders and
+positions, zero ledger working orders/positions, unresolved intents and unknown
+orders. Pre-work parity recorded the expected reviewed-source drift; a private
+ledger recovery copy was verified. The remote workstation remains unverified.
+
+Windows/GitHub source `b2b0d017ea2c3617a48c4d9d168b2bcf7d8334af` was fast-forwarded
+into the clean WSL checkout from `7c7e6f21f`. All192 normalized tracked
+source/test/script/web/config hashes matched, before and after the native
+production suite: all1,626 tests passed in160.177s. The deployment marker was
+then updated to that reviewed source. Fresh authenticated gate18:33:51.708994Z
+again proved all seven venue/ownership/ledger counts zero.
+
+The standard launcher started supervisor4022391 / runner4022412 at18:33:58Z
+with explicit `auto 10 32 rest`. No strategy, config, risk or ledger repair was
+made in this restart task. HARD remains$90, flat pending-entry ceiling30
+excluding positioned-market orders, reducers and exits; existing lower caps
+and manual REST account choice remain. Public-book renewal is not private
+account WebSocket recovery.
+
+Initial scan18:34:12Z returned26/26 books through the public stream with
+zero REST fallbacks in12.2s; startup16/16 also used the stream with zero REST.
+First entry action18:34:50Z proves useful order progress, not just a live PID.
+
+First API window18:36:08Z:322 attempts over130.0s (2.476/s),292 reads,
+30 mutations, zero rate limits, zero REST-book requests and zero cooldown.
+Four failures were `order_retrieve@404`, not book429s; subsequent ownership
+repair passes reported remaining0. Admission maximum4.299s; response
+maximum11.955s. Initial scheduler decision p95 was45.396s, action p95 1.786s;
+this is not evidence of full end-to-end private-WebSocket performance parity.
+
+Second API window18:37:40Z:243 attempts/92.1s (2.638/s),12 mutations,
+four `order_retrieve@404`, zero rate limits/REST-book requests/cooldown.
+Maximum admission5.833s and response8.891s; scheduler p95 decision43.200s,
+action1.202s. Several18:37:43Z incentive refreshes temporarily reported
+unavailable pregame proof; their safety gates remain intact. Do not classify
+that as a venue outage or change live-event rules to fill capacity.
+
+A natural+10 Vysmar/Kocmar position was observed18:36:42.969Z; the bot
+cancelled/repriced its reducing order, with first reducer acknowledged4.153s
+after position observation and0.140s after cancellation confirmation. REST
+reported flat18:36:59.560Z. These times start at observation, not venue fill.
+Authenticated18:37:40.356217Z state:26 flat-market orders across17 markets,
+zero positions and zero ledger unresolved/unknown state. The original26
+scan-book count is not an imposed26-order cap. Candidate period/spread/lifecycle
+filters precede detailed scoring, and per-side entry-quality/economic checks
+can leave pending entries below30. No filter or cap was changed.
+
+The ledger confirms both legs match local PLACE intents: BUY10 at0.48,
+18:36:37.224777Z, then SELL10 at0.50,18:36:58.500420Z. Both MAKER and
+not reversed;21.276s venue-fill interval, +$0.20 gross before fees/rebates.
+This was normal passive reduction, not a HARD/time-expiry exit. The hold
+limit is a deadline, not a minimum holding period. Another SELL10 at0.49
+filled18:38:41.143976Z; REST observed -10 at18:38:45.134Z and acknowledged
+the new BUY reducer3.403s later. The later position is a separate episode.
+
+Third API window18:38:42Z:132 attempts/61.9s (2.132/s), seven mutations,
+one `order_retrieve@404`, zero rate limits/REST-book reads/cooldown.
+Authenticated18:39:34.993259Z:28 venue orders across19 markets, comprising
+27 flat-market entries and one position-market order, one open position,
+zero unresolved intents/unknown orders; ledger agrees28 orders/one position.
+
+Fourth/fifth API windows18:39:45Z/18:40:46Z:194/175 attempts in62.7/61.1s,
+12/four mutations, two individual-order404s each; zero REST-book requests,
+rate limits or cooldown. Across all five windows:1,066 attempts,13 failures,
+all `order_retrieve@404`; no book429 recurrence during the seven-minute check.
+
+The second episode also closed through its bot-owned passive BUY10 at0.49,
+filled18:40:56.072256Z,134.928s after its SELL10 at0.49 (zero gross spread
+before fees/rebates). Authenticated18:41:00.190427Z reported25 flat-market
+orders across17 markets, zero venue positions and zero unresolved/unknown
+orders. The non-atomic ledger read still showed26 orders/one position at that
+instant; the runner logged `flat_observed` at18:41:00.781151Z,0.591s later,
+then resumed entries. This was a naturally resolving observation race, not a
+ledger repair or evidence that a combined snapshot is atomic.
+
+The same runner remained up beyond seven minutes. Initial order/scan/passive
+exit/API acceptance passed; continued hard-exit, reconnect/maintenance,
+full-capacity and long-duration performance acceptance remains observational.
+No runtime source was edited during release, and no additional restart,
+manual order, induced fill/failure, private-source flip or risk reset occurred.

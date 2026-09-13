@@ -121,6 +121,7 @@ class RestFallbackRunner(CommissioningRunner):
     REST_POLL_SECONDS = 5.0
     PENDING_ENTRY_ORDER_CEILING = 30
     ORDER_READ_CONCURRENCY = 4
+    HISTORY_DEEP_OVERLAP_SECONDS = 30.0
 
     def __init__(self, *args, rest_polling_policy=None,
                  account_state_mode="rest", **kwargs):
@@ -143,6 +144,7 @@ class RestFallbackRunner(CommissioningRunner):
                                  self.ledger.query("SELECT execution_id FROM execution_fills"))
         self._rest_history_seen: frozenset[str] | None = stored_fills or None
         self._rest_history_pending: frozenset[str] = frozenset()
+        self._rest_history_deep_completed_at = None
         self.executor.gateway = RestProofTradingGateway(
             self.gateway,
             lambda: (not self._using_rest_source()
@@ -279,12 +281,28 @@ class RestFallbackRunner(CommissioningRunner):
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
         return failures
 
+    def _execution_history_overlap_pages(self, now):
+        """Keep active/ambiguous proof deep; bound flat late-publication audit."""
+        deep = self._rest_history_deep_completed_at
+        if (not self.rest_polling_policy.enabled or not self._bulk_order_proof
+                or self._rest_history_seen is None
+                or self._has_open_position() or self.ledger.unresolved_intents()
+                or self.ledger.absent_orders() or deep is None
+                or not 0 <= (now - deep).total_seconds()
+                    < self.HISTORY_DEEP_OVERLAP_SECONDS):
+            return 2
+        return 1
+
     async def _fetch_execution_history(self, now):
         if not self._using_rest_source():
             return await super()._fetch_execution_history(now)
+        overlap_pages = self._execution_history_overlap_pages(now)
         batch = await self.account.fetch_executions(
             observed_at=now, require_coverage=True,
-            known_execution_ids=self._rest_history_seen)
+            known_execution_ids=self._rest_history_seen,
+            minimum_overlap_pages=overlap_pages)
+        if overlap_pages == 2:
+            self._rest_history_deep_completed_at = self._now()
         self._rest_history_pending = frozenset(
             item.execution_id for item in batch if hasattr(item, "execution_id"))
         return batch

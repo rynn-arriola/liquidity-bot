@@ -10,7 +10,7 @@ from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
-from test_venue_state import raw_order
+from test_venue_state import raw_execution, raw_order
 from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
 from liquidity_bot.execution_ledger import LedgerConflict, PositionState
 from liquidity_bot.rest_fallback import RestFallbackRunner
@@ -253,12 +253,81 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
         runner.rest_polling_policy = RestPollingPolicy(enabled=False)
         self.assertFalse(runner._rest_poll_due(self.now + timedelta(seconds=1)))
 
+    async def test_history_overlap_is_shallow_only_for_recent_flat_stable_proof(self):
+        runner, client = await self.build(1)
+        runner._rest_history_deep_completed_at = self.now
+        self.assertEqual(runner._execution_history_overlap_pages(self.now), 2)
+        runner._bulk_order_proof = True
+        runner._rest_history_seen = None
+        self.assertEqual(runner._execution_history_overlap_pages(self.now), 2)
+        runner._rest_history_seen = frozenset({"known-execution"})
+        self.assertEqual(runner._execution_history_overlap_pages(self.now), 1)
+
+        self.position(runner, client)
+        self.assertEqual(runner._execution_history_overlap_pages(self.now), 2)
+
+        runner.ledger.apply_position_event(
+            "test", "flat-again", PositionState(
+                "market-0", Decimal("0"), self.now), received_at=self.now)
+        runner.ledger.prepare_intent(
+            "pending", "PLACE", "market-0", "pending-client", {},
+            created_at=self.now)
+        self.assertEqual(runner._execution_history_overlap_pages(self.now), 2)
+
+        runner.ledger.transition_intent("pending", "FAILED", updated_at=self.now)
+        with patch.object(runner.ledger, "absent_orders", return_value=({"id": "absent"},)):
+            self.assertEqual(runner._execution_history_overlap_pages(self.now), 2)
+        self.assertEqual(runner._execution_history_overlap_pages(
+            self.now + timedelta(seconds=29.999)), 1)
+        self.assertEqual(runner._execution_history_overlap_pages(
+            self.now + timedelta(seconds=30)), 2)
+        self.assertEqual(runner._execution_history_overlap_pages(
+            self.now - timedelta(microseconds=1)), 2)
+
+    async def test_recent_flat_history_overlap_uses_one_page_but_new_burst_pages(self):
+        runner, client = await self.build(1)
+        runner._rest_history_seen = frozenset({"known-execution"})
+        runner._rest_history_deep_completed_at = self.now
+        known = {
+            "id": "known-trade", "marketSlug": "market-0",
+            "state": "TRADE_STATE_NEW", "isAggressor": False,
+            "passiveExecution": raw_execution(
+                id="known-execution", order=raw_order(
+                    id="exchange-0", marketSlug="market-0")),
+        }
+        calls = []
+        async def activities(params):
+            calls.append(dict(params))
+            if params.get("cursor"):
+                return {"activities": [], "eof": True}
+            return {"activities": [
+                {"type": "ACTIVITY_TYPE_TRADE", "trade": known}],
+                "eof": False, "nextCursor": "older"}
+
+        with patch.object(client.portfolio, "activities", side_effect=activities):
+            await self.poll(runner)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["sortOrder"], "SORT_ORDER_DESCENDING")
+        self.assertEqual(runner._rest_history_deep_completed_at, self.now)
+
+        self.now += timedelta(seconds=5)
+        runner._rest_history_seen = frozenset({"different-execution"})
+        runner._rest_history_deep_completed_at = self.now
+        calls.clear()
+        with patch.object(client.portfolio, "activities", side_effect=activities):
+            await self.poll(runner)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["cursor"], "older")
+
     async def test_failed_history_still_revokes_optimized_proof(self):
         runner, client = await self.build(2)
+        previous_deep = self.now - timedelta(seconds=30)
+        runner._rest_history_deep_completed_at = previous_deep
         with patch.object(client.portfolio, "activities", AsyncMock(side_effect=AdapterError("history"))):
             with self.assertRaises(AdapterError):
                 await self.poll(runner)
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
+        self.assertEqual(runner._rest_history_deep_completed_at, previous_deep)
 
     async def test_partial_or_missing_quantity_response_fails_closed(self):
         for kind in ("eof", "nextCursor", "quantity"):

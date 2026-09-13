@@ -13,7 +13,7 @@ from liquidity_bot.execution_ledger import PositionState
 from liquidity_bot.models import AccountBalance
 
 from tests.test_adapters import CountingLimiter
-from tests.test_venue_state import raw_order
+from tests.test_venue_state import raw_execution, raw_order
 
 
 NOW = datetime(2026, 8, 13, 3, 0, tzinfo=timezone.utc)
@@ -293,6 +293,89 @@ class SnapshotGatewayTests(unittest.TestCase):
                 if strict:
                     self.assertEqual(params["sortOrder"], "SORT_ORDER_DESCENDING")
             self.assertEqual(client.portfolio.calls[1]["cursor"], "second")
+
+    def test_strict_descending_history_stops_at_first_durable_overlap_page(self):
+        known = {"id": "trade-known", "marketSlug": "market-one",
+                 "state": "TRADE_STATE_NEW", "isAggressor": False,
+                 "passiveExecution": raw_execution(
+                     id="known", order=raw_order(id="owned-order"))}
+        client = Client({}, [
+            {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": known}],
+             "eof": False, "nextCursor": "unneeded"},
+            {"activities": [], "eof": True},
+        ])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+
+        batch = self.run_async(account.fetch_executions(
+            observed_at=NOW, require_coverage=True,
+            known_execution_ids=frozenset({"known"}),
+            minimum_overlap_pages=1))
+
+        self.assertEqual({row.execution_id for row in batch}, {"known"})
+        self.assertEqual(len(client.portfolio.calls), 1)
+        self.assertEqual(
+            client.portfolio.calls[0]["sortOrder"], "SORT_ORDER_DESCENDING")
+
+    def test_default_deep_history_reads_past_first_overlap_for_late_fill(self):
+        known = {"id": "trade-known", "marketSlug": "market-one",
+                 "state": "TRADE_STATE_NEW", "isAggressor": False,
+                 "passiveExecution": raw_execution(
+                     id="known", order=raw_order(id="owned-order"))}
+        late = {"id": "trade-late", "marketSlug": "market-one",
+                "state": "TRADE_STATE_NEW", "isAggressor": False,
+                "passiveExecution": raw_execution(
+                    id="late", order=raw_order(id="owned-order"))}
+        client = Client({}, [
+            {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": known}],
+             "eof": False, "nextCursor": "older"},
+            {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": late}],
+             "eof": True},
+        ])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+
+        batch = self.run_async(account.fetch_executions(
+            observed_at=NOW, require_coverage=True,
+            known_execution_ids=frozenset({"known"})))
+
+        self.assertEqual({row.execution_id for row in batch}, {"known", "late"})
+        self.assertEqual(len(client.portfolio.calls), 2)
+        self.assertEqual(client.portfolio.calls[1]["cursor"], "older")
+
+    def test_strict_descending_history_pages_until_new_burst_reaches_overlap(self):
+        newest = {"id": "trade-new", "marketSlug": "market-one",
+                  "state": "TRADE_STATE_NEW", "isAggressor": False,
+                  "passiveExecution": raw_execution(
+                      id="new", order=raw_order(id="owned-order"))}
+        known = {"id": "trade-known", "marketSlug": "market-one",
+                 "state": "TRADE_STATE_NEW", "isAggressor": False,
+                 "passiveExecution": raw_execution(
+                     id="known", order=raw_order(id="owned-order"))}
+        client = Client({}, [
+            {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": newest}],
+             "eof": False, "nextCursor": "overlap"},
+            {"activities": [{"type": "ACTIVITY_TYPE_TRADE", "trade": known}],
+             "eof": False, "nextCursor": "unneeded"},
+            {"activities": [], "eof": True},
+        ])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+
+        batch = self.run_async(account.fetch_executions(
+            observed_at=NOW, require_coverage=True,
+            known_execution_ids=frozenset({"known"}),
+            minimum_overlap_pages=1))
+
+        self.assertEqual({row.execution_id for row in batch}, {"new", "known"})
+        self.assertEqual(len(client.portfolio.calls), 2)
+        self.assertEqual(client.portfolio.calls[1]["cursor"], "overlap")
+
+    def test_strict_history_rejects_invalid_overlap_depth(self):
+        client = Client({}, [{"activities": [], "eof": True}])
+        account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
+        for value in (0, 3, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.run_async(account.fetch_executions(
+                    observed_at=NOW, require_coverage=True,
+                    minimum_overlap_pages=value))
 
     def test_busted_trade_is_observed_even_without_an_execution_leg(self):
         client = Client({"orders": []}, [{"activities": [{

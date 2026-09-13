@@ -951,9 +951,13 @@ These are implementation requirements, not suggestions.
     consume it. Unresolved entry reservations still count. At most four
     independent exact-order reads overlap under the unchanged shared governor;
     all workers finish or are canceled before proof returns. History uses
-    durable fill IDs as restart anchors (retained EOF for an empty ledger),
-    with at least two descending pages through known fill
-    overlap; malformed or truncated coverage cannot certify proof. Applied
+    durable fill IDs as restart anchors (retained EOF for an empty ledger).
+    Startup, rebind, recovery, shutdown, positioned/ambiguous state and each
+    bounded 30-second flat audit read at least two descending pages through
+    known fill overlap. Between those audits, a stable-flat proof may stop at
+    the first nonempty all-known execution page; a page containing any new
+    execution continues until known overlap or proven EOF. Malformed or
+    truncated coverage cannot certify proof. Applied
     positive history can survive expired proof, never entry authority. Equity
     freshness uses the current clock after account reconciliation, not its
     pre-await timestamp. Stable mode capacity and trading policy are unchanged.

@@ -169,6 +169,7 @@ class AsyncAccountSnapshotGateway:
         self, *, observed_at: datetime, max_pages: int = 2,
         require_coverage: bool = False,
         known_execution_ids: frozenset[str] | None = None,
+        minimum_overlap_pages: int = 2,
     ) -> ExecutionHistoryBatch:
         """Recent fills still retained by the venue for this account.
 
@@ -193,6 +194,9 @@ class AsyncAccountSnapshotGateway:
         _accept_event, so re-applying a fill already recorded is a no-op.
         """
 
+        if (isinstance(minimum_overlap_pages, bool)
+                or minimum_overlap_pages not in (1, 2)):
+            raise ValueError("minimum execution-history overlap must be 1 or 2 pages")
         rows: dict[str, Execution] = {}
         trade_states: dict[str, TradeStateObservation] = {}
         cursor: str | None = None
@@ -335,11 +339,17 @@ class AsyncAccountSnapshotGateway:
                 if cursor in seen_cursors:
                     raise AdapterError("execution history repeated pagination cursor")
                 seen_cursors.add(cursor)
-                # An empty ledger first walks retained history. Restart and
-                # later descending walks keep at least the two-page overlap
-                # and continue through a whole already-proven fill page.
-                # A partial page with one old fill cannot conceal a burst.
-                if (page_number >= 1 and known_execution_ids is not None
+                # An empty ledger first walks retained history. Later walks
+                # are descending (the documented newest-first contract), so
+                # reaching any page whose account executions are all already
+                # durable proves every older page is overlap too. If a burst
+                # fills the whole first page with new executions there is no
+                # overlap and pagination continues. Requiring a second known
+                # page on every stable-flat proof doubled normal history
+                # traffic. The caller still schedules bounded deeper audits
+                # for late-published older activity.
+                if (page_number + 1 >= minimum_overlap_pages
+                        and known_execution_ids is not None
                         and page_execution_ids
                         and page_execution_ids <= known_execution_ids):
                     covered = True

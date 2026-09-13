@@ -14,6 +14,13 @@ writer/background worker. A fully independent polling watch, chunked catalog wor
 and cross-source end-to-end latency percentiles remain follow-on measurement work.
 There is no claim that a one-second target guarantees one-second fill detection.
 
+The September 13 load follow-up keeps mandatory history in that same proof but
+uses the documented newest-first order plus durable execution IDs as a bounded
+overlap anchor. Stable, flat, unambiguous proofs may stop on an all-known first
+page between 30-second deep audits. Startup/recovery/shutdown, open positions,
+ambiguity and new execution bursts remain deep and fail closed. This is request
+reduction only; it does not cache account authority or change polling cadence.
+
 The design-session read-only snapshot at 06:15:39Z returned 30 venue orders
 across 21 markets and zero venue positions. Subsequent local counts within the
 same non-atomic read were 30 working orders, one position, one unresolved intent

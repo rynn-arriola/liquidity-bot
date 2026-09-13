@@ -366,6 +366,7 @@ class AccountSourceRunner(RestFallbackRunner):
         orders = await self._fetch_rest_order_snapshot(now)
         identities = DeferredIdentityResolver()
         history_reader = AsyncAccountSnapshotGateway(self.gateway, resolve_client_id=identities)
+        history_overlap_pages = self._execution_history_overlap_pages(now)
 
         async def already_read_orders():
             return orders
@@ -373,7 +374,8 @@ class AccountSourceRunner(RestFallbackRunner):
         async def history():
             return await history_reader.fetch_executions(
                 observed_at=now, require_coverage=True,
-                known_execution_ids=self._rest_history_seen)
+                known_execution_ids=self._rest_history_seen,
+                minimum_overlap_pages=history_overlap_pages)
 
         observation = await self._snapshot_reader.collect(
             source=self.account_state_mode,
@@ -387,6 +389,8 @@ class AccountSourceRunner(RestFallbackRunner):
             raise AdapterError("obsolete account observation")
         # Projection/adoption resumes on the serial owner, never in a worker.
         resolved = identities.project(self.ledger.resolve_client_order_id)
+        if history_overlap_pages == 2:
+            self._rest_history_deep_completed_at = self._now()
         self._collected_history = replace(observation.history, executions=tuple(
             replace(item, client_order_id=(resolved.get(item.exchange_order_id)
                                           or item.client_order_id))

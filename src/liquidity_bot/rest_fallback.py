@@ -682,6 +682,29 @@ class RestFallbackRunner(CommissioningRunner):
         # into another entry opportunity when that happens.
         return await self._decision_sweep(slugs, position_only=True)
 
+    def _preserve_position_orders_during_bound_recovery(self, slug):
+        """Keep only one exactly-sized reducer during public-feed recovery."""
+
+        position = self.ledger.position(slug)
+        if (position == 0 or self.ledger.market_has_unresolved_intent(slug)
+                or self.ledger.absent_orders(slug)):
+            return False
+        orders = self._working_orders(slug)
+        reducing_side = "offer" if position > 0 else "bid"
+        return (len(orders) == 1
+                and orders[0].side == reducing_side
+                and orders[0].remaining_qty == abs(position))
+
+    def _bound_recovery_position_preemption_enabled(self):
+        """REST account proof remains valid when only the public feed failed."""
+
+        return self._using_rest_source()
+
+    async def _service_bound_recovery_positions(self):
+        """Let due/uncovered positions preempt serial flat-order quarantine."""
+
+        return await self._service_urgent_positions()
+
     def _position_near_its_flatten_deadline(self, now):
         if super()._position_near_its_flatten_deadline(now):
             return True

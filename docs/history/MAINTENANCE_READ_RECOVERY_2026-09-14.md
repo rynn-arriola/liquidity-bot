@@ -217,3 +217,62 @@ that became due mid-recovery—not by a429 and not by failure of the IOC itself.
 The IOC then produced flat proof2.166 seconds later. Fix design must retain
 fail-closed stream quarantine while allowing already-owned urgent exposure to
 preempt or interleave safely; no such behavior change is authorized here.
+
+## Prepared public-recovery exit-priority repair
+
+The operator then authorized the repair and explicitly said not to restart.
+The selected design changes only shared public-feed recovery while manual REST
+account state is active. `_open_streams_for_active_market()` already completes
+a fresh account-wide REST reconciliation before recovery can continue. The
+prepared path reuses that exact proof instead of immediately repeating it,
+checks positioned owners before flat owners, preserves only one order whose
+side and remaining quantity exactly reduce the current proved position, and
+runs the existing serial position-only service before and between flat-order
+cancellations. New entries remain impossible until shared recovery finishes.
+
+A wrong-side, wrong-quantity, duplicate, absent or unresolved order cannot be
+preserved. An uncovered/due position enters the existing planner, executor,
+durable-intent and proof path; there is no parallel mutation owner and no new
+IOC authority. A stream failure during a checkpoint aborts into the existing
+bounded recovery loop. The final reconciliation and per-market ambiguity gates
+remain. Private WebSocket account recovery does not use the exception because
+its lost account transport cannot independently prove whether a fill landed;
+it retains the original whole-slate quarantine. This fault-evidence boundary
+is why a general "never cancel reducers" design was rejected.
+
+The public renewal wrapper now includes the underlying exception type/message
+while retaining exception chaining. This adds no request and does not claim
+whether a future failure belongs to the laptop or venue; it makes that cause
+observable instead of replacing it with a generic label.
+
+Focused regression covers REST-only activation, unchanged private recovery,
+exact reducer qualification, wrong side/quantity, duplicate, absent and
+unresolved state, positioned-owner ordering, position checkpoints between
+flat cancellations, coordinated429 recovery and nested renewal diagnostics.
+The related recovery/account-source/position group passed270 tests. Deliberate
+reversals proved both activation and nested-error regressions fail when their
+repairs are removed, then the fixes were restored. The complete Windows run
+executed1,685 tests with only the four expected POSIX-lock refusals; the native
+WSL run then passed all1,685 tests in390.864 seconds.
+
+Dedicated edge audit: success retains exact reducers and resumes only after
+fresh proof; empty and flat owners add no preservation; full32-slot ordering
+is stable within positioned/flat groups; partial fills make a changed reducer
+quantity fail qualification; ambiguity cannot authorize mutation or reuse;
+stop strings return to the existing shutdown owner; a second public failure
+re-enters bounded recovery; private mode and rollback retain strict global
+quarantine. API load removes one duplicate complete reconcile only on the
+already-proved REST path and adds no cadence/poller/subscription. Quote size,
+slot count, entry-order ceiling, reward rank, entry quality, entry/exit prices,
+inventory clocks, hard-exit bounds, maintenance rules and $90 HARD are unchanged.
+
+The distinct market-only recovery route was also reviewed and deliberately
+left strict. It has no fresh replacement public book until after quarantine,
+so servicing positions earlier there would rely on stale prices; reconnecting
+first while old entries remain live would weaken fail-closed behavior. The
+observed renewal failure requested shared bound recovery, where the new narrow
+REST-account exception has both fresh account proof and replacement books.
+
+The live bot was not stopped or restarted and this source was not copied into
+the production checkout. Therefore none of the prepared behavior is active;
+the running process remains on `c7b6762d7` until a later operator instruction.

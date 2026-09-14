@@ -167,7 +167,10 @@ class RefreshingMarketStream(MarketReadOnlyStream):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = AdapterError("public book renewal failed")
+            detail = str(exc).strip()
+            error = AdapterError(
+                "public book renewal failed: "
+                f"{type(exc).__name__}{f': {detail}' if detail else ''}")
             error.__cause__ = exc
             self._fail(error)
 

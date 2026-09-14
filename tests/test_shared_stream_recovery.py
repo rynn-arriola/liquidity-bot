@@ -1,6 +1,7 @@
 """Shared public failure must reach the owner, not amplify across slots."""
 import asyncio
 import traceback
+from decimal import Decimal
 from functools import partial
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
@@ -9,7 +10,9 @@ import test_live_commissioning as fixtures
 from liquidity_bot.account_source_runner import AccountSourceRunner
 from liquidity_bot.errors import (
     AdapterError, EmptyBookError, MarketStreamUnavailable, RuntimeInvariantViolation)
+from liquidity_bot.execution_ledger import PositionState
 from liquidity_bot.live_commissioning import CommissioningRunner
+from liquidity_bot.reconciler import WorkingOrder
 from liquidity_bot.refreshing_books import RefreshingMarketStream
 from liquidity_bot.rest_polling_policy import RestPollingPolicy
 from test_refreshing_books import Socket
@@ -153,6 +156,136 @@ class SharedStreamRecoveryTests(IsolatedAsyncioTestCase):
                     await runner._settle_stream_readers(market, private, recovery_pending=True)
                     await runner.market_stream.close()
                     await runner.private_stream.close()
+
+    async def test_only_rest_bound_recovery_enables_position_preemption(self):
+        for rest in (True, False):
+            with self.subTest(rest=rest):
+                runner, _ = await self.build(rest=rest)
+                runner._request_market_stream_rebind(
+                    MarketStreamUnavailable("lost"))
+
+                async def open_streams(**_kwargs):
+                    runner._streams_need_rebind = False
+                    runner._pending_market_stream_error = None
+
+                with patch.object(
+                        runner, "_refresh_balance", new=AsyncMock()), patch.object(
+                            runner, "_open_streams_for_active_market",
+                            new=AsyncMock(side_effect=open_streams)), patch.object(
+                                runner, "_quarantine_working_orders",
+                                new=AsyncMock(return_value=None)) as quarantine, patch.object(
+                                    runner, "_drain_private_events",
+                                    new=AsyncMock()):
+                    self.assertIsNone(await runner._recover_bound_streams(
+                        MarketStreamUnavailable("lost")))
+
+                self.assertEqual(
+                    quarantine.await_args.kwargs,
+                    {
+                        "require_terminal": False,
+                        "account_state_already_reconciled": rest,
+                        "preempt_positions": rest,
+                    },
+                )
+
+    async def test_private_recovery_keeps_original_global_quarantine(self):
+        runner, _ = await self.build(rest=False)
+        with patch.object(
+                runner, "_quarantine_working_orders",
+                new=AsyncMock(return_value=None)) as quarantine, patch.object(
+                    runner, "_wait_for_initial_private_state",
+                    new=AsyncMock()), patch.object(
+                        runner, "_drain_private_events", new=AsyncMock()):
+            self.assertIsNone(await runner._recover_private_stream(
+                MarketStreamUnavailable("private lost")))
+
+        quarantine.assert_awaited_once_with(require_terminal=False)
+
+    async def test_rest_recovery_preserves_only_an_exact_reducer(self):
+        runner, _ = await self.build(rest=True, capacity=20)
+        held = "market-held"
+        runner.ledger.apply_position_event(
+            "rest", "position-held",
+            PositionState(held, Decimal("10"), fixtures.NOW),
+            received_at=fixtures.NOW,
+        )
+
+        exact = WorkingOrder("reducer", "offer", .51, Decimal("10"))
+        wrong_side = WorkingOrder("builder", "bid", .49, Decimal("10"))
+        wrong_qty = WorkingOrder("oversized", "offer", .51, Decimal("11"))
+        with patch.object(runner, "_working_orders", return_value=(exact,)):
+            self.assertTrue(
+                runner._preserve_position_orders_during_bound_recovery(held))
+        for orders in ((wrong_side,), (wrong_qty,), (exact, wrong_qty), ()):
+            with self.subTest(orders=orders), patch.object(
+                    runner, "_working_orders", return_value=orders):
+                self.assertFalse(
+                    runner._preserve_position_orders_during_bound_recovery(held))
+        with patch.object(runner, "_working_orders", return_value=(exact,)), \
+                patch.object(runner.ledger, "market_has_unresolved_intent",
+                             return_value=True):
+            self.assertFalse(
+                runner._preserve_position_orders_during_bound_recovery(held))
+        with patch.object(runner, "_working_orders", return_value=(exact,)), \
+                patch.object(runner.ledger, "absent_orders",
+                             return_value=[object()]):
+            self.assertFalse(
+                runner._preserve_position_orders_during_bound_recovery(held))
+
+    async def test_rest_recovery_checks_positions_between_flat_cancels(self):
+        runner, _ = await self.build(rest=True, capacity=20)
+        held, flat_one, flat_two = "market-held", "market-flat-one", "market-flat-two"
+        runner._bind_markets((flat_one, held, flat_two))
+        runner.ledger.apply_position_event(
+            "rest", "position-held",
+            PositionState(held, Decimal("10"), fixtures.NOW),
+            received_at=fixtures.NOW,
+        )
+        self.fixture.seed_working_order(
+            runner, slug=held, side="offer", suffix="held-reducer")
+        self.fixture.seed_working_order(
+            runner, slug=flat_one, side="bid", suffix="flat-one")
+        self.fixture.seed_working_order(
+            runner, slug=flat_two, side="bid", suffix="flat-two")
+
+        events = []
+        original_preserve = runner._preserve_position_orders_during_bound_recovery
+
+        def preserve(market):
+            events.append(("inspect", market))
+            return original_preserve(market)
+
+        async def cancel(market, *, now):
+            events.append(("cancel", market))
+
+        async def service_positions():
+            events.append(("position-check", None))
+            if any(kind == "cancel" for kind, _ in events):
+                return "operator_stop"
+            return None
+
+        with patch.object(
+                runner, "_rest_reconcile", new=AsyncMock()), patch.object(
+                    runner, "_service_bound_recovery_positions",
+                    new=AsyncMock(side_effect=service_positions)), patch.object(
+                        runner, "_preserve_position_orders_during_bound_recovery",
+                        side_effect=preserve), patch.object(
+                            runner.kill_switch, "initiate",
+                            new=AsyncMock(side_effect=cancel)):
+            stop = await runner._quarantine_working_orders(
+                require_terminal=False,
+                account_state_already_reconciled=True,
+                preempt_positions=True,
+            )
+
+        self.assertEqual(stop, "operator_stop")
+        self.assertEqual(
+            next(event for event in events if event[0] == "inspect"),
+            ("inspect", held),
+        )
+        cancelled = [market for kind, market in events if kind == "cancel"]
+        self.assertEqual(len(cancelled), 1)
+        self.assertNotIn(held, cancelled)
 
     async def test_rebind_projects_held_private_evidence_before_recovery(self):
         runner, _ = await self.build(rest=False)

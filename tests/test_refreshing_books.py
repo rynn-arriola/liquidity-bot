@@ -182,6 +182,7 @@ class RefreshingBooksTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(AdapterError, "renewal failed"):
             await stream.fresh_book("one")
         self.assertIsInstance(stream._failure.__cause__, OSError)
+        self.assertIn("OSError: disconnect", str(stream._failure))
         await stream.close()
         self.assertIsNone(stream._renew_task)
         self.assertFalse(stream.owns("one"))

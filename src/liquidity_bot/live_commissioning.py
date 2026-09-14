@@ -6217,6 +6217,28 @@ class CommissioningRunner:
         """Optional source-specific exit pass before unrelated periodic work."""
         return None
 
+    def _preserve_position_orders_during_bound_recovery(
+        self, slug: str,
+    ) -> bool:
+        """Whether this account source can prove one exact reducer is safe.
+
+        The default private source returns false: losing/rebinding its account
+        transport retains the existing global quarantine. A source with fresh
+        independent account proof may override this for exact reducers only.
+        """
+
+        return False
+
+    def _bound_recovery_position_preemption_enabled(self) -> bool:
+        """Whether shared-feed recovery has independent account proof."""
+
+        return False
+
+    async def _service_bound_recovery_positions(self) -> str | None:
+        """Optional serial checkpoint for already-owned urgent exposure."""
+
+        return None
+
     def _request_market_stream_rebind(self, error: MarketStreamUnavailable) -> None:
         # Only the outer owner can transfer task-held private evidence before
         # reconnecting. Yield to it without per-market retirement/proof fanout.
@@ -7396,7 +7418,9 @@ class CommissioningRunner:
     async def _quarantine_working_orders(
         self, slug: str | None = None, *, require_terminal: bool = True,
         drain_private_events: bool = False,
-    ) -> None:
+        account_state_already_reconciled: bool = False,
+        preempt_positions: bool = False,
+    ) -> str | None:
         """Cancel known quotes, optionally requiring terminal proof to return.
 
         ``slug`` limits the quarantine to one market. A per-market fault --
@@ -7408,8 +7432,10 @@ class CommissioningRunner:
         market's quote within seconds of placement, on repeat.
 
         The global form (``slug=None``) is still correct for faults that really
-        are account-wide: a stream reconnect, and rotation, which is about to
-        rebind every market anyway.
+        are account-wide: a private-stream reconnect, and rotation, which is
+        about to rebind every market anyway. REST-backed shared public-feed
+        recovery is the narrow exception: after a fresh complete account proof
+        it may preserve one exact reducer while retiring risk-building orders.
         """
 
         # Name the caller. This is one of only two paths that cancel an order,
@@ -7446,15 +7472,43 @@ class CommissioningRunner:
         # Positive OPEN evidence can then license a cancel even when GET-by-id
         # is lagging. The second pass below enforces the requested terminal
         # postcondition.
-        await self._rest_reconcile(
-            now, strict_order_markets=frozenset())
+        if not account_state_already_reconciled:
+            await self._rest_reconcile(
+                now, strict_order_markets=frozenset())
         self._assert_runtime_scope()
+
+        async def service_positions() -> str | None:
+            if not preempt_positions:
+                return None
+            stop = await self._service_bound_recovery_positions()
+            if stop:
+                return stop
+            if self._streams_need_rebind:
+                raise (self._pending_market_stream_error
+                       or MarketStreamUnavailable(
+                           "public stream failed during position-priority recovery"))
+            return None
+
+        stop = await service_positions()
+        if isinstance(stop, str) and stop:
+            return stop
         # Retire quotes in every market that could hold them, not just the
         # primary. Resuming with one market's order still working would let it
         # fill unobserved while the others rebind.
         # Nothing bound and nothing in the ledger means nothing to retire.
         slugs = (slug,) if slug is not None else self._shutdown_slugs()
+        if preempt_positions:
+            # Validate/cancel position-owned orders before flat-market quotes.
+            # If a reducer became oversized after a partial fill, leaving it
+            # behind a long flat-order slate could reverse the position.
+            slugs = tuple(sorted(
+                slugs,
+                key=lambda market: self.ledger.position(market) == 0,
+            ))
         for market in slugs:
+            stop = await service_positions()
+            if isinstance(stop, str) and stop:
+                return stop
             if self.ledger.market_has_unresolved_intent(market):
                 # The intent and UNKNOWN_ABSENT row identify exactly which
                 # market is ambiguous. After a fresh private bind, the normal
@@ -7465,14 +7519,27 @@ class CommissioningRunner:
                 # forbidden; see `_retry_uncertain_cancels`.
                 continue
             if self.ledger.working_orders(market):
+                if (preempt_positions
+                        and self._preserve_position_orders_during_bound_recovery(
+                            market)):
+                    continue
                 await self.kill_switch.initiate(market, now=self._now())
+                stop = await service_positions()
+                if isinstance(stop, str) and stop:
+                    return stop
         if drain_private_events:
             await self._drain_private_events()
+        stop = await service_positions()
+        if isinstance(stop, str) and stop:
+            return stop
         await self._rest_reconcile(
             self._now(), strict_order_markets=terminal_order_markets)
         self._assert_runtime_scope()
+        stop = await service_positions()
+        if isinstance(stop, str) and stop:
+            return stop
         if not require_terminal:
-            return
+            return None
         for market in slugs:
             unresolved = self.ledger.unresolved_intents(market)
             if unresolved and all(
@@ -7497,6 +7564,7 @@ class CommissioningRunner:
             if self.ledger.working_orders(market):
                 raise AdapterError(
                     f"runtime recovery order is still working in {market}")
+        return None
 
     async def _market_has_settled(self, slug: str) -> bool:
         """Has the venue RESOLVED this market? Proof, not inference.
@@ -8713,13 +8781,13 @@ class CommissioningRunner:
         the whole bind has to be redone -- which is exactly what that method
         does, so this retries it rather than reimplementing the sequence.
 
-        Rebinds private visibility before quarantine. A top-up deliberately
-        leaves resting orders alone, so cancelling here gives up the reward
-        they were still accruing -- but the private stream is down, which means
-        a fill can land unseen, and quoting blind is the one thing the gate
-        exists to prevent. Listening first preserves terminal cancel proof;
-        the recovery coroutine still owns the loop, so no new-risk decision can
-        run before quarantine and fresh-state proof finish.
+        Rebinds account visibility before quarantine. Private account mode
+        keeps the strict whole-slate quarantine because a fill may have landed
+        unseen. REST account mode already has fresh independent account proof,
+        so it may preserve only one exact reducer and service due exposure
+        between flat-order cancellations. In both modes the recovery coroutine
+        owns the loop: no new-risk decision can run before quarantine and
+        fresh-state proof finish.
         """
 
         exc = initial
@@ -8750,7 +8818,18 @@ class CommissioningRunner:
                 # decision loop, so this order does not create a quote window.
                 await self._open_streams_for_active_market(
                     strict_order_markets=frozenset())
-                await self._quarantine_working_orders(require_terminal=False)
+                prioritize_positions = (
+                    self._bound_recovery_position_preemption_enabled())
+                stop = await self._quarantine_working_orders(
+                    require_terminal=False,
+                    # Opening REST-backed streams just performed a complete
+                    # account reconcile. Do not repeat that potentially slow
+                    # read before checking already-owned exposure.
+                    account_state_already_reconciled=prioritize_positions,
+                    preempt_positions=prioritize_positions,
+                )
+                if isinstance(stop, str) and stop:
+                    return stop
                 await self._drain_private_events()
                 ambiguous_markets = sorted({
                     str(row["market_slug"])

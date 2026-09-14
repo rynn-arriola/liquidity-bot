@@ -144,3 +144,22 @@ covering +10, zero unresolved intents and zero unknown orders; ledger agrees.
 The7-minute acceptance confirms continued operation/coverage, not complete
 elimination of venue throttling or a natural timed exit. Sustained account-read
 load and future maintenance acceptance remain observational open items.
+
+## Read-only status follow-up, September14 16:43Z
+
+Same supervisor2305886/runner2305915 remains running after3h41m on the same
+deployed marker, manual REST size10/32. Authenticated16:43:09.707090Z returned
+36 venue orders:30 flat-market entries and six exact reducing orders covering
+all six positions (including1.36- and6-contract residuals). No unresolved
+intents or unknown orders. The ledger read taken after the venue reads had35
+working orders; these active reads are not atomic and do not prove a lost order.
+
+Fifteen completed API windows since16:27Z contain3,018 attempts,13 failures and
+zero429s; latest rates3.280/3.371/3.395/s with no cooldown. Individual-order404s
+remain visible; max admission wait in the slice5.274s. No runtime-recovery
+fault appeared. The16:42:28Z scheduler reported decision p9515.217s, so smooth
+WebSocket-equivalent latency is still not established. The Tomgen/Alawaz
+hard_inventory_timeout IOC16:33:05.800852Z was followed by observed flat at
+16:33:09.474600Z (3.674s). Another natural flat was observed16:29:45Z. Current
+position coverage and these completions do not prove every future deadline.
+No code/configuration change, venue mutation by diagnostics, or restart.

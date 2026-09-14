@@ -163,3 +163,29 @@ hard_inventory_timeout IOC16:33:05.800852Z was followed by observed flat at
 16:33:09.474600Z (3.674s). Another natural flat was observed16:29:45Z. Current
 position coverage and these completions do not prove every future deadline.
 No code/configuration change, venue mutation by diagnostics, or restart.
+
+## Automatic public-stream recovery, September14 20:05–20:08Z
+
+At20:05:38.981178Z bound_streams attempt1 reported public book renewal failure.
+At20:05:59.779400Z shared recovery quarantined working orders, followed by
+positively observed terminal cancellations20:06:26Z. Source inspection confirms
+rebind, quarantine and reconciliation precede normal decisions. This explains
+the disappearing quotes. Underlying transport cause is not established by the
+wrapper error. Earlier exact pregame-state-unavailable events are separate guards.
+
+Same processes remained up7h05m. Entries resumed20:06:44Z without restart.
+Authenticated20:07:22Z:12 flat entries/five covered positions;20:08:14.300573Z:
+29 flat entries plus five exact reducers for +10,+4,-1.77,-10,+10, zero
+unresolved/unknown orders, ledger34 working agrees. This proves recovery and
+rebuilt coverage, not uninterrupted exit coverage. The Naghan residual exit
+acknowledged20:06:35Z at a logged34.173s past deadline, then flat20:06:37Z;
+Konrom exit acknowledged20:07:02Z at10.357s past deadline, then flat20:07:04Z.
+Recovery scheduling delay needs narrow diagnosis; eventual flat is not on-time proof.
+
+Fourteen completed windows since19:50Z through20:04:48Z had3,259 attempts,
+18 failures and zero429. These precede recovery and cannot prove zero rate
+limits across the entire event. Observed trigger is a public-stream failure,
+not a logged429. Changelog reopened: newest maintenance announcement remains
+September14 05–08ET; live status web fetch failed, so no global-health or
+maintenance attribution. No diagnostic venue mutation, code/config change or
+restart. Existing $90 HARD and30-flat-entry cap remain unchanged.

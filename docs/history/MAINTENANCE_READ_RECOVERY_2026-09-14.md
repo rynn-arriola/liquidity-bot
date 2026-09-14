@@ -276,3 +276,53 @@ REST-account exception has both fresh account proof and replacement books.
 The live bot was not stopped or restarted and this source was not copied into
 the production checkout. Therefore none of the prepared behavior is active;
 the running process remains on `c7b6762d7` until a later operator instruction.
+
+## Command 1 deployment, September14
+
+The later Command 1 authorized the complete stop/deploy/restart workflow.
+Supervisor2305886 was stopped and runner2305915 received SIGTERM. Its final
+record at20:57:46.295651Z reports `operator_sigterm`, `flat=true`. Independent
+authenticated20:58:08.568896Z proof found zero venue orders/positions, zero
+unresolved intents/unknown orders and zero ledger working orders/positions.
+The graceful shutdown flattened its remaining exposure through existing exits;
+there was no force-kill or manual ledger repair.
+
+Windows/GitHub were clean at `2166dd2634582934e42c6f9fec0d4845ac2297d7`.
+Pre-deployment parity verified a private stopped-ledger recovery copy captured
+20:58:32.641178Z,430,809,088 bytes, SHA-256 prefix15b94f71376d. The offline PC
+was skipped. The clean WSL checkout fast-forwarded from `1b8b187d4` through a
+local git bundle;194 normalized source/test/config/script hashes matched both
+the reviewed commit and Windows. Existing regression/reversal/full-local-suite
+evidence was reused; the final deployment diff is the same reviewed change.
+No source or configuration was changed during this deployment task.
+
+The exact installed runtime passed all1,685 tests in241.884 seconds and all194
+hashes were verified again afterward. DEPLOYED_COMMIT was set to `2166dd263`.
+The fresh21:04:10.946602Z authenticated gate again proved zero venue and ledger
+orders/positions, zero unresolved intents and zero unknown orders. The authorized
+launcher then started supervisor3353887/runner3353918 at21:04Z with size10,
+32 slots and explicit REST account mode. Existing $90 HARD, max30 flat-entry
+ceiling, position-order exclusion and durable loss state were preserved.
+Acceptance reads start from log byte82,338,858 so older errors cannot be
+misattributed to this run. Native test output is in the ignored runtime file
+`logs/release-2166dd263-tests.log`.
+
+At21:07:05.710637Z authenticated proof showed30 flat entry orders and two
+exact BUY10 reducers covering two -10 positions, with zero unresolved/unknown
+orders. The first reducer acknowledged21:06:07.992460Z,0.083823 seconds after
+the position was observed. That position naturally flattened21:09:29.183834Z.
+Authenticated21:10:03.315747Z then showed30 flat entries plus one exact BUY10
+covering the remaining -10 position, zero unknown orders and one in-flight
+create. The log positively resolved that create at21:10:04.770672Z. Venue and
+ledger reads during active trading are not atomic; their one-order difference
+does not itself show missing ownership.
+
+The first five completed API windows through21:10:03Z contain1,065 attempts,
+17 individual-order404s and zero429s. Rates3.284/3.251/2.952/2.930/3.052 per
+second; all reported cooldowns zero, maximum admission wait1.217 seconds.
+No runtime-recovery failure or retirement appeared. The latest scheduler
+decision p95 was8.699 seconds, compared with37.496 during startup; these are
+observations rather than a WebSocket-performance equivalence claim. Both
+processes remained up at5m55s. No shared renewal failure, hard exit or new
+maintenance occurred, so natural recovery/deadline acceptance remains open.
+No fault or fill was induced and no further restart was needed.

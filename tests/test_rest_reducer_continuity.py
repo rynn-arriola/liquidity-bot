@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
 from test_venue_state import raw_order
-from liquidity_bot.errors import AdapterError
+from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
 from liquidity_bot.execution_ledger import PositionState
 from liquidity_bot.rest_fallback import RestFallbackRunner
 from liquidity_bot.rest_polling_policy import RestPollingPolicy
@@ -74,6 +74,77 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         self.assertTrue(runner.ledger.unresolved_intents(held))
         self.assertFalse(client.orders.create_calls)
 
+    async def test_immediate_replacement_shares_cancel_proof_but_still_checks_equity(self):
+        runner, client, held = await self.build()
+        entries = tuple(f"entry-{i}" for i in range(30))
+        runner._bind_markets((held, *entries))
+        for slug in entries:
+            self.fixture.seed_working_order(runner, slug=slug, side="bid", suffix=slug)
+            client.orders.rows[f"exchange-{slug}"] = raw_order(
+                id=f"exchange-{slug}", marketSlug=slug, side="BUY", quantity="10", cumQuantity="0",
+                state="ORDER_STATE_NEW", createTime=self.now.isoformat(),
+                price={"value": "0.49", "currency": "USD"})
+        self.now += timedelta(seconds=1)
+        await runner._rest_reconcile(self.now)
+        original = runner._decide_for_market
+        prior_poll = runner._rest_poll_completed_at
+
+        async def decide(slug, now):
+            runner.state_for(held).book_observed_at = self.now
+            return await original(slug, self.now)
+
+        with patch.object(runner, "_decide_for_market", decide), \
+                patch.object(runner, "_refresh_execution_state_for_decision", AsyncMock()) as refresh, \
+                patch.object(runner, "_refresh_equity_for_decision", AsyncMock()) as equity:
+            await runner._decision_sweep((held,))
+        # Cancel's complete exact-owner proof is also the replacement's proof;
+        # no second account-wide collection, but equity is checked both times.
+        self.assertEqual(refresh.await_count, 1)
+        self.assertEqual(equity.await_count, 2)
+        self.assertEqual(len(client.orders.cancel_calls), 1)
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertEqual(runner._rest_poll_completed_at, prior_poll)
+
+    async def test_shared_confirmation_is_one_use_and_never_renews_entry_gate(self):
+        runner, _, held = await self.build()
+        before = runner._rest_poll_completed_at
+        await runner._decide_for_market(held, self.now)
+        self.assertTrue(runner._position_priority_has_fresh_account_proof(held))
+        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+        self.assertEqual(runner._rest_poll_completed_at, before)
+
+    async def test_shared_confirmation_refuses_stale_changed_unknown_stop_and_wrong_owner(self):
+        runner, _, held = await self.build()
+        await runner._decide_for_market(held, self.now)
+        cached = runner._position_confirmation_proofs[held]
+        self.assertFalse(runner._position_priority_has_fresh_account_proof("unrelated"))
+        for change in ("expired", "future", "gate", "write", "scope", "source", "stop"):
+            with self.subTest(change=change):
+                runner._position_confirmation_proofs[held] = cached
+                if change == "expired":
+                    with patch.object(runner, "_now", return_value=self.now + timedelta(seconds=1)):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                elif change == "future":
+                    with patch.object(runner, "_now", return_value=self.now - timedelta(seconds=1)):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                elif change == "gate":
+                    with patch.object(runner.gate, "session_ready", return_value=False):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                elif change == "scope":
+                    with patch.object(runner, "_active_market_slugs", (held, "other")):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                elif change == "source":
+                    with patch.object(runner, "account_state_mode", "websocket"):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                elif change == "stop":
+                    with patch.object(runner, "_stop_requested", "operator"):
+                        self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                else:
+                    runner.ledger.connection.execute("UPDATE execution_positions SET net_qty=net_qty")
+                    self.assertFalse(runner._position_priority_has_fresh_account_proof(held))
+                    # Re-capture only for independent subsequent invalidations.
+                    cached = (runner._position_confirmation_version(), cached[1], cached[2])
+
     async def test_fill_during_cancel_replaces_only_remaining_quantity(self):
         runner, client, held = await self.build()
         original = client.orders.cancel
@@ -119,6 +190,43 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         self.assertEqual(result, (None, 1.0))
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
         self.assertFalse(client.orders.create_calls)
+
+    async def test_account_throttle_yields_slate_without_cancelling_reducers_or_retiring(self):
+        runner, client, held = await self.build()
+        runner._bind_markets((held, "flat"))
+        for error in (AdapterError("rate limited", status_code=429),
+                      ApiAdmissionDeferred("wait", error_code="LOCAL_ACCOUNT_READ_COOLDOWN",
+                                           retry_after_seconds=10)):
+            with self.subTest(error=type(error).__name__):
+                runner.gate.on_reconciliation_conflict()
+                with patch.object(runner, "_refresh_execution_state_for_decision",
+                                  AsyncMock(side_effect=error)) as proof, \
+                        patch.object(runner, "_decide_for_market", AsyncMock(return_value=(None, 0))) as decide:
+                    self.assertIsNone(await runner._decision_sweep((held, "flat")))
+                self.assertEqual(proof.await_count, 1)
+                decide.assert_not_awaited()
+                self.assertFalse(client.orders.cancel_calls)
+                self.assertFalse(client.orders.create_calls)
+                self.assertFalse(runner._retired)
+                self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
+        self.now += timedelta(seconds=11)
+        await runner._rest_reconcile(self.now)
+        self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
+
+    async def test_exact_order_throttle_preserves_typed_error_after_workers_finish(self):
+        from liquidity_bot.account_source_runner import AccountSourceRunner
+        from liquidity_bot.execution_ledger import LedgerConflict
+        runner, _, held = await self.build()
+        error = ApiAdmissionDeferred("wait", error_code="LOCAL_ACCOUNT_READ_COOLDOWN")
+        # Exercise the permanent runner's pure-reader override on the same
+        # real executor/ledger, including precedence of ownership conflicts.
+        with patch.object(runner.executor, "read_order_state", AsyncMock(side_effect=error)):
+            with self.assertRaises(ApiAdmissionDeferred):
+                await AccountSourceRunner._read_exact_order_states(runner, ["exchange-reducer"], self.now)
+        with patch.object(runner.executor, "read_order_state", AsyncMock(
+                side_effect=[error, LedgerConflict("foreign identity")])):
+            with self.assertRaises(LedgerConflict):
+                await AccountSourceRunner._read_exact_order_states(runner, ["one", "two"], self.now)
 
     async def test_stop_after_cancel_does_not_start_confirmation_or_replacement(self):
         runner, client, held = await self.build()

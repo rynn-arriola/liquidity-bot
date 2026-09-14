@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - exercised only by native Windows
     fcntl = None
 
 from .errors import AdapterError, ApiAdmissionDeferred, EmptyBookError
+from . import read_backoff
 from .models import (
     BookLevel,
     BookSnapshot,
@@ -417,6 +418,7 @@ class LimiterTelemetry:
     background_cooldown_remaining_seconds: float
     report_cooldown_remaining_seconds: float
     shared_across_processes: bool
+    account_read_cooldowns: tuple[tuple[str, float], ...] = ()
 
 
 def _percentile(values: tuple[float, ...], fraction: float) -> float:
@@ -569,6 +571,7 @@ class AsyncIntervalLimiter:
         self._interrupt_generation = 0
         self._interrupt_event = asyncio.Event()
         self._book_backoff: dict[str, Any] = {}
+        self._account_read_backoff: dict[str, Any] = {}
         # Fairness for serial, nonwaiting flat-owner callers only. Expiring
         # demand is not a reservation of a host slot or a safety request.
         self._optional_book_waiters: dict[str, float] = {}
@@ -831,7 +834,7 @@ class AsyncIntervalLimiter:
 
     def _claim_shared_slot(
         self, interval: float, traffic_class: str, book_token: str | None = None,
-        *, defer_optional_book: bool = False,
+        *, defer_optional_book: bool = False, account_endpoint=None, read_token=None,
     ) -> tuple[float, float]:
         """Try one host claim; return total delay and its cooldown portion."""
 
@@ -846,6 +849,8 @@ class AsyncIntervalLimiter:
                 now = time.time()
                 if book_token is not None:
                     self._book_admission(state, now, book_token, claim=False)
+                if account_endpoint is not None:
+                    read_backoff.admit(state, account_endpoint, now, read_token, claim=False)
                 aggregate_due = self._shared_timestamp(
                     state.get("next_request_at", 0.0), now,
                     maximum_future_seconds=(
@@ -893,12 +898,26 @@ class AsyncIntervalLimiter:
                 if book_token is not None:
                     self._book_admission(state, now, book_token, claim=True)
                     self._record_book_claim(state, now, traffic_class)
+                if account_endpoint is not None:
+                    read_backoff.admit(state, account_endpoint, now, read_token, claim=True)
                 state["next_request_at"] = (
                     now + self.shared_global_interval_seconds)
                 if lane_clock is not None:
                     state[lane_clock] = now + interval
                 self._write_shared_state(handle, state)
                 return 0.0, 0.0
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _record_shared_account_read_result(self, endpoint, **result):
+        path = self.shared_state_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._open_shared_state(path) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self._read_shared_state(handle)
+                if read_backoff.record(state, endpoint, time.time(), **result):
+                    self._write_shared_state(handle, state)
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
@@ -967,7 +986,7 @@ class AsyncIntervalLimiter:
                 try:
                     state = self._read_shared_state(handle)
                     now = time.time()
-                    return {
+                    result = {
                         traffic_class: max(
                             0.0,
                             self._shared_timestamp(
@@ -986,6 +1005,9 @@ class AsyncIntervalLimiter:
                         for traffic_class in (
                             "background", "entry", "report", "safety")
                     }
+                    result.update({"read:" + endpoint: read_backoff.remaining(
+                        state, endpoint, now) for endpoint in read_backoff.ENDPOINTS})
+                    return result
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         except FileNotFoundError:
@@ -1013,6 +1035,9 @@ class AsyncIntervalLimiter:
         book_token = (uuid4().hex if request_kind == "read"
                       and _request_category(operation, request_kind) == "market_book"
                       else None)
+        account_endpoint = (read_backoff.endpoint_for(_request_category(operation, request_kind))
+                            if request_kind == "read" else None)
+        read_token = uuid4().hex if account_endpoint is not None else None
         try:
             while True:
                 if self._interrupt_generation != interrupt_generation:
@@ -1045,6 +1070,8 @@ class AsyncIntervalLimiter:
                     # asyncio lock while a worker waits for that file lock.
                     delay, cooldown_delay = await asyncio.to_thread(
                         self._claim_shared_slot, interval, chosen_class, book_token,
+                        **({"account_endpoint": account_endpoint, "read_token": read_token}
+                           if account_endpoint is not None else {}),
                         **({"defer_optional_book": True} if nonwaiting_book else {}))
                 else:
                     async with self._lock:
@@ -1052,6 +1079,9 @@ class AsyncIntervalLimiter:
                         if book_token is not None:
                             self._book_admission(
                                 self._book_backoff, now, book_token, claim=False)
+                        if account_endpoint is not None:
+                            read_backoff.admit(self._account_read_backoff, account_endpoint,
+                                               now, read_token, claim=False)
                         lane_due = 0.0
                         if chosen_class == "entry":
                             lane_due = self._next_entry_at
@@ -1087,6 +1117,9 @@ class AsyncIntervalLimiter:
                         delay = max(0.0, due - now)
                         cooldown_delay = max(0.0, cooldown_due - now)
                         if delay == 0.0:
+                            if account_endpoint is not None:
+                                read_backoff.admit(self._account_read_backoff, account_endpoint,
+                                                   now, read_token, claim=True)
                             if book_token is not None:
                                 self._book_admission(
                                     self._book_backoff, now, book_token, claim=True)
@@ -1139,7 +1172,7 @@ class AsyncIntervalLimiter:
             _request_category(operation, request_kind)
         ] += 1
         self._wait_samples.append(waited)
-        return book_token
+        return book_token or read_token
 
     def interrupt_waits(self) -> None:
         """Wake waits that began before an operator stop boundary.
@@ -1198,6 +1231,22 @@ class AsyncIntervalLimiter:
                 f"{category}@{status}"] += 1
         else:
             self._successful_responses += 1
+        account_endpoint = (read_backoff.endpoint_for(_request_category(operation, request_kind))
+                            if request_kind == "read" else None)
+        if account_endpoint is not None:
+            result = dict(token=admission_token, status_code=status_code,
+                          failed=failed, retry_after_seconds=retry_after_seconds)
+            if self.shared_state_path is not None:
+                await asyncio.to_thread(self._record_shared_account_read_result,
+                                        account_endpoint, **result)
+            else:
+                async with self._lock:
+                    read_backoff.record(self._account_read_backoff, account_endpoint,
+                                        time.monotonic(), **result)
+            if status_code == 429:
+                self._rate_limited_responses += 1
+            # A read rejection cannot impose cooldown on cancel/reducer sends.
+            return
         if (request_kind == "read"
                 and _request_category(operation, request_kind) == "market_book"):
             result = dict(token=admission_token, status_code=status_code,
@@ -1285,6 +1334,10 @@ class AsyncIntervalLimiter:
             report_cooldown_remaining_seconds=class_cooldowns["report"],
             shared_across_processes=(
                 self.shared_state_path is not None and fcntl is not None),
+            account_read_cooldowns=tuple((endpoint, max(
+                read_backoff.remaining(self._account_read_backoff, endpoint, now),
+                float(shared_cooldowns.get("read:" + endpoint, 0))))
+                for endpoint in read_backoff.ENDPOINTS),
         )
         if reset:
             self._telemetry_started_at = now
@@ -1592,6 +1645,13 @@ class AsyncReadOnlyGateway:
                 # "Global Rate Limit Exceeded" even though it is not a rate
                 # limit; slowing down in response makes that failure worse.
                 if self._status_code(exc) != 429 or attempt + 1 >= self.retry_attempts:
+                    raise self._adapter_error(operation, exc) from exc
+                if (isinstance(self.limiter, AsyncIntervalLimiter)
+                        and read_backoff.endpoint_for(_request_category(operation, "read"))
+                        is not None):
+                    # Fail this proof promptly. The next ordinary caller may
+                    # claim one endpoint recovery probe after bounded backoff.
+                    # Never hold the serial exit owner in a read retry ladder.
                     raise self._adapter_error(operation, exc) from exc
                 if _request_category(operation, "read") == "market_book":
                     # Let the next ordinary caller claim the single recovery

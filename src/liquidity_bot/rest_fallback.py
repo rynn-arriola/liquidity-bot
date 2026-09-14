@@ -7,6 +7,8 @@ trades latency for availability, and cannot detect silently stale venue data.
 
 from __future__ import annotations
 
+from . import read_backoff
+
 import asyncio
 from contextvars import ContextVar
 from dataclasses import replace
@@ -131,6 +133,7 @@ class RestFallbackRunner(CommissioningRunner):
         self._bulk_skipped = {}
         self._hard_exit_terminal_proofs = {}
         self._hard_exit_retry_authorizations = {}
+        self._position_confirmation_proofs = {}
         self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
         if self._using_rest_source():
             kwargs["private_stream_factory"] = DisabledPrivateStream
@@ -274,11 +277,16 @@ class RestFallbackRunner(CommissioningRunner):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         failures = []
+        throttle = None
         for exchange_id, result in zip(exchange_ids, results):
-            if isinstance(result, RuntimeInvariantViolation):
+            if isinstance(result, (RuntimeInvariantViolation, LedgerConflict)):
                 raise result
             if result is not None:
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+                if read_backoff.is_backpressure(result):
+                    throttle = result
+        if throttle is not None:
+            raise throttle
         return failures
 
     def _execution_history_overlap_pages(self, now):
@@ -308,6 +316,7 @@ class RestFallbackRunner(CommissioningRunner):
         return batch
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
+        self._position_confirmation_proofs.clear()
         if not self._using_rest_source():
             return await super()._rest_reconcile(
                 now, tag=tag, strict_order_markets=strict_order_markets)
@@ -441,6 +450,35 @@ class RestFallbackRunner(CommissioningRunner):
             return super()._position_priority_has_fresh_transition_proof(slug)
         return self._usable_hard_exit_terminal_proof(slug) is not None
 
+    def _position_confirmation_version(self):
+        # Over-invalidate on ANY ledger write, including identity adoption and
+        # unrelated mutations. No cache may survive a new account observation.
+        return (self.ledger.connection.total_changes, tuple(self.active_slugs),
+                self.account_state_mode,
+                getattr(getattr(self, "source_control", None), "generation", None))
+
+    def _position_priority_has_fresh_account_proof(self, slug):
+        if not self._using_rest_source():
+            return super()._position_priority_has_fresh_account_proof(slug)
+        cached = self._position_confirmation_proofs.pop(slug, None)
+        if cached is None:
+            return False
+        version, started, completed = cached
+        now = self._now()
+        # Share the just-completed cancel confirmation with its immediate
+        # replacement consumer once. No new snapshot timestamp, global poll
+        # clock, risk mark or mutation authority is created by this shortcut.
+        return bool(
+            not self._stop_requested and self.rest_polling_policy.enabled
+            and version == self._position_confirmation_version()
+            and 0 <= (now - started).total_seconds() <= 30
+            and 0 <= (now - completed).total_seconds() < 1
+            and self.gate.session_ready(self.ledger, now=now)
+            and self.ledger.position(slug) != 0
+            and not self.ledger.working_orders(slug)
+            and not self.ledger.unresolved_intents()
+            and not self.ledger.absent_orders())
+
     def _scoped_reducing_mutation_proof_current(self, slug):
         """Recheck one exact retry authorization at the network boundary."""
 
@@ -527,6 +565,7 @@ class RestFallbackRunner(CommissioningRunner):
         return "retry"
 
     async def _reconcile_position_state(self, slug, *, tag):
+        self._position_confirmation_proofs.clear()
         observed_at = self._now()
         try:
             await CommissioningRunner._rest_reconcile(
@@ -547,6 +586,12 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_history_seen = (
             (self._rest_history_seen or frozenset())
             | self._rest_history_pending)
+        if (tag == "position-transition" and self.ledger.position(slug) != 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.unresolved_intents()
+                and not self.ledger.absent_orders()):
+            self._position_confirmation_proofs[slug] = (
+                self._position_confirmation_version(), observed_at, self._now())
 
     async def _decide_for_market(self, slug, now, *, replanned=False):
         if not self._using_rest_source():

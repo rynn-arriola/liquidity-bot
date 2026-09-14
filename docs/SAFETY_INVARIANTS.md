@@ -15,6 +15,9 @@ These are implementation requirements, not suggestions.
    settle: maker-lab ran one and reached settlement 79% losers by construction,
    for -$88.20 in one session. Emergency loss realization stays reserved for
    the bounded hard-timeout path, not the passive reducer.
+   An exact-size working reducer already at that touch is retained rather than
+   stepping ahead of itself; genuinely better touch, quantity changes and the
+   existing hard/lifecycle deadlines still require their normal decisions.
 6. If the position remains at its hard inventory-age limit, cancel and confirm
    every working order before sending a price-capped IOC. Hard exit plans and
    applies one cancel at a time, building side first; confirmation grace starts
@@ -686,7 +689,13 @@ These are implementation requirements, not suggestions.
     revalidation have an independent 4/second entry lane; account proof,
     cancels, passive reducers and IOC exits use safety. A 429
     cools only its originating class, safety's own cooldown is at most one
-    second, and no mutation retries. Public book-read 429s are a narrower
+    second, and no mutation retries. Account-read 429s instead cool their exact
+    endpoint across all lanes, with one expiring recovery probe and no inline
+    retry. Trade/cash history share the activities endpoint. Other endpoints
+    and mutations remain independently admissible, never exempt from required
+    proof. Typed account backpressure revokes failed proof without per-market
+    cancellation/retirement fanout; it proves neither flatness nor order state.
+    Public book-read 429s are a narrower
     endpoint exception: all slugs/classes share bounded adaptive backoff and
     one expiring recovery-probe lease, never an inline retry or an account/
     mutation-lane cooldown. Only the matching probe's success clears that
@@ -977,6 +986,13 @@ These are implementation requirements, not suggestions.
     reads only for the identical schedule token, within the existing ten-second
     confirmation limit and with no working, absent or unresolved owner state.
     Any mismatch, stale clock or ambiguity requires another exact proof.
+    A successful passive cancel-confirmation may likewise share only its
+    account proof once with the immediate same-owner priority decision: REST
+    optimization enabled, completion age below one second, original proof age
+    at most30 seconds, identical ledger version/scope/source generation, valid
+    account gate, nonzero position and no working owner order or account-wide
+    ambiguity. It never skips equity, renews global polling/entry authority,
+    survives another reconciliation or carries across a stop/source change.
     Confirmed reducer cancellation continues through the same guarded path;
     an exhausted uncovered/due owner defers flat work while preserving other
     held owners. Successful held service cannot inherit flat reward dwell.

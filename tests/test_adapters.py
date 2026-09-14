@@ -761,7 +761,7 @@ class GatewayTests(unittest.TestCase):
             counter_lock = threading.Lock()
             calls = 0
 
-            def blocked_first_claim(*_args):
+            def blocked_first_claim(*_args, **_kwargs):
                 nonlocal calls
                 with counter_lock:
                     calls += 1

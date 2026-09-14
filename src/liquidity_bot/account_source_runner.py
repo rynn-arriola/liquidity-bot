@@ -6,6 +6,8 @@ it never plans, submits, cancels or resets an order/position.
 """
 from __future__ import annotations
 
+from . import read_backoff
+
 import asyncio
 from collections import deque
 from dataclasses import replace
@@ -341,6 +343,7 @@ class AccountSourceRunner(RestFallbackRunner):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         failures = []
+        throttle = None
         # Workers only read; one synchronous ordered projector owns the ledger.
         for exchange_id, result in zip(exchange_ids, results):
             if isinstance(result, (RuntimeInvariantViolation, LedgerConflict)):
@@ -349,12 +352,18 @@ class AccountSourceRunner(RestFallbackRunner):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+                if read_backoff.is_backpressure(result):
+                    throttle = result
             else:
                 order, identities = result
                 resolved = identities.project(self.ledger.resolve_client_order_id)
                 order = replace(order, client_order_id=(resolved.get(exchange_id)
                                                        or order.client_order_id))
                 self.executor.apply_order_state(exchange_id, order, observed_at=now)
+        if throttle is not None:
+            # Join every worker and preserve successful positive facts first.
+            # Do not erase typed endpoint backpressure into a per-owner string.
+            raise throttle
         return failures
 
     async def _collect_rest_snapshots(self, now):

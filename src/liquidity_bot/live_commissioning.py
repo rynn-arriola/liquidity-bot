@@ -12,6 +12,8 @@ through ``main()`` with all explicit arming acknowledgements.
 
 from __future__ import annotations
 
+from . import read_backoff
+
 import argparse
 import asyncio
 import json
@@ -5637,7 +5639,8 @@ class CommissioningRunner:
             f"cooldown_report={evidence.report_cooldown_remaining_seconds:.1f} "
             f"shared={int(evidence.shared_across_processes)} "
             f"categories={categories} "
-            f"failure_categories={failure_categories}",
+            f"failure_categories={failure_categories} "
+            f"account_read_cooldowns={','.join(f'{name}:{seconds:.1f}' for name, seconds in evidence.account_read_cooldowns if seconds > 0) or 'none'}",
             flush=True,
         )
 
@@ -6190,6 +6193,10 @@ class CommissioningRunner:
 
         return False
 
+    def _position_priority_has_fresh_account_proof(self, slug: str) -> bool:
+        """Optional account-only reuse; never skips equity or grants authority."""
+        return False
+
     def _hard_exit_retry_delay(self, slug: str) -> float:
         """Back off a confirmed terminal IOC before its bounded retry."""
 
@@ -6279,15 +6286,23 @@ class CommissioningRunner:
                 priority_dispatch
                 and self._position_priority_has_fresh_transition_proof(slug)
             )
-            if not state_refresh_failed and not transition_proved:
+            account_proved = (transition_proved or (
+                priority_dispatch and self._position_priority_has_fresh_account_proof(slug)))
+            if not state_refresh_failed and not account_proved:
                 try:
                     await self._refresh_execution_state_for_decision(now)
-                except Exception:
+                except Exception as exc:
                     # Preserve the last observation until its 30-second bound;
                     # once stale, the frame refuses new risk. Do not retry this
                     # account-wide REST proof for every remaining market in the
                     # same sweep; the outer loop will give it another chance.
                     state_refresh_failed = True
+                    if read_backoff.is_backpressure(exc):
+                        # A failed account proof permits no decision, but a
+                        # shared read throttle is not a defect in every market.
+                        # Yield before per-market recovery can cancel reducers
+                        # or retire owners. Ordinary recovery/stop stays active.
+                        return None
             # REST can discover a fill while proving a different, flat owner.
             # Re-enter the SAME guarded path for that position before another
             # entry decision. A changed quantity/order state can wake an owner

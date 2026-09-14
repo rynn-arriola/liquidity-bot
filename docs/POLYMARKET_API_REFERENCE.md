@@ -21,6 +21,16 @@ implemented.
 
 ## Interface actually used by this project
 
+Account-read429 handling in the reviewed implementation is endpoint-specific:
+balance, positions, open orders, individual-order retrieval, and activities
+(trade/cash history together). All cooperating request lanes share bounded
+backoff and one expiring probe lease, without inline retry. This is local load
+protection, not evidence of a new venue quota, an account ban or WebSocket
+recovery. Other endpoints and mutations still require their normal admission
+and account proof. See the
+[account-load review](history/ACCOUNT_READ_AND_REDUCER_LOAD_2026-09-13.md)
+for measured failures, tests and release boundaries.
+
 September13 whole-bot transport review confirms public books are already streamed;
 the remaining major account reads depend on the private stream, which returned
 zero application frames in the19:34–19:35Z retest. Marked-equity REST/cash-history

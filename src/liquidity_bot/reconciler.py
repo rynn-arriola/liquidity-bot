@@ -697,9 +697,16 @@ class DesiredStateReconciler:
             frame.book, reducing, frame.market.tick_size, frame.entry_price)
         reducing_orders = [order for order in frame.working_orders
                            if order.side == reducing]
+        # An exact reducer already at the touch must not improve against
+        # itself. Canceling it removes that touch, so the replacement can land
+        # at the very same price and repeat forever. A genuinely better market
+        # touch or changed remaining quantity still follows normal repricing.
+        at_touch = [order for order in reducing_orders
+                    if self._matches(order, price=self._touch(frame.book, reducing), qty=qty)]
         matching = [order for order in reducing_orders
                     if self._matches(order, price=passive_price, qty=qty)]
-        keep_id = matching[0].order_id if matching else None
+        keep = matching or at_touch
+        keep_id = keep[0].order_id if keep else None
         wrong = [order for order in reducing_orders
                  if order.order_id != keep_id]
         actions.extend(PlanAction(

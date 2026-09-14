@@ -278,6 +278,22 @@ Live measurements require the prepared code to be deployed with operator authori
 
 ## Implemented operator control
 
+### Account-read load and reducer continuity
+
+The [September13 account-load review](history/ACCOUNT_READ_AND_REDUCER_LOAD_2026-09-13.md)
+retains the existing single owner and single-flight watchers. It adds endpoint
+429 backoff shared across lanes/processes, with one recovery probe instead of
+inline retries. The immediate priority decision can consume a successful exact
+passive cancel-confirmation once, with strict age/version/scope/source checks;
+equity remains independently checked and entry authority is not renewed.
+Exact reducers already at the active touch are retained, avoiding self-induced
+cancel/repost churn. No always-running second full-account reconciler, broader
+cache authority, polling increase or automatic source switch is introduced.
+This reduces avoidable requests, not the venue's ability to rate-limit. Runtime
+deployment and live acceptance are tracked in STATUS, not implied by this design.
+
+### Source selection
+
 The launcher accepts `websocket`, `rest` or compatible `rest-fallback` as its
 fourth argument. If omitted, it loads the last successfully verified selection;
 without a saved selection it uses validated `config/account_source_policy.json`.

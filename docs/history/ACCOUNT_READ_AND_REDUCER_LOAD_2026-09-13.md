@@ -149,3 +149,47 @@ price-capped procedure, manual closure or leaving exits resting. No shutdown-pol
 override, manual ledger repair, deployment or restart has occurred. Remaining
 owners in shutdown logs: Timder/Taiich(-10), Arusag/Jinlu(+2), Pesden/Binole(-10).
 Amounts are the stopped log observations, not promises of unchanged exposure.
+
+## Deployment and restart
+
+The operator subsequently confirmed manual closure and requested restart.
+At00:33:03.700782Z the venue was order/position-free; the stopped ledger still
+held three historical working orders/positions. The reviewed stopped prestart
+routine acquired exclusive ownership, proved all three exact orders terminal,
+then ran normal reconciliation with venue mutations disabled. It finished
+flat/clear with zero venue mutations; no inferred cancellation or manual row
+repair was used.
+
+Commit `2a867a5819ab41175e9f4af4808fed0031322371` was pushed, fast-forwarded
+into the clean runtime, and all193 tracked runtime/test/config/script file
+hashes matched the reviewed commit and Windows. The complete production suite
+passed1,671 tests in156.394 seconds. `DEPLOYED_COMMIT` was updated only after
+verification. The00:36:47.151632Z start gate proved zero venue/ledger orders,
+positions, unresolved intents or unknown orders. Supervisor693287/runner693316
+started with `auto 10 32 rest`. No risk, source, size, cadence or cap changed.
+
+Post-start parity passed Windows/GitHub/WSL/marker; its online recovery snapshot
+was captured00:37:06.846957Z,402788352 bytes, hash prefix3585fbc6ade9. Offline
+PC skipped. Startup selection streamed87/87 books and its final32/32 with zero
+REST fallbacks. Normal entry placements began; that alone is not sustained
+exit/recovery or load acceptance.
+
+## Five-minute natural startup acceptance
+
+At00:41:52.527473Z the authenticated snapshot proved30 flat pending entries,
+zero positions, zero unresolved intents and zero unknown orders. Supervisor
+693287 and runner693316 were up5m05s/5m04s with the intended command.
+
+Four complete API windows through00:41:21Z contained725 attempts, zero429s,
+zero lane/endpoint cooldown and13 `order_retrieve@404` responses. Per-window
+rates were3.114,2.597,2.812 and1.869 requests/s. The last window had113 calls
+in60.5 seconds, two mutations, zero failures and0.459s maximum admission wait.
+No REST-book category was present. These startup/flat cohorts are not comparable
+proof of savings over the earlier busy-position cohort.
+
+Four00:41:02Z incentive-refresh checks reported unavailable pregame state;
+normal entry guards/recovery remained binding. Do not describe the run as
+error-free. No natural position transition, passive reducer or hard IOC occurred
+in this acceptance interval. Reducer continuity, exact confirmation reuse,
+recovery-probe behavior under real429s and sustained32-owner capacity remain
+natural-observation items, not induced live tests or reasons to weaken guards.

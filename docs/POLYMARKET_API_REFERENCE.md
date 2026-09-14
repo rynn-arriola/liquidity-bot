@@ -23,7 +23,7 @@ implemented.
 
 Account-read outage handling in the reviewed implementation is endpoint-specific:
 balance, positions, open orders, individual-order retrieval, and activities
-(trade/cash history together). The September14 prepared extension includes
+(trade/cash history together). The September14 deployed extension includes
 HTTP500/502/503/504 and typed network failures, preserving true status telemetry
 and independent mutation admission. [Review](history/MAINTENANCE_READ_RECOVERY_2026-09-14.md).
 All cooperating request lanes share bounded

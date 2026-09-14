@@ -7,9 +7,10 @@ implement/review outage-read cooldowns and maintenance book recovery. Later
 instructions authorize stop/restart after verification and immediate stop
 while working. Laptop runner693316/supervisor693287 stopped successfully;
 authenticated12:51:02.784125Z proves zero venue orders/positions/unresolved/unknown
-state. No force-kill was needed. Source remains `2a867a581`; review began clean
+state. No force-kill was needed. Prior loaded source was `2a867a581`; review began clean
 at `f3de96717`. Available-machine
-parity passed; offline PC skipped. No venue mutation was made in this task.
+parity passed; offline PC skipped. Diagnostics made no venue mutations; the
+authorized restarted bot later resumed its ordinary trading actions.
 
 Authenticated12:42:58.290401Z: zero venue orders, positions, unresolved intents
 and unknown orders; ledger agrees. The existing scheduled hold has a resume
@@ -107,3 +108,39 @@ Stop/deploy/restart is authorized after verification. Future natural
 acceptance must prove bounded outage reads, no per-owner fanout or empty-owner
 book retirement during maintenance, fresh-book trading after all holds, and
 proper exits/cancel proof with exposure. No fault or fill may be induced.
+
+## Deployment and initial live acceptance
+
+Pushed `c7b6762d71433b640e4468bacaf00f32f8726ba8` before deployment. The clean
+WSL runtime fast-forwarded through a local git bundle;197 normalized tracked
+source/test/script/config hashes matched. Its exact installed full suite passed
+all1,681 tests in167.598 seconds. DEPLOYED_COMMIT records that release.
+Available Windows/GitHub/WSL parity passed with the offline PC explicitly skipped.
+
+Fresh13:01:32.058822Z authenticated orders/positions and ledger ownership were
+all zero. Authorized restart13:01:40Z launched supervisor2305886/runner2305915
+with manual REST, quote size10 and32 slots. The scan completed in6.7 seconds,
+with46/46 streamed scan books and23/23 final books, no REST-book fallback.
+Entries began normally. At13:03:05Z the runner observed one natural +10 position;
+authenticated13:07:33.976985Z proves29 flat entry orders plus one OPEN SELL10
+covering it. Unknown orders were zero; one new in-flight intent was present.
+
+The first five API windows contain1,035 attempts and13 failures:11 individual
+order404s and two real429s (balance in13:06:18Z window, positions in13:07:20Z
+window). Rates were3.034/2.922/3.206/3.095/2.972 requests/s. The balance cooldown
+had cleared, while positions showed its bounded2-second hold in that window.
+There was no per-owner runtime-recovery fanout or retirement; ordinary
+cancel-terminal observations and intent repair continued. This is not a
+zero-error or WebSocket-speed claim, and low flat-paused load is not comparable.
+No natural hard exit or new maintenance outage occurred in this initial sample.
+
+Seven-minute follow-up: both processes remain running. The13:08:21Z window had
+one execution-history429, one order404 and213 attempts/60.9s (3.500/s), including
+83 exact-order lookups. Admission max5.511s and decision p95 17.444s prevent a
+latency-parity claim; all reported cooldowns cleared. Six windows total1,248
+attempts,15 failures (12 order404s/3 account429s), with no per-owner recovery.
+Authenticated13:08:56.459883Z proves28 flat entries plus the same exact SELL10
+covering +10, zero unresolved intents and zero unknown orders; ledger agrees.
+The7-minute acceptance confirms continued operation/coverage, not complete
+elimination of venue throttling or a natural timed exit. Sustained account-read
+load and future maintenance acceptance remain observational open items.

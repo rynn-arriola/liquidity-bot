@@ -5483,6 +5483,10 @@ class CommissioningRunner:
         state = self.state_for(slug or self.market_slug)
         now = self._now()
         self._refreshed_book_this_call = False
+        if self._maintenance_owner_is_idle(state.slug, now):
+            # Keep the due time: the first post-hold pass must obtain fresh
+            # depth, not inherit a dead-market or recovery delay.
+            return next_refresh
         if now < next_refresh:
             return next_refresh
         if self._book_refresh_would_be_pointless(state.slug, now):
@@ -5875,6 +5879,8 @@ class CommissioningRunner:
         """
 
         state = self.state_for(slug)
+        if self._maintenance_owner_is_idle(slug, now):
+            return None, 0.0
         retired = self._retired.get(slug)
         if (retired is not None and retired.rounds >= MAX_RETIREMENT_ROUNDS
                 and self.ledger.position(slug) == 0
@@ -6299,7 +6305,7 @@ class CommissioningRunner:
                     state_refresh_failed = True
                     if read_backoff.is_backpressure(exc):
                         # A failed account proof permits no decision, but a
-                        # shared read throttle is not a defect in every market.
+                        # shared read outage is not a defect in every market.
                         # Yield before per-market recovery can cancel reducers
                         # or retire owners. Ordinary recovery/stop stays active.
                         return None
@@ -9347,6 +9353,24 @@ class CommissioningRunner:
         text = str(reason)
         return next((prefix for prefix in cls.PERMANENT_RETIREMENT_PREFIXES
                      if text.startswith(prefix)), None)
+
+    def _maintenance_owner_is_idle(self, slug: str, now: datetime) -> bool:
+        """Skip price work only for a proven empty owner during a known hold.
+
+        Account reconciliation, stream consumption and lifecycle checks remain
+        live. Any newly observed exposure or ambiguity immediately removes this
+        exception; a maintenance notice alone never proves the account empty.
+        """
+        return (
+            (self._maintenance_decision.phase != MaintenancePhase.NORMAL
+             or self._maintenance_health_required_for is not None)
+            and not self._stop_requested
+            and self.gate.ready(self.ledger, now=now)
+            and self.ledger.position(slug) == 0
+            and not self.ledger.working_orders(slug)
+            and not self.ledger.absent_orders(slug)
+            and not self.ledger.market_has_unresolved_intent(slug)
+        )
 
     def _book_refresh_would_be_pointless(self, slug: str, now: datetime) -> bool:
         """Is there anything left that a fresh book for this market could serve?

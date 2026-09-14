@@ -168,8 +168,13 @@ class RestFallbackReviewTests(IsolatedAsyncioTestCase):
             if order_id == "bad":
                 raise AdapterError("unavailable", status_code=503)
         with patch.object(runner.executor, "reconcile_order", read):
-            failures = await runner._read_owned_order_states(["bad", "good"], self.now)
+            with self.assertRaises(AdapterError) as caught:
+                await runner._read_owned_order_states(["bad", "good"], self.now)
         self.assertEqual(visited, ["bad", "good"])
+        self.assertEqual(caught.exception.status_code, 503)
+        with patch.object(runner.executor, "reconcile_order", AsyncMock(
+                side_effect=[AdapterError("not found", status_code=404), None])):
+            failures = await runner._read_owned_order_states(["bad", "good"], self.now)
         self.assertEqual(failures[0][0], "bad")
         with patch.object(runner.executor, "reconcile_order", AsyncMock(
                 side_effect=RuntimeInvariantViolation("test", "unsafe"))):

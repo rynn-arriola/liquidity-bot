@@ -689,9 +689,11 @@ These are implementation requirements, not suggestions.
     revalidation have an independent 4/second entry lane; account proof,
     cancels, passive reducers and IOC exits use safety. A 429
     cools only its originating class, safety's own cooldown is at most one
-    second, and no mutation retries. Account-read 429s instead cool their exact
+    second, and no mutation retries. Account-read 429s,500/502/503/504 and typed
+    network failures instead cool their exact
     endpoint across all lanes, with one expiring recovery probe and no inline
-    retry. Trade/cash history share the activities endpoint. Other endpoints
+    retry. Only429 counts as rate-limited telemetry. Schema/auth/404 and local
+    defects never open this outage circuit. Trade/cash history share the activities endpoint. Other endpoints
     and mutations remain independently admissible, never exempt from required
     proof. Typed account backpressure revokes failed proof without per-market
     cancellation/retirement fanout; it proves neither flatness nor order state.
@@ -892,6 +894,11 @@ These are implementation requirements, not suggestions.
     followed by three complete authenticated order/position/balance reads.
     Normal stream, reconciliation, UI-participation and account-risk gates
     must still pass.
+    Known scheduled holds may skip price refresh/planning only for an owner
+    proven flat/order-free/ambiguity-free by the existing fresh account gate.
+    Account/stream/lifecycle monitoring continues; any exposure removes the
+    exception. Preserve the book due time so release requires ordinary fresh
+    depth immediately, without resetting real retirements or health gates.
     The process stays alive, operator stop remains prompt, and no schedule,
     cache, public status or health read may prove cancellation or flatness.
 99. A completed cash transfer may enter adjusted trading equity as positive

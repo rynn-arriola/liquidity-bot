@@ -6,6 +6,9 @@ Cash/trade history share a circuit because both use the activities endpoint.
 from __future__ import annotations
 
 import math
+import socket
+
+from httpx import TransportError
 
 from .errors import AdapterError, ApiAdmissionDeferred
 
@@ -13,6 +16,20 @@ from .errors import AdapterError, ApiAdmissionDeferred
 ENDPOINTS = ("balance", "positions", "activities", "open_orders", "order_retrieve")
 LEASE_SECONDS = 20.0  # Beyond the configured 15-second HTTP timeout.
 MAX_SECONDS = 60.0
+TRANSIENT_STATUSES = (500, 502, 503, 504)
+
+
+def is_transport_failure(exc):
+    """Only typed network failures or explicit adapter causes qualify."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror, TransportError)):
+            return True
+        if not isinstance(exc, AdapterError):
+            return False
+        exc = exc.__cause__
+    return False
 
 
 def endpoint_for(category):
@@ -24,7 +41,9 @@ def endpoint_for(category):
 def is_backpressure(exc):
     return (isinstance(exc, ApiAdmissionDeferred)
             and exc.error_code == "LOCAL_ACCOUNT_READ_COOLDOWN"
-            or isinstance(exc, AdapterError) and exc.status_code == 429)
+            or isinstance(exc, AdapterError)
+            and exc.status_code in (429, *TRANSIENT_STATUSES)
+            or is_transport_failure(exc))
 
 
 def _stamp(value, now, maximum=MAX_SECONDS):
@@ -65,11 +84,13 @@ def admit(states, endpoint, now, token, *, claim):
             state.update(token=token, lease_until=now + LEASE_SECONDS)
 
 
-def record(states, endpoint, now, *, token, status_code, failed, retry_after_seconds):
+def record(states, endpoint, now, *, token, status_code, failed, retry_after_seconds,
+           transport_failure=False):
     state = _state(states, endpoint)
     before = dict(state)
-    if status_code == 429:
-        last = _stamp(state.get("last_429"), now)
+    if status_code in (429, *TRANSIENT_STATUSES) or transport_failure:
+        # Retain compatibility with the existing shared file on rollback.
+        last = _stamp(state.get("last_failure", state.get("last_429")), now)
         try:
             streak = min(5, max(0, int(state.get("streak", 0))))
         except (TypeError, ValueError, OverflowError):
@@ -88,9 +109,11 @@ def record(states, endpoint, now, *, token, status_code, failed, retry_after_sec
         # success cannot clear this new failure because its token is revoked.
         other_lease = (_stamp(state.get("lease_until"), now, LEASE_SECONDS)
                        if state.get("token") != token else 0.0)
-        state.update(limited=True, last_429=now, streak=streak, token=None,
+        state.update(limited=True, last_failure=now, streak=streak, token=None,
                      lease_until=other_lease,
                      until=max(_stamp(state.get("until"), now), now + delay))
+        if status_code == 429:
+            state["last_429"] = now
     elif token is not None and token == state.get("token"):
         state.update(token=None, lease_until=0.0)
         if failed:

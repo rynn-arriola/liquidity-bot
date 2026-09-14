@@ -1,0 +1,109 @@
+# Maintenance read and idle-book recovery — September 14, 2026
+
+## Scope and evidence
+
+The operator accepted both log-review recommendations with "Ok lets do it":
+implement/review outage-read cooldowns and maintenance book recovery. Later
+instructions authorize stop/restart after verification and immediate stop
+while working. Laptop runner693316/supervisor693287 stopped successfully;
+authenticated12:51:02.784125Z proves zero venue orders/positions/unresolved/unknown
+state. No force-kill was needed. Source remains `2a867a581`; review began clean
+at `f3de96717`. Available-machine
+parity passed; offline PC skipped. No venue mutation was made in this task.
+
+Authenticated12:42:58.290401Z: zero venue orders, positions, unresolved intents
+and unknown orders; ledger agrees. The existing scheduled hold has a resume
+boundary13:00:13.197Z followed by three authenticated health checks. The schedule
+and ledger alone cannot prove flatness.
+
+The [official changelog](https://docs.polymarket.us/changelog) was reopened:
+v0.0.90 announces September14 maintenance05:00–08:00 ET. Direct web-tool status
+fetch failed; the bot's dated official completion observation12:00:59Z remains
+the available operational evidence, not a fresh global service-health claim.
+
+The09:26:23Z API window reported230 attempts/61 seconds and199 failures,
+including170 open-order503s. Later windows repeated open-order/position503s;
+09:30:30Z included a positions429. Inspection confirms only429 opened the
+endpoint circuit; account-proof503s could continue into per-owner recovery.
+12:29–12:32Z windows were1.594–1.649 requests/s with zero failures/429s.
+Those flat paused windows do not establish active-trading performance.
+
+12:14–12:23Z logs show positively empty books increasing per-market recovery
+counts through12 attempts during the hold. Retired owners later continued
+stale-book diagnostics. Stale counts do not prove a broken public socket;
+empty depth is market-specific. A shared renewal failure12:15:14Z already used
+the coordinated recovery path. No further transport replacement is justified.
+
+## Design and implemented behavior
+
+Extend the existing per-account-endpoint circuit. HTTP500/502/503/504 and typed
+network failures receive2/4/8/16/30-second spacing, Retry-After bounded to60s,
+and one20-second recovery lease across cooperating lanes/processes. No inline
+retry. Cash/trade history share the activities circuit. Only actual429 counts
+as rate-limited telemetry. A current successful probe clears the circuit;
+older success cannot clear newer failure, and cancellation expires the lease.
+Schema, auth,404, arbitrary local errors and implicit context do not qualify.
+
+Typed account outages survive exact-reader aggregation and yield the decision
+sweep instead of launching recovery on each market. Other endpoints and mutation
+admission remain available; exits still require all fresh exact evidence. The
+bounded delay reduces retry amplification but cannot guarantee zero future429s.
+
+During a known scheduled evacuation/maintenance/resume-health hold, skip price
+refresh/planning only when the account gate is ready and the owner is flat,
+working-order-free, absent-order-free and unresolved-intent-free. Account and
+stream monitoring, lifecycle checks, positions, cancels and ambiguity recovery
+remain active. Keep the book due time, so release immediately returns through
+ordinary fresh-book acquisition/planning. Never re-stamp old depth, release a
+real retirement, reset a cooldown or bypass post-maintenance health checks.
+
+Rejected alternatives: generic retries amplify traffic; treating every error
+as transient hides integrity defects; full-slate REST books recreate the public
+book dependency; clearing retirements at resume erases real faults. No new
+source, subscription, poller, rate, strategy, size, cap, baseline or schema.
+Manual REST, size10/32, max30 flat entries excluding position orders, time/loss
+tiers, exit deadlines and $90 HARD are preserved.
+
+## Verification and dedicated edge audit
+
+Tests cover each server status, raw/wrapped network errors, schema/auth refusal,
+cross-process/lane exclusion, mixed429/5xx backoff,32 recovery callers, older
+success fencing, canceled lease, malformed state and independent mutation
+admission. Existing reducer tests additionally cover503/504/timeout fanout,
+typed exact-read propagation and ownership-conflict precedence.
+
+Maintenance regressions cover32 empty owners across scheduled phases, REST and
+private-mode fixtures, post-health fresh-book recovery, outstanding orders,
+absent orders/intents, failed account proof, stop and a late fill reactivating
+the unchanged maintenance exit. The prior70-test related slice passed; final
+suite evidence is recorded below.
+
+Four reversal groups load real baseline functions in memory. Old result
+accounting fails server/network suppression, old pressure classification fails
+the32-owner fanout regression, and old book scheduling fails the no-request
+regression. All are assertion failures; import/setup errors are rejected.
+Patches restore immediately; production and tracked source remain untouched.
+
+Final dedicated review: empty/full32 scope, phase/health boundaries, late
+exposure/ambiguity, original receipt freshness, stop, leased-probe cancellation
+and old-completion races retain existing proof rules. Normal operation adds
+only a false short-circuit predicate, with no ledger read. Held owners remain
+unconditional; all account projection/mutation stays on the serial owner.
+Shared state adds only an optional timestamp and remains readable by rollback
+code, though rollback lacks these repairs. No ledger migration/risk reset.
+
+## Release boundary
+
+Final reviewed native WSL copy passed all1,681 tests in167.701 seconds. An
+earlier full run exposed one old test expecting503 aggregation; its assertion
+now checks the intended typed503 propagation while preserving other-reader
+completion,404 handling and invariant precedence. No production fix was changed
+to satisfy that expectation. Four reversal groups, normalized source hashes,
+final diff review, `git diff --check` and the documentation audit passed.
+The12:50:46.180420Z terminal record says `operator_sigterm`, `flat=true`, followed
+by the independent12:51:02Z authenticated flat/clear proof above.
+
+Stop/deploy/restart is authorized after verification. Future natural
+acceptance must prove bounded outage reads, no per-owner fanout or empty-owner
+book retirement during maintenance, fresh-book trading after all holds, and
+proper exits/cancel proof with exposure. No fault or fill may be induced.

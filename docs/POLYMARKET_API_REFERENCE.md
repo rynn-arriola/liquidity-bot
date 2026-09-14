@@ -21,9 +21,12 @@ implemented.
 
 ## Interface actually used by this project
 
-Account-read429 handling in the reviewed implementation is endpoint-specific:
+Account-read outage handling in the reviewed implementation is endpoint-specific:
 balance, positions, open orders, individual-order retrieval, and activities
-(trade/cash history together). All cooperating request lanes share bounded
+(trade/cash history together). The September14 prepared extension includes
+HTTP500/502/503/504 and typed network failures, preserving true status telemetry
+and independent mutation admission. [Review](history/MAINTENANCE_READ_RECOVERY_2026-09-14.md).
+All cooperating request lanes share bounded
 backoff and one expiring probe lease, without inline retry. This is local load
 protection, not evidence of a new venue quota, an account ban or WebSocket
 recovery. Other endpoints and mutations still require their normal admission

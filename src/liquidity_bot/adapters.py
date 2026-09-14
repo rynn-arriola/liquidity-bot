@@ -1217,6 +1217,7 @@ class AsyncIntervalLimiter:
         traffic_class: str = "safety",
         operation: str = "", request_kind: str = "read",
         admission_token: str | None = None,
+        transport_failure: bool = False,
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
@@ -1235,7 +1236,8 @@ class AsyncIntervalLimiter:
                             if request_kind == "read" else None)
         if account_endpoint is not None:
             result = dict(token=admission_token, status_code=status_code,
-                          failed=failed, retry_after_seconds=retry_after_seconds)
+                          failed=failed, retry_after_seconds=retry_after_seconds,
+                          transport_failure=transport_failure)
             if self.shared_state_path is not None:
                 await asyncio.to_thread(self._record_shared_account_read_result,
                                         account_endpoint, **result)
@@ -1627,6 +1629,7 @@ class AsyncReadOnlyGateway:
                         traffic_class=traffic_class,
                         operation=operation, request_kind="read",
                         admission_token=admission_token,
+                        transport_failure=read_backoff.is_transport_failure(exc),
                     )
                 raise
             except Exception as exc:
@@ -1639,6 +1642,7 @@ class AsyncReadOnlyGateway:
                         traffic_class=traffic_class,
                         operation=operation, request_kind="read",
                         admission_token=admission_token,
+                        transport_failure=read_backoff.is_transport_failure(exc),
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text

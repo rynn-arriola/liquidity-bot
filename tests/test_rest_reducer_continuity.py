@@ -195,6 +195,9 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         runner, client, held = await self.build()
         runner._bind_markets((held, "flat"))
         for error in (AdapterError("rate limited", status_code=429),
+                      AdapterError("service unavailable", status_code=503),
+                      AdapterError("gateway timeout", status_code=504),
+                      TimeoutError("network timeout"),
                       ApiAdmissionDeferred("wait", error_code="LOCAL_ACCOUNT_READ_COOLDOWN",
                                            retry_after_seconds=10)):
             with self.subTest(error=type(error).__name__):
@@ -225,6 +228,15 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
                 await AccountSourceRunner._read_exact_order_states(runner, ["exchange-reducer"], self.now)
         with patch.object(runner.executor, "read_order_state", AsyncMock(
                 side_effect=[error, LedgerConflict("foreign identity")])):
+            with self.assertRaises(LedgerConflict):
+                await AccountSourceRunner._read_exact_order_states(runner, ["one", "two"], self.now)
+        outage = AdapterError("unavailable", status_code=503)
+        with patch.object(runner.executor, "read_order_state", AsyncMock(side_effect=outage)):
+            with self.assertRaises(AdapterError) as caught:
+                await AccountSourceRunner._read_exact_order_states(runner, ["one", "two"], self.now)
+            self.assertIs(caught.exception, outage)
+        with patch.object(runner.executor, "read_order_state", AsyncMock(
+                side_effect=[outage, LedgerConflict("foreign identity")])):
             with self.assertRaises(LedgerConflict):
                 await AccountSourceRunner._read_exact_order_states(runner, ["one", "two"], self.now)
 

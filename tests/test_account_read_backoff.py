@@ -3,6 +3,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+import httpx
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -24,6 +25,79 @@ class RateLimited(Exception):
 
 
 class AccountReadBackoffTests(unittest.IsolatedAsyncioTestCase):
+    async def test_server_outages_back_off_without_mutation_or_endpoint_cooldown(self):
+        for status in read_backoff.TRANSIENT_STATUSES:
+            with self.subTest(status=status):
+                limiter = AsyncIntervalLimiter()
+                gateway = AsyncReadOnlyGateway(object(), limiter=limiter)
+                failure = AdapterError("unavailable", status_code=status)
+                call = AsyncMock(side_effect=failure)
+                with self.assertRaises(AdapterError):
+                    await gateway._call(BALANCE, call)
+                self.assertTrue(read_backoff.is_backpressure(failure))
+                self.assertEqual(call.await_count, 1)
+                deferred = (await asyncio.gather(gateway._call(BALANCE, call),
+                                                return_exceptions=True))[0]
+                self.assertIsInstance(deferred, ApiAdmissionDeferred)
+                for lane in ("entry", "safety", "background", "report"):
+                    with self.assertRaises(ApiAdmissionDeferred):
+                        await limiter.wait(operation=BALANCE, traffic_class=lane)
+                for operation, kind in ((POSITIONS, "read"), ("cancel", "mutation"),
+                                         ("reducer", "mutation")):
+                    await limiter.wait(operation=operation, request_kind=kind)
+                self.assertEqual(limiter.telemetry().rate_limited_responses, 0)
+                self.assertEqual(call.await_count, 1)
+
+    async def test_network_failure_backoff_but_schema_and_auth_are_not_outages(self):
+        for error in (TimeoutError(), ConnectionResetError(), httpx.ReadTimeout("timeout")):
+            limiter = AsyncIntervalLimiter()
+            gateway = AsyncReadOnlyGateway(object(), limiter=limiter)
+            with self.assertRaises(AdapterError) as caught:
+                await gateway._call(POSITIONS, AsyncMock(side_effect=error))
+            self.assertTrue(read_backoff.is_backpressure(caught.exception))
+            with self.assertRaises(ApiAdmissionDeferred):
+                await limiter.wait(operation=POSITIONS)
+        for error in (ValueError("schema"), AdapterError("bad schema"),
+                      AdapterError("not found", status_code=404),
+                      AdapterError("denied", status_code=403), PermissionError()):
+            limiter = AsyncIntervalLimiter()
+            gateway = AsyncReadOnlyGateway(object(), limiter=limiter)
+            with self.assertRaises(AdapterError) as caught:
+                await gateway._call(POSITIONS, AsyncMock(side_effect=error))
+            self.assertFalse(read_backoff.is_backpressure(caught.exception))
+            await limiter.wait(operation=POSITIONS)
+
+    async def test_mixed_outage_probe_is_single_and_recovers_with_positive_success(self):
+        limiter = AsyncIntervalLimiter()
+        for expected, status in zip((2, 4, 8, 16, 30, 30), (503, 500, 429, 502, 504, 503)):
+            with patch("liquidity_bot.adapters.time.monotonic", return_value=100):
+                await limiter.record_result(operation=BALANCE, duration_seconds=.1,
+                                            status_code=status, failed=True)
+                self.assertEqual(dict(limiter.telemetry().account_read_cooldowns)["balance"], expected)
+        state = limiter._account_read_backoff["account_read_balance"]
+        state["until"] = 0
+        results = await asyncio.gather(*(limiter.wait(operation=BALANCE)
+                                        for _ in range(32)), return_exceptions=True)
+        tokens = [r for r in results if isinstance(r, str)]
+        self.assertEqual(len(tokens), 1)
+        self.assertEqual(sum(isinstance(r, ApiAdmissionDeferred) for r in results), 31)
+        await limiter.record_result(operation=BALANCE, duration_seconds=.1,
+                                    admission_token=tokens[0])
+        await limiter.wait(operation=BALANCE)
+
+    @unittest.skipUnless(fcntl is not None, "requires POSIX shared coordination")
+    async def test_server_outage_is_shared_across_process_lanes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "budget.json"
+            first = AsyncIntervalLimiter(shared_state_path=path)
+            second = AsyncIntervalLimiter(shared_state_path=path)
+            await first.record_result(operation=HISTORY, duration_seconds=.1,
+                                      failed=True, status_code=503, retry_after_seconds=10)
+            with self.assertRaises(ApiAdmissionDeferred):
+                await second.wait(operation=CASH, traffic_class="report")
+            await second.wait(operation="cancel", request_kind="mutation")
+            self.assertEqual((await second.shared_telemetry()).rate_limited_responses, 0)
+
     async def fault(self, limiter, operation=BALANCE, token=None, retry_after=10):
         await limiter.record_result(operation=operation, duration_seconds=.1,
             status_code=429, failed=True, admission_token=token,

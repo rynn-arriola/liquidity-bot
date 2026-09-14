@@ -189,3 +189,31 @@ not a logged429. Changelog reopened: newest maintenance announcement remains
 September14 05–08ET; live status web fetch failed, so no global-health or
 maintenance attribution. No diagnostic venue mutation, code/config change or
 restart. Existing $90 HARD and30-flat-entry cap remain unchanged.
+
+### Cause trace
+
+The immediate public-feed trigger is local and specific: `fresh_book()` started
+the shared renewal worker because its usable snapshot was stale. `_subscribe()`
+allows three seconds total for the SDK `unsubscribe(previous)` and subsequent
+`subscribe_market_data(new_id, slugs)` sends. The worker caught a failure from
+that bounded control operation at20:05:38Z and permanently marked the shared
+stream failed. Because neither SDK call awaits an application acknowledgement,
+the available evidence proves a send/control operation failed or exceeded the
+three-second local timeout; it does not prove which send stalled or whether the
+underlying cause was laptop networking or venue transport. The generic
+`public book renewal failed` wrapper did not print its nested exception, which
+is a diagnostic gap. A socket close/error callback would instead have stored a
+disconnect/subscription-failure label, so neither was the directly observed path.
+
+The exit delay has a stronger causal trace. `bound_streams` recovery is awaited
+inside the single decision owner. It refreshed account state, rebound both
+streams, then globally quarantined and reconciled working orders before returning
+to the ordinary loop. Recovery started20:05:38Z, before the Naghan position's
+approximately20:06:01Z hard deadline, and did not return to urgent action until
+after the bulk cancellation proof around20:06:26Z. Its IOC acknowledged
+20:06:35.098344Z,34.173 seconds after the recorded deadline. Therefore the
+late exit was caused by serial recovery work taking priority over a deadline
+that became due mid-recovery—not by a429 and not by failure of the IOC itself.
+The IOC then produced flat proof2.166 seconds later. Fix design must retain
+fail-closed stream quarantine while allowing already-owned urgent exposure to
+preempt or interleave safely; no such behavior change is authorized here.

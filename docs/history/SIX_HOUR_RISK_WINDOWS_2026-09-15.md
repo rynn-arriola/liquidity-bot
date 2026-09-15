@@ -216,3 +216,30 @@ independently inspected. Offline PC remains pending, not probed again.
 At12:40:03Z the read-only ledger check found zero unresolved intents; the
 fresh12:40:00Z confirmed checkpoint remains unchanged. This distinguishes
 the prior sequential in-flight observations from persistent ambiguity.
+
+## Settled-fill correction deployment and acceptance
+
+Corrected release `87381d91d2bb3159ac0177efe5a1da6d2167ae4b` was pushed before
+the stopped WSL fast-forward. The17:40:26Z SQLite online recovery copy passed
+integrity at475848704bytes with SHA-256
+`0c27990a08a744081397529a012651085f4870b64588b53896165c30a436ce31`.
+The review tree and exact installed WSL checkout each passed all **1,713 tests**
+in256.180s and167.378s. GitHub/Windows/WSL/marker parity passed; installed log
+is `logs/release-87381d91d-tests.log`.
+
+Fresh authenticated17:49:39Z gate proved zero venue orders/positions and zero
+unresolved, unknown or ledger exposure. Supervisor1861188/runner1861217
+started17:49:54Z in unchanged manual REST size10/32. Public selection used
+36/36 then32/32 WebSocket books with zero REST fallback. First new meter proof
+at17:50:14Z reconstructed -$3.1406 settled P&L, cap30, no hold, instead of the
+old false ~$19.33/cap15. It explicitly logged matched-fill basis and excluded
+open orders/positions.
+
+At17:55:34Z the refreshed durable row showed -$3.0506, cap30 and no HARD hold.
+Authenticated state had30 flat pending entries plus one exact BUY10 reducer
+covering the sole -10 position, zero unresolved/unknown state; another natural
+position had flattened. Thus open-position orders remain outside the30 cap and
+open inventory did not become loss. Four completed API windows ran3.313–3.688
+requests/s. One cash-history429 recovered with no remaining cooldown; the next
+three windows had zero429. Natural partial-close tier/HARD/boundary acceptance
+remains uninduced and pending.

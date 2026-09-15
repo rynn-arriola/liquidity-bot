@@ -18,9 +18,9 @@ loss. Here "settle" means an executed close reflected in venue account state,
 not waiting for the sports event to resolve. Partial closes contribute only
 their realized portion. Open-position price swings do not consume the budget.
 
-Implementation/review is authorized; this task does not deploy, stop or restart
-the live process. Loaded runtime remains the earlier $90 policy until a
-separately authorized rollout. Four $25 budgets total $100 nominally per day,
+Initially implementation/review only; the operator subsequently authorized
+restart after completion and explicitly approved "Just use a new 25" for
+first activation. Release evidence follows below. Four $25 budgets total $100 nominally per day,
 not a guaranteed maximum: in-flight fills and evacuation may add losses.
 
 ## Design and alternatives
@@ -134,7 +134,52 @@ source, configuration, ledger or process was changed. Current venue exposure
 was not re-read during this implementation; last authenticated11:31Z state
 was25 flat entries plus one -10 position and its exact reducer, not current proof.
 
-Remaining rollout gates: approve activation timing/baseline, normal graceful
-stop and fresh authenticated flat/clear ownership, reviewed deployment and
-hashes, native installed full suite, authorized restart and natural acceptance.
-The live $90 policy must not be represented as already replaced.
+The above is pre-release evidence; the subsequent authorized rollout below
+supersedes its pending state. Natural risk-transition acceptance remains.
+
+## Authorized deployment and restart
+
+Operator authorized restart after review and approved a fresh $25 because no
+verified06:00 realized baseline existed for first-ever activation. This does
+not authorize resetting an existing window during any future restart.
+
+Old runner stopped gracefully at12:27:31.745621Z with `flat=true`. Independent
+authenticated12:28:08.339996Z gate proved zero venue orders/positions, zero
+unresolved/unknown orders and empty ledger working exposure. No force-kill.
+Stopped SQLite online backup at12:28:35.408262Z passed integrity,458936320bytes,
+SHA-256 `a8b6ab0452344689deba7f839c78382097fec1b3465a8a119714b579354d4f0b`.
+It remains a private recovery artifact, not active authority.
+
+Reviewed source `971f7812f0adbf0e5aa2d9cb9a3415fe988460b7` was pushed before
+the runtime fast-forward. All197 source/test/script/config normalized hashes
+match git, Windows and installed Linux. Installed full suite passed all1,709
+tests in171.149s; log `logs/release-971f7812f-tests.log`. Legacy active HARD and
+provisional holds were both zero: no hold was forgiven or ledger repaired.
+Marker changed only after verification/tests, then launch was chained behind
+another authenticated `--require-flat` gate. Supervisor1169387/runner1169420
+started12:33:43Z in unchanged manual REST mode, quote size10/32 configured markets.
+
+New-run log begins at byte87205227. First window record12:34:13.797887Z:
+06:00–12:00ET, confirmed loss0, HARD25, pending cap30, held/provisionalfalse,
+positions/reducers excluded. First scan ranked90 books through WebSocket with
+zero REST fallbacks; selected32 likewise used stream books. Next risk reset is
+12:00ET/16:00Z, not six elapsed hours after activation.
+
+Authenticated12:37:09Z read found27 flat entry orders, zero positions and zero
+unknown orders. One create was in flight; ledger29 working is a later sequential
+observation, not an atomic venue count. First two completed API windows made
+666 requests with12 individual-order404s and zero429s; no claim of error-free
+operation or permanent rate-limit immunity. Natural risk transitions and
+source/maintenance recovery were not induced for acceptance.
+
+At12:39:02.747475Z (over five minutes after launch), authenticated reads found
+30 flat entry orders across23 markets, zero positions and zero unknown orders;
+one intent was in flight. Fresh checkpoint12:39:28.446233Z still matches its
+opening confirmed coordinate exactly: loss0, cap30, no HARD/provisional latch.
+Three completed API windows total973 requests/15 order-retrieve404s/zero429s.
+Routine replaces and bounded exact-order reconciliation continued. Discord
+rendering is tested and deployed; receipt/display in Discord has not been
+independently inspected. Offline PC remains pending, not probed again.
+At12:40:03Z the read-only ledger check found zero unresolved intents; the
+fresh12:40:00Z confirmed checkpoint remains unchanged. This distinguishes
+the prior sequential in-flight observations from persistent ambiguity.

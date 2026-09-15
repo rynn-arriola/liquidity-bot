@@ -202,6 +202,16 @@ CREATE TABLE IF NOT EXISTS execution_risk_windows (
     released_at TEXT,
     provisional_markets TEXT
 );
+CREATE TABLE IF NOT EXISTS execution_settled_risk_windows (
+    window_start TEXT PRIMARY KEY,
+    window_end TEXT NOT NULL,
+    settled_pnl TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    entry_cap INTEGER NOT NULL,
+    tripped_at TEXT,
+    released_at TEXT
+);
 CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
     risk_date TEXT PRIMARY KEY,
     opening_equity TEXT NOT NULL,
@@ -2042,7 +2052,9 @@ class ExecutionLedger:
         return True
 
     def realized_pnl(self, market_slug: str | None = None, *,
-                     since: datetime | None = None) -> Decimal:
+                     since: datetime | None = None,
+                     received_since: datetime | None = None,
+                     received_through: datetime | None = None) -> Decimal:
         """Realised matched-inventory P&L, net of observed fill fees.
 
         Stored prices always use the LONG/YES frame. BUY_SHORT at ``p`` costs
@@ -2051,9 +2063,18 @@ class ExecutionLedger:
         carried at cost and contributes no gross P&L. Fees are incurred when
         their fill occurs, even if that fill remains open.
 
-        A window still replays older fills to establish its opening basis, but
-        attributes only realizations and fees whose fill occurred in-window.
+        A window still replays older fills to establish its opening basis. By
+        default, ``since`` attributes realizations and fees by venue event
+        time for historical reporting. Risk windows instead use
+        ``received_since``/``received_through`` so a delayed closing fill is
+        charged exactly once when it becomes durable; a boundary observation
+        gap can never forgive it.
         """
+
+        if since is not None and received_since is not None:
+            raise ValueError("realized P&L accepts one attribution clock")
+        if received_through is not None and received_since is None:
+            raise ValueError("received-through requires received-since")
 
         clauses: list[str] = ["reversed=0"]
         params: list[Any] = []
@@ -2062,12 +2083,29 @@ class ExecutionLedger:
             params.append(market_slug)
         where = " WHERE " + " AND ".join(clauses)
         cutoff = _time(since, "since") if since is not None else None
+        received_cutoff = (
+            _time(received_since, "received_since")
+            if received_since is not None else None)
+        received_limit = (
+            _time(received_through, "received_through")
+            if received_through is not None else None)
+        if (received_cutoff is not None and received_limit is not None
+                and received_limit < received_cutoff):
+            raise ValueError("received P&L interval crossed its boundary")
         inventories: dict[str, MatchedInventory] = {}
         realized = Decimal("0")
+        receipt_filter = ""
+        if received_limit is not None:
+            receipt_filter = " AND received_at<=?"
+            params.append(received_limit)
+        order = (
+            "received_at,event_at,execution_id"
+            if received_cutoff is not None
+            else "event_at,received_at,execution_id")
         for row in self.query(
-                "SELECT market_slug,price,qty,fee,intent,event_at "
-                "FROM execution_fills" + where
-                + " ORDER BY event_at,received_at,execution_id",
+                "SELECT market_slug,price,qty,fee,intent,event_at,received_at "
+                "FROM execution_fills" + where + receipt_filter
+                + " ORDER BY " + order,
                 tuple(params)):
             slug = str(row["market_slug"])
             delta = inventories.setdefault(slug, MatchedInventory()).apply(
@@ -2076,7 +2114,11 @@ class ExecutionLedger:
                 quantity=str(row["qty"]),
                 fee=str(row["fee"] or 0),
             )
-            if cutoff is None or str(row["event_at"]) >= cutoff:
+            attributed_at = str(row[
+                "received_at" if received_cutoff is not None else "event_at"])
+            if ((cutoff is None or attributed_at >= cutoff)
+                    and (received_cutoff is None or attributed_at >= received_cutoff)
+                    and (received_limit is None or attributed_at <= received_limit)):
                 realized += delta
         return realized
 

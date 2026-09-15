@@ -19,7 +19,7 @@ from liquidity_bot.account_observations import AccountSnapshotReader
 from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind as Kind
 from liquidity_bot.rest_fallback import RestStateGate
 from liquidity_bot.errors import AdapterError
-from liquidity_bot.execution_ledger import ExecutionLedger
+from liquidity_bot.execution_ledger import Execution, ExecutionLedger
 
 
 def request(control, now, target):
@@ -213,7 +213,15 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
         from liquidity_bot.risk_windows import load_risk_window_policy
         runner, client, _ = await self.build(risk_window_policy=load_risk_window_policy())
         meter = runner._window_risk
-        client.account.current_balance = Decimal("95")
+        # A complete matched pair realizes a $5 loss. Cash by itself is not a
+        # window-loss input, regardless of the selected account transport.
+        for name, intent, price in (
+                ("open", "ORDER_INTENT_BUY_LONG", Decimal("0.5")),
+                ("close", "ORDER_INTENT_BUY_SHORT", Decimal("0.45"))):
+            runner.ledger.apply_execution(Execution(
+                execution_id=f"handoff-{name}", market_slug="handoff-market",
+                side="BUY", price=price, qty=Decimal("100"), fee=Decimal("0"),
+                intent=intent, event_at=self.now), received_at=self.now)
         await runner._refresh_balance(self.now)
         self.assertEqual(runner._loss_entry_order_cap, 25)
         for target in ("websocket", "rest"):
@@ -221,7 +229,7 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
             self.assertEqual(runner.account_state_mode, target)
             self.assertIs(runner._window_risk, meter)
             self.assertEqual(runner._loss_entry_order_cap, 25)
-            self.assertEqual(runner.risk_guard.starting_equity, Decimal("100"))
+            self.assertEqual(runner.risk_guard.starting_equity, Decimal("0"))
         self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
 
     async def test_silent_candidate_cannot_switch_and_old_source_survives(self):

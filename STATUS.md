@@ -1,6 +1,8 @@
 # Current operator status
 Only current operational facts belong here; [historical snapshots](docs/history/README.md) are archived.
+
 ## Verified state
+- **STOPPED September15 for settled-loss repair:** supervisor1169387/runner1169420 stopped gracefully at17:00:26Z with terminal `flat=true`; authenticated17:00:39Z proof found zero venue orders, positions, unresolved or unknown ownership. At the incident checkpoint the first cash-based meter showed about $19.33 loss/cap15 versus about $2.84 matched-fill loss; after final shutdown fills the complete window replay is -$3.1406, still cap30. Reviewed correction/deployment is in progress; no bot process is running.
 - **RUNNING September15 on `971f7812f` — six-hour $25 risk windows:** operator approved fresh $25 and restart. Graceful flat stop, authenticated flat/clear gates, stopped recovery backup,197 hashes and all1,709 installed native tests passed. Supervisor1169387/runner1169420 restarted12:33:43Z, manual REST size10/32. First meter12:34:13Z loss0/hard25/cap30, next reset noon ET. Authenticated12:39:02Z:30 flat entry orders/zero positions/zero unknown orders, one in-flight intent; fresh12:39:28Z checkpoint still confirms loss0/cap30/no hold. Three completed API windows973 calls/15 individual-order404s/zero429s. Pending entries30→25→20→15→10 at $0/$5/$10/$15/$20 confirmed loss; positioned orders/reducers excluded. Discord window budget separates daily P&L. Natural loss-tier/hold/boundary acceptance remains; no induced losses or permanent zero429 promise. [Release](docs/history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md).
 - **RUNNING September14 21:10Z on `2166dd263` — public-recovery exit priority:** Command 1 passed two authenticated flat/clear gates,1,685 installed tests and194 hashes, then restarted21:04Z as supervisor3353887/runner3353918, manual REST size10/32. Authenticated21:10:03Z shows30 flat entries plus one exact BUY10 covering the remaining -10 position; unknown orders zero, one in-flight create resolved21:10:04Z. Another position naturally flattened21:09:29Z. Five API windows:1,065 attempts,17 individual-order404s, zero429/recovery faults, latest3.052rps. Shared recovery's deadline behavior remains naturally untested; no induced fault. $90 HARD and max30 flat entries excluding positioned orders unchanged. [Evidence](docs/history/MAINTENANCE_READ_RECOVERY_2026-09-14.md).
 - **RUNNING September14 20:08Z after automatic stream recovery on `c7b6762d7`:** same supervisor2305886/runner2305915, manual REST size10/32, no restart. Public book renewal failed20:05:38Z; shared recovery quarantined working orders20:05:59Z, cancellations were observed20:06:26Z and entries resumed20:06:44Z. Authenticated20:08:14Z proves29 flat entries plus five exact reducers covering five positions, zero unresolved/unknown orders; ledger agrees. Fourteen completed pre-recovery windows since19:50Z had3,259 attempts/18 failures/zero429; this does not cover the entire recovery interval. Two timed exits completed20:06:37Z/20:07:04Z; the first IOC acknowledgement was34.17s past its logged deadline, so recovery latency remains an open concern. Root transport cause is unconfirmed, not established maintenance or a ban. $90 HARD/max30 flat entries unchanged. Diagnosis only, no code/config change. [Evidence](docs/history/MAINTENANCE_READ_RECOVERY_2026-09-14.md).
@@ -55,25 +57,16 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 | Setting | Current decision |
 |---|---|
 | Production runtime | Laptop is sole live owner; desktop is prepared but inactive manual cold backup; former server destroyed |
-| Quote size | 10 loaded live |
-| Concurrent capacity | 32 loaded as a guarded canary; 20 remains the bare-launcher default; roll back to 24 on the documented acceptance gates |
+| Quote size | 10 persisted for next restart |
+| Concurrent capacity | 32 persisted as a guarded canary; 20 remains the bare-launcher default; roll back to 24 on the documented acceptance gates |
 | Entry horizon | Six hours |
 | League filter | None |
 | New-entry spread | 2-cent fresh selection; selected exact-one-tick books quote both touches; locked books back off safely; 1.5-cent retention hysteresis |
 | Exposure / stressed exit | $420 portfolio / $90 market exposure; $40 stressed-exit entry cap |
-| Sole money-loss stop | $90 adjusted marked-equity HARD unchanged; durable confirmed evacuation/pause and provisional persistence are authorized for this restart |
+| Sole money-loss stop | $25 matched, closed-trade net loss per 00–06/06–12/12–18/18–00 ET window; open orders/positions and paper marks excluded |
 | Taker-exit count / fee | Count has no trading authority / $13.33 gross owned taker-fee reference is observe-only |
 | Risk day | `America/New_York`, DST-aware |
 [DECISIONS.md](DECISIONS.md) is authoritative for policy details.
-## Former server incident and current resolution
-From 22:07 UTC, Retail mutations returned HTTP 403/code 7 location/VPN denials. The old gateway mislabeled them as ambiguous no-ID PLACE intents and
-retirement consumed all 20 owners. The deployed repair fails only the rejected intent, limits later entry probes, preserves cancels/reducers and repairs only
-legacy rows with exact persisted rejection proof.
-
-The 22:56Z server acceptance repaired 20 rows and kept zero unresolved/retired through three denied probes. The account stayed flat and no quote could rest. The laptop's 00:40Z startup then accepted 39 quotes across
-20 markets with no matching denial, so execution access works from the
-selected residential runtime. The containment remains installed. [Evidence](docs/history/MUTATION_ACCESS_DENIAL_2026-08-28.md).
-
 ## Current operating instruction
 The laptop remains the sole live owner; the desktop is an inactive manual backup. Any handoff requires stop, venue proof and a verified ledger snapshot. Unqualified `run the bot` targets the laptop; explicit `run on the PC` selects the desktop with full handoff. Parity covers PC/laptop/GitHub, laptop WSL and a verified private execution-ledger recovery copy; no secret/database enters git and no copy is activated. `dba96ba` passed end-to-end; Drive remains weekly-only.
 ## Current records

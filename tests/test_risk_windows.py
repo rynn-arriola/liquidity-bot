@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from liquidity_bot.commissioning import CommissioningConfig, CommissioningRefused
 from liquidity_bot.cash_activity import NontradingCashChange
 from liquidity_bot.errors import AdapterError
-from liquidity_bot.execution_ledger import ExecutionLedger, PositionState
+from liquidity_bot.execution_ledger import Execution, ExecutionLedger, PositionState
 from liquidity_bot.risk_windows import (
     DEFAULT_RISK_WINDOW_POLICY_PATH, RiskWindowPolicy, WindowRiskMeter,
     load_risk_window_policy)
@@ -31,10 +31,10 @@ class RiskWindowTests(unittest.TestCase):
         self.policy = load_risk_window_policy()
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
 
-    def observe(self, equity, *, at=START, **kwargs):
+    def observe(self, pnl, *, at=START):
         return self.meter.observe(
-            equity=D(equity), observed_at=at, now=at, full_cap=64,
-            day_baseline=START, **kwargs)
+            settled_pnl=D(pnl), observed_at=at, now=at, full_cap=64,
+        )
 
     def test_all_four_windows_and_dst_use_et_wall_clock(self):
         for hour in (0, 6, 12, 18):
@@ -66,101 +66,100 @@ class RiskWindowTests(unittest.TestCase):
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 30)
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
-        self.observe(100)
-        self.assertEqual(self.observe(85).cap, 15)
+        self.observe(0)
+        self.assertEqual(self.observe(-15).cap, 15)
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
         self.assertFalse(self.meter.ready(START))
-        self.assertEqual(self.observe(99).cap, 15)
+        self.assertEqual(self.observe(-1).cap, 15)
         next_window = START + timedelta(hours=6)
         self.assertFalse(self.meter.ready(next_window))
-        result = self.observe(99, at=next_window)
-        self.assertEqual(result.opening_equity, D(99))
+        result = self.observe(0, at=next_window)
+        self.assertEqual(result.opening_equity, D(0))
         self.assertEqual(result.cap, 30)
 
     def test_close_in_boundary_gap_counts_in_new_window(self):
-        self.observe(100)
-        self.observe(100, at=START + timedelta(hours=6, seconds=-3))
-        result = self.observe(90, at=START + timedelta(hours=6, seconds=3))
-        self.assertEqual(result.opening_equity, D(100))
+        self.observe(0)
+        self.observe(0, at=START + timedelta(hours=6, seconds=-3))
+        result = self.observe(-10, at=START + timedelta(hours=6, seconds=3))
+        self.assertEqual(result.opening_equity, D(0))
         self.assertEqual(result.cap, 20)
 
-    def test_transfers_across_midnight_cannot_hide_or_create_loss(self):
-        self.observe(100, at=START + timedelta(hours=23, minutes=59))
+    def test_new_window_uses_its_own_settled_pnl(self):
+        self.observe(-20, at=START + timedelta(hours=23, minutes=59))
         next_day = START + timedelta(days=1)
-        # A $50 deposit and $10 closed loss result in raw cash+basis of $140.
-        result = self.observe(140, at=next_day, interval_nontrading=D(50))
-        self.assertEqual(result.opening_equity, D(100))
-        self.assertEqual(self.meter.realized_equity, D(90))
+        result = self.observe(-10, at=next_day)
+        self.assertEqual(result.opening_equity, D(0))
+        self.assertEqual(self.meter.realized_equity, D(-10))
         self.assertEqual(result.cap, 20)
-        result = self.observe(110, at=next_day + timedelta(seconds=5), interval_nontrading=D(-30))
-        self.assertEqual(self.meter.realized_equity, D(90))
+        result = self.observe(-10, at=next_day + timedelta(seconds=5))
+        self.assertEqual(self.meter.realized_equity, D(-10))
         self.assertEqual(result.cap, 20)
 
-    def test_open_paper_loss_is_provisional_and_does_not_charge_tiers(self):
-        self.observe(100)
-        mark = self.observe(100, marked_equity=D(60), positions=frozenset({"one"}))
-        self.assertTrue(self.meter.provisional)
+    def test_only_settled_pnl_can_change_the_budget(self):
+        mark = self.observe(0)
+        self.assertFalse(self.meter.provisional)
         self.assertFalse(self.meter.held)
         self.assertEqual(mark.cap, 30)
-        self.assertFalse(self.meter.ready(START))
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
-        self.assertTrue(self.meter.provisional)
-        self.observe(100, marked_equity=D(99), positions=frozenset({"one"}))
-        self.assertTrue(self.meter.provisional)
-        mark = self.observe(95)  # Finally closes for $5 actual loss.
+        mark = self.observe(-5)
         self.assertFalse(self.meter.provisional)
         self.assertFalse(self.meter.held)
         self.assertEqual(mark.cap, 25)
 
+    def test_false_legacy_cash_cap_is_not_imported(self):
+        with self.ledger.connection:
+            self.ledger.connection.execute(
+                "INSERT INTO execution_risk_windows "
+                "(window_start,window_end,opening_equity,opening_marked_equity,"
+                "observed_at,day_baseline,policy,entry_cap) VALUES (?,?,?,?,?,?,?,?)",
+                (START.isoformat(), (START + timedelta(hours=6)).isoformat(),
+                 "100", "100", START.isoformat(), START.isoformat(),
+                 self.policy.fingerprint(), 15))
+        mark = self.observe("-2.84")
+        self.assertEqual(mark.cap, 30)
+        old = self.ledger.query(
+            "SELECT entry_cap FROM execution_risk_windows")[0]
+        self.assertEqual(old["entry_cap"], 15)
+
+    def test_active_legacy_cash_hold_requires_explicit_reconciliation(self):
+        with self.ledger.connection:
+            self.ledger.connection.execute(
+                "INSERT INTO execution_risk_windows "
+                "(window_start,window_end,opening_equity,opening_marked_equity,"
+                "observed_at,day_baseline,policy,entry_cap,tripped_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (START.isoformat(), (START + timedelta(hours=6)).isoformat(),
+                 "100", "100", START.isoformat(), START.isoformat(),
+                 self.policy.fingerprint(), 0, START.isoformat()))
+        with self.assertRaisesRegex(ValueError, "explicit reconciliation"):
+            WindowRiskMeter(self.ledger.connection, self.policy)
+
     def test_confirmed_stop_survives_restart_and_needs_later_flat_proof(self):
-        self.observe(100)
-        self.observe(75)
+        self.observe(0)
+        self.observe(-25)
         self.assertTrue(self.meter.held)
         path = self.ledger.path
         self.ledger.close()
         self.ledger = ExecutionLedger(path)
         self.addCleanup(self.ledger.close)
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
-        self.observe(110)
+        self.observe(10)
         self.assertTrue(self.meter.held)
         self.assertFalse(self.meter.release(now=START, flat_proven=True))
         later = START + timedelta(hours=6)
-        self.observe(110, at=later)
+        self.observe(0, at=later)
         self.assertFalse(self.meter.release(now=later, flat_proven=False))
         self.assertTrue(self.meter.release(now=later, flat_proven=True))
         self.assertTrue(self.meter.ready(later))
 
-    def test_late_fill_joins_persisted_provisional_cohort(self):
-        self.observe(100)
-        self.observe(100, marked_equity=D(60), positions=frozenset({"first"}))
-        self.observe(100, marked_equity=D(65), positions=frozenset({"first", "late"}))
-        self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
-        self.observe(95, marked_equity=D(92), positions=frozenset({"late"}))
-        self.assertTrue(self.meter.provisional)
-        self.assertFalse(self.meter.held)
-        self.observe(93)
-        self.assertFalse(self.meter.provisional)
-        self.assertEqual(self.meter.current.cap, 25)
-
-    def test_provisional_carried_position_closes_next_window_without_forgiveness(self):
-        self.observe(100)
-        self.observe(100, marked_equity=D(65), positions=frozenset({"one"}))
-        later = START + timedelta(hours=6)
-        self.observe(100, at=later, marked_equity=D(65), positions=frozenset({"one"}))
-        self.assertTrue(self.meter.provisional)
-        result = self.observe(70, at=later + timedelta(seconds=5))
-        self.assertEqual(result.cap, 0)
-        self.assertTrue(self.meter.held)
-        self.assertFalse(self.meter.provisional)
-
     def test_invalid_policy_clock_and_changed_policy_fail_closed(self):
-        self.observe(100)
+        self.observe(0)
         with self.assertRaisesRegex(ValueError, "boundary"):
-            self.meter.observe(equity=D(100), observed_at=START,
-                               now=START + timedelta(hours=6), full_cap=64, day_baseline=START)
+            self.meter.observe(settled_pnl=D(0), observed_at=START,
+                               now=START + timedelta(hours=6), full_cap=64)
         self.meter = WindowRiskMeter(self.ledger.connection, RiskWindowPolicy(stop_loss_usd=D(30)))
         with self.assertRaisesRegex(ValueError, "policy changed"):
-            self.observe(100)
+            self.observe(0)
         for amount in ("NaN", "Infinity", "0", "-25"):
             with self.assertRaises(ValueError):
                 RiskWindowPolicy(stop_loss_usd=D(amount))
@@ -186,6 +185,18 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
         return runner, client, notifier
 
+    def settle_loss(self, runner, loss, *, suffix="loss", at=live.NOW):
+        """Record a complete matched pair with exactly ``loss`` gross P&L."""
+        quantity = D(100)
+        short_frame_price = D("0.5") - D(loss) / quantity
+        for name, intent, price in (
+                ("open", "ORDER_INTENT_BUY_LONG", D("0.5")),
+                ("close", "ORDER_INTENT_BUY_SHORT", short_frame_price)):
+            runner.ledger.apply_execution(Execution(
+                execution_id=f"{suffix}-{name}", market_slug=f"settled-{suffix}",
+                side="BUY", price=price, qty=quantity, fee=D(0),
+                intent=intent, event_at=at), received_at=at)
+
     async def test_settlement_only_caps_daily_pnl_and_exact_exit_authority(self):
         runner, client, _ = await self.runner()
         now = live.NOW
@@ -196,17 +207,17 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
             "cashValue": {"value": "10", "currency": "USD"}, "updateTime": now.isoformat()}}
         await runner._rest_reconcile(now)
         await runner._refresh_balance(now)
-        self.assertEqual(runner.risk_guard.current_equity, D(100))
+        self.assertEqual(runner.risk_guard.current_equity, D(0))
         self.assertEqual(runner._loss_entry_order_cap, 30)
-        self.assertTrue(runner._window_risk.provisional)
+        self.assertFalse(runner._window_risk.provisional)
         self.assertFalse(runner._hard_stop_active())
         self.assertFalse(runner._frame(now).hard_stop_flatten_required)
-        self.assertFalse(runner._frame(now).new_risk_allowed)
+        self.assertTrue(runner._frame(now).new_risk_allowed)
         self.assertEqual(runner._equity_snapshot.marked_trading_pnl(
             opening_equity=runner._day_opening_equity, nontrading_cash=D(0)), D(-30))
-        # Full close finally confirms $26 loss; HARD now requests evacuation.
+        # Only a completed matched pair confirms the $26 loss.
+        self.settle_loss(runner, D(26), suffix="hard")
         client.portfolio.rows = {}
-        client.account.current_balance = D(74)
         now += timedelta(seconds=1)
         runner.clock = lambda: now
         await runner._rest_reconcile(now)
@@ -217,11 +228,11 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._frame(now).hard_stop_flatten_required)
         restarted, _, _ = await self.runner(ledger=runner.ledger, client=client, clock=lambda: now)
         self.assertTrue(restarted._hard_stop_active())
-        self.assertEqual(restarted.risk_guard.starting_equity, D(100))
+        self.assertEqual(restarted.risk_guard.starting_equity, D(0))
 
     async def test_new_window_needs_new_account_proof_and_preserves_other_pauses(self):
         runner, client, _ = await self.runner()
-        client.account.current_balance = D(75)
+        self.settle_loss(runner, D(25), suffix="prior-hard")
         await runner._refresh_balance(live.NOW)
         self.assertTrue(runner._hard_stop_active())
         later = runner._window_risk.current.end
@@ -244,7 +255,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         client.account.current_balance = D(50)
         client.portfolio.rows = {runner.market_slug: {
             "netPositionDecimal": "10", "cashValue": {"value": "5", "currency": "USD"}}}
-        with self.assertRaisesRegex(AdapterError, "cost is unavailable"):
+        with self.assertRaisesRegex(AdapterError, "basis is unavailable"):
             await runner._refresh_balance(live.NOW)
         self.assertEqual(runner.risk_guard.current_equity, previous)
         self.assertFalse(runner._hard_stop_active())
@@ -276,7 +287,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
                    AsyncMock(return_value=(change,))) as history:
             for _ in range(2):
                 await runner._refresh_balance(now)
-                self.assertEqual(runner.risk_guard.current_equity, D(100))
+                self.assertEqual(runner.risk_guard.current_equity, D(0))
                 self.assertEqual(runner._loss_entry_order_cap, 30)
                 self.assertFalse(runner._hard_stop_active())
             self.assertEqual(history.call_args.kwargs["boundary"], runner._cash_activity_boundary)
@@ -288,7 +299,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
                    AsyncMock(return_value=(change, deposit))):
             for _ in range(2):
                 await runner._refresh_balance(now)
-                self.assertEqual(runner.risk_guard.current_equity, D(100))
+                self.assertEqual(runner.risk_guard.current_equity, D(0))
 
     async def test_pending_entry_ceiling_excludes_positions_and_reducers(self):
         runner, client, _ = await self.runner(max_markets=32)
@@ -301,7 +312,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
             PositionState("market-two", D(10), live.NOW),),
             as_of=live.NOW, observed_at=live.NOW, complete_account=True)
         self.assertEqual(runner._loss_cap_overflow_order_ids(live.NOW), frozenset())
-        client.account.current_balance = D(95)
+        self.settle_loss(runner, D(5), suffix="cap")
         await runner._refresh_balance(live.NOW)
         overflow = runner._loss_cap_overflow_order_ids(live.NOW)
         self.assertEqual(len(overflow), 5)
@@ -310,28 +321,59 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_close_counts_only_realized_part_not_remaining_paper_loss(self):
         runner, client, _ = await self.runner()
         slug = runner.market_slug
+        runner.ledger.apply_execution(Execution(
+            execution_id="partial-open", market_slug=slug, side="BUY",
+            price=D("0.5"), qty=D(100), fee=D(0),
+            intent="ORDER_INTENT_BUY_LONG", event_at=live.NOW),
+            received_at=live.NOW)
         client.account.current_balance = D(50)
         client.portfolio.rows = {slug: {
             "netPositionDecimal": "100", "cost": {"value": "50", "currency": "USD"},
             "cashValue": {"value": "45", "currency": "USD"}}}
         await runner._refresh_balance(live.NOW)
-        self.assertEqual(runner.risk_guard.current_equity, D(100))
+        self.assertEqual(runner.risk_guard.current_equity, D(0))
         # Half closes for $20 against $25 cost. Remaining $25 basis is still
         # open and its paper loss is not charged again.
         client.account.current_balance = D(70)
         client.portfolio.rows[slug].update({
             "netPositionDecimal": "50", "cost": {"value": "25", "currency": "USD"},
             "cashValue": {"value": "20", "currency": "USD"}})
+        runner.ledger.apply_execution(Execution(
+            execution_id="partial-close", market_slug=slug, side="BUY",
+            price=D("0.4"), qty=D(50), fee=D(0),
+            intent="ORDER_INTENT_BUY_SHORT", event_at=live.NOW),
+            received_at=live.NOW)
         await runner._refresh_balance(live.NOW)
-        self.assertEqual(runner.risk_guard.current_equity, D(95))
+        self.assertEqual(runner.risk_guard.current_equity, D(-5))
         self.assertEqual(runner._loss_entry_order_cap, 25)
         await runner._refresh_balance(live.NOW)
-        self.assertEqual(runner.risk_guard.current_equity, D(95))
+        self.assertEqual(runner.risk_guard.current_equity, D(-5))
         self.assertEqual(runner._loss_entry_order_cap, 25)
+
+    async def test_net_flat_cash_retention_cannot_create_false_window_loss(self):
+        runner, client, _ = await self.runner()
+        # The incident shape: opposite fills economically close the position,
+        # REST reports no position, but the matched cash remains unavailable.
+        runner.ledger.apply_execution(Execution(
+            execution_id="retained-open", market_slug="retained-cash", side="BUY",
+            price=D("0.5"), qty=D(100), fee=D(0),
+            intent="ORDER_INTENT_BUY_LONG", event_at=live.NOW),
+            received_at=live.NOW)
+        runner.ledger.apply_execution(Execution(
+            execution_id="retained-close", market_slug="retained-cash", side="BUY",
+            price=D("0.475"), qty=D(100), fee=D(0),
+            intent="ORDER_INTENT_BUY_SHORT", event_at=live.NOW),
+            received_at=live.NOW)
+        client.account.current_balance = D(80)
+        client.portfolio.rows = {}
+        await runner._refresh_balance(live.NOW)
+        self.assertEqual(runner.risk_guard.current_equity, D("-2.5"))
+        self.assertEqual(runner._loss_entry_order_cap, 30)
+        self.assertFalse(runner._hard_stop_active())
 
     async def test_live_summary_separates_daily_and_window_loss_and_pause(self):
         runner, client, notifier = await self.runner()
-        client.account.current_balance = D(95)
+        self.settle_loss(runner, D(5), suffix="summary")
         await runner._refresh_balance(live.NOW)
         runner._day_opening_equity = D(199)
         await runner._send_summary(live.NOW)

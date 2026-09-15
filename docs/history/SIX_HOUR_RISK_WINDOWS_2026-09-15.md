@@ -5,7 +5,7 @@
 The operator explicitly replaced the $90 daily HARD with four fixed $25
 windows: 00:00–06:00,06:00–12:00,12:00–18:00,18:00–00:00 America/New_York.
 Percentages mean **budget remaining**, not loss consumed. The pending-entry
-ceiling starts at30 and ratchets to25/20/15/10 at $5/$10/$15/$20 confirmed net
+ceiling starts at30 and ratchets to25/20/15/10 at $5/$10/$15/$20 settled net
 loss. At $25, cancel entries, evacuate positions through existing exact exit
 proof, and hold until a later window plus fresh flat/clear account proof.
 Positions and reducer/IOC orders are excluded from the pending-entry count.
@@ -14,16 +14,49 @@ Quote quantity, configured market breadth, reward selection, entry-quality,
 normal exit timing, source selection and API limits are unchanged.
 
 The latest instruction requires waiting for positions to settle before charging
-loss. Here "settle" means an executed close reflected in venue account state,
-not waiting for the sports event to resolve. Partial closes contribute only
-their realized portion. Open-position price swings do not consume the budget.
+loss. Here "settle" means durable matched fills that economically close all or
+part of inventory, not waiting for the sports event to resolve. Complete fresh
+venue account state remains a separate safety gate. Partial closes contribute
+only their realized portion. Open-position price swings do not consume the budget.
 
 Initially implementation/review only; the operator subsequently authorized
 restart after completion and explicitly approved "Just use a new 25" for
 first activation. Release evidence follows below. Four $25 budgets total $100 nominally per day,
 not a guaranteed maximum: in-flight fills and evacuation may add losses.
 
-## Design and alternatives
+## Settled-fill correction after live evidence
+
+The first implementation below is superseded. In the live12:00–18:00 ET
+window, its cash-plus-open-cost coordinate reached about **-$19.33** and
+ratcheted pending entries to15. Replaying the bot's durable matched fills over
+the same window showed only about **-$2.84** closed-trade P&L. The account was
+net-flat on matched outcomes while the venue still held their cash, so venue
+cash settlement timing was incorrectly labeled as trading loss.
+
+The corrected meter uses durable matched-inventory P&L. Older fills establish
+basis, while only the matched portion closed in this window and actual fill
+fees count. Open orders, unmatched positions, paper marks, buying power,
+deposits, withdrawals, rewards and delayed return of matched cash cannot change
+the meter. A partial close contributes only its matched portion. Daily marked
+P&L remains a separate report and does not feed the window stop.
+
+Window attribution replays fills in durable local receipt order. This matters
+at a boundary: either matching leg executed earlier but delivered after06:00 is
+charged once when received in the new window instead of being omitted. The cap
+still ratchets downward within the window, HARD still persists across restart,
+and release still requires a later window plus fresh flat/clear proof. Existing
+cash-based rows remain immutable audit evidence; a false old cap is not
+imported, while an active old HARD/provisional hold refuses startup for explicit
+reconciliation.
+
+The runner was stopped gracefully at17:00:26Z with terminal `flat=true`.
+Independent authenticated proof at17:00:39Z found zero venue orders, positions,
+unresolved intents or unknown ownership. No force-kill or ledger repair was
+used. A read-only17:23Z replay including final shutdown fills measured
+**-$3.1406** for the window, still below the first $5 tier and therefore cap30.
+Deployment and post-restart evidence are recorded after final review.
+
+## Superseded first implementation and evidence
 
 Reusing the daily marked baseline would charge paper loss and contaminate the
 daily reward/reporting scope. Fill-ledger-only risk would miss known account

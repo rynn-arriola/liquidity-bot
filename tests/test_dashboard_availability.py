@@ -41,9 +41,9 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             ledger = ExecutionLedger(path)
             try:
                 meter = WindowRiskMeter(ledger.connection, config.risk_window_policy)
-                for equity in (Decimal(100), Decimal(95)):
-                    meter.observe(equity=equity, observed_at=now, now=now,
-                                  full_cap=64, day_baseline=now)
+                for pnl in (Decimal(0), Decimal(-5)):
+                    meter.observe(settled_pnl=pnl, observed_at=now, now=now,
+                                  full_cap=64)
                 self.assertEqual(dashboard._window_hard_stop_pnl(now, database=path), Decimal(-5))
                 self.assertIsNone(dashboard._window_hard_stop_pnl(
                     now + dashboard.timedelta(seconds=16), database=path))

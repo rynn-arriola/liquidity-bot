@@ -1,9 +1,8 @@
 """Restart-persistent ET trading windows, independent of daily reporting.
 
-The owner supplies cash plus open-position cost, less proven non-trading cash.
-Only closed losses affect the durable cap and stop; open marks may pause entry
-provisionally until the breach-time positions close.
-This module does no network IO and has no order authority.
+The owner supplies matched-inventory realised P&L reconstructed from durable
+fills. Open orders, open-position basis, paper marks and cash movements never
+change the window budget. This module does no network IO or order mutation.
 """
 
 from __future__ import annotations
@@ -127,150 +126,75 @@ class WindowRiskMeter:
         self.connection = connection
         self.policy = policy
         self.current: WindowMark | None = None
+        legacy_active = self.connection.execute(
+            "SELECT 1 FROM execution_risk_windows WHERE "
+            "(tripped_at IS NOT NULL AND released_at IS NULL) "
+            "OR provisional_markets IS NOT NULL LIMIT 1").fetchone()
+        if legacy_active is not None:
+            raise ValueError(
+                "legacy cash-based risk hold requires explicit reconciliation")
         self.held = bool(self._holds())
-        self.provisional = bool(self._provisionals())
-
-    def _provisionals(self):
-        return self.connection.execute(
-            "SELECT window_start,provisional_markets FROM execution_risk_windows "
-            "WHERE provisional_markets IS NOT NULL").fetchall()
+        self.provisional = False
 
     def _holds(self):
         return self.connection.execute(
-            "SELECT window_start,window_end,tripped_at FROM execution_risk_windows "
+            "SELECT window_start,window_end,tripped_at "
+            "FROM execution_settled_risk_windows "
             "WHERE tripped_at IS NOT NULL AND released_at IS NULL").fetchall()
 
     def checkpoint(self):
         return self.connection.execute(
-            "SELECT observed_at,raw_cost_equity,realized_equity,marked_equity,"
-            "cash_anchor,nontrading_total "
-            "FROM execution_risk_window_checkpoint WHERE singleton=1").fetchone()
-
-    @property
-    def cash_boundary(self) -> datetime | None:
-        row = self.checkpoint()
-        return datetime.fromisoformat(row[4]) if row else None
-
-    @property
-    def nontrading_total(self) -> Decimal:
-        row = self.checkpoint()
-        return _amount(row[5]) if row else Decimal("0")
+            "SELECT observed_at,settled_pnl "
+            "FROM execution_settled_risk_windows "
+            "ORDER BY observed_at DESC LIMIT 1").fetchone()
 
     def ready(self, now: datetime) -> bool:
         return (self.current is not None and not self.held and not self.provisional
                 and self.current.start <= _aware(now) < self.current.end)
 
-    def observe(self, *, equity: Decimal, observed_at: datetime,
-                now: datetime, full_cap: int, day_baseline: datetime,
-                marked_equity: Decimal | None = None,
-                positions: frozenset[str] = frozenset(),
-                interval_nontrading: Decimal = Decimal("0"),
-                cash_observed_at: datetime | None = None,
-                nontrading_total: Decimal = Decimal("0")) -> WindowMark:
+    def observe(self, *, settled_pnl: Decimal, observed_at: datetime,
+                now: datetime, full_cap: int) -> WindowMark:
         now, observed_at = _aware(now), _aware(observed_at)
         start, end = self.policy.bounds(now)
-        equity = _amount(equity)
-        marked = equity if marked_equity is None else _amount(marked_equity)
-        raw_equity = equity
-        adjustment = _amount(interval_nontrading)
-        nontrading_total = _amount(nontrading_total)
-        cash_at = _aware(cash_observed_at or observed_at)
+        pnl = _amount(settled_pnl)
         if not start <= observed_at <= now < end:
             raise ValueError("account snapshot crossed a risk-window boundary")
-        if not observed_at <= cash_at <= now:
-            raise ValueError("risk-window cash observation clock is invalid")
         if self.current is not None and start < self.current.start:
             raise ValueError("risk-window clock moved backwards")
-        checkpoint = self.checkpoint()
-        if checkpoint:
-            last_at = datetime.fromisoformat(checkpoint[0])
-            if cash_at < last_at:
-                raise ValueError("risk-window account clock moved backwards")
-            # Continuous, transfer-neutral coordinates survive midnight and
-            # restart. A close in the observation gap is charged to the new
-            # window, never forgiven by its first lower post-boundary balance.
-            equity = _amount(checkpoint[2]) + raw_equity - _amount(checkpoint[1]) - adjustment
-            marked = equity + marked - raw_equity
-        else:
-            last_at = None
-        opening = (_amount(checkpoint[2]) if last_at is not None and last_at < start
-                   else equity)
-        opening_marked = (_amount(checkpoint[3]) if last_at is not None and last_at < start
-                          else marked)
-        day_key = _aware(day_baseline).isoformat()
         key = start.isoformat()
         with self.connection:
-            # A policy change must not silently rebase an already-used window.
             self.connection.execute(
-                "INSERT OR IGNORE INTO execution_risk_windows "
-                "(window_start,window_end,opening_equity,observed_at,day_baseline,"
-                "policy,entry_cap,opening_marked_equity) VALUES (?,?,?,?,?,?,?,?)",
-                (key, end.isoformat(), str(opening), observed_at.isoformat(),
-                 day_key, self.policy.fingerprint(),
-                 min(full_cap, self.policy.max_pending_entry_orders), str(opening_marked)))
+                "INSERT OR IGNORE INTO execution_settled_risk_windows "
+                "(window_start,window_end,settled_pnl,observed_at,policy,"
+                "entry_cap) VALUES (?,?,?,?,?,?)",
+                (key, end.isoformat(), str(pnl), observed_at.isoformat(),
+                 self.policy.fingerprint(),
+                 min(full_cap, self.policy.max_pending_entry_orders)))
             row = self.connection.execute(
-                "SELECT opening_equity,entry_cap,tripped_at,day_baseline,policy,"
-                "opening_marked_equity "
-                "FROM execution_risk_windows WHERE window_start=?", (key,)).fetchone()
-            if row[3] != day_key or row[4] != self.policy.fingerprint():
-                raise ValueError("risk-window baseline or policy changed during window")
-            opening = _amount(row[0])
-            loss = max(Decimal("0"), opening - equity)
-            cap = min(int(row[1]), self.policy.cap(loss, full_cap=full_cap))
-            trip = row[2]
+                "SELECT entry_cap,tripped_at,policy "
+                "FROM execution_settled_risk_windows WHERE window_start=?",
+                (key,)).fetchone()
+            if row[2] != self.policy.fingerprint():
+                raise ValueError("risk-window policy changed during window")
+            loss = max(Decimal("0"), -pnl)
+            cap = min(int(row[0]), self.policy.cap(loss, full_cap=full_cap))
+            trip = row[1]
             if loss >= self.policy.stop_loss_usd and trip is None:
                 trip = now.isoformat()
             self.connection.execute(
-                "UPDATE execution_risk_windows SET entry_cap=?,tripped_at=?,observed_at=? "
-                "WHERE window_start=?", (cap, trip, observed_at.isoformat(), key))
-            # A market's absence here comes from a complete account snapshot,
-            # never a missing order row or a local cache. Hold the cohort until
-            # every affected position has closed, including across midnight.
-            had_current_provisional = False
-            for held_key, cohort in self._provisionals():
-                if held_key == key:
-                    had_current_provisional = True
-                names = json.loads(cohort)
-                if not isinstance(names, list) or not names:
-                    raise ValueError("provisional window cohort is invalid")
-                if not set(names) & positions:
-                    self.connection.execute(
-                        "UPDATE execution_risk_windows SET provisional_markets=NULL "
-                        "WHERE window_start=?", (held_key,))
-                elif not positions <= set(names):
-                    # Already-resting entries can fill while cancellation is
-                    # in flight. Their closure must join the pending proof.
-                    self.connection.execute(
-                        "UPDATE execution_risk_windows SET provisional_markets=? "
-                        "WHERE window_start=?",
-                        (json.dumps(sorted(set(names) | positions)), held_key))
-            if trip is not None:
-                self.connection.execute(
-                    "UPDATE execution_risk_windows SET provisional_markets=NULL "
-                    "WHERE window_start=?", (key,))
-            elif (not had_current_provisional and positions
-                  and _amount(row[5]) - marked >= self.policy.stop_loss_usd):
-                self.connection.execute(
-                    "UPDATE execution_risk_windows SET provisional_markets=? "
-                    "WHERE window_start=?", (json.dumps(sorted(positions)), key))
-            self.connection.execute(
-                "INSERT INTO execution_risk_window_checkpoint VALUES (1,?,?,?,?,?,?) "
-                "ON CONFLICT(singleton) DO UPDATE SET observed_at=excluded.observed_at,"
-                "raw_cost_equity=excluded.raw_cost_equity,"
-                "realized_equity=excluded.realized_equity,marked_equity=excluded.marked_equity,"
-                "cash_anchor=excluded.cash_anchor,nontrading_total=excluded.nontrading_total",
-                (cash_at.isoformat(), str(raw_equity), str(equity), str(marked),
-                 day_key, str(nontrading_total)))
-        self.current = WindowMark(start, end, opening, cap,
+                "UPDATE execution_settled_risk_windows SET settled_pnl=?,"
+                "entry_cap=?,tripped_at=?,observed_at=? WHERE window_start=?",
+                (str(pnl), cap, trip, observed_at.isoformat(), key))
+        self.current = WindowMark(start, end, Decimal("0"), cap,
                                   datetime.fromisoformat(trip) if trip else None)
         self.held = bool(self._holds())
-        self.provisional = bool(self._provisionals())
+        self.provisional = False
         return self.current
 
     @property
     def realized_equity(self) -> Decimal | None:
         row = self.checkpoint()
-        return _amount(row[2]) if row else None
+        return _amount(row[1]) if row else None
 
     def release(self, *, now: datetime, flat_proven: bool) -> bool:
         """Release only expired windows after the owner proves fresh flat state."""
@@ -284,7 +208,7 @@ class WindowRiskMeter:
         with self.connection:
             for key in expired:
                 self.connection.execute(
-                    "UPDATE execution_risk_windows SET released_at=? "
+                    "UPDATE execution_settled_risk_windows SET released_at=? "
                     "WHERE window_start=? AND released_at IS NULL",
                     (now.isoformat(), key))
         self.held = bool(self._holds())

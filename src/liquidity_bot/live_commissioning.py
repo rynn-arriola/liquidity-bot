@@ -717,9 +717,12 @@ class CommissioningRunner:
             datetime.fromisoformat(str(holds[0]["first_tripped_at"]))
             if holds else None)
         self._hard_stop_hold_notice: str | None = "held" if holds else None
-        self._window_risk = (
-            WindowRiskMeter(self.ledger.connection, config.risk_window_policy)
-            if config.risk_window_policy is not None else None)
+        try:
+            self._window_risk = (
+                WindowRiskMeter(self.ledger.connection, config.risk_window_policy)
+                if config.risk_window_policy is not None else None)
+        except ValueError as exc:
+            raise CommissioningRefused(str(exc)) from exc
         if self._window_risk is not None:
             if self._window_risk.held:
                 self._hard_stop_hold_notice = "held"
@@ -4468,28 +4471,17 @@ class CommissioningRunner:
         if self._cash_activity_boundary is None:
             raise RuntimeError("cash-activity boundary is unavailable")
         cash_through = observed_at
-        window_adjustment = Decimal("0")
         if self._window_risk is None:
             nontrading = await fetch_nontrading_cash(
                 self.gateway, boundary=self._cash_activity_boundary,
                 through=cash_through, max_pages=NONTRADING_CASH_MAX_PAGES)
         else:
-            window_boundary = self._window_risk.cash_boundary
             changes = await fetch_nontrading_cash_changes(
                 self.gateway,
-                boundary=min(self._cash_activity_boundary,
-                             window_boundary or self._cash_activity_boundary),
+                boundary=self._cash_activity_boundary,
                 through=cash_through, max_pages=NONTRADING_CASH_MAX_PAGES)
             nontrading = sum((change.amount for change in changes
                              if change.completed_at > self._cash_activity_boundary), Decimal("0"))
-            if window_boundary is not None:
-                window_adjustment = sum((change.amount for change in changes
-                                         if change.completed_at > window_boundary), Decimal("0"))
-                # Compare cumulative proven cash, not event timestamps since
-                # the last poll: late-posted/backdated same-day transfers must
-                # not be mistaken for trading. The previous day's anchor is
-                # retained through the first successful midnight bracket.
-                window_adjustment -= self._window_risk.nontrading_total
         # Cash activity can complete while its pages are being read. The
         # snapshot already bracketed positions with equal cash reads; one
         # final equal cash read proves the activity adjustment belongs to
@@ -4503,7 +4495,8 @@ class CommissioningRunner:
                 "ET risk day changed during non-trading activity snapshot")
         if self._window_risk is not None:
             if snapshot.position_basis is None:
-                raise AdapterError("open-position cost is unavailable for settled window loss")
+                raise AdapterError(
+                    "open-position basis is unavailable for account safety")
             age = (self._now() - snapshot.observed_at).total_seconds()
             if not 0 <= age <= self.risk_guard.max_equity_age_seconds:
                 raise AdapterError("settled window account snapshot is stale")
@@ -4537,11 +4530,11 @@ class CommissioningRunner:
         # they are from the realised sensor.
         adjusted_equity = snapshot.marked_equity - self._nontrading_cash
         if self._window_risk is not None:
-            # Open contracts tie up cash; add their cost back so neither entry
-            # spend nor paper mark changes can consume the closed-loss budget.
-            settled_equity = snapshot.balance.current_balance + snapshot.position_basis
-            self._observe_risk_window(settled_equity, snapshot, observed_at,
-                                      window_adjustment, cash_through)
+            # The venue can report a net-flat position before cash tied in the
+            # matched outcomes is returned. Cash+basis therefore created a
+            # false loss ratchet. The window uses only durable matched-fill
+            # P&L; open orders, open inventory and cash timing are irrelevant.
+            self._observe_risk_window(snapshot, observed_at)
             adjusted_equity = self._window_risk.realized_equity
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=snapshot.observed_at)
@@ -4550,26 +4543,22 @@ class CommissioningRunner:
         self._publish_live_pnl_snapshot()
 
     def _observe_risk_window(
-        self, equity: Decimal, snapshot: AccountEquitySnapshot, now: datetime,
-        adjustment: Decimal, cash_through: datetime,
+        self, snapshot: AccountEquitySnapshot, now: datetime,
     ) -> None:
         meter = self._window_risk
         if meter is None or self.risk_guard is None:
             return
-        if self._cash_activity_boundary is None:
-            raise AdapterError("daily cash baseline is unavailable for risk window")
         previous, was_held = meter.current, meter.held
         was_provisional = meter.provisional
         try:
+            window_start = meter.policy.bounds(now)[0]
+            settled_pnl = self.ledger.realized_pnl(
+                received_since=window_start,
+                received_through=snapshot.observed_at)
             mark = meter.observe(
-                equity=equity, observed_at=snapshot.observed_at, now=now,
-                full_cap=self.config.full_entry_order_capacity,
-                day_baseline=self._cash_activity_boundary,
-                marked_equity=snapshot.marked_equity,
-                interval_nontrading=adjustment, cash_observed_at=cash_through,
-                nontrading_total=self._nontrading_cash,
-                positions=frozenset(p.market_slug for p in snapshot.positions
-                                    if p.net_qty != 0))
+                settled_pnl=settled_pnl,
+                observed_at=snapshot.observed_at, now=now,
+                full_cap=self.config.full_entry_order_capacity)
         except ValueError as exc:
             raise AdapterError(str(exc)) from exc
         self.risk_guard.adopt_day_baseline(mark.opening_equity)
@@ -4580,10 +4569,11 @@ class CommissioningRunner:
             local = mark.start.astimezone(NEW_YORK)
             print(f"[window-risk] at={now.isoformat()} start={local.isoformat()} "
                   f"end={mark.end.astimezone(NEW_YORK).isoformat()} "
-                  f"loss={max(Decimal('0'), mark.opening_equity - meter.realized_equity)} "
+                  f"loss={max(Decimal('0'), -meter.realized_equity)} "
                   f"hard={meter.policy.stop_loss_usd} cap={mark.cap} "
                   f"held={meter.held} provisional={meter.provisional} "
-                  "positions_and_reducers=excluded", flush=True)
+                  "basis=matched_fills open_orders_and_positions=excluded",
+                  flush=True)
         if meter.held and not was_held:
             self._hard_stop_hold_notice = "held"
             self._entry_pause_cancel_requested = True
@@ -7185,9 +7175,16 @@ class CommissioningRunner:
         unknown = self.ledger.account_unknown_order_count()
         equity_change = Decimal("0")
         if self._equity_snapshot is not None and self.risk_guard is not None:
-            equity_change = (
-                self._equity_snapshot.marked_equity
-                - self.risk_guard.starting_equity)
+            if self._window_risk is not None:
+                # In window-risk mode this field is realised trading P&L, not
+                # the separate daily marked-equity report.
+                equity_change = (
+                    self.risk_guard.current_equity
+                    - self.risk_guard.starting_equity)
+            else:
+                equity_change = (
+                    self._equity_snapshot.marked_equity
+                    - self.risk_guard.starting_equity)
         place_count = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         entry_fills, exit_fills = self.ledger.fill_role_counts(

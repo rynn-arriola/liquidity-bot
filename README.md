@@ -55,7 +55,7 @@ Phases 0-4 and the narrow Phase 5 commissioning path are implemented:
 - persist an order intent before any mutation and never retry ambiguous creates;
 - reconcile exact-decimal orders, fills, and positions from private WebSocket
   state plus REST snapshots;
-- enforce single-process ownership, stream freshness, marked-equity HARD,
+- enforce single-process ownership, stream freshness, settled-trade HARD,
   exposure limits, and market-scoped shutdown.
 
 The readiness gate remains `DO_NOT_START_TRIAL`: multi-day profitability and
@@ -73,37 +73,32 @@ hard-locked by `CommissioningConfig`:
 | concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
-| emergency HARD stop | `$90 × size / 10 × slots / 32` on adjusted marked equity; $56.25 at 20 slots, $67.50 at 24, $90 at 32; provisional with open inventory; confirmed loss durably pauses and evacuates |
-| loss-scaled flat-entry orders | tightest ET-day cap: 50% HARD → 30, 70% → 25, 80% → 20, 90% → 15, 95% → 10; confirmed HARD evacuates and pauses the day at 100%; never counts position-market orders or reducers |
-| time-scaled flat-entry orders | midnight–8:59:59 AM `America/New_York` → maximum 30 pending entries; 9:00 AM–11:59:59 PM → maximum 40; combines with loss and physical capacity by taking the smallest |
+| emergency HARD stop | fixed $25 of matched, closed-trade net loss in each 00–06/06–12/12–18/18–00 ET window; open orders, open inventory and paper marks do not count |
+| loss-scaled flat-entry orders | each window starts at 30; $5/$10/$15/$20 matched net loss → 25/20/15/10; $25 evacuates and pauses; never counts position-market orders or reducers |
+| time-scaled flat-entry orders | every six-hour ET window starts at maximum 30 pending entries and combines with the loss tier, source ceiling and physical capacity by taking the smallest |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
 | early-exit cross cap | $8 at size 10 (`0.8 × size`) |
 | per-market open exposure | $90 at size 10 (`9 × size`) |
 | REST budget | 4 requests/second |
 
-The sole money-loss budget resets at midnight `America/New_York`, including DST.
-A marked HARD breach blocks new entries immediately. Before that breach, the
-flat-market entry-order ceiling ratchets downward as the same marked loss uses
-50%, 70%, 80%, 90% and 95% of HARD. A recovering mark cannot widen it until
-the next ET day. Excess owned entry orders are cancelled one at a time from
+The sole money-loss budget resets at 00:00, 06:00, 12:00 and 18:00
+`America/New_York`, including DST. It uses durable matched-fill P&L: only the
+closed portion of inventory and actual fill fees count. Open orders, unmatched
+inventory, paper marks, deposits, withdrawals and rewards cannot consume the
+budget. The flat-market entry-order ceiling ratchets downward at $5/$10/$15/$20
+net loss and cannot widen until the next window. Excess owned entry orders are cancelled one at a time from
 the lowest-ranked markets; uncertain creates reserve capacity. Orders in a
 market with an open position, passive reducers, IOC exits and shutdown are
 outside this ceiling.
-Independently, midnight through 8:59:59 AM Eastern has a 30-pending-entry
-ceiling and 9:00 AM through 11:59:59 PM has a 40-order ceiling. A tighter
-durable loss tier remains. The schedule and loss tiers load from the strict
-restart-scoped `config/entry_order_policy.json`; each value also clamps to two
-orders per configured slot. It uses the same exclusions and does not change
-market ranking.
-With open inventory it waits for a breach-time position to close and a newer
-balance before it can clear or confirm the hard stop. Realized session P&L,
-per-market realized P&L, taker-exit count and taker fees remain reporting
-evidence and have no independent pause or stop authority.
+The window schedule and tiers load from strict restart-scoped
+`config/risk_window_policy.json`; each value also clamps to two orders per
+configured slot. Taker-exit count and fee references remain reporting evidence
+and have no independent pause or stop authority.
 Once HARD is confirmed, cancel all pending entries and immediately exit every
 position through sequential cancellation, terminal proof and exact-quantity
 IOC. The bot stays alive, retries temporary failures safely and persists its
-day pause across restarts. A later ET day plus fresh flat/known account and
+window pause across restarts. A later window plus fresh flat/known account and
 normal health/maintenance gates is required before trading again.
 
 The optional entry-quality filter loads restart-scoped
@@ -312,8 +307,8 @@ unattributable rewards are visible but never included in accounted net.
 
 LIVE summaries also include a read-only capital card. It derives one
 worst-case quote notional per configured slot, preserves the existing
-portfolio-exposure cushion and adds seven daily hard-stop budgets so the bot
-has a week of operating runway when reward cash arrives later. The displayed
+portfolio-exposure cushion and adds seven days of four fixed $25 windows so
+the bot has a week of operating runway when reward cash arrives later. The displayed
 free-withdraw ceiling is the smaller of current buying power and settled cash
 above that comfortable balance; it rounds down and becomes `UNAVAILABLE` on
 stale, unresolved, unknown or integrity-failed account state. It uses the
@@ -324,9 +319,9 @@ routine post may wait up to 60 seconds only while its balance is fresh and
 current order ambiguity is the blocker; two-second rechecks are ledger-only.
 Stale or persistent evidence remains `UNAVAILABLE`, and shutdown/critical
 summaries never wait. Freshness uses the render clock, not an earlier decision
-sweep timestamp; an unavailable amount names its blocker. Loaded size 10 / 32
-with $128 HARD reserves $1,316. Prepared $90 HARD reserves $1,050 at that size
-and breadth; it is not active until reviewed deployment and authorized restart.
+sweep timestamp; an unavailable amount names its blocker. Loaded size10/32
+reserves $1,120: $320 quote footprint, $100 cushion and $700 weekly window
+budget.
 Deposits, withdrawals and rewards never count as trading P&L. Missing daily
 account boundaries stay unavailable; incomplete matched pairs remain a separate
 diagnostic and cannot finalize net. The lifetime ledger net is labeled an

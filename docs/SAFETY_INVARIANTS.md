@@ -54,7 +54,7 @@ These are implementation requirements, not suggestions.
     (FINDINGS section 9). Eight was a real measurement of one connection's
     cap, not of the account's.
 14. `cancel-all` and account-wide close operations are forbidden on a shared account.
-15. The marked-equity HARD stop does not replace open-exposure and worst-case-loss limits.
+15. The settled-trade HARD stop does not replace open-exposure and worst-case-loss limits.
 16. Before quoting a side, stressed full-book depth must show the entire proposed size can be closed inside its stressed-exit and slippage budgets.
 17. A WebSocket reconnect has no replay guarantee: new risk remains disabled
     until REST reconciliation and complete, fresh private snapshots succeed.
@@ -85,26 +85,26 @@ These are implementation requirements, not suggestions.
     reconnect budget. Quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. The September15 authorized replacement is one fixed **$25 confirmed-loss
+25. The September15 authorized replacement is one fixed **$25 settled-trade
     HARD per six-hour ET window**, not an additional $90 daily stop. Its
-    accounting coordinate is complete authenticated cash plus open-position
-    cost, adjusted by proven non-trading cash. Open entry spend and paper loss
-    cannot ratchet the budget. A partial close counts only its realized part.
-    Missing cost, incomplete cash classification, stale/cross-boundary samples
-    or moving cash fail closed; buying power and the fill ledger are not substitutes.
-    Existing bracketed cash/position reads remain mandatory. A marked breach
-    may provisionally pause entries while normal exits continue. Its complete
-    position cohort, including in-flight fills, survives restart and window
-    rollover until all its positions close. Only confirmed loss latches HARD,
+    accounting coordinate is durable matched-inventory P&L, net of actual fill
+    fees. Older fills are replayed only to establish basis; a window counts the
+    closed portion when its closing fill becomes durable. Open orders,
+    unmatched inventory, paper marks, raw cash, cash settlement timing,
+    buying power and non-trading cash cannot ratchet or trip the budget. A
+    partial close counts only its matched portion. Existing complete account,
+    ownership and freshness reads remain mandatory safety gates, but are not
+    substituted into the loss arithmetic. Only settled loss latches HARD,
     cancels pending entries and immediately evacuates remaining positions using
     exact sequential cancel/proof/IOC. HARD pauses rather than shuts down.
     Recovery within the same window or restart cannot release it. A later ET
     window plus fresh reconciled zero orders, zero positions, zero ambiguity
     and a newer flat account mark is required. Other pauses remain independent.
-    Continuous transfer-neutral checkpoints prevent midnight/restart from
-    forgiving a closing loss. First activation needs an explicit rollout
-    baseline; an existing legacy HARD/provisional hold cannot silently migrate.
-    Session/market fill-ledger P&L and taker counts/fees remain telemetry only.
+    Receipt-time window attribution prevents a delayed closing fill at a
+    boundary from being forgiven. First activation starts only the current
+    window; an existing legacy HARD/provisional hold cannot silently migrate.
+    Older cash-based window rows remain immutable historical evidence and are
+    never imported as current loss. Taker counts/fee references remain telemetry only.
     Daily marked reports retain their separate midnight ET accounting. The
     dollar trigger is not a guarantee against additional evacuation losses.
 26. A restart may mutate only persisted, identified orders/positions in the

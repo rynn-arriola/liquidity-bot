@@ -895,12 +895,13 @@ class PairSettlementTests(unittest.TestCase):
 
     def fill(
             self, led, eid, side, intent, price, qty, fee="0", *,
-            market="market-one", event_at=None):
+            market="market-one", event_at=None, received_at=None):
         event_at = event_at or datetime(2026, 8, 15, tzinfo=UTC)
         led.apply_execution(Execution(
             execution_id=eid, market_slug=market, side=side,
             price=Decimal(price), qty=Decimal(qty), fee=Decimal(fee),
-            event_at=event_at, intent=intent), received_at=event_at)
+            event_at=event_at, intent=intent),
+            received_at=received_at or event_at)
 
     def test_a_round_trip_realises_the_pair_settlement(self):
         """BUY_SHORT at 0.33 costs 0.67 in the opposite outcome.
@@ -972,6 +973,65 @@ class PairSettlementTests(unittest.TestCase):
 
         self.assertEqual(
             led.realized_pnl("market-one", since=after), Decimal("0.45"))
+
+    def test_received_window_charges_a_delayed_close_when_it_becomes_durable(self):
+        led = self.ledger()
+        before = datetime(2026, 8, 15, 11, 59, tzinfo=UTC)
+        boundary = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+        observed = boundary + timedelta(seconds=3)
+        self.fill(led, "open", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.50", "100", event_at=before - timedelta(hours=1))
+        self.fill(led, "close", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.475", "100", event_at=before, received_at=observed)
+
+        self.assertEqual(
+            led.realized_pnl(
+                "market-one", received_since=boundary,
+                received_through=observed),
+            Decimal("-2.500"),
+        )
+        self.assertEqual(
+            led.realized_pnl("market-one", since=boundary), Decimal("0"))
+
+    def test_received_window_excludes_a_fill_beyond_its_proven_clock(self):
+        led = self.ledger()
+        boundary = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+        self.fill(led, "open", "ORDER_SIDE_BUY", "ORDER_INTENT_BUY_LONG",
+                  "0.50", "100", event_at=boundary - timedelta(hours=1))
+        self.fill(led, "close", "ORDER_SIDE_SELL", "ORDER_INTENT_BUY_SHORT",
+                  "0.475", "100", event_at=boundary,
+                  received_at=boundary + timedelta(seconds=4))
+
+        self.assertEqual(
+            led.realized_pnl(
+                received_since=boundary,
+                received_through=boundary + timedelta(seconds=3)),
+            Decimal("0"),
+        )
+        with self.assertRaisesRegex(ValueError, "one attribution clock"):
+            led.realized_pnl(since=boundary, received_since=boundary)
+        with self.assertRaisesRegex(ValueError, "received-through"):
+            led.realized_pnl(received_through=boundary)
+
+    def test_received_window_charges_a_delayed_older_event_when_received(self):
+        led = self.ledger()
+        boundary = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+        # The complementary leg is learned first. The economically earlier
+        # event arrives later, so event-time ordering must not assign the
+        # eventual match back to the already-closed window.
+        self.fill(led, "known-short", "ORDER_SIDE_SELL",
+                  "ORDER_INTENT_BUY_SHORT", "0.475", "100",
+                  event_at=boundary - timedelta(minutes=1),
+                  received_at=boundary - timedelta(seconds=1))
+        self.fill(led, "delayed-long", "ORDER_SIDE_BUY",
+                  "ORDER_INTENT_BUY_LONG", "0.50", "100",
+                  event_at=boundary - timedelta(hours=1),
+                  received_at=boundary + timedelta(seconds=2))
+
+        self.assertEqual(led.realized_pnl(
+            received_since=boundary,
+            received_through=boundary + timedelta(seconds=2)),
+            Decimal("-2.500"))
 
     def test_realized_by_market_matches_individual_market_replays(self):
         led = self.ledger()

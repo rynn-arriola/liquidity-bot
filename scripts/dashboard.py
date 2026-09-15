@@ -76,16 +76,15 @@ def _window_hard_stop_pnl(now: datetime, *, database=DB,
         connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
             row = connection.execute(
-                "SELECT w.opening_equity,c.realized_equity,w.observed_at,w.policy "
-                "FROM execution_risk_windows w CROSS JOIN execution_risk_window_checkpoint c "
-                "WHERE w.window_start=? AND c.singleton=1",
+                "SELECT settled_pnl,observed_at,policy "
+                "FROM execution_settled_risk_windows WHERE window_start=?",
                 (policy.bounds(now)[0].isoformat(),)).fetchone()
         finally:
             connection.close()
-        if row is None or row[3] != policy.fingerprint():
+        if row is None or row[2] != policy.fingerprint():
             return None
-        age = (now - datetime.fromisoformat(row[2])).total_seconds()
-        result = Decimal(row[1]) - Decimal(row[0])
+        age = (now - datetime.fromisoformat(row[1])).total_seconds()
+        result = Decimal(row[0])
         return result if 0 <= age <= 15 and result.is_finite() else None
     except (sqlite3.Error, ValueError, TypeError, ArithmeticError):
         return None

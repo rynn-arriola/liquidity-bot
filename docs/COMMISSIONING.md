@@ -9,10 +9,10 @@ This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
 The September15 authorized risk replacement uses fixed $25 six-hour ET windows
-and confirmed account closing results; it supersedes the older $90 daily and
+and durable matched closing fills; it supersedes the older $90 daily and
 overnight/daytime cap descriptions below once loaded. Configuration is
 [`risk_window_policy.json`](../config/risk_window_policy.json); immutable window
-baselines, transfer-neutral checkpoints and outstanding holds survive restart.
+loss tiers and outstanding holds survive restart.
 See [scope, accounting, tests and migration gates](history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md).
 
 One permanent runner supports explicit `websocket` and `rest` sources, with
@@ -83,17 +83,19 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
   `$10 × (quote size / 10) × (slots / 24)` ($10 at size 10 / 24 slots).
   Neither count nor fee observation can block/cancel quotes, pause/stop trading
   or change an exit path. Crossing the fee reference logs/reports once;
-- one fixed configured $25 confirmed-account-loss HARD per six-hour ET window
+- one fixed configured $25 matched, closed-trade-loss HARD per six-hour ET window
   is the sole money-loss authority in the new release. Boundaries are
-  00:00,06:00,12:00,18:00 America/New_York including DST. Open-position cost
-  neutralizes entry spend and paper mark changes; positively classified
-  rewards/deposits/withdrawals/bonuses/transfers are excluded. Complete fresh
-  cash-stable account proof is required; unknown cannot consume guessed loss;
+  00:00,06:00,12:00,18:00 America/New_York including DST. Durable fills are
+  replayed to establish basis, but only matched closure and actual fill fees
+  received in the window count. Open orders, unmatched inventory, paper marks,
+  cash settlement timing, rewards/deposits/withdrawals/bonuses/transfers are
+  excluded. Complete fresh account proof remains required; unknown cannot
+  consume guessed loss or authorize new risk;
 - confirmed HARD cancels entries and immediately evacuates all inventory using
   sequential cancel-confirm-exact-IOC. The durable window pause survives restart
-  and recovered equity; resume requires a later ET window plus fresh flat account,
-  current adjusted risk and normal maintenance/stream/entry gates. A provisional
-  open-position breach still uses the existing cohort-close confirmation;
+  and later profits; resume requires a later ET window plus fresh flat account,
+  current settled-loss proof and normal maintenance/stream/entry gates. Open
+  inventory never creates a provisional window loss;
 - use that same confirmed window loss to ratchet the account-wide
   flat-entry ceiling from30 to25/20/15/10 at $5/$10/$15/$20 loss.
   HARD at $25 remains the sole loss stop. The tightest reached tier

@@ -180,6 +180,28 @@ CREATE TABLE IF NOT EXISTS execution_provisional_hard_stop (
     first_tripped_at TEXT NOT NULL,
     markets_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_risk_window_checkpoint (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    observed_at TEXT NOT NULL,
+    raw_cost_equity TEXT NOT NULL,
+    realized_equity TEXT NOT NULL,
+    marked_equity TEXT NOT NULL,
+    cash_anchor TEXT NOT NULL,
+    nontrading_total TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_risk_windows (
+    window_start TEXT PRIMARY KEY,
+    window_end TEXT NOT NULL,
+    opening_equity TEXT NOT NULL,
+    opening_marked_equity TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    day_baseline TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    entry_cap INTEGER NOT NULL,
+    tripped_at TEXT,
+    released_at TEXT,
+    provisional_markets TEXT
+);
 CREATE TABLE IF NOT EXISTS execution_risk_day_baselines (
     risk_date TEXT PRIMARY KEY,
     opening_equity TEXT NOT NULL,

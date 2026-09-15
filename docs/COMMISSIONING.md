@@ -8,6 +8,13 @@ operator's choices in [DECISIONS.md](../DECISIONS.md).
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
+The September15 authorized risk replacement uses fixed $25 six-hour ET windows
+and confirmed account closing results; it supersedes the older $90 daily and
+overnight/daytime cap descriptions below once loaded. Configuration is
+[`risk_window_policy.json`](../config/risk_window_policy.json); immutable window
+baselines, transfer-neutral checkpoints and outstanding holds survive restart.
+See [scope, accounting, tests and migration gates](history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md).
+
 One permanent runner supports explicit `websocket` and `rest` sources, with
 `rest-fallback` retained as an alias. The fourth launcher argument overrides the
 last successfully verified selection; without either, the validated policy defaults
@@ -76,30 +83,30 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
   `$10 × (quote size / 10) × (slots / 24)` ($10 at size 10 / 24 slots).
   Neither count nor fee observation can block/cancel quotes, pause/stop trading
   or change an exit path. Crossing the fee reference logs/reports once;
-- one breadth-scaled marked-account-equity HARD stop is the sole money-loss
-  authority. It is $56.25 at size 10 / 20 slots, $67.50 at 24 and $90 at 32. The ET
-  risk day resets at midnight `America/New_York`, including DST. Positively
-  classified completed rewards, deposits, withdrawals, bonuses and transfers
-  are subtracted from the adjusted mark; the bounded cash-only snapshot must
-  be current and proven or risk freshness expires and new risk fails closed;
+- one fixed configured $25 confirmed-account-loss HARD per six-hour ET window
+  is the sole money-loss authority in the new release. Boundaries are
+  00:00,06:00,12:00,18:00 America/New_York including DST. Open-position cost
+  neutralizes entry spend and paper mark changes; positively classified
+  rewards/deposits/withdrawals/bonuses/transfers are excluded. Complete fresh
+  cash-stable account proof is required; unknown cannot consume guessed loss;
 - confirmed HARD cancels entries and immediately evacuates all inventory using
-  sequential cancel-confirm-exact-IOC. The durable daily pause survives restart
-  and recovered equity; resume requires a later ET day plus fresh flat account,
+  sequential cancel-confirm-exact-IOC. The durable window pause survives restart
+  and recovered equity; resume requires a later ET window plus fresh flat account,
   current adjusted risk and normal maintenance/stream/entry gates. A provisional
   open-position breach still uses the existing cohort-close confirmation;
-- use that same adjusted ET-day marked loss to ratchet the account-wide
-  flat-entry order ceiling: 30 at 50% of HARD, 25 at 70%, 20 at 80%, 15 at
-  90%, and 10 at 95%. HARD at 100% remains the sole loss stop. The tightest reached tier
-  survives restart and cannot loosen until the next ET day. Unresolved creates
+- use that same confirmed window loss to ratchet the account-wide
+  flat-entry ceiling from30 to25/20/15/10 at $5/$10/$15/$20 loss.
+  HARD at $25 remains the sole loss stop. The tightest reached tier
+  survives restart and cannot loosen until the next window. Unresolved creates
   reserve capacity; excess owned entries drain one cancellation at a time from
   the lowest-ranked markets. Position-market orders, reducers, IOC exits and
   shutdown never consume or obey this entry ceiling;
-- independently cap pending flat-market entries at 30 from 00:00 inclusive to
-  09:00 exclusive `America/New_York` and 40 during the rest of the ET day.
-  Combine that clock band with the durable loss tier and physical two-orders-
-  per-slot capacity by taking the smallest cap. At 09:00 only the clock band
-  changes; it never resets a loss tier or changes selection priority. These
-  values load from strict restart-scoped `config/entry_order_policy.json`;
+- cap pending flat-market entries at30 in each window, narrowed by the
+  durable loss tier, source ceiling and physical two-orders-per-slot capacity.
+  The new window policy replaces the prior 00–09 max30/otherwise40 bands.
+  At a boundary fresh window/account evidence is mandatory before entry;
+  existing positions retain their normal exit timers. These
+  values load from strict restart-scoped `config/risk_window_policy.json`;
   malformed or loosening-shaped configuration refuses before credentials or
   venue access. Position markets, reducers, IOC exits, recovery and shutdown
   retain the same exclusions;

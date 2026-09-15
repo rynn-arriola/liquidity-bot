@@ -160,10 +160,10 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.now = fixtures.NOW
 
-    async def build(self, mode="rest"):
+    async def build(self, mode="rest", **kwargs):
         with patch.object(fixtures, "CommissioningRunner", partial(
                 AccountSourceRunner, account_state_mode=mode)):
-            runner, client, notifier = self.fixture.build_runner(clock=lambda: self.now)
+            runner, client, notifier = self.fixture.build_runner(clock=lambda: self.now, **kwargs)
         runner._websocket_factory = CandidateStream
         await runner.preflight()
         self.addAsyncCleanup(runner.market_stream.close)
@@ -208,6 +208,21 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
         self.assertEqual(runner.PENDING_ENTRY_ORDER_CEILING, 30)
         self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
         self.assertEqual(startup_mode(None, runner.ledger.path.parent), "rest")
+
+    async def test_window_budget_survives_rest_websocket_handoff(self):
+        from liquidity_bot.risk_windows import load_risk_window_policy
+        runner, client, _ = await self.build(risk_window_policy=load_risk_window_policy())
+        meter = runner._window_risk
+        client.account.current_balance = Decimal("95")
+        await runner._refresh_balance(self.now)
+        self.assertEqual(runner._loss_entry_order_cap, 25)
+        for target in ("websocket", "rest"):
+            await self.switch(runner, target)
+            self.assertEqual(runner.account_state_mode, target)
+            self.assertIs(runner._window_risk, meter)
+            self.assertEqual(runner._loss_entry_order_cap, 25)
+            self.assertEqual(runner.risk_guard.starting_equity, Decimal("100"))
+        self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
 
     async def test_silent_candidate_cannot_switch_and_old_source_survives(self):
         runner, client, _ = await self.build()

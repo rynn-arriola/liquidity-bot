@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
+from .risk_windows import RiskWindowPolicy, load_risk_window_policy
 from .entry_order_policy import (
     EntryOrderPolicy, EntryOrderPolicyError, load_entry_order_policy)
 from .quote_size import (
@@ -66,8 +67,10 @@ def next_six_am_new_york(now: datetime) -> datetime:
 class CommissioningConfig:
     """Bounded experimental authorization derived from one quote quantity.
 
-    ``hard_stop_loss_usd`` is the sole money-loss stop. Its size-10/32-slot
-    reference is $90 and it scales proportionally with quantity and breadth.
+    ``hard_stop_loss_usd`` is the sole money-loss stop: a fixed configured
+    $25 per six-hour ET window, based on confirmed closed-result accounting.
+    Passing ``risk_window_policy=None`` retains the historical daily policy
+    for replay; production always loads the validated window policy.
     The stressed-exit entry cap is an economic eligibility check, not a stop.
     """
 
@@ -92,7 +95,7 @@ class CommissioningConfig:
     # when no runtime setting file exists.
     #
     # Everything derived from contract count moves with it or the config stops
-    # being coherent. This includes the portfolio cap and all loss thresholds;
+    # being coherent. This includes the portfolio cap, but not the fixed window stop;
     # size is restart-scoped so none can move under live orders.
     quote_size: Decimal = DEFAULT_QUOTE_SIZE
     # Eight is the measured ceiling, not a preference. The private
@@ -135,6 +138,8 @@ class CommissioningConfig:
         default_factory=load_entry_order_policy)
     entry_quality_policy: EntryQualityPolicy = field(
         default_factory=load_entry_quality_policy)
+    risk_window_policy: RiskWindowPolicy | None = field(
+        default_factory=load_risk_window_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on
     # 2026-08-11/12: a passive exit resolved within 30s for only 26% of
     # episodes, but 46% by 900s (median 100s, p75 653s). Crossing costs a
@@ -272,8 +277,10 @@ class CommissioningConfig:
 
     @property
     def hard_stop_loss_usd(self) -> Decimal:
-        """Scale the operator's size-10/32-slot $90 HARD reference."""
+        """Fixed window dollars, or the explicit historical daily replay value."""
 
+        if self.risk_window_policy is not None:
+            return self.risk_window_policy.stop_loss_usd
         return (
             HARD_STOP_SIZE_10_32_USD
             * self.quote_size
@@ -291,12 +298,15 @@ class CommissioningConfig:
     def entry_order_cap_for_loss(self, loss_usd: Decimal) -> int:
         """Return the operator-selected cap at the current HARD utilization.
 
-        The runtime persists only downward transitions for an ET risk day, so
+        The runtime persists only downward transitions within a risk window, so
         this pure calculation may safely return a looser cap after a mark
         recovers.  The durable ratchet decides whether that recovery can widen
-        the live order budget (it cannot until the next ET day).
+        the live order budget (it cannot until the next window).
         """
 
+        if self.risk_window_policy is not None:
+            return self.risk_window_policy.cap(
+                loss_usd, full_cap=self.full_entry_order_capacity)
         loss = max(Decimal("0"), Decimal(loss_usd))
         hard = self.hard_stop_loss_usd
         fraction = Decimal("0") if hard <= 0 else loss / hard
@@ -304,11 +314,14 @@ class CommissioningConfig:
             fraction, full_cap=self.full_entry_order_capacity)
 
     def entry_order_cap_for_time(self, observed_at: datetime) -> int:
-        """Return the deterministic midnight-09:00 ET entry-order ceiling."""
+        """Return the fixed window ceiling, or historical daily clock band."""
 
         if (observed_at.tzinfo is None
                 or observed_at.utcoffset() is None):
             raise ValueError("observed_at must be timezone-aware")
+        if self.risk_window_policy is not None:
+            return min(self.full_entry_order_capacity,
+                       self.risk_window_policy.max_pending_entry_orders)
         try:
             return self.entry_order_policy.time_cap(
                 observed_at, full_cap=self.full_entry_order_capacity)
@@ -322,6 +335,8 @@ class CommissioningConfig:
     def entry_order_cap_is_overnight(self, observed_at: datetime) -> bool:
         """Return whether the configured lower clock band applies."""
 
+        if self.risk_window_policy is not None:
+            return False
         try:
             return self.entry_order_policy.is_overnight(observed_at)
         except EntryOrderPolicyError as exc:
@@ -357,7 +372,8 @@ class CommissioningConfig:
     def weekly_operating_reserve_usd(self) -> Decimal:
         """Keep seven daily hard-stop budgets while rewards remain pending."""
 
-        return self.hard_stop_loss_usd * Decimal("7")
+        windows_per_day = 4 if self.risk_window_policy is not None else 1
+        return self.hard_stop_loss_usd * Decimal(7 * windows_per_day)
 
     @classmethod
     def diagnostic_defaults(

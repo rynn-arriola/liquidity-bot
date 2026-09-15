@@ -92,11 +92,16 @@ class LiquiditySummary:
     today_realized_pnl_usd: Decimal | None = None
     today_unrealized_pnl_usd: Decimal | None = None
     today_pnl_as_of: datetime | None = None
-    # The hard stop's adjusted marked-equity delta. Negative is a loss. Proven
+    # The hard stop's own adjusted equity delta. Negative is a loss. Proven
     # non-trading cash is removed before the guard observes equity, so this can
     # intentionally differ from `today_pnl_usd`. None preserves compatibility
-    # for offline/legacy callers that do not run the live equity guard.
+    # for offline/legacy callers that do not run the live equity guard. Window
+    # mode instead uses confirmed closing results and None stays unavailable.
     hard_stop_pnl_usd: Decimal | None = None
+    hard_stop_window: str | None = None
+    pending_entry_cap: int | None = None
+    pending_entry_count: int | None = None
+    hard_stop_state: str | None = None
     # Lifetime result for THIS bot: ledger trading, which is bot-scoped by
     # construction because the ledger holds only this bot's fills. Settled
     # positions are invisible to it, so it understates losses -- see FINDINGS.
@@ -395,7 +400,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
     # summaries compatible without changing their display.
     hard_stop_pnl = (
         summary.today_pnl_usd
-        if summary.hard_stop_pnl_usd is None
+        if summary.hard_stop_pnl_usd is None and summary.hard_stop_window is None
         else summary.hard_stop_pnl_usd)
     hard_loss = (max(Decimal("0"), -_money(hard_stop_pnl))
                  if hard_stop_pnl is not None else None)
@@ -409,6 +414,18 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         risk_text += (
             "\nHARD     " + _meter(float(hard_loss), float(hard_cap))
             + f"  ${float(hard_loss):,.2f} / ${float(hard_cap):,.2f}\n")
+    if summary.hard_stop_window is not None:
+        risk_text += _row("Risk window", summary.hard_stop_window)
+        remaining = (max(Decimal("0"), hard_cap - hard_loss)
+                     if hard_loss is not None else None)
+        risk_text += _row("Budget left", (
+            f"${remaining:,.2f} ({min(Decimal('100'), remaining / hard_cap * 100):.0f}%)"
+            if remaining is not None and hard_cap > 0 else "unavailable"))
+    if summary.pending_entry_cap is not None:
+        count = "unknown" if summary.pending_entry_count is None else str(summary.pending_entry_count)
+        risk_text += _row("Pending entries", f"{count} / {summary.pending_entry_cap}")
+    if summary.hard_stop_state is not None:
+        risk_text += _row("Risk status", summary.hard_stop_state)
 
     reward_text = (_row("PAID attributed", f"{float(paid):,.2f}")
                    + _row("Pending", f"{float(pending):,.2f}"))

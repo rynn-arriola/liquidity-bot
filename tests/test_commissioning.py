@@ -33,6 +33,8 @@ class CommissioningTests(unittest.TestCase):
             "exclusive_api_key_confirmed": True,
             "maker_lab_stopped_confirmed": True,
             "arm_live": True,
+            # Explicit historical policy for daily/breadth-scaling regressions.
+            "risk_window_policy": None,
         }
         values.update(changes)
         return CommissioningConfig(**values)

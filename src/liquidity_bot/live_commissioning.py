@@ -39,7 +39,8 @@ from .bot_era import bot_era_rewards_by_status
 from .adapters import (
     AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS,
     shared_api_limiter)
-from .cash_activity import corrected_opening_cash, fetch_nontrading_cash
+from .cash_activity import (
+    corrected_opening_cash, fetch_nontrading_cash, fetch_nontrading_cash_changes)
 from .commissioning import (
     AUTO_REWARD_MARKET,
     CommissioningConfig,
@@ -61,6 +62,7 @@ from .execution_ledger import (
 from .execution_timing import ExecutionTimings
 from .entry_quality import (
     DEFAULT_ENTRY_QUALITY_POLICY_PATH, load_entry_quality_policy)
+from .risk_windows import WindowRiskMeter, load_risk_window_policy
 from .entry_order_policy import (
     DEFAULT_ENTRY_ORDER_POLICY_PATH,
     EntryOrderPolicyError,
@@ -715,6 +717,20 @@ class CommissioningRunner:
             datetime.fromisoformat(str(holds[0]["first_tripped_at"]))
             if holds else None)
         self._hard_stop_hold_notice: str | None = "held" if holds else None
+        self._window_risk = (
+            WindowRiskMeter(self.ledger.connection, config.risk_window_policy)
+            if config.risk_window_policy is not None else None)
+        if self._window_risk is not None:
+            if self._window_risk.held:
+                self._hard_stop_hold_notice = "held"
+            if self._window_risk.provisional:
+                self._provisional_hard_stop_notice = "started"
+        if self._window_risk is not None and (
+                self._hard_stop_hold_day is not None
+                or self._provisional_hard_stop_at is not None):
+            raise CommissioningRefused(
+                "resolve the existing daily HARD hold with fresh flat proof "
+                "before migrating to six-hour risk windows")
         self._transport_recovery_component: str | None = None
         self._market_fault_pause_until: datetime | None = None
         # Footer identity, so an alert says which box and which build produced
@@ -1646,6 +1662,7 @@ class CommissioningRunner:
             session_ready = False
         return (
             risk_allowed,
+            self._window_entry_ready(now),
             self._provisional_hard_stop_at is None,
             self._baseline_day == today,
             self._nontrading_cash is not None,
@@ -1660,12 +1677,20 @@ class CommissioningRunner:
 
         return (
             self._manual_entry_paused
-            or self._hard_stop_hold_day is not None
+            or self._hard_stop_active()
+            or (self._window_risk is not None and self._window_risk.provisional)
             or self._transport_recovery_component is not None
             or self._market_fault_pause_until is not None
             or self._scheduled_maintenance_pause_active()
             or (self._ui_availability_initialized and self._ui_entry_paused)
         )
+
+    def _hard_stop_active(self) -> bool:
+        return (self._hard_stop_hold_day is not None
+                or (self._window_risk is not None and self._window_risk.held))
+
+    def _window_entry_ready(self, now: datetime) -> bool:
+        return self._window_risk is None or self._window_risk.ready(now)
 
     def _scheduled_maintenance_pause_active(self) -> bool:
         """Fail closed until the official schedule has initialized."""
@@ -1702,8 +1727,11 @@ class CommissioningRunner:
         )
 
     def _current_entry_pause_reason(self) -> str | None:
-        if self._hard_stop_hold_day is not None:
-            return "daily_hard_stop_flatten_and_wait"
+        if self._hard_stop_active():
+            return ("window_hard_stop_flatten_and_wait" if self._window_risk
+                    else "daily_hard_stop_flatten_and_wait")
+        if self._window_risk is not None and self._window_risk.provisional:
+            return "window_loss_awaiting_position_close"
         if self._transport_recovery_component is not None:
             return f"transport_recovery:{self._transport_recovery_component}"
         if self._market_fault_pause_until is not None:
@@ -3383,7 +3411,7 @@ class CommissioningRunner:
                 and not self._loss_cap_blocks_new_entry(self._now())))
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
-        hard_recovery = recovery_only and self._hard_stop_hold_day is not None
+        hard_recovery = recovery_only and self._hard_stop_active()
         if recovery_only and not hard_recovery:
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
@@ -4080,7 +4108,7 @@ class CommissioningRunner:
                 self._working_orders(state.slug), False,
                 state.reward_eligible, {}, 0,
                 new_risk_allowed=False,
-                hard_stop_flatten_required=self._hard_stop_hold_day is not None,
+                hard_stop_flatten_required=self._hard_stop_active(),
                 maintenance_flatten_required=(
                     self._scheduled_maintenance_flatten_required()))
         new_risk_allowed = self._entry_risk_allowed(now, state.market)
@@ -4110,7 +4138,7 @@ class CommissioningRunner:
             position_opened_at=basis.opened_at if basis else None,
             entry_price=float(basis.average_entry_price) if basis else None,
             new_risk_allowed=new_risk_allowed,
-            hard_stop_flatten_required=self._hard_stop_hold_day is not None,
+            hard_stop_flatten_required=self._hard_stop_active(),
             maintenance_flatten_required=(
                 self._scheduled_maintenance_flatten_required()),
         )
@@ -4120,6 +4148,7 @@ class CommissioningRunner:
         today = date.fromisoformat(risk_day(now))
         return (
             self.risk_guard is not None
+            and self._window_entry_ready(now)
             and self.risk_guard.can_add_new_risk(now=now)
             and self._provisional_hard_stop_at is None
             and self._baseline_day == today
@@ -4395,6 +4424,17 @@ class CommissioningRunner:
         )
 
     async def _refresh_balance(self, now: datetime) -> None:
+        try:
+            await self._refresh_balance_candidate(now)
+        except Exception:
+            # A failed settlement proof is unknown, not another fresh reading
+            # of the previous confirmed window loss. Preserve the dollar
+            # checkpoint, but immediately withdraw entry authority.
+            if self._window_risk is not None and self.risk_guard is not None:
+                self.risk_guard.equity_observed_at = None
+            raise
+
+    async def _refresh_balance_candidate(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
         snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
@@ -4427,12 +4467,29 @@ class CommissioningRunner:
         # (even if an offsetting fill leaves the raw cash balance unchanged).
         if self._cash_activity_boundary is None:
             raise RuntimeError("cash-activity boundary is unavailable")
-        nontrading = await fetch_nontrading_cash(
-            self.gateway,
-            boundary=self._cash_activity_boundary,
-            through=observed_at,
-            max_pages=NONTRADING_CASH_MAX_PAGES,
-        )
+        cash_through = observed_at
+        window_adjustment = Decimal("0")
+        if self._window_risk is None:
+            nontrading = await fetch_nontrading_cash(
+                self.gateway, boundary=self._cash_activity_boundary,
+                through=cash_through, max_pages=NONTRADING_CASH_MAX_PAGES)
+        else:
+            window_boundary = self._window_risk.cash_boundary
+            changes = await fetch_nontrading_cash_changes(
+                self.gateway,
+                boundary=min(self._cash_activity_boundary,
+                             window_boundary or self._cash_activity_boundary),
+                through=cash_through, max_pages=NONTRADING_CASH_MAX_PAGES)
+            nontrading = sum((change.amount for change in changes
+                             if change.completed_at > self._cash_activity_boundary), Decimal("0"))
+            if window_boundary is not None:
+                window_adjustment = sum((change.amount for change in changes
+                                         if change.completed_at > window_boundary), Decimal("0"))
+                # Compare cumulative proven cash, not event timestamps since
+                # the last poll: late-posted/backdated same-day transfers must
+                # not be mistaken for trading. The previous day's anchor is
+                # retained through the first successful midnight bracket.
+                window_adjustment -= self._window_risk.nontrading_total
         # Cash activity can complete while its pages are being read. The
         # snapshot already bracketed positions with equal cash reads; one
         # final equal cash read proves the activity adjustment belongs to
@@ -4444,6 +4501,12 @@ class CommissioningRunner:
         if date.fromisoformat(risk_day(self._now())) != today:
             raise AdapterError(
                 "ET risk day changed during non-trading activity snapshot")
+        if self._window_risk is not None:
+            if snapshot.position_basis is None:
+                raise AdapterError("open-position cost is unavailable for settled window loss")
+            age = (self._now() - snapshot.observed_at).total_seconds()
+            if not 0 <= age <= self.risk_guard.max_equity_age_seconds:
+                raise AdapterError("settled window account snapshot is stale")
         # Keep every consumer on the final bracketed balance row.  Do not
         # publish any part of the candidate snapshot until all reads have
         # succeeded; a failed activity bracket must leave the previous
@@ -4473,11 +4536,67 @@ class CommissioningRunner:
         # stop. Rewards, deposits and withdrawals are then removed exactly as
         # they are from the realised sensor.
         adjusted_equity = snapshot.marked_equity - self._nontrading_cash
+        if self._window_risk is not None:
+            # Open contracts tie up cash; add their cost back so neither entry
+            # spend nor paper mark changes can consume the closed-loss budget.
+            settled_equity = snapshot.balance.current_balance + snapshot.position_basis
+            self._observe_risk_window(settled_equity, snapshot, observed_at,
+                                      window_adjustment, cash_through)
+            adjusted_equity = self._window_risk.realized_equity
         self.risk_guard.observe_equity(
             adjusted_equity, observed_at=snapshot.observed_at)
         self._refresh_loss_entry_order_cap(observed_at)
         self._refresh_overnight_entry_order_cap(observed_at)
         self._publish_live_pnl_snapshot()
+
+    def _observe_risk_window(
+        self, equity: Decimal, snapshot: AccountEquitySnapshot, now: datetime,
+        adjustment: Decimal, cash_through: datetime,
+    ) -> None:
+        meter = self._window_risk
+        if meter is None or self.risk_guard is None:
+            return
+        if self._cash_activity_boundary is None:
+            raise AdapterError("daily cash baseline is unavailable for risk window")
+        previous, was_held = meter.current, meter.held
+        was_provisional = meter.provisional
+        try:
+            mark = meter.observe(
+                equity=equity, observed_at=snapshot.observed_at, now=now,
+                full_cap=self.config.full_entry_order_capacity,
+                day_baseline=self._cash_activity_boundary,
+                marked_equity=snapshot.marked_equity,
+                interval_nontrading=adjustment, cash_observed_at=cash_through,
+                nontrading_total=self._nontrading_cash,
+                positions=frozenset(p.market_slug for p in snapshot.positions
+                                    if p.net_qty != 0))
+        except ValueError as exc:
+            raise AdapterError(str(exc)) from exc
+        self.risk_guard.adopt_day_baseline(mark.opening_equity)
+        self._loss_entry_order_cap = mark.cap
+        if (mark != previous or was_held != meter.held
+                or was_provisional != meter.provisional):
+            self._dirty_market_slugs.update(self.active_slugs)
+            local = mark.start.astimezone(NEW_YORK)
+            print(f"[window-risk] at={now.isoformat()} start={local.isoformat()} "
+                  f"end={mark.end.astimezone(NEW_YORK).isoformat()} "
+                  f"loss={max(Decimal('0'), mark.opening_equity - meter.realized_equity)} "
+                  f"hard={meter.policy.stop_loss_usd} cap={mark.cap} "
+                  f"held={meter.held} provisional={meter.provisional} "
+                  "positions_and_reducers=excluded", flush=True)
+        if meter.held and not was_held:
+            self._hard_stop_hold_notice = "held"
+            self._entry_pause_cancel_requested = True
+            for slug in self._retired:
+                self._retired[slug].next_retry_at = now
+            self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+        elif meter.provisional and not was_provisional:
+            self._entry_pause_cancel_requested = True
+            self._provisional_hard_stop_notice = "started"
+            self._publish_active_scope_snapshot(status="ENTRY_PAUSED")
+        elif was_provisional and not meter.provisional:
+            self._provisional_hard_stop_notice = "cleared"
+            self._publish_active_scope_snapshot()
 
     def _publish_active_scope_snapshot(
         self, *, status: str | None = None,
@@ -4568,7 +4687,10 @@ class CommissioningRunner:
         if guard is None:
             raise RuntimeError("risk guard is not initialized")
         observed_at = guard.equity_observed_at
-        if observed_at is None:
+        if observed_at is None or (self._window_risk is not None and (
+                self._window_risk.current is None
+                or self._window_risk.current.start
+                != self._window_risk.policy.bounds(now)[0])):
             await self._refresh_balance(now)
             return
         age = (now - observed_at).total_seconds()
@@ -4586,6 +4708,10 @@ class CommissioningRunner:
         observed_at = guard.equity_observed_at if guard is not None else None
         if (observed_at is not None
                 and risk_day(now) == risk_day(observed_at)
+                and (self._window_risk is None or (
+                    self._window_risk.current is not None
+                    and self._window_risk.current.start
+                    == self._window_risk.policy.bounds(now)[0]))
                 and 0 <= (now - observed_at).total_seconds() < 5):
             # Keep the original due time: skipping a duplicate at age four
             # seconds must not postpone the next periodic check by five more.
@@ -4596,6 +4722,8 @@ class CommissioningRunner:
     def _refresh_loss_entry_order_cap(self, observed_at: datetime) -> None:
         """Tighten the durable ET-day entry-order budget from marked HARD use."""
 
+        if self._window_risk is not None:
+            return  # Window observation owns its durable cap atomically.
         guard = self.risk_guard
         day = self._baseline_day
         if (guard is None or day is None or guard.current_equity is None
@@ -4646,6 +4774,8 @@ class CommissioningRunner:
     def _effective_entry_order_cap(self, observed_at: datetime) -> int:
         """Return the tighter of the durable loss and clock-based ceilings."""
 
+        if not self._window_entry_ready(observed_at):
+            return 0
         policy_cap = min(
             self._loss_entry_order_cap,
             self.config.entry_order_cap_for_time(observed_at),
@@ -4997,7 +5127,7 @@ class CommissioningRunner:
         # The hard stop measures against this. Without it the emergency
         # ceiling stays pinned to whatever equity this process happened to
         # start at, which is the ratchet above.
-        if self.risk_guard is not None:
+        if self.risk_guard is not None and self._window_risk is None:
             self.risk_guard.adopt_day_baseline(opening_equity)
 
     def _latch_hard_stop(self, now: datetime) -> None:
@@ -5023,6 +5153,9 @@ class CommissioningRunner:
     def _maybe_release_hard_stop(self, now: datetime) -> None:
         """Next ET day is necessary, not sufficient: fresh flat proof first."""
 
+        if self._window_risk is not None:
+            self._maybe_release_window_stop(now)
+            return
         day = self._hard_stop_hold_day
         today = date.fromisoformat(risk_day(now))
         if (day is None or today <= day or self._baseline_day != today
@@ -5059,6 +5192,32 @@ class CommissioningRunner:
         print(f"[daily-hard-stop] at={now.isoformat()} day={day} "
               "state=released proof=fresh_next_day_flat_account", flush=True)
 
+    def _maybe_release_window_stop(self, now: datetime) -> None:
+        meter, guard = self._window_risk, self.risk_guard
+        if (meter is None or not meter.held or meter.current is None
+                or guard is None or not guard.can_add_new_risk(now=now)
+                or self._streams_need_rebind
+                or not self.gate.ready(self.ledger, now=now)):
+            return
+        reconciled, equity_at = self.gate.last_reconcile_at, guard.equity_observed_at
+        snapshot = self._equity_snapshot
+        if (reconciled is None or equity_at is None or snapshot is None
+                or not meter.current.start <= reconciled <= equity_at <= now
+                or snapshot.observed_at != equity_at
+                or self._nontrading_cash_day != self._baseline_day
+                or self._nontrading_cash is None
+                or any(p.net_qty != 0 for p in snapshot.positions)
+                or self.ledger.working_orders() or self.ledger.absent_orders()
+                or self.ledger.unresolved_intents() or self._has_open_position()):
+            return
+        self._assert_runtime_scope()
+        if meter.release(now=now, flat_proven=True):
+            self._dirty_market_slugs.update(self.active_slugs)
+            self._hard_stop_hold_notice = "released" if not meter.held else None
+            self._publish_active_scope_snapshot()
+            print(f"[window-risk] at={now.isoformat()} "
+                  "state=released proof=fresh_next_window_flat_account", flush=True)
+
     def _stop_reason(self, now: datetime) -> str | None:
         if self._stop_requested:
             return self._stop_requested
@@ -5084,7 +5243,8 @@ class CommissioningRunner:
                 "SELECT market_slug FROM execution_positions "
                 "WHERE CAST(net_qty AS REAL)!=0")
         }
-        hard_hit = (self._hard_stop_hold_day is None
+        hard_hit = (self._window_risk is None
+                    and self._hard_stop_hold_day is None
                     and self.risk_guard.hard_stop_reached(now=now))
         if hard_hit and open_position_slugs:
             if self._provisional_hard_stop_at is None:
@@ -5259,6 +5419,28 @@ class CommissioningRunner:
         """Announce a paper breach once, then its position-close recovery."""
 
         hold_notice, self._hard_stop_hold_notice = self._hard_stop_hold_notice, None
+        if self._window_risk is not None:
+            provisional, self._provisional_hard_stop_notice = (
+                self._provisional_hard_stop_notice, None)
+            if hold_notice == "held":
+                await self.notifier.send_async(
+                    "⏸️ Six-hour HARD loss reached. Cancelling pending entries "
+                    "and exiting positions. Entries remain paused until a later "
+                    "ET window and fresh flat-account proof.", critical=True)
+            elif hold_notice == "released":
+                await self.notifier.send_async(
+                    "✅ New six-hour ET window: HARD pause cleared after fresh "
+                    "flat-account proof. Trading safety gates still apply.")
+            elif provisional == "started":
+                await self.notifier.send_async(
+                    "⏸️ Open-position loss is provisional. New entries are paused "
+                    "while normal exits continue; only confirmed closed losses "
+                    "count toward the window stop and order reductions.")
+            elif provisional == "cleared":
+                await self.notifier.send_async(
+                    "✅ Breach-time positions closed. The six-hour budget now "
+                    "uses the confirmed result; normal entry gates apply.")
+            return
         if hold_notice == "held":
             await self.notifier.send_async(
                 "⏸️ HARD loss confirmed. Cancelling pending entries and exiting "
@@ -7046,6 +7228,11 @@ class CommissioningRunner:
             capital_reason = (
                 "account integrity problem" if problems else
                 f"order proof pending ({len(unresolved)} intents, {unknown} unknown)")
+        pending_entries = None
+        if (self._window_risk is not None and not unknown and not problems
+                and self.gate.ready(self.ledger, now=now)):
+            flat_orders, reservations = self._flat_entry_orders_and_reservations()
+            pending_entries = len(flat_orders) + reservations
         payload = build_liquidity_summary(LiquiditySummary(
             mode="LIVE",
             readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
@@ -7072,6 +7259,25 @@ class CommissioningRunner:
             trading_realized_usd=equity_change,
             open_marked_usd=Decimal("0"),
             hard_stop_loss_usd=self.config.hard_stop_loss_usd,
+            pending_entry_count=pending_entries,
+            pending_entry_cap=(self._effective_entry_order_cap(now)
+                               if self._window_risk is not None else None),
+            hard_stop_state=(
+                "HARD paused"
+                if self._window_risk is not None and self._window_risk.held else
+                "Awaiting position closure"
+                if self._window_risk is not None and self._window_risk.provisional else
+                "Awaiting fresh window proof"
+                if self._window_risk is not None and (
+                    not self._window_entry_ready(now)
+                    or self.risk_guard is None
+                    or not self.risk_guard.can_add_new_risk(now=now)) else
+                "Other entry pause" if self._window_risk is not None and self._entry_pause_active() else
+                "Window budget available" if self._window_risk is not None else None),
+            hard_stop_window=(
+                self._window_risk.policy.bounds(now)[0].astimezone(NEW_YORK).strftime('%H:%M')
+                + '–' + self._window_risk.policy.bounds(now)[1].astimezone(NEW_YORK).strftime('%H:%M')
+                + ' ET · confirmed' if self._window_risk is not None else None),
             # Supply, straight off the last selection scan. These counters
             # already exist on the selection object and were never reported
             # anywhere -- which is why "is it quoting 3 because 3 is all
@@ -7161,6 +7367,12 @@ class CommissioningRunner:
                 - self.risk_guard.starting_equity
                 if self.risk_guard is not None
                 and self.risk_guard.current_equity is not None
+                and (self._window_risk is None or (
+                    self._window_risk.current is not None
+                    and self._window_risk.current.start <= now < self._window_risk.current.end
+                    and self.risk_guard.equity_observed_at is not None
+                    and 0 <= (now - self.risk_guard.equity_observed_at).total_seconds()
+                    <= self.risk_guard.max_equity_age_seconds))
                 else None),
             # Lifetime, and genuinely this bot's: the ledger holds only this
             # bot's fills, so no date filter is needed. Understates losses,
@@ -10670,6 +10882,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     try:
         entry_quality_policy = load_entry_quality_policy(Path(getattr(
             args, "entry_quality_policy", DEFAULT_ENTRY_QUALITY_POLICY_PATH)))
+        risk_window_policy = load_risk_window_policy()
     except ValueError as exc:
         raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
@@ -10683,6 +10896,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         max_markets=args.max_markets,
         entry_order_policy=entry_order_policy,
         entry_quality_policy=entry_quality_policy,
+        risk_window_policy=risk_window_policy,
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)

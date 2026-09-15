@@ -21,6 +21,24 @@ NOW = datetime(2026, 9, 7, 13, tzinfo=timezone.utc)
 
 
 class DiscordReportLayoutTests(unittest.TestCase):
+    def test_window_meter_never_falls_back_to_daily_pnl_when_unknown(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE", observed_at=NOW,
+            session_started_at=NOW, today_pnl_usd=Decimal("-104"),
+            hard_stop_loss_usd=Decimal("25"), hard_stop_window="06:00–12:00 ET",
+            pending_entry_cap=25, pending_entry_count=24,
+            hard_stop_state="Window budget available")
+        payload = json.dumps(build_liquidity_summary(summary))
+        self.assertIn("HARD     UNAVAILABLE", payload)
+        confirmed = json.dumps(build_liquidity_summary(replace(
+            summary, hard_stop_pnl_usd=Decimal("-5"))))
+        self.assertIn("$5.00 / $25.00", confirmed)
+        self.assertNotIn("$104.00 / $25.00", confirmed)
+        self.assertIn("$20.00 (80%)", confirmed)
+        self.assertIn("Pending entries", confirmed)
+        self.assertIn("24 / 25", confirmed)
+        self.assertIn("Window budget available", confirmed)
+
     def test_summary_is_one_column_report_without_repeated_notes(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE",

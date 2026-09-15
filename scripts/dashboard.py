@@ -65,6 +65,31 @@ def _hard_stop_cap(config: CommissioningConfig = CONFIG) -> float:
 
     return float(config.hard_stop_loss_usd)
 
+
+def _window_hard_stop_pnl(now: datetime, *, database=DB,
+                          config: CommissioningConfig = CONFIG) -> Decimal | None:
+    """Read the runner's last confirmed window mark; never substitute daily P&L."""
+    policy = config.risk_window_policy
+    if policy is None:
+        return None
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT w.opening_equity,c.realized_equity,w.observed_at,w.policy "
+                "FROM execution_risk_windows w CROSS JOIN execution_risk_window_checkpoint c "
+                "WHERE w.window_start=? AND c.singleton=1",
+                (policy.bounds(now)[0].isoformat(),)).fetchone()
+        finally:
+            connection.close()
+        if row is None or row[3] != policy.fingerprint():
+            return None
+        age = (now - datetime.fromisoformat(row[2])).total_seconds()
+        result = Decimal(row[1]) - Decimal(row[0])
+        return result if 0 <= age <= 15 and result.is_finite() else None
+    except (sqlite3.Error, ValueError, TypeError, ArithmeticError):
+        return None
+
 C = {"g": "\033[32m", "y": "\033[33m", "r": "\033[31m",
      "d": "\033[90m", "b": "\033[1m", "x": "\033[0m"}
 
@@ -659,7 +684,9 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
     print(line(" " * 46 + f"{fills_all:,} lifetime"))
     print(line())
     hard_cap = _hard_stop_cap()
-    hard_loss = None if today_pnl is None else max(0.0, -float(today_pnl))
+    hard_pnl = (_window_hard_stop_pnl(datetime.now(timezone.utc))
+                if CONFIG.risk_window_policy is not None else today_pnl)
+    hard_loss = None if hard_pnl is None else max(0.0, -float(hard_pnl))
     if hard_loss is None:
         print(line(f"{'hard stop':<14}unknown"))
     else:
@@ -668,8 +695,10 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
         print(line(f"{'hard stop':<14}{bar(hard_loss, hard_cap, 24, level)}   "
                    f"${hard_loss:,.2f} / ${hard_cap:,.0f}"
                    + paint("d", f"   ${hard_cap - hard_loss:,.2f} left")))
-    print(line(paint("d", "  marked account trading since 00:00 ET; proven rewards and")))
-    print(line(paint("d", "  deposits are excluded, matching the runner's HARD sensor")))
+    if CONFIG.risk_window_policy is not None:
+        print(line(paint("d", "  last confirmed six-hour ET loss; paper loss and transfers excluded")))
+    else:
+        print(line(paint("d", "  marked account trading since 00:00 ET; transfers excluded")))
     print(box_bottom())
     print("")
 
@@ -698,7 +727,7 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
                        quoted=quoted, idle_bound=idle_bound, free=free,
                        positions=positions, orders=orders,
                        fills_today=fills_today, fills_all=fills_all,
-                       hard_stop_pnl=today_pnl, hard_stop_cap=hard_cap,
+                       hard_stop_pnl=hard_pnl, hard_stop_cap=hard_cap,
                        viable=viable, tight=tight, rewarded=rewarded,
                        reward_paid=reward_paid, reward_pending=reward_pending,
                        uptime=_uptime()),

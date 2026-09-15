@@ -16,7 +16,7 @@ from scripts import dashboard
 
 
 class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
-    def test_hard_stop_cap_follows_restart_scoped_quantity_and_breadth(self):
+    def test_window_hard_stop_cap_is_fixed_despite_quantity_and_breadth(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             quote_size = root / "quote_size"
@@ -29,7 +29,28 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.quote_size, Decimal("10"))
         self.assertEqual(config.max_markets, 24)
-        self.assertEqual(dashboard._hard_stop_cap(config), 67.5)
+        self.assertEqual(dashboard._hard_stop_cap(config), 25)
+
+    def test_window_meter_reads_only_fresh_matching_checkpoint(self):
+        from liquidity_bot.execution_ledger import ExecutionLedger
+        from liquidity_bot.risk_windows import WindowRiskMeter
+        config = dashboard.CommissioningConfig.diagnostic_defaults()
+        now = dashboard.datetime(2026, 9, 15, 12, tzinfo=dashboard.timezone.utc)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "test.db"
+            ledger = ExecutionLedger(path)
+            try:
+                meter = WindowRiskMeter(ledger.connection, config.risk_window_policy)
+                for equity in (Decimal(100), Decimal(95)):
+                    meter.observe(equity=equity, observed_at=now, now=now,
+                                  full_cap=64, day_baseline=now)
+                self.assertEqual(dashboard._window_hard_stop_pnl(now, database=path), Decimal(-5))
+                self.assertIsNone(dashboard._window_hard_stop_pnl(
+                    now + dashboard.timedelta(seconds=16), database=path))
+                self.assertIsNone(dashboard._window_hard_stop_pnl(
+                    now + dashboard.timedelta(hours=6), database=path))
+            finally:
+                ledger.close()
 
     async def _render_with_failure(self, fail_at: str) -> str:
         class FailingAccount:

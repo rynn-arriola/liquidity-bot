@@ -6,6 +6,13 @@
 > historical files is not the current runtime state.
 
 This is a multi-agent project, primarily operated with Codex.
+The September15 risk replacement is configured in
+[`config/risk_window_policy.json`](config/risk_window_policy.json): four fixed
+$25 six-hour ET windows, confirmed closing losses only, with pending-entry
+caps30/25/20/15/10 and positions/reducers excluded. This is separate from daily
+P&L reporting. See the [policy and rollout constraints](docs/history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md)
+and STATUS for whether the new code is loaded; older $90 references describe
+the prior release.
 `AI_OPERATOR.md` is the one agent-neutral instruction and routing source;
 `AGENTS.md` and `CLAUDE.md` are thin auto-discovery pointers only. To check
 desktop, laptop and GitHub consistency, ask an AI to **"run parity"**. A

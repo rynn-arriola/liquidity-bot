@@ -40,12 +40,12 @@ These are implementation requirements, not suggestions.
     six-hour selection horizon does not
     change. Early-exit loss (`0.8 × size`), stressed-exit entry cap (`4 × size`),
     per-market exposure (`9 × size`), portfolio exposure
-    (`(slots + 10) × size`), HARD (`$90 × size / 10 × slots / 32`),
+    (`(slots + 10) × size`), HARD (fixed configured dollars per ET window),
     and the cent-rounded ET-day gross taker-fee telemetry reference
     (`$10 × size / 10 × slots / 24`) are computed properties. Taker-exit count
     and crossing the fee reference must not alter trading. Portfolio
     exposure funds every restart-configured slot-notional plus a ten-notional
-    cushion. Breadth scales portfolio exposure, HARD and the fee observation;
+    cushion. Breadth scales portfolio exposure and the fee observation, not the window HARD;
     stressed-exit eligibility, per-market exposure and REST retain
     their quantity or policy meanings.
 
@@ -85,35 +85,28 @@ These are implementation requirements, not suggestions.
     reconnect budget. Quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. The sole money-loss authority is the **$90 × size / 10 × slots / 32** adjusted
-    marked-account-equity HARD stop
-    (`currentBalance` plus every open position's Retail `cashValue`, less
-    proven non-trading cash) is the emergency sensor. Every complete mark is
-    bracketed by equal settled-cash reads; `assetNotional` is not used because
-    production returned zero while open positions had nonzero `cashValue`. A
-    missing/malformed position mark or moving cash fails closed. A marked
-    breach blocks every new entry immediately. If
-    inventory is open it is provisional: existing exits keep running, a
-    recovered mark cannot clear until a breach-time position is positively
-    closed, and the decision requires a complete reconciliation followed by a
-    newer balance.
-    The provisional breach day/time/cohort must also survive restart; restoration
-    uses the original durable baseline and post-breach closure proof before
-    release. Confirmed hold and provisional cleanup must commit atomically.
-    A confirmed hard loss durably latches its ET meter day,
-    cancels pending entries and immediately evacuates every remaining position
-    through exact sequential cancel/proof/IOC. It pauses, never shuts down for
-    HARD alone. Same-day recovered equity/restart cannot release the latch;
-    a later ET day, current adjusted baseline and fresh reconciled zero orders,
-    zero positions and zero ambiguity are required, with all other entry gates
-    still enforced. The later equity snapshot must also show zero positions;
-    older flat reconciliation cannot override a newer late fill. Temporary
-    failures retain recovery and the latch.
-    Realized session P&L, per-market realized P&L, taker-exit
-    count and taker fees may be reported but cannot block/cancel quotes, pause
-    or stop trading, or alter exits. Buying power is never treated as P&L or
-    marked equity. The derived HARD property cannot drift independently of the
-    restart-scoped quote quantity and width.
+25. The September15 authorized replacement is one fixed **$25 confirmed-loss
+    HARD per six-hour ET window**, not an additional $90 daily stop. Its
+    accounting coordinate is complete authenticated cash plus open-position
+    cost, adjusted by proven non-trading cash. Open entry spend and paper loss
+    cannot ratchet the budget. A partial close counts only its realized part.
+    Missing cost, incomplete cash classification, stale/cross-boundary samples
+    or moving cash fail closed; buying power and the fill ledger are not substitutes.
+    Existing bracketed cash/position reads remain mandatory. A marked breach
+    may provisionally pause entries while normal exits continue. Its complete
+    position cohort, including in-flight fills, survives restart and window
+    rollover until all its positions close. Only confirmed loss latches HARD,
+    cancels pending entries and immediately evacuates remaining positions using
+    exact sequential cancel/proof/IOC. HARD pauses rather than shuts down.
+    Recovery within the same window or restart cannot release it. A later ET
+    window plus fresh reconciled zero orders, zero positions, zero ambiguity
+    and a newer flat account mark is required. Other pauses remain independent.
+    Continuous transfer-neutral checkpoints prevent midnight/restart from
+    forgiving a closing loss. First activation needs an explicit rollout
+    baseline; an existing legacy HARD/provisional hold cannot silently migrate.
+    Session/market fill-ledger P&L and taker counts/fees remain telemetry only.
+    Daily marked reports retain their separate midnight ET accounting. The
+    dollar trigger is not a guarantee against additional evacuation losses.
 26. A restart may mutate only persisted, identified orders/positions in the
     ledger-selected recovery markets inside configured capacity, and then only
     to reduce risk or recover flat. Unowned or out-of-scope state refuses
@@ -402,12 +395,13 @@ These are implementation requirements, not suggestions.
     reconciliation, scheduler priority, slot capacity or risk policy. A
     separately reviewed, operator-authorized live rule must use current
     action/book evidence instead, never persisted observation fields.
-67. Reward attribution and daily risk authority use midnight-to-midnight
-    `America/New_York` and must honor DST. Changing the risk reset instant is a
-    live-risk policy change, not an accounting side effect. The UTC-to-ET
-    cutover must inherit the exact baseline already being enforced rather than
-    stamp current equity and forgive the day's drawdown; only the following ET
-    midnight may establish a fresh baseline.
+67. Reward attribution and daily reporting use midnight-to-midnight
+    `America/New_York`, including DST. The separately authorized September15
+    risk windows begin at 00:00,06:00,12:00,18:00 ET; their first DST window is
+    five/seven elapsed hours. Changing risk boundaries is a business decision,
+    never a reporting side effect. Used window baselines are immutable across
+    restart and source handoff; the observation gap at a boundary must not
+    silently forgive a closing loss.
 68. The retired queue-depletion dataset remains observation only. Historical
     `WOULD_QUEUE_RESET` rows, stream sessions and reports cannot be read by the
     planner, reconciler, scheduler, risk policy or mutation gateway. The live
@@ -845,13 +839,13 @@ These are implementation requirements, not suggestions.
     risk. This routing may reduce API work only; it cannot alter quote price,
     quantity, reward period, economics, ranking, ownership, risk or exit
     authority.
-96. Loss-scaled order capacity is a new-risk ceiling driven only by the same
-    complete adjusted ET-day marked-equity evidence as HARD. At 50%, 70%, 80%,
-    90% and 95% HARD utilization, no more than 30, 25, 20, 15 and 10
-    flat-market entry orders respectively may be working or unresolved. The
-    tightest tier reached is durable for that ET date and cannot loosen after a
-    mark recovery or process restart; only the following ET day restores full
-    configured two-sided capacity. A tier transition blocks a new entry at the
+96. Window loss-scaled capacity uses the same confirmed-loss evidence as HARD.
+    Initially allow 30 pending entries; at $5/$10/$15/$20 confirmed net loss,
+    cap them at 25/20/15/10. At $25 HARD permits no new entries. These are
+    80/60/40/20/0 percent budget-remaining thresholds. The tightest tier is
+    durable for that ET window and cannot loosen after recovery or restart;
+    only a new window restores its ceiling, subject to outstanding holds and
+    fresh evidence. A tier transition blocks a new entry at the
     mutation boundary and drains only positively owned overflow orders, one
     cancel per driver pass, lowest-ranked market first and preserving complete
     pairs where possible. Unknown state cannot authorize a cap-driven cancel.
@@ -860,14 +854,13 @@ These are implementation requirements, not suggestions.
     cancelled or counted by this ceiling. It adds no venue read or stream and
     does not replace exposure, stressed-exit, buying-power or HARD enforcement;
     HARD at 100% remains the sole loss stop.
-97. A separate deterministic clock ceiling permits no more than 30 working or
-    unresolved flat-market entry orders from 00:00 inclusive through 09:00
-    exclusive `America/New_York`, including DST, and no more than 40 during the
-    rest of the ET day. The effective ceiling is the smallest of the clock
-    band, current durable loss-scaled ceiling and two orders per configured
-    slot. Reaching 09:00 changes only the clock band and cannot reset or widen
-    the loss ratchet. The schedule and loss tiers load once at startup from a
-    strictly validated policy; an unreadable or invalid policy refuses before
+97. `config/risk_window_policy.json` defines the restart-scoped $25 stop and
+    30/25/20/15/10 pending-entry schedule. It replaces the old 00:00–09:00
+    30/otherwise40 clock band and daily percentage tiers in production.
+    Effective capacity is the smallest of this policy, its durable loss cap,
+    source ceiling and two orders per configured slot. A six-hour boundary
+    blocks entries until fresh window evidence; it does not release a HARD hold
+    without flat proof. Unreadable or invalid policy refuses before
     credentials, database or venue access and cannot hot-reload.
     It uses invariant 96's reservations, ownership proof, one-cancel driver,
     ranking/pair preservation and mutation-boundary recheck. Nonzero-position

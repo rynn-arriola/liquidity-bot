@@ -467,6 +467,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         ledger=None,
         client=None,
         max_markets=20,
+        risk_window_policy=None,
     ):
         # `ledger` and `client` let a test build a SECOND runner over the state
         # a previous one left behind -- which is what a restart actually is,
@@ -487,6 +488,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             arm_live=True,
             auto_select_reward_markets=auto,
             max_markets=max_markets,
+            # Historical daily-stop regressions retain their original policy;
+            # test_risk_windows exercises the new production policy end to end.
+            risk_window_policy=risk_window_policy,
             # Legacy lifecycle fixtures exercise the explicit off path;
             # test_entry_quality covers the independently enabled policy.
             entry_quality_policy=EntryQualityPolicy(enabled=False),

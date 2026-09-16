@@ -419,6 +419,15 @@ def _money(value: Decimal | None, *, zero_if_missing: bool = False) -> str:
     return f"${float(value):,.2f}"
 
 
+def _trading_money(value: Decimal | None, *, missing: str = "—") -> str:
+    """Format signed P&L conventionally while keeping missing data explicit."""
+
+    if value is None:
+        return missing
+    sign = "-" if value < 0 else "+" if value > 0 else ""
+    return f"{sign}${abs(float(value)):,.2f}"
+
+
 def _displayed_trading(
     day_value: date,
     *,
@@ -744,7 +753,12 @@ def build_discord_payload(
     account_history: dict[str, Decimal] | None = None,
     settled_history: dict[str, Decimal] | None = None,
 ) -> dict:
-    """Build two narrow, aligned tables that Discord renders consistently."""
+    """Build a compact settled-trading and reward report for Discord.
+
+    The webhook deliberately uses only the closed-fill ledger for trading P&L.
+    Account-marked equity remains available to the dashboard and CLI, but it
+    is not mixed into this operator-facing reward report.
+    """
 
     if generated_at.tzinfo is None or generated_at.utcoffset() is None:
         raise ValueError("generated_at must be timezone-aware")
@@ -752,44 +766,21 @@ def build_discord_payload(
         raise ValueError("the Discord table layout supports at most 7 days")
 
     pnl_lines = [
-        f"{'Date ET':<11}  {'Settled':>9}  {'Account':>9}  {'Paid':>8}  "
-        f"{'Pending':>8}  {'Net':>9}",
-        "-----------  ---------  ---------  --------  --------  ---------",
+        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  {'Pending':>8}",
+        "-----------  ---------  --------  --------",
     ]
     resting_lines = [
-        "Date ET      Side-hours  Avg sides",
-        "-----------  ----------  ---------",
+        "Date ET          Hours  Avg sides",
+        "-----------  ---------  ---------",
     ]
-    finalized_nets: list[Decimal] = []
     for day_value in days:
         key = day_value.isoformat()
-        trade = _displayed_trading(
-            day_value, today=today, pnl=pnl,
-            account_realized=account_realized,
-            account_history=account_history)
         paid_reward = paid.get(key)
         pending_reward = pending.get(key)
         has_reward = paid_reward is not None or pending_reward is not None
-        complete = (
-            day_value < today and trade is not None and paid_reward is not None
-            and not pending_reward and not _trading_is_estimate(
-                day_value, today=today, account_history=account_history))
-        if complete:
-            net = trade + paid_reward
-            finalized_nets.append(net)
-            net_text = f"${float(net):+,.2f}"
-        else:
-            net_text = "Pending"
-
-        estimate = _trading_is_estimate(
-            day_value, today=today, account_history=account_history)
-        trade_text = (
-            f"{'~' if estimate else ''}${float(trade):+,.2f}"
-            if trade is not None
-            else "--")
         settled = (settled_history.get(key)
                    if settled_history is not None else None)
-        settled_text = (_money(settled) if settled is not None else "--")
+        trading_text = _trading_money(settled, missing="--")
         if has_reward:
             paid_text = _money(paid_reward, zero_if_missing=True)
             pending_text = _money(pending_reward, zero_if_missing=True)
@@ -801,17 +792,10 @@ def build_discord_payload(
         average = resting / elapsed if elapsed > 0 else 0.0
         label = f"{key}{'*' if day_value == today else ''}"
         pnl_lines.append(
-            f"{label:<11}  {settled_text:>9}  {trade_text:>9}  {paid_text:>8}  "
-            f"{pending_text:>8}  {net_text:>9}")
+            f"{label:<11}  {trading_text:>9}  {paid_text:>8}  "
+            f"{pending_text:>8}")
         resting_lines.append(
-            f"{label:<11}  {resting:>10.2f}  {average:>9.2f}")
-
-    displayed_trades = [
-        _displayed_trading(
-            day, today=today, pnl=pnl, account_realized=account_realized,
-            account_history=account_history)
-        for day in days
-    ]
+            f"{label:<11}  {resting:>9.2f}  {average:>9.2f}")
     paid_total = sum(
         (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     pending_total = sum(
@@ -824,12 +808,12 @@ def build_discord_payload(
         or pending.get(day.isoformat()) is not None for day in days)
     fields = [
         {
-            "name": "Daily P&L and rewards",
+            "name": "Daily results",
             "value": "```text\n" + "\n".join(pnl_lines) + "\n```",
             "inline": False,
         },
         {
-            "name": "Liquidity supplied",
+            "name": "Liquidity",
             "value": "```text\n" + "\n".join(resting_lines) + "\n```",
             "inline": False,
         },
@@ -837,17 +821,14 @@ def build_discord_payload(
     embed = {
         "title": f"Liquidity Bot · Last {len(days)} ET Days",
         "description": (
-            f"**Trading:** settled {_money(settled_total)} · "
-            f"account marked{' (estimated)' if any(_trading_is_estimate(day, today=today, account_history=account_history) for day in days) else ''} "
-            f"{_coverage_summary(displayed_trades)}\n"
-            f"**Reported paid:** {_money(paid_total) if reward_observed else 'Unavailable'}\n"
-            f"**Reported pending:** {_money(pending_total) if reward_observed else 'Unavailable'}\n"
-            f"**Finalized net subtotal:** {_net_subtotal(finalized_nets)}"),
+            f"**Trading P&L:** {_trading_money(settled_total)}\n"
+            f"**Rewards:** "
+            f"{_money(paid_total) if reward_observed else '--'} paid · "
+            f"{_money(pending_total) if reward_observed else '--'} pending"),
         "fields": fields,
         "color": 0x3498DB,
         "timestamp": generated_at.isoformat(),
-        "footer": {"text": (
-            "* partial · ~ account interval · -- missing/not posted")},
+        "footer": {"text": "Trading = settled closed fills · * today"},
     }
     total_chars = (
         len(embed["title"]) + len(embed["description"])

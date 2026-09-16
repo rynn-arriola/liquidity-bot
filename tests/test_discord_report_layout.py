@@ -111,14 +111,14 @@ class DiscordReportLayoutTests(unittest.TestCase):
             elapsed_hours={}, today=today, generated_at=NOW, unbalanced_markets=999)
         embed = payload["embeds"][0]
         self.assertEqual(len(embed["fields"]), 2)
-        self.assertEqual(len(embed["description"].splitlines()), 4)
-        self.assertIn("Settled", embed["fields"][0]["value"])
+        self.assertEqual(len(embed["description"].splitlines()), 2)
+        self.assertIn("Trading", embed["fields"][0]["value"])
         self.assertIn("--", embed["fields"][0]["value"])
         self.assertNotIn("unavail", embed["fields"][0]["value"])
-        self.assertIn("Pending", embed["fields"][0]["value"])
-        self.assertIn("account marked 0/1 days proven", embed["description"])
-        self.assertIn("**Reported paid:** Unavailable", embed["description"])
-        self.assertIn("**Reported pending:** Unavailable", embed["description"])
+        self.assertIn("**Trading P&L:** —", embed["description"])
+        self.assertIn("**Rewards:** -- paid · -- pending", embed["description"])
+        self.assertNotIn("account", json.dumps(payload).lower())
+        self.assertNotIn("finalized", json.dumps(payload).lower())
         for noise in ("Balanced-pair", "unbalanced", "Snapshot intervals",
                       "Includes carried", "Missing boundaries", "Today starts"):
             self.assertNotIn(noise, json.dumps(payload))

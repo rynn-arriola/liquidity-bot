@@ -129,22 +129,24 @@ class RewardTableTests(unittest.TestCase):
         self.assertEqual(len(embed["fields"]), 2)
         pnl_table = embed["fields"][0]["value"]
         resting_table = embed["fields"][1]["value"]
-        self.assertIn("Date ET        Settled    Account", pnl_table)
-        self.assertIn("2026-08-19      $-8.00    $-10.00", pnl_table)
-        self.assertIn("2026-08-25*     $-8.00    $-30.98", pnl_table)
-        self.assertIn("$+5.00", pnl_table)
-        self.assertIn("Side-hours  Avg sides", resting_table)
-        self.assertIn("2026-08-25*       24.00       1.00", resting_table)
+        self.assertIn("Date ET        Trading", pnl_table)
+        self.assertIn("2026-08-19      -$8.00", pnl_table)
+        self.assertIn("2026-08-25*     -$8.00", pnl_table)
+        self.assertNotIn("Account", pnl_table)
+        self.assertNotIn("Net", pnl_table)
+        self.assertIn("Hours  Avg sides", resting_table)
+        self.assertIn("2026-08-25*      24.00       1.00", resting_table)
         self.assertNotIn("|", pnl_table)
         pnl_lines = pnl_table.splitlines()[1:-1]
         resting_lines = resting_table.splitlines()[1:-1]
-        self.assertEqual({len(line) for line in pnl_lines}, {64})
-        self.assertEqual({len(line) for line in resting_lines}, {34})
-        self.assertIn("**Finalized net subtotal:** $+30.00", embed["description"])
-        self.assertIn(
-            "**Trading:** settled $-56.00",
-            embed["description"])
-        self.assertIn("account marked $-90.98", embed["description"])
+        self.assertEqual({len(line) for line in pnl_lines}, {42})
+        self.assertEqual({len(line) for line in resting_lines}, {33})
+        self.assertEqual(
+            embed["description"],
+            "**Trading P&L:** -$56.00\n"
+            "**Rewards:** $105.00 paid · $0.00 pending")
+        self.assertNotIn("account", embed["description"].lower())
+        self.assertNotIn("finalized", embed["description"].lower())
         self.assertNotIn("Balanced-pair", embed["description"])
         self.assertEqual(embed["timestamp"], "2026-08-25T17:00:00+00:00")
         self.assertLess(len(embed["footer"]["text"]), 80)
@@ -336,11 +338,11 @@ class RewardTableTests(unittest.TestCase):
         payload = build_discord_payload(
             days, elapsed_hours={}, generated_at=datetime(2026, 9, 8, 5, tzinfo=timezone.utc),
             unbalanced_markets=0, **kwargs)
-        self.assertIn("~$-104.20", payload["embeds"][0]["fields"][0]["value"])
+        self.assertNotIn("104.20", payload["embeds"][0]["fields"][0]["value"])
         embed = payload["embeds"][0]
         self.assertEqual(len(embed["fields"]), 2)
-        self.assertIn("~ account interval", embed["footer"]["text"])
-        self.assertIn("account marked (estimated)", embed["description"])
+        self.assertNotIn("account", embed["footer"]["text"].lower())
+        self.assertNotIn("account", embed["description"].lower())
         snapshot = build_dashboard_snapshot(
             days, generated_at=datetime(2026, 9, 8, 5, tzinfo=timezone.utc),
             unbalanced_markets=0, overall_trading=Decimal(0), **kwargs)
@@ -453,7 +455,7 @@ class RewardTableTests(unittest.TestCase):
         payload = build_discord_payload(
             days, elapsed_hours={}, generated_at=datetime(2026, 9, 4, 12,
             tzinfo=timezone.utc), unbalanced_markets=136, **kwargs)
-        self.assertIn("2026-09-03     $-80.32         --", payload["embeds"][0]["fields"][0]["value"])
+        self.assertIn("2026-09-03     -$80.32    $85.76", payload["embeds"][0]["fields"][0]["value"])
         self.assertNotIn("$-66.90", payload["embeds"][0]["fields"][0]["value"])
         snapshot = build_dashboard_snapshot(
             days, generated_at=datetime(2026, 9, 4, 12, tzinfo=timezone.utc),

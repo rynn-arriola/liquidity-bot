@@ -28,7 +28,7 @@ still fill; neither the manual statement nor old ledger establishes flatness.
 Final September16 00:21:36Z process/account check again proved no trader or
 supervisor,18 resting orders/14 markets, zero positions/unresolved/unknown orders.
 
-## Prepared design; not deployed or armed
+## Deployed design
 
 - `config/entry_expiry_policy.json` enables a300-second lifetime on new passive
   entries, shortened to the existing effective pregame flatten boundary. The
@@ -103,16 +103,37 @@ shutdown, rollback and secrets. $25 settled-fill windows,30 pending-entry cap
 excluding positions, quote size10/32, reward ranking, normal900-second timer,
 pregame cutoff and manual REST selection remain unchanged.
 
-## Activation and rollback
+## Activation and live acceptance
 
-Still required: operator account handling, fresh authenticated reconciliation,
-reviewed push/deployment/hash/runtime-test gates, install/verify the Windows
-task and an independently authorized safe start. No watchdog task was installed
-and no production code, state or process was changed during preparation.
-The standalone `-Once` test is not installation or live acceptance.
-Installation, once authorized/reviewed, uses `scripts/install_host_watchdog.ps1`
-on laptop Windows. Use the normal bot stop script to disarm; killing processes
-directly is indistinguishable from a crash and can trigger armed recovery.
+Commit `63c2c42f9` was pushed, deployed to the laptop WSL checkout and recorded
+in `DEPLOYED_COMMIT`. Because the WSL HTTPS fetch hung, deployment used a
+locally created Git bundle and a normal fast-forward, preserving ancestry.
+The exact production checkout passed all1,739 tests in168.801seconds. Parity
+then verified Windows/GitHub/WSL/marker identity and a private recovery-ledger
+backup (`486,076,416` bytes; abbreviated hash `9c274839043b`). Authenticated
+September16 00:30:49Z proof was fully flat/clear before launch.
+
+The Windows task was installed and verified, then normal manual-REST size10/32
+trading started at00:31:06Z as supervisor1009/runner1023. The watchdog reported
+`process_present`. Inspected entry intents used
+`TIME_IN_FORCE_GOOD_TILL_DATE` with expiry exactly300seconds after creation.
+At00:32:36Z the public book socket reported server shutdown; the runner
+quarantined, proved cancellations and resumed placing entries without a process
+restart. Initial API windows ran3.108–3.736rps. One90.5-second window recorded
+two `balance@429` responses; the following window recorded zero429s, so the
+platform's low-rate account-read behavior remains a live limitation rather
+than an outage-protection regression.
+
+Authenticated00:40:09Z state showed29 flat entry orders and one +2 position
+inside the unchanged900-second inventory window. The runner detected the fill,
+cancelled its building side and maintained/repriced a passive exact reducer;
+the sampled read landed between cancel and replacement, with one intent in
+flight. Unknown orders were zero. This proves initial live operation and
+recovery, not the uninduced900-second hard-exit or actual host-disappearance
+watchdog path.
+
+Use the normal bot stop script to disarm; killing processes directly is
+indistinguishable from a crash and can trigger armed recovery.
 
 For rollback, disarm recovery with the reviewed stop path and disable/remove
 the Windows task before reverting launcher/runtime files. Account and ledger

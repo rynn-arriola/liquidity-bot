@@ -3,7 +3,7 @@ Only current operational facts belong here; [historical snapshots](docs/history/
 
 ## Verified state
 
-- **STOPPED September15; outage protections prepared, not deployed/armed:** logs ended22:30:14Z without a terminal record; WSL was later recreated, exact cause unproved. Authenticated September16 00:21:36Z after manual closes:18 resting orders/14 markets, zero positions/unresolved/unknown orders; these orders may still fill. Reviewed300s GTD entries plus a Windows recovery-only watchdog;1,739 tests passed; no normal restart or live mutation performed. [Incident/review](docs/history/HOST_OUTAGE_PROTECTION_2026-09-15.md).
+- **RUNNING September16 on `63c2c42f9` — exchange-expiring entries and host recovery:** authenticated00:30:49Z flat/clear gate passed after the operator cleared the old orders. Exact production suite passed all1,739 tests; Windows/GitHub/WSL/marker parity and the verified private-ledger backup passed. Supervisor1009/runner1023 started00:31:06Z, manual REST size10/32. Every inspected new passive entry used five-minute GTD; reducers remain GTC and exits IOC. The Windows watchdog is armed and reports `process_present`. During nine-minute acceptance the bot safely recovered one public-stream server close and resumed quoting. API windows ran3.108–3.736rps; one window had two `balance@429` responses and the next had zero429s, so no zero429 guarantee is claimed. At00:40:09Z authenticated state had29 flat entry orders and one +2 position inside its normal passive-exit window; unknown orders were zero and one live intent was in flight. [Incident/release](docs/history/HOST_OUTAGE_PROTECTION_2026-09-15.md).
 
 ## Prior acceptance history (not current state)
 

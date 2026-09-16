@@ -12,7 +12,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
@@ -72,6 +72,7 @@ class OrderRequest:
     # Local-only measurement payload.  It is deliberately omitted from the
     # venue wire body and has no role in order validation or strategy policy.
     quote_observation: QuoteObservation | None = None
+    good_till_time: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -159,14 +160,23 @@ def build_order_payload(request: OrderRequest,
         raise OrderValidationError("quantity is not aligned to minimumTradeQty")
     if request.time_in_force not in {
             "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+            "TIME_IN_FORCE_GOOD_TILL_DATE",
             "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"}:
-        raise OrderValidationError("controlled trial supports only GTC and IOC")
-    if request.post_only and request.time_in_force != "TIME_IN_FORCE_GOOD_TILL_CANCEL":
-        raise OrderValidationError("post-only orders must be GTC")
+        raise OrderValidationError("controlled trial supports only GTC, GTD and IOC")
+    if request.post_only and request.time_in_force not in {
+            "TIME_IN_FORCE_GOOD_TILL_CANCEL", "TIME_IN_FORCE_GOOD_TILL_DATE"}:
+        raise OrderValidationError("post-only orders must be GTC or GTD")
     if (not request.post_only
             and request.time_in_force != "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"):
         raise OrderValidationError("aggressive trial orders must be IOC")
-    return {
+    if request.time_in_force == "TIME_IN_FORCE_GOOD_TILL_DATE":
+        if (request.reducing or not request.post_only
+                or not isinstance(request.good_till_time, datetime)
+                or request.good_till_time.utcoffset() is None):
+            raise OrderValidationError("GTD requires an aware expiry on a passive entry")
+    elif request.good_till_time is not None:
+        raise OrderValidationError("expiry is only valid for GTD entries")
+    payload = {
         "marketSlug": request.market_slug,
         "intent": _intent(request.strategy_side, request.reducing),
         "type": "ORDER_TYPE_LIMIT",
@@ -177,6 +187,10 @@ def build_order_payload(request: OrderRequest,
         "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC",
         "synchronousExecution": False,
     }
+    if request.good_till_time is not None:
+        payload["goodTillTime"] = request.good_till_time.astimezone(
+            timezone.utc).isoformat().replace("+00:00", "Z")
+    return payload
 
 
 class AsyncTradingGateway:
@@ -274,6 +288,13 @@ class AsyncTradingGateway:
         self, payload: Mapping[str, Any], *, reducing: bool = False,
     ) -> Mapping[str, Any]:
         def check_event():
+            if payload.get("tif") == "TIME_IN_FORCE_GOOD_TILL_DATE":
+                deadline = datetime.fromisoformat(
+                    str(payload["goodTillTime"]).replace("Z", "+00:00"))
+                if deadline <= datetime.now(timezone.utc):
+                    raise ApiAdmissionDeferred(
+                        "entry expired during admission; request not sent",
+                        error_code="LOCAL_ENTRY_EXPIRED", retry_after_seconds=1.0)
             check = getattr(self.gateway, "event_entry_allowed", None)
             if (not reducing and callable(check)
                     and not check(str(payload.get("marketSlug", "")))):
@@ -376,6 +397,8 @@ class LiveOrderExecutor:
                     now: datetime, intent_id: str | None = None,
                     client_order_id: str | None = None) -> SubmittedOrder:
         payload = build_order_payload(request, market)
+        if request.good_till_time is not None and request.good_till_time <= now:
+            raise OrderValidationError("entry expiry must be in the future")
         # Name the ordinary same-market race before the broader state gate so
         # the runner can wait for reconciliation without quarantining (and
         # cancelling) the order that is still becoming visible at the venue.

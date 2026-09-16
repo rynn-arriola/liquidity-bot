@@ -9,7 +9,8 @@ import unittest
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash runtime required")
 class SupervisorAttentionTests(unittest.TestCase):
-    def run_supervisor(self, code, *, mode=None, relaunch_proven=False):
+    def run_supervisor(self, code, *, mode=None, relaunch_proven=False,
+                       recovery=False):
         with tempfile.TemporaryDirectory(prefix="supervisor-test-") as directory:
             root = Path(directory)
             for subdir in ("scripts", ".venv/bin", "logs", "bin"):
@@ -25,6 +26,7 @@ case "$*" in
   *liquidity_bot.quote_size*) echo 5; exit 0;;
   *liquidity_bot.slot_capacity*) echo 20; exit 0;;
   *liquidity_bot.supervisor_alert*) exit 0;;
+  *liquidity_bot.host_recovery*) echo "$*" >> host-calls; exit 0;;
   *liquidity_bot.live_commissioning*) echo "$*" >> calls; exit "$TEST_RUNNER_CODE";;
 esac
 exit 99
@@ -43,10 +45,20 @@ exit 0
             args = ["bash", str(script)]
             if mode:
                 args += ["auto", "10", "32", mode]
+            if recovery:
+                args += ["recovery-only", "1" * 32]
             result = subprocess.run(args, cwd=root, env=env,
                                     text=True, capture_output=True, timeout=10)
             calls = (root / "calls").read_text().splitlines()
             return result, calls
+
+    def test_host_recovery_is_single_pass_even_for_restartable_exit(self):
+        for code in (0, 2, 3, 5):
+            with self.subTest(code=code):
+                result, calls = self.run_supervisor(code, mode="rest", recovery=True)
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(len(calls), 1)
+                self.assertIn("--recovery-only", calls[0])
 
     def test_manual_clean_stop_ends_supervisor(self):
         result, calls = self.run_supervisor(0)

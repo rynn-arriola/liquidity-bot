@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
+from .entry_expiry import EntryExpiryPolicy
 from .risk_windows import RiskWindowPolicy, load_risk_window_policy
 from .entry_order_policy import (
     EntryOrderPolicy, EntryOrderPolicyError, load_entry_order_policy)
@@ -79,6 +80,10 @@ class CommissioningConfig:
     exclusive_api_key_confirmed: bool
     maker_lab_stopped_confirmed: bool
     arm_live: bool = False
+    recovery_only: bool = False
+    # CLI loads the production policy; legacy replay constructors remain GTC.
+    entry_expiry_policy: EntryExpiryPolicy = field(
+        default_factory=lambda: EntryExpiryPolicy(enabled=False))
     # Raised 1 -> 5 on 2026-08-14, matching maker-lab's QUOTE_SIZE. At one
     # contract both the maker rebate and the taker fee round to zero (section 1
     # of FINDINGS: per-contract economics are ~37% worse at size 1), and reward
@@ -426,6 +431,10 @@ class CommissioningConfig:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         problems: list[str] = []
+        if type(self.recovery_only) is not bool:
+            problems.append("recovery_only must be boolean")
+        if not isinstance(self.entry_expiry_policy, EntryExpiryPolicy):
+            problems.append("entry expiry policy must be validated")
         if not self.arm_live:
             problems.append("live arming flag is absent")
         if not self.economic_risk_accepted:

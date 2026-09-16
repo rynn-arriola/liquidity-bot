@@ -4,11 +4,18 @@
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
+mkdir -p data logs || exit 2
 
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-5}
 SLOT_CAPACITY=${3:-20}
 ACCOUNT_STATE_MODE=${4:-saved}
+HOST_MODE=${5:-normal}
+HOST_TOKEN=${6:-}
+case "$HOST_MODE" in
+    normal|recovery-only) ;;
+    *) echo "[supervisor] refused invalid host mode"; exit 2 ;;
+esac
 case "$ACCOUNT_STATE_MODE" in
     websocket|rest|rest-fallback|saved) ;;
     *) echo "[supervisor] refused invalid account-state mode"; exit 2 ;;
@@ -36,6 +43,9 @@ alert() {
 }
 
 attention() {
+    if [ -n "$HOST_TOKEN" ]; then
+        "$PY" -B -m liquidity_bot.host_recovery finish attention "$HOST_TOKEN" || true
+    fi
     # Stay observable without repeatedly relaunching a deterministic defect or
     # touching unknown venue exposure. stop_commissioning.sh still ends this
     # supervisor normally; no child trader is alive in this loop.
@@ -57,7 +67,14 @@ echo "[supervisor] liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots
 alert "Liquidity Bot supervisor started at $QUOTE_SIZE contracts per quote across up to $SLOT_CAPACITY markets; account source: $ACCOUNT_STATE_MODE."
 
 while true; do
+    if [ -n "$HOST_TOKEN" ]; then
+        "$PY" -B -m liquidity_bot.host_recovery check "$HOST_TOKEN" || exit 0
+    fi
     SOURCE_ARGS=()
+    RECOVERY_ARGS=()
+    if [ "$HOST_MODE" = "recovery-only" ]; then
+        RECOVERY_ARGS=(--recovery-only)
+    fi
     if [ "$ACCOUNT_STATE_MODE" != "saved" ]; then
         SOURCE_ARGS=(--account-state-mode "$ACCOUNT_STATE_MODE")
     fi
@@ -68,6 +85,11 @@ while true; do
     # 2026-08-14 incident the log was four minutes stale while the process was
     # actively failing. Only the prints that pass flush=True got through, and
     # the diagnosis had to come from the ledger instead.
+    exec 9>data/host_control.lock
+    flock -x 9 || exit 2
+    if [ -n "$HOST_TOKEN" ]; then
+        "$PY" -B -m liquidity_bot.host_recovery --lock-held check "$HOST_TOKEN" || exit 0
+    fi
     "$PY" -B -u -m liquidity_bot.live_commissioning \
         "${MARKET_ARGS[@]}" \
         --database data/commissioning.db \
@@ -77,9 +99,24 @@ while true; do
         --exclusive-api-key \
         --maker-lab-stopped \
         --quote-size "$QUOTE_SIZE" \
+        "${RECOVERY_ARGS[@]}" \
         "${SOURCE_ARGS[@]}" \
-        --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1
+        --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1 9>&- &
+    RUNNER_PID=$!
+    flock -u 9
+    exec 9>&-
+    wait "$RUNNER_PID"
     CODE=$?
+    if [ "$HOST_MODE" = "recovery-only" ]; then
+        if [ "$CODE" -eq 0 ]; then
+            "$PY" -B -m liquidity_bot.host_recovery finish recovered "$HOST_TOKEN" || true
+            alert "Liquidity Bot host recovery proved flat. Trading remains paused for operator review."
+        else
+            "$PY" -B -m liquidity_bot.host_recovery finish attention "$HOST_TOKEN" || true
+            alert "Liquidity Bot host recovery needs attention (exit $CODE). Check venue orders and positions."
+        fi
+        exit "$CODE"
+    fi
     # A successful in-process handoff persists the new source. Relaunch must
     # not replay the original CLI choice and undo the operator's switch.
     if "$PY" -B -m liquidity_bot.account_source relaunch-ready; then
@@ -89,6 +126,9 @@ while true; do
 
     case "$CODE" in
         0)
+            if [ -n "$HOST_TOKEN" ]; then
+                "$PY" -B -m liquidity_bot.host_recovery finish disarmed "$HOST_TOKEN" || true
+            fi
             echo "[supervisor] clean exit after ${RAN}s; not restarting"
             exit 0
             ;;

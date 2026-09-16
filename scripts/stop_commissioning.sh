@@ -4,6 +4,11 @@
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
+mkdir -p data
+exec 9>data/host_control.lock
+flock -x 9 || exit 1
+# Persist operator intent before killing anything; Windows must not undo a stop.
+.venv/bin/python -B -m liquidity_bot.host_recovery --lock-held disarm || exit 1
 
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
@@ -33,6 +38,8 @@ if [ -n "$RUNNERS" ]; then
 fi
 
 WAITED=0
+flock -u 9
+exec 9>&-
 GRACE=${COMMISSIONING_STOP_GRACE_SECONDS:-300}
 while [ -n "$(runner_pids)" ] && [ "$WAITED" -lt "$GRACE" ]; do
     sleep 2

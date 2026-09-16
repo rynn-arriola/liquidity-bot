@@ -3284,6 +3284,15 @@ class CommissioningRunner:
                 for slug in recovery_slugs:
                     self._retired_ever.add(slug)
                     self._recovery_slugs.add(slug)
+            elif self.config.recovery_only:
+                if (not reconciled_at_startup or not self.ledger.risk_state_known()
+                        or not self.ledger.ownership_is_known()
+                        or self.ledger.working_orders()
+                        or self.ledger.absent_orders()
+                        or self.ledger.unresolved_intents()
+                        or self._has_open_position()):
+                    raise CommissioningRefused("host recovery lacks complete flat proof")
+                return "HOST_RECOVERY_FLAT"
             else:
                 await self._select_reward_market(now)
                 now = self._now()
@@ -3308,8 +3317,8 @@ class CommissioningRunner:
         # reporting set that now outlives the bar it used to imply, and a
         # control decision must not read from it.
         await self._refresh_bound_books(now)
-        if (self._isolated_unexecutable_slugs()
-                or self._startup_managed_position_is_scoped(None, self._now())):
+        if (not self.config.recovery_only and (self._isolated_unexecutable_slugs()
+                or self._startup_managed_position_is_scoped(None, self._now()))):
             # One exact recovery owner reserves its slot. Empty/non-open
             # owners remain mutation-free; a readable post-kickoff owner keeps
             # the unchanged exit planner. Use only the remaining configured
@@ -3410,12 +3419,15 @@ class CommissioningRunner:
         self.driver = ControlledActionDriver(
             self.executor, self.ledger, self.risk_guard,
             new_entry_allowed=lambda: (
-                not self._entry_pause_active()
-                and not self._loss_cap_blocks_new_entry(self._now())))
+                not self.config.recovery_only
+                and not self._entry_pause_active()
+                and not self._loss_cap_blocks_new_entry(self._now())),
+            entry_expiry_policy=self.config.entry_expiry_policy,
+            force_exit_before_start_seconds=self.config.force_exit_before_start_seconds)
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         hard_recovery = recovery_only and self._hard_stop_active()
-        if recovery_only and not hard_recovery:
+        if self.config.recovery_only or (recovery_only and not hard_recovery):
             return "RECOVERY_ONLY"
         await self._wait_for_initial_private_state()
         selection_note = ""
@@ -4189,6 +4201,7 @@ class CommissioningRunner:
             if market.game_start is not None else None)
         allowed = (
             not self._stop_requested
+            and not self.config.recovery_only
             and position == 0
             and not self._public_book_invalid(slug)
             and self._entry_risk_allowed(now, market)
@@ -10122,7 +10135,10 @@ class CommissioningRunner:
                                     and not state.market.event_allows_entry(self._now()))
                                 or (start - now).total_seconds()
                                 <= self.config.force_exit_before_start_seconds)
-                            if not near_kickoff:
+                            # Host recovery has no following normal trader to
+                            # resume a parked exit. Use the existing bounded
+                            # cancel-confirm/price-capped flatten path instead.
+                            if not near_kickoff and not self.config.recovery_only:
                                 reducing = (
                                     "ORDER_SIDE_SELL" if position > 0
                                     else "ORDER_SIDE_BUY")
@@ -10322,6 +10338,11 @@ class CommissioningRunner:
         preflight_error: Exception | None = None
         try:
             startup_mode = await self.preflight_until_ready()
+            if startup_mode == "HOST_RECOVERY_FLAT":
+                stopped = self._now()
+                return CommissioningResult(
+                    self.started_at or stopped, self.cutoff_at, stopped,
+                    "host_recovery_complete", True, 0)
             preflight_complete = True
             notifications = RuntimeNotificationDispatcher(direct_notifier)
             self.notifier = notifications
@@ -10880,7 +10901,9 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         entry_quality_policy = load_entry_quality_policy(Path(getattr(
             args, "entry_quality_policy", DEFAULT_ENTRY_QUALITY_POLICY_PATH)))
         risk_window_policy = load_risk_window_policy()
-    except ValueError as exc:
+        from .entry_expiry import load_entry_expiry_policy
+        entry_expiry_policy = load_entry_expiry_policy()
+    except (ValueError, OSError) as exc:
         raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
@@ -10888,6 +10911,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         exclusive_api_key_confirmed=args.exclusive_api_key,
         maker_lab_stopped_confirmed=args.maker_lab_stopped,
         arm_live=args.arm_live,
+        recovery_only=bool(getattr(args, "recovery_only", False)),
+        entry_expiry_policy=entry_expiry_policy,
         auto_select_reward_markets=auto_select,
         quote_size=Decimal(args.quote_size),
         max_markets=args.max_markets,
@@ -10974,6 +10999,8 @@ def main() -> int:
     parser.add_argument("--lock-file", type=Path,
                         default=Path("data/commissioning.lock"))
     parser.add_argument("--arm-live", action="store_true")
+    parser.add_argument("--recovery-only", action="store_true",
+                        help="recover identified account exposure, never start entries")
     parser.add_argument("--accept-one-contract-risk", action="store_true")
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
@@ -11046,6 +11073,8 @@ def main() -> int:
     }, indent=2, sort_keys=True))
     if not result.flat:
         return 3
+    if args.recovery_only:
+        return 0
     if result.stop_reason.startswith("runner_failure:"):
         # An unexpected loop failure that still proved the whole account flat
         # is recoverable by a fresh process: startup re-runs the full flat and

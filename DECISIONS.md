@@ -23,6 +23,7 @@
 | Choice | Decision in force |
 |---|---|
 | Production runtime | The former server was destroyed after repeated Polymarket VPN/proxy 403s. The explicitly authorized laptop is the sole live runtime; the desktop is prepared but inactive as its manual cold backup. They must never run together |
+| Host-outage protection | September15 approved preparation of300s exchange-expiring entries and a Windows watchdog on this same laptop. It may restore only the existing bounded cancel/flatten recovery, never automatic new trading; manual stop disarms it. Reducers remain GTC, exits IOC, no proactive cancel-renewal. Deployment/activation still gated; operator is handling current exposure. [Scope](docs/history/HOST_OUTAGE_PROTECTION_2026-09-15.md) |
 | UI maintenance participation | Exact official Polymarket US application maintenance pauses new entries and cancels flat entry quotes without stopping the runner; cancels and position exits remain live. Resume requires three healthy application checks. A persistent operator pause has the same reduce-only scope and cannot override UI maintenance when cleared |
 | Scheduled production maintenance | Automatically follow the official Statuspage schedule for the exact production exchange component. Begin withdrawing entries and flattening positions 30 minutes before the announced start; remain paused throughout maintenance; resume no earlier than one hour after the later of scheduled end or official completion and only after three complete authenticated account-health reads plus all existing stream/reconciliation/UI gates. Keep the bot process alive; do not require a manual trigger |
 | Quote size | 10 contracts is loaded live; whole values 5-30 are supported and restart-scoped |
@@ -79,8 +80,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
   authoritative.
 - Unqualified “run the bot” targets the laptop. Only explicit “run on the
   computer/PC” selects the desktop, still with the single-owner handoff/preflight. “Stop bot now,” “stop it now,” or “just stop it” means immediate graceful stop before checks so manually cancelled orders cannot be replaced; never force-kill and verify venue state afterward. “Restart now while flat” uses the same stop-first sequence, then positive post-stop proof and normal startup gates; failure leaves it stopped. “Command 1” is the complete immediate stop → post-stop proof → finish only missing review/test/push/parity/deploy verification for already in-scope AI changes → fresh gate → persisted-setting restart → live acceptance workflow; valid completed work is reused, and any uncertain gate leaves the bot stopped.
-- The laptop is the primary live runtime. The desktop is prepared for development,
-  offline verification and manual cold backup only. Exactly one machine may use the
+- The laptop is the primary live runtime. The desktop is prepared for development, offline verification and manual cold backup only. Exactly one machine may use the
   live API credentials and active ledger at a time; there is no automatic
   failover and the two machines must never run concurrently.
 - The active SQLite ledger follows the live runtime. It must move only as a

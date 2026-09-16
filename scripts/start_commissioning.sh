@@ -3,6 +3,9 @@
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
+mkdir -p data logs
+exec 9>data/host_control.lock
+flock -x 9 || exit 1
 
 TARGET=${1:-auto}
 QUOTE_SIZE=${2:-}
@@ -64,8 +67,12 @@ fi
 
 printf '%s\n' "$QUOTE_SIZE" > data/commissioning_quote_size
 printf '%s\n' "$SLOT_CAPACITY" > data/commissioning_slot_capacity
+HOST_TOKEN=$(.venv/bin/python -B -m liquidity_bot.host_recovery --lock-held \
+    arm "$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY" "$ACCOUNT_STATE_MODE") || exit 2
 setsid nohup ./scripts/supervise_commissioning.sh "$TARGET" "$QUOTE_SIZE" "$SLOT_CAPACITY" "$ACCOUNT_STATE_MODE" \
-    >> logs/supervisor.log 2>&1 < /dev/null &
+    normal "$HOST_TOKEN" >> logs/supervisor.log 2>&1 < /dev/null 9>&- &
+flock -u 9
+exec 9>&-
 
 echo "starting liquidity commissioning target=$TARGET size=$QUOTE_SIZE slots=$SLOT_CAPACITY account_state=$ACCOUNT_STATE_MODE"
 for _ in $(seq 1 20); do

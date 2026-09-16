@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Callable, Iterable
 
 from .account_snapshots import AsyncAccountSnapshotGateway
+from .entry_expiry import EntryExpiryPolicy
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .errors import RuntimeInvariantViolation
 from .live_orders import LiveOrderExecutor, OrderRequest, SubmittedOrder
@@ -191,11 +192,15 @@ class ControlledActionDriver:
 
     def __init__(self, executor: LiveOrderExecutor, ledger: ExecutionLedger,
                  risk_guard: SessionRiskGuard | None = None,
-                 new_entry_allowed: Callable[[], bool] | None = None):
+                 new_entry_allowed: Callable[[], bool] | None = None,
+                 entry_expiry_policy: EntryExpiryPolicy | None = None,
+                 force_exit_before_start_seconds: int = 300):
         self.executor = executor
         self.ledger = ledger
         self.risk_guard = risk_guard
         self.new_entry_allowed = new_entry_allowed
+        self.entry_expiry_policy = entry_expiry_policy
+        self.force_exit_before_start_seconds = force_exit_before_start_seconds
 
     def _owned_order(self, exchange_order_id: str):
         rows = self.ledger.query(
@@ -282,9 +287,20 @@ class ControlledActionDriver:
                     raise RuntimeInvariantViolation(
                         "reducing_quote_not_exact_position",
                         "inventory quote must reduce the entire exact position")
+            expiry = None
+            if not reducing and self.entry_expiry_policy is not None:
+                expiry = self.entry_expiry_policy.deadline(
+                    now, market.game_start, self.force_exit_before_start_seconds)
+                if expiry is not None and expiry <= now:
+                    return ActionResult(PlanAction(
+                        ActionKind.HALT_NEW_RISK, market.slug,
+                        "entry_expiry_pregame_cutoff"))
             request = OrderRequest(
                 market.slug, action.side, Decimal(str(action.price)), action.qty,
                 reducing=reducing,
+                time_in_force=("TIME_IN_FORCE_GOOD_TILL_DATE" if expiry is not None
+                               else "TIME_IN_FORCE_GOOD_TILL_CANCEL"),
+                good_till_time=expiry,
                 quote_observation=(
                     quote_observation if not reducing else None))
         else:

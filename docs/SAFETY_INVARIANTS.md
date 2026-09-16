@@ -1028,3 +1028,19 @@ These are implementation requirements, not suggestions.
     safety bypasses that allowance, not actual endpoint429 backoff. Account
     source choice, all pricing/ranking/lifecycle rules, ownership and exit
     authority remain independent and unchanged.
+108. Enabled entry-expiry policy applies only to new passive entries: Retail
+    GTD at the earlier of the configured60–300-second lifetime and effective
+    pregame flatten boundary. Passive reducers retain GTC and forced exits IOC.
+    No local expiry or absent row proves terminal order state; fills racing
+    expiry retain their inventory and exact cancel/reduction requirements.
+    Admission must refuse an expired unsent request without retry or ambiguity.
+109. Host watchdog recovery is same-host and recovery-only, not failover or
+    authority to resume entries. Manual stop durably disarms before signaling;
+    start/stop/spawn/tick serialize under one lock and retain the execution
+    lease. Missing/corrupt/disarmed state cannot launch. An absent trader and
+    supervisor may trigger at most three persisted recovery launches with
+    backoff; a live process is never force-killed. Recovery requires existing
+    complete account/ownership/capacity proof, never scans for new entry and
+    cannot walk away from a parked exit. Existing bounded price-capped shutdown
+    controls mutations. Unknown/nonflat/refused state remains attention, not
+    success; proven flat remains paused for explicit operator review.

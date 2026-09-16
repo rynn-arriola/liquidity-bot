@@ -49,6 +49,7 @@ from liquidity_bot.cash_activity import (  # noqa: E402
 from liquidity_bot.errors import AdapterError  # noqa: E402
 from liquidity_bot.bot_era import BOT_ERA_START_DATE  # noqa: E402
 from liquidity_bot.execution_ledger import ExecutionLedger  # noqa: E402
+from liquidity_bot.pnl import MatchedInventory  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK, reward_day  # noqa: E402
 from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
@@ -279,6 +280,52 @@ def historical_account_trading_by_day(
     return result
 
 
+def settled_trading_by_day(
+    db: str, days: list[date],
+) -> dict[str, Decimal]:
+    """Return closed-fill P&L by ET day from one chronological ledger replay.
+
+    The replay includes older fills to establish the cost basis, then assigns
+    each realized match and observed fill fee to the venue event's ET day. Open
+    inventory contributes no gross P&L. Reversed fills are excluded. This is a
+    separate, narrower measurement than account-marked P&L: it can remain
+    available when a midnight account snapshot is missing, but it never fills
+    that evidence gap or finalizes account net.
+    """
+
+    result = {day.isoformat(): Decimal(0) for day in days}
+    if not result:
+        return result
+    try:
+        connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                "SELECT execution_id,market_slug,price,qty,fee,intent,"
+                "event_at,received_at FROM execution_fills WHERE reversed=0 "
+                "ORDER BY event_at,received_at,execution_id"
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise AccountMetricUnavailable(
+            "settled-fill ledger is unreadable") from exc
+
+    inventories: dict[str, MatchedInventory] = {}
+    for row in rows:
+        delta = inventories.setdefault(
+            str(row["market_slug"]), MatchedInventory()).apply(
+                intent=str(row["intent"] or ""),
+                price=str(row["price"]),
+                quantity=str(row["qty"]),
+                fee=str(row["fee"] or 0),
+            )
+        key = reward_day(_timestamp(row["event_at"], "fill event"))
+        if key in result:
+            result[key] += delta
+    return result
+
+
 async def _nontrading_cash_today(
     gateway: AsyncReadOnlyGateway, *, boundary: datetime, through: datetime,
 ) -> Decimal:
@@ -420,6 +467,15 @@ def _covered_total(values: list[Decimal | None]) -> str:
     return f"${sum(known, Decimal(0)):+,.2f}"
 
 
+def _coverage_summary(values: list[Decimal | None]) -> str:
+    """Summarize account-mark coverage without implying a partial total."""
+
+    known = [value for value in values if value is not None]
+    if len(known) == len(values) and values:
+        return f"${sum(known, Decimal(0)):+,.2f}"
+    return f"{len(known)}/{len(values)} days proven"
+
+
 def _snapshot_interval_notes(
     days: list[date], *, today: date,
     account_history: dict[str, Decimal] | None,
@@ -462,6 +518,7 @@ def build_dashboard_snapshot(
     overall_trading: Decimal,
     account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal] | None = None,
 ) -> dict[str, Any]:
     """Build the bounded local file consumed by the zero-API TV dashboard."""
 
@@ -495,6 +552,9 @@ def build_dashboard_snapshot(
                 getattr(account_history, "intervals", {}).get(key, ())],
             "current_day": day_value == today,
             "trading": _dashboard_money(trading),
+            "settled_trading": _dashboard_money(
+                settled_history.get(key)
+                if settled_history is not None else None),
             "trading_estimate": _trading_is_estimate(
                 day_value, today=today, account_history=account_history),
             "gain": _dashboard_money(gain),
@@ -531,6 +591,10 @@ def build_dashboard_snapshot(
             "overall_trading": _dashboard_money(overall_trading),
             "overall_gain": _dashboard_money(paid_total),
             "overall_since_et": BOT_ERA_START_DATE,
+            "settled_total": _dashboard_money(sum(
+                (settled_history.get(day.isoformat(), Decimal(0))
+                 for day in days), Decimal(0))
+                if settled_history is not None else None),
         },
         "rows": rows,
     }
@@ -560,11 +624,12 @@ def render_table(
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
     today: date, account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal] | None = None,
 ) -> str:
     lines = [
-        "| Date (ET) | Trading P&L | Paid reward | Pending reward | "
+        "| Date (ET) | Settled P&L | Account P&L | Paid reward | Pending reward | "
         "Finalized net | Resting side-hours | Avg. sides resting |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     finalized_nets: list[Decimal] = []
     for day_value in days:
@@ -601,8 +666,12 @@ def render_table(
             f"{'~' if estimate else ''}${float(trade):+,.2f}"
             if trade is not None
             else "Unavailable")
+        settled = (settled_history.get(key)
+                   if settled_history is not None else None)
+        settled_text = (_money(settled) if settled is not None
+                        else "Unavailable")
         lines.append(
-            f"| {label} | {trade_text} | {paid_text} | {pending_text} | "
+            f"| {label} | {settled_text} | {trade_text} | {paid_text} | {pending_text} | "
             f"{net_text} | {resting:.2f} | {average:.2f} |")
 
     displayed_trades = [
@@ -618,6 +687,9 @@ def render_table(
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
+    settled_total = (sum(
+        (settled_history.get(day.isoformat(), Decimal(0)) for day in days),
+        Decimal(0)) if settled_history is not None else None)
     lines.extend([
         "",
         (f"- Account marked trading today (ET): "
@@ -632,6 +704,8 @@ def render_table(
          and account_realized.open_unrealized is not None
          else "- Closed / open mark today: **Unavailable**"),
         f"- Account marked trading total ({len(days)}d): **{_covered_total(displayed_trades)}**",
+        f"- Settled closed-fill trading total ({len(days)}d): "
+        f"**{_money(settled_total)}**",
         f"- Balanced-pair estimate (7d): **${float(pair_total):+,.2f}**",
         f"- Paid rewards: **${float(paid_total):,.2f}**",
         f"- Known pending rewards: **${float(pending_total):,.2f}**",
@@ -647,6 +721,9 @@ def render_table(
         "Missing boundaries remain unavailable, not a matched-pair fallback. Today's row "
         "is marked trading: closed P&L plus current open-position cashValue, "
         "with proven non-trading cash excluded, since the recorded ET opening.",
+        "Settled P&L is the separate closed-fill ledger result; open positions "
+        "and non-trading cash are excluded and it never finalizes a missing "
+        "account-marked day.",
     ])
     if account_realized is not None and _current_mark(account_realized) is None:
         lines.append(f"Account mark unavailable: {account_realized.reason}.")
@@ -665,6 +742,7 @@ def build_discord_payload(
     today: date, generated_at: datetime, unbalanced_markets: int,
     account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal] | None = None,
 ) -> dict:
     """Build two narrow, aligned tables that Discord renders consistently."""
 
@@ -674,9 +752,9 @@ def build_discord_payload(
         raise ValueError("the Discord table layout supports at most 7 days")
 
     pnl_lines = [
-        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  "
+        f"{'Date ET':<11}  {'Settled':>9}  {'Account':>9}  {'Paid':>8}  "
         f"{'Pending':>8}  {'Net':>9}",
-        "-----------  ---------  --------  --------  ---------",
+        "-----------  ---------  ---------  --------  --------  ---------",
     ]
     resting_lines = [
         "Date ET      Side-hours  Avg sides",
@@ -708,7 +786,10 @@ def build_discord_payload(
         trade_text = (
             f"{'~' if estimate else ''}${float(trade):+,.2f}"
             if trade is not None
-            else "unavail")
+            else "--")
+        settled = (settled_history.get(key)
+                   if settled_history is not None else None)
+        settled_text = (_money(settled) if settled is not None else "--")
         if has_reward:
             paid_text = _money(paid_reward, zero_if_missing=True)
             pending_text = _money(pending_reward, zero_if_missing=True)
@@ -720,7 +801,7 @@ def build_discord_payload(
         average = resting / elapsed if elapsed > 0 else 0.0
         label = f"{key}{'*' if day_value == today else ''}"
         pnl_lines.append(
-            f"{label:<11}  {trade_text:>9}  {paid_text:>8}  "
+            f"{label:<11}  {settled_text:>9}  {trade_text:>9}  {paid_text:>8}  "
             f"{pending_text:>8}  {net_text:>9}")
         resting_lines.append(
             f"{label:<11}  {resting:>10.2f}  {average:>9.2f}")
@@ -735,6 +816,9 @@ def build_discord_payload(
         (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
+    settled_total = (sum(
+        (settled_history.get(day.isoformat(), Decimal(0)) for day in days),
+        Decimal(0)) if settled_history is not None else None)
     reward_observed = any(
         paid.get(day.isoformat()) is not None
         or pending.get(day.isoformat()) is not None for day in days)
@@ -753,7 +837,9 @@ def build_discord_payload(
     embed = {
         "title": f"Liquidity Bot · Last {len(days)} ET Days",
         "description": (
-            f"**Trading total{' (estimated)' if any(_trading_is_estimate(day, today=today, account_history=account_history) for day in days) else ''}:** {_covered_total(displayed_trades)}\n"
+            f"**Trading:** settled {_money(settled_total)} · "
+            f"account marked{' (estimated)' if any(_trading_is_estimate(day, today=today, account_history=account_history) for day in days) else ''} "
+            f"{_coverage_summary(displayed_trades)}\n"
             f"**Reported paid:** {_money(paid_total) if reward_observed else 'Unavailable'}\n"
             f"**Reported pending:** {_money(pending_total) if reward_observed else 'Unavailable'}\n"
             f"**Finalized net subtotal:** {_net_subtotal(finalized_nets)}"),
@@ -761,7 +847,7 @@ def build_discord_payload(
         "color": 0x3498DB,
         "timestamp": generated_at.isoformat(),
         "footer": {"text": (
-            "* partial day · ~ estimated interval · -- not posted")},
+            "* partial · ~ account interval · -- missing/not posted")},
     }
     total_chars = (
         len(embed["title"]) + len(embed["description"])
@@ -804,6 +890,7 @@ async def main() -> int:
         overall_trading = ledger.realized_pnl()
     finally:
         ledger.close()
+    settled_history = settled_trading_by_day(args.db, days)
     gateway = AsyncReadOnlyGateway(
         client_from_environment(),
         limiter=shared_api_limiter(ACCOUNT_REPORT_RATE_PER_SECOND),
@@ -832,7 +919,8 @@ async def main() -> int:
     table = render_table(
         days, pnl=pnl, paid=paid, pending=pending,
         resting_hours=resting, elapsed_hours=elapsed, today=today,
-        account_realized=account_realized, account_history=history)
+        account_realized=account_realized, account_history=history,
+        settled_history=settled_history)
     if args.dashboard_cache is not None:
         write_dashboard_snapshot(
             args.dashboard_cache,
@@ -842,7 +930,8 @@ async def main() -> int:
                 unbalanced_markets=unbalanced,
                 overall_trading=overall_trading,
                 account_realized=account_realized,
-                account_history=history))
+                account_history=history,
+                settled_history=settled_history))
     if not args.quiet:
         print(table)
         print()
@@ -868,7 +957,8 @@ async def main() -> int:
                 resting_hours=resting, elapsed_hours=elapsed, today=today,
                 generated_at=now, unbalanced_markets=unbalanced,
                 account_realized=account_realized,
-                account_history=history),
+                account_history=history,
+                settled_history=settled_history),
             channel="rewards")
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",

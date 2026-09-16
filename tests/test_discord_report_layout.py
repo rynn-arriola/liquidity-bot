@@ -112,9 +112,11 @@ class DiscordReportLayoutTests(unittest.TestCase):
         embed = payload["embeds"][0]
         self.assertEqual(len(embed["fields"]), 2)
         self.assertEqual(len(embed["description"].splitlines()), 4)
-        self.assertIn("unavail", embed["fields"][0]["value"])
+        self.assertIn("Settled", embed["fields"][0]["value"])
+        self.assertIn("--", embed["fields"][0]["value"])
+        self.assertNotIn("unavail", embed["fields"][0]["value"])
         self.assertIn("Pending", embed["fields"][0]["value"])
-        self.assertIn("Unavailable (0/1 days proven)", embed["description"])
+        self.assertIn("account marked 0/1 days proven", embed["description"])
         self.assertIn("**Reported paid:** Unavailable", embed["description"])
         self.assertIn("**Reported pending:** Unavailable", embed["description"])
         for noise in ("Balanced-pair", "unbalanced", "Snapshot intervals",

@@ -14,7 +14,8 @@ from scripts.reward_table import (
     _historical_nontrading_cash_changes, _nontrading_cash_today,
     _opening_cash_for_day, account_realized_today, build_discord_payload,
     build_dashboard_snapshot, historical_account_trading_by_day, render_table,
-    resting_side_hours_by_day, write_dashboard_snapshot)
+    resting_side_hours_by_day, settled_trading_by_day,
+    write_dashboard_snapshot)
 from liquidity_bot.cash_activity import NontradingCashChange
 
 
@@ -92,14 +93,15 @@ class RewardTableTests(unittest.TestCase):
             today=date(2026, 8, 25),
             account_history={"2026-08-23": Decimal("-10"),
                              "2026-08-24": Decimal("-10")},
+            settled_history={day.isoformat(): Decimal("-8") for day in days},
             account_realized=AccountRealizedToday(
                 Decimal("-30.9844"), "ok"),
         )
 
-        self.assertIn("| 2026-08-23 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
-        self.assertIn("| 2026-08-24 | $-10.00 | $5.00 | $20.00 | Pending", output)
+        self.assertIn("| 2026-08-23 | $-8.00 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
+        self.assertIn("| 2026-08-24 | $-8.00 | $-10.00 | $5.00 | $20.00 | Pending", output)
         self.assertIn(
-            "| 2026-08-25* | $-30.98 | Not posted | Not posted | Pending",
+            "| 2026-08-25* | $-8.00 | $-30.98 | Not posted | Not posted | Pending",
             output)
         self.assertIn("Finalized net subtotal (proven closed days only): **$+5.00**", output)
         self.assertIn("Account marked trading today (ET): **$-30.98**", output)
@@ -118,6 +120,7 @@ class RewardTableTests(unittest.TestCase):
             generated_at=datetime(2026, 8, 25, 17, tzinfo=timezone.utc),
             unbalanced_markets=30,
             account_history={day.isoformat(): Decimal("-10") for day in days[:-1]},
+            settled_history={day.isoformat(): Decimal("-8") for day in days},
             account_realized=AccountRealizedToday(
                 Decimal("-30.9844"), "ok"))
 
@@ -126,21 +129,22 @@ class RewardTableTests(unittest.TestCase):
         self.assertEqual(len(embed["fields"]), 2)
         pnl_table = embed["fields"][0]["value"]
         resting_table = embed["fields"][1]["value"]
-        self.assertIn("Date ET        Trading", pnl_table)
-        self.assertIn("2026-08-19     $-10.00", pnl_table)
-        self.assertIn("2026-08-25*    $-30.98", pnl_table)
+        self.assertIn("Date ET        Settled    Account", pnl_table)
+        self.assertIn("2026-08-19      $-8.00    $-10.00", pnl_table)
+        self.assertIn("2026-08-25*     $-8.00    $-30.98", pnl_table)
         self.assertIn("$+5.00", pnl_table)
         self.assertIn("Side-hours  Avg sides", resting_table)
         self.assertIn("2026-08-25*       24.00       1.00", resting_table)
         self.assertNotIn("|", pnl_table)
         pnl_lines = pnl_table.splitlines()[1:-1]
         resting_lines = resting_table.splitlines()[1:-1]
-        self.assertEqual({len(line) for line in pnl_lines}, {53})
+        self.assertEqual({len(line) for line in pnl_lines}, {64})
         self.assertEqual({len(line) for line in resting_lines}, {34})
         self.assertIn("**Finalized net subtotal:** $+30.00", embed["description"])
         self.assertIn(
-            "**Trading total:** $-90.98",
+            "**Trading:** settled $-56.00",
             embed["description"])
+        self.assertIn("account marked $-90.98", embed["description"])
         self.assertNotIn("Balanced-pair", embed["description"])
         self.assertEqual(embed["timestamp"], "2026-08-25T17:00:00+00:00")
         self.assertLess(len(embed["footer"]["text"]), 80)
@@ -153,11 +157,12 @@ class RewardTableTests(unittest.TestCase):
             paid={today.isoformat(): Decimal("172.90")}, pending={},
             resting_hours={today.isoformat(): 1.0},
             elapsed_hours={today.isoformat(): 1.0}, today=today,
+            settled_history={today.isoformat(): Decimal("-20")},
             account_realized=AccountRealizedToday(
                 Decimal("-44.52"), "ok"))
 
         self.assertIn(
-            "| 2026-08-25* | $-44.52 | $172.90 | $0.00 | Pending",
+            "| 2026-08-25* | $-20.00 | $-44.52 | $172.90 | $0.00 | Pending",
             output)
         self.assertIn(
             "Finalized net subtotal (proven closed days only): **Unavailable (no finalized days)**",
@@ -188,6 +193,8 @@ class RewardTableTests(unittest.TestCase):
             unbalanced_markets=4,
             overall_trading=Decimal("-130.65"),
             account_history={"2026-08-24": Decimal("-10")},
+            settled_history={"2026-08-24": Decimal("-8"),
+                             "2026-08-25": Decimal("-12")},
             account_realized=AccountRealizedToday(Decimal("-44.52"), "ok"),
         )
 
@@ -201,7 +208,9 @@ class RewardTableTests(unittest.TestCase):
             "overall_trading": "-130.65",
             "overall_gain": "15",
             "overall_since_et": "2026-08-14",
+            "settled_total": "-20",
         })
+        self.assertEqual(payload["rows"][0]["settled_trading"], "-8")
         self.assertEqual(payload["rows"][0]["net"], "5")
         self.assertEqual(payload["rows"][0]["net_status"], "finalized")
         self.assertIsNone(payload["rows"][1]["net"])
@@ -330,8 +339,8 @@ class RewardTableTests(unittest.TestCase):
         self.assertIn("~$-104.20", payload["embeds"][0]["fields"][0]["value"])
         embed = payload["embeds"][0]
         self.assertEqual(len(embed["fields"]), 2)
-        self.assertIn("~ estimated interval", embed["footer"]["text"])
-        self.assertIn("Trading total (estimated)", embed["description"])
+        self.assertIn("~ account interval", embed["footer"]["text"])
+        self.assertIn("account marked (estimated)", embed["description"])
         snapshot = build_dashboard_snapshot(
             days, generated_at=datetime(2026, 9, 8, 5, tzinfo=timezone.utc),
             unbalanced_markets=0, overall_trading=Decimal(0), **kwargs)
@@ -435,21 +444,53 @@ class RewardTableTests(unittest.TestCase):
             pnl={"2026-09-03": Decimal("-66.9033")},
             paid={"2026-09-03": Decimal("85.76")}, pending={},
             resting_hours={}, today=days[1], account_history={},
+            settled_history={"2026-09-03": Decimal("-80.32"),
+                             "2026-09-04": Decimal("-7.10")},
             account_realized=AccountRealizedToday(Decimal("-10"), "ok"))
         output = render_table(days, elapsed_hours={}, **kwargs)
-        self.assertIn("| 2026-09-03 | Unavailable", output)
+        self.assertIn("| 2026-09-03 | $-80.32 | Unavailable", output)
         self.assertIn("Unavailable (1/2 days proven)", output)
         payload = build_discord_payload(
             days, elapsed_hours={}, generated_at=datetime(2026, 9, 4, 12,
             tzinfo=timezone.utc), unbalanced_markets=136, **kwargs)
-        self.assertIn("unavail", payload["embeds"][0]["fields"][0]["value"])
+        self.assertIn("2026-09-03     $-80.32         --", payload["embeds"][0]["fields"][0]["value"])
         self.assertNotIn("$-66.90", payload["embeds"][0]["fields"][0]["value"])
         snapshot = build_dashboard_snapshot(
             days, generated_at=datetime(2026, 9, 4, 12, tzinfo=timezone.utc),
             unbalanced_markets=136, overall_trading=Decimal("-100"), **kwargs)
         self.assertIsNone(snapshot["rows"][0]["trading"])
+        self.assertEqual(snapshot["rows"][0]["settled_trading"], "-80.32")
         self.assertIsNone(snapshot["rows"][0]["net"])
         self.assertNotEqual(snapshot["rows"][0]["net_status"], "finalized")
+
+    def test_settled_trading_replays_basis_and_buckets_close_by_et_day(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "CREATE TABLE execution_fills ("
+                "execution_id TEXT PRIMARY KEY, market_slug TEXT, price TEXT, "
+                "qty TEXT, fee TEXT, intent TEXT, event_at TEXT, "
+                "received_at TEXT, reversed INTEGER)")
+            connection.executemany(
+                "INSERT INTO execution_fills VALUES (?,?,?,?,?,?,?,?,?)",
+                [
+                    ("open", "market-one", "0.40", "10", "0.10",
+                     "ORDER_INTENT_BUY_LONG", "2026-08-24T03:59:00+00:00",
+                     "2026-08-24T03:59:01+00:00", 0),
+                    ("close", "market-one", "0.50", "10", "0.05",
+                     "ORDER_INTENT_BUY_SHORT", "2026-08-24T04:00:00+00:00",
+                     "2026-08-24T04:00:01+00:00", 0),
+                    ("reversed", "market-two", "0.30", "10", "9.99",
+                     "ORDER_INTENT_BUY_LONG", "2026-08-24T05:00:00+00:00",
+                     "2026-08-24T05:00:01+00:00", 1),
+                ])
+
+        result = settled_trading_by_day(
+            str(self.database), [date(2026, 8, 23), date(2026, 8, 24)])
+
+        self.assertEqual(result, {
+            "2026-08-23": Decimal("-0.10"),
+            "2026-08-24": Decimal("0.95"),
+        })
 
     def test_hourly_wrapper_is_bounded_locked_and_lower_priority(self):
         report = (

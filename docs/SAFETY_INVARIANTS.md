@@ -468,7 +468,12 @@ These are implementation requirements, not suggestions.
     must cover the closing snapshot rather than stop at nominal midnight. This is
     marked account P&L, not closed-only realized trading. Missing boundaries
     remain unavailable; the separate pair estimate cannot fill a daily row,
-    complete the period total or finalize net. Today's net is never finalized.
+    complete the period total or finalize net. A separately labeled settled
+    closed-fill column may remain numeric: it replays every active ledger fill
+    to establish basis, assigns realized matches and observed fees by venue
+    event time in ET, excludes reversed fills/open inventory/non-trading cash,
+    and can never substitute for the missing account mark or finalize net.
+    Today's net is never finalized.
     An immutable historical scan may ignore completions after its
     fixed `through` boundary but must still reach EOF; the current bracketed
     snapshot may not. Any moving balance, absent position `cashValue`, unproven

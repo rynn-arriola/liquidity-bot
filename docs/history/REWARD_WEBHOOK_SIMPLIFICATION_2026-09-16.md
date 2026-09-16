@@ -48,5 +48,13 @@ environment passes all 1,740 tests in 208.415 seconds. Empty reward data, missin
 settled data, zero/positive/negative values, current-day partial rows, seven-day
 capacity, Discord field limits and dashboard isolation are covered.
 
-Deployment is report-only and must not restart the trader. Final commit, WSL
-deployment hash and scheduled/manual post evidence are recorded after release.
+Commit `72ea22915` was pushed and fast-forwarded into the WSL checkout. The
+post-deploy focused suite passed all 42 tests, followed by all 1,740 tests in
+161.178 seconds in the exact deployed checkout. Windows and WSL
+`scripts/reward_table.py` SHA-256 both equal
+`9ac6d2831fd02dad61ad4c5dc1e9e9f61f186d28ce5fe21e1d1a535e0f92ca60`.
+
+Deployment was report-only. Supervisor `1009` and runner `1023` retained their
+September 15 start time and remain loaded on trading source `63c2c42f9`; no
+stop or restart occurred. The next scheduled Discord post is the remaining
+natural presentation acceptance; no duplicate manual report was sent.

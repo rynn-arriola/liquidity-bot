@@ -63,5 +63,15 @@ resting side-hours retain local order-history inputs; finalized net still
 requires a proven account mark plus posted paid reward. The new settled series
 adds no API request and no value is silently substituted into another field.
 
-Push and report-only deployment evidence will be appended before release. The
-trading runner was not restarted.
+Commit `6bd3f0cc4` was pushed, then fast-forwarded into the production checkout
+without restarting the trading process. The production checkout passed the 42
+report/layout tests. The normal 23:07 ET system timer loaded the new script,
+posted successfully to the dedicated Discord webhook and exited zero.
+
+Its dashboard artifact proves all seven settled rows are numeric and the other
+fields remain populated from their existing sources: paid reward on September
+9–13, pending reward on September 13–15, account marks on four of seven days,
+and resting side-hours on every day. Net remains pending where account evidence
+is missing/estimated or reward is not final. Supervisor `1009` and runner
+`1023` kept their original start time and remain loaded on trading source
+`63c2c42f9`; there was no restart and no trading-code deployment.

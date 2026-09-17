@@ -165,3 +165,28 @@ both HEADs at7082e3ac4 and preserved the prior review-only dirty documentation.
   needed, but restoring old code would restore these defects. Exact native
   deployment tests and natural live acceptance remain for a later authorized
   restart, not this staging-only task.
+
+## Subsequent authorized deployment without restart
+
+The operator then explicitly said: "We can deploy but dont restart."
+The clean tracked native WSL checkout was fast-forwarded from7082e3ac4 to
+the already-reviewed/pushed **ee500e4dbfcd58d7d750c4515a05e636436b9479**.
+No additional runtime changes were introduced; the preceding design, reversal
+tests and dedicated edge-case review apply to the exact deployed set.
+
+- All207 tracked source/test/script/config/web files match the Windows review
+  checkout by normalized-UTF8 SHA-256 (CRLF/LF normalization), zero mismatches.
+- The exact native production checkout passed **all1,749 tests in165.601s**,
+  zero failures/errors, using its existing virtual environment.
+- `DEPLOYED_COMMIT` now names ee500e4db as the installed release. It is NOT a
+  claim that the already-running Python process re-imported the fixes.
+- Original supervisor432 and runner446 kept their September16 12:08:21 and
+  12:08:22 starts (WSL process timestamps); no stop, signal, restart, reload,
+  configuration change or venue mutation occurred. Their loaded trading code
+  remains the preceding release until the next authorized restart.
+- Current authenticated orders/positions were not re-probed and are unknown;
+  deployment is not evidence of flatness or natural live fix acceptance.
+- Normal fresh account/ownership/start gates still apply at the later restart.
+  Exchange-resolution coverage remains the separate unresolved policy item.
+- The unavailable PC was skipped. Documentation-only synchronization follows
+  this deployment; it does not change the tested runtime files.

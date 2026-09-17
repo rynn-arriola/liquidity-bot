@@ -24,6 +24,10 @@ These are implementation requirements, not suggestions.
    only after submission and belongs to that exact order. The next cancel may
    be selected only after positive terminal proof. It must never drift to
    settlement by default.
+   Before withdrawing an exact passive reducer, evaluate whether the existing
+   early IOC depth/loss policy permits crossing. A deferral retains/restores
+   the normal exact passive reducer, never retires that protection. Pending
+   cancellation proof and absolute kickoff/maintenance/HARD exits still win.
 7. A reward order is allowed only for the lifecycle phase applying at that instant.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
 9. Published pools and pending earnings are never treated as cash or guaranteed revenue.
@@ -101,7 +105,10 @@ These are implementation requirements, not suggestions.
     window plus fresh reconciled zero orders, zero positions, zero ambiguity
     and a newer flat account mark is required. Other pauses remain independent.
     Receipt-time window attribution prevents a delayed closing fill at a
-    boundary from being forgiven. First activation starts only the current
+    boundary from being forgiven. REST fill receipt is stamped after awaited
+    history collection, separately from the older account-proof clock. One
+    batch shares a receipt time; duplicate fills retain their original stamp.
+    First activation starts only the current
     window; an existing legacy HARD/provisional hold cannot silently migrate.
     Older cash-based window rows remain immutable historical evidence and are
     never imported as current loss. Taker counts/fee references remain telemetry only.

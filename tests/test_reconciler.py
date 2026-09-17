@@ -311,9 +311,9 @@ class ReconcilerTests(unittest.TestCase):
             now=T0 + timedelta(seconds=300), position="0.09", orders=(),
             snapshot=thinner_than_residual, opened=T0, entry=.49))
 
-        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
-        self.assertEqual(
-            actions[0].reason, "hard_exit_deferred_thin_book")
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].qty, Decimal("0.09"))
+        self.assertEqual(actions[0].reason, "soft_reducing_quote_at_active_touch")
 
     def test_kickoff_exit_uses_displayed_depth_rather_than_settling(self):
         # Thin book: half the displayed depth is not enough to clear the
@@ -350,15 +350,9 @@ class ReconcilerTests(unittest.TestCase):
 
         # Hours from kickoff the book can still improve, so the conservative
         # refusal is correct and must not be relaxed: no IOC is sent.
-        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
-        # But refusing to cross must not end the session. The reason is the
-        # recoverable one, so the position keeps its passive reducer and every
-        # other market keeps quoting; the pre-kickoff flatten is the deadline
-        # that actually forces the exit.
-        self.assertEqual(actions[0].reason, "hard_exit_deferred_thin_book")
-        from liquidity_bot.live_commissioning import (
-            RECOVERABLE_STRATEGY_CRITICALS)
-        self.assertIn(actions[0].reason, RECOVERABLE_STRATEGY_CRITICALS)
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].reason, "soft_reducing_quote_at_active_touch")
+        self.assertEqual(actions[0].qty, Decimal("2"))
 
     def test_thin_book_at_kickoff_is_still_terminal(self):
         thin = BookSnapshot(
@@ -975,8 +969,9 @@ class ReconcilerTests(unittest.TestCase):
             opened=T0, entry=.90, snapshot=collapsed))
 
         self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0].kind, ActionKind.CRITICAL)
-        self.assertEqual(actions[0].reason, "hard_exit_price_cap_exceeded")
+        self.assertEqual(actions[0].kind, ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].reason, "soft_reducing_quote_at_active_touch")
+        self.assertEqual(actions[0].price, .07)
 
     def test_the_kickoff_deadline_overrides_the_early_exit_cap(self):
         """A cap must never hold a position into settlement."""

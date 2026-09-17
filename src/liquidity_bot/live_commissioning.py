@@ -2547,16 +2547,24 @@ class CommissioningRunner:
         # order and position snapshots above are what gate new risk.
         try:
             execution_batch = await self._fetch_execution_history(now)
+            # Receipt is after the awaited collection, not the poll's start.
+            # Otherwise a poll spanning an ET boundary backdates newly learned
+            # losses into a window whose final mark already happened. Keep one
+            # receipt for the batch so venue event order breaks ties even when
+            # the history endpoint returns newest-first. Replays retain their
+            # original durable receipt in the ledger. Proof freshness continues
+            # to use the older `now`; receiving fills does not renew authority.
+            received_at = self._now()
             for execution in execution_batch:
                 # The ledger accepts identical replay and outcome enrichment.
                 # A raised conflict is immutable identity disagreement in BOTH
                 # account modes, not optional missing history.
-                self.ledger.apply_execution(execution, received_at=now)
+                self.ledger.apply_execution(execution, received_at=received_at)
             # Trade lifecycle is independent of execution delivery. In
             # particular, BUSTED can appear after a fill was already recorded;
             # apply it after linking all execution legs in this batch.
             for trade_state in getattr(execution_batch, "trade_states", ()):
-                self.ledger.apply_trade_state(trade_state, received_at=now)
+                self.ledger.apply_trade_state(trade_state, received_at=received_at)
             self._runtime_error_counts.pop("execution_backfill", None)
         except LedgerConflict:
             # A malformed/unavailable history page is optional positive

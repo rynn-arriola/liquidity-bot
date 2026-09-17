@@ -540,6 +540,30 @@ class DesiredStateReconciler:
             inventory_age >= deadline or pre_kickoff_due or maintenance_due)
 
         if normal_exit_due or small_residual_due:
+            # Price the possible IOC before withdrawing passive protection.
+            # An early exit may be deferred, but its exact reducer must keep
+            # working. This is pure book arithmetic, never submission authority:
+            # pending cancels and every working order still need proof below.
+            entry_side = "bid" if frame.position > 0 else "offer"
+            exit_result = cross_exit(
+                frame.book, entry_side=entry_side,
+                entry_price=frame.entry_price, qty=float(qty),
+                depth_haircut=self.policy.exit_depth_haircut,
+                taker_theta=self.policy.taker_theta)
+            if ((not exit_result.complete or exit_result.worst_price is None)
+                    and (pre_kickoff_due or small_residual_due
+                         or maintenance_due)):
+                # Absolute flatten deadlines and exactly tradable tiny residue
+                # retain the existing displayed-depth fallback.
+                exit_result = cross_exit(
+                    frame.book, entry_side=entry_side,
+                    entry_price=frame.entry_price, qty=float(qty),
+                    depth_haircut=1.0,
+                    taker_theta=self.policy.taker_theta)
+            defer_early_exit = (
+                not pre_kickoff_due and not maintenance_due
+                and (not exit_result.complete or exit_result.worst_price is None
+                     or exit_result.pnl < -self.policy.max_early_exit_loss))
             if frame.working_orders:
                 # The grace measures how long OUR CANCEL has been outstanding,
                 # not how long we are past the deadline. Measuring from the
@@ -578,6 +602,8 @@ class DesiredStateReconciler:
                     # backed by terminal ledger proof, not snapshot absence.
                     self._clear_hard_exit_cancel(slug)
 
+                if defer_early_exit:
+                    return self._passive_inventory_plan(frame)
                 target = next(
                     (order for order in frame.working_orders
                      if order.side == building),
@@ -587,6 +613,8 @@ class DesiredStateReconciler:
                     ActionKind.CANCEL, slug, "hard_timeout_cancel_confirm_first",
                     side=target.side, order_id=target.order_id)]
             self._clear_hard_exit_cancel(slug)
+            if defer_early_exit:
+                return self._passive_inventory_plan(frame)
             attempts = self._hard_exit_attempts.get(slug, 0)
             started_at = self._hard_exit_started_at.get(slug)
             if attempts >= self.policy.max_hard_exit_attempts:
@@ -595,50 +623,8 @@ class DesiredStateReconciler:
                     and (frame.now - started_at).total_seconds()
                     >= self.policy.max_hard_exit_retry_seconds):
                 return self._critical(frame, "hard_exit_retry_window_exceeded")
-            entry_side = "bid" if frame.position > 0 else "offer"
-            exit_result = cross_exit(
-                frame.book, entry_side=entry_side,
-                entry_price=frame.entry_price, qty=float(qty),
-                depth_haircut=self.policy.exit_depth_haircut,
-                taker_theta=self.policy.taker_theta)
-            if ((not exit_result.complete or exit_result.worst_price is None)
-                    and (pre_kickoff_due or small_residual_due
-                         or maintenance_due)):
-                # The stress haircut exists to pick a price we could still get
-                # if half the displayed depth vanished. At the kickoff deadline
-                # the alternative is no longer a better fill later, it is
-                # settlement: maker-lab's residue settled at -$5.51 per event
-                # while a crossing costs cents. Re-price against displayed
-                # depth rather than refuse and hold into the game. A tiny
-                # residual gets the same displayed-depth attempt because its
-                # entire maximum settlement exposure is nine cents; if even
-                # displayed depth cannot fill it, the ordinary recoverable
-                # thin-book path below keeps the reducer working.
-                exit_result = cross_exit(
-                    frame.book, entry_side=entry_side,
-                    entry_price=frame.entry_price, qty=float(qty),
-                    depth_haircut=1.0,
-                    taker_theta=self.policy.taker_theta)
             if not exit_result.complete or exit_result.worst_price is None:
-                if not pre_kickoff_due and not maintenance_due:
-                    # A book too thin to absorb the exit is not a reason to end
-                    # the session. The inventory clock is a preference for
-                    # leaving early; the pre-kickoff flatten is the deadline
-                    # that actually matters, and it re-prices against displayed
-                    # depth above. Keep holding, keep the passive reducer
-                    # working, and retry when the book refills. Measured: at
-                    # one contract this fires whenever exit-side depth is under
-                    # 2.0, and the observed universe contains live books with
-                    # exit-side depth of 1.0 (FINDINGS section 5).
-                    return self._critical(frame, "hard_exit_deferred_thin_book")
                 return self._critical(frame, "hard_exit_insufficient_stressed_depth")
-            if (exit_result.pnl < -self.policy.max_early_exit_loss
-                    and not pre_kickoff_due and not maintenance_due):
-                # Before the kickoff deadline a too-expensive exit can wait for
-                # a better book. At the deadline it cannot: refusing here holds
-                # the position into the game, and settlement is unbounded up to
-                # the full contract value while the cap is a policy choice.
-                return self._critical(frame, "hard_exit_price_cap_exceeded")
             self._hard_exit_started_at.setdefault(slug, frame.now)
             self._hard_exit_attempts[slug] = attempts + 1
             self._hard_exit_sent[slug] = frame.now
@@ -654,6 +640,15 @@ class DesiredStateReconciler:
                 ActionKind.PLACE_IOC, slug, reason,
                 side=reducing, price=exit_result.worst_price, qty=qty)]
 
+        return self._passive_inventory_plan(frame)
+
+    def _passive_inventory_plan(self, frame: MarketFrame) -> list[PlanAction]:
+        """The same exact reducing policy before and after an early deferral."""
+
+        slug = frame.market.slug
+        qty = abs(frame.position)
+        reducing = self._reducing_side(frame.position)
+        building = "bid" if reducing == "offer" else "offer"
         # Immediately pull every order that can add to the filled direction.
         actions = [PlanAction(
             ActionKind.CANCEL, slug, "cancel_building_after_fill",

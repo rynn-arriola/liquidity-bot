@@ -156,8 +156,9 @@ These are implementation requirements, not suggestions.
     depth/cutoff, freshness, exitability, exposure, ownership, and loss gates.
     The normalized 30-second reward/no-fill/stressed-exit model remains
     advisory telemetry while `enforce_reward_cost_gate` is false; its sign may
-    not veto an otherwise authorized quote. The venue's $1 aggregate settlement
-    threshold is reporting-only, never a per-market gate. Missing reward
+    not veto an otherwise authorized quote. The currently stated $1 per-market/
+    reward-period payout threshold is measurement-only under the September18
+    operator decision; it must not filter, rank or cancel quotes. Missing reward
     duration or enforced safety evidence means zero orders.
 34. Pair-completion spread and maker rebate are zero in the commissioning entry
     forecast until attributable live evidence supports nonzero values. Published

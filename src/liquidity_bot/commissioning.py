@@ -253,6 +253,8 @@ class CommissioningConfig:
     # state still quarantines the market, still blocks new risk, and still
     # forces shutdown through equity and stream-freshness checks.
     unresolved_mutation_timeout_seconds: float = 60.0
+    # Legacy config name retained for compatibility. No payout-floor gate:
+    # current support guidance is per market/period and is measured separately.
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     earnings_refresh_seconds: int = 900
     auto_select_reward_markets: bool = False

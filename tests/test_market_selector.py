@@ -561,6 +561,48 @@ class RankingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_payout_measurement_is_per_market_and_cannot_change_selection(self):
+        slugs = ("small-a", "small-b", "combined", "buffer", "blocked", "none")
+        gateway = FakeGateway(
+            {s: market(s) for s in slugs},
+            {s: incentive(s, pool=1000) for s in slugs},
+            {s: book(s) for s in slugs})
+        selection = await RewardMarketSelector(gateway).select(now=NOW)
+        by_slug = {item.market.slug: item for item in selection.opportunities}
+
+        def measured(slug, amounts, blocked=()):
+            item = by_slug[slug]
+            return replace(item, sides=tuple(
+                replace(side,
+                        expected_net_value=None if index in blocked else .01,
+                        projection=replace(side.projection,
+                            maximum_remaining_reward=amount))
+                for index, (side, amount) in enumerate(zip(item.sides, amounts))))
+
+        # Different markets cannot combine .60 + .70. Both sides of the same
+        # market can combine .40 + .60. A blocked side's reward cannot count.
+        items = (
+            measured("small-a", (.60, 0)), measured("small-b", (.70, 0)),
+            measured("combined", (.40, .60)), measured("buffer", (.75, .75)),
+            measured("blocked", (.20, 10), blocked=(1,)),
+            measured("none", (10, 10), blocked=(0, 1)))
+        selection = replace(selection, opportunities=items, selected=items[0])
+        before = selection.top_viable(32)
+        calls_before = tuple(gateway.book_calls)
+        self.assertEqual(selection.viable_markets, 5)
+        self.assertEqual(selection.payout_floor_market_count(1), 2)
+        self.assertEqual(selection.payout_floor_market_count(1.5), 1)
+        self.assertEqual(selection.payout_floor_market_count(1.500001), 0)
+        self.assertAlmostEqual(items[4].maximum_remaining_reward_total, .20)
+        self.assertEqual(selection.top_viable(32), before)
+        self.assertIs(selection.selected, items[0])
+        self.assertEqual(tuple(gateway.book_calls), calls_before)
+        for floor in (-1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                selection.payout_floor_market_count(floor)
+        empty = replace(selection, opportunities=(), selected=None)
+        self.assertEqual(empty.payout_floor_market_count(1), 0)
+
     async def test_real_429_stops_selection_and_revalidation_after_one_book(self):
         for revalidate in (False, True):
             with self.subTest(revalidate=revalidate):

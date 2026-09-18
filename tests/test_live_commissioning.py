@@ -972,12 +972,30 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         with patch("builtins.print") as emitted:
             runner._log_selection_scan(selection)
 
-        line = emitted.call_args.args[0]
+        line = emitted.call_args_list[0].args[0]
         self.assertIn("event_pages=2", line)
         self.assertIn("event_page_ceiling=10", line)
         self.assertIn("event_markets=7961", line)
         self.assertIn("executable=228", line)
+        self.assertIn("payout_est_ge_1=1", line)
+        self.assertIn("payout_est_ge_1_5=0", line)
         self.assertIn("scan_seconds=8.8", line)
+        detail = emitted.call_args_list[1].args[0]
+        self.assertIn("[payout-estimate]", detail)
+        self.assertIn("market=market-one program=reward-market-one", detail)
+        self.assertIn("rank=1 sides=bid remaining_usd=1.000000", detail)
+        self.assertIn("enforcement=none", detail)
+
+    def test_payout_measurement_failure_cannot_abort_selection_logging(self):
+        runner, _, _ = self.build_runner()
+        selection = fake_selection("market-one")
+        with patch.object(RewardMarketSelection, "payout_floor_market_count",
+                          side_effect=ValueError("invalid measurement")):
+            self.assertIsNone(runner._payout_floor_count(selection, 1))
+            with patch("builtins.print") as emitted:
+                runner._log_selection_scan(selection)
+            self.assertIn("payout_est_ge_1=None", emitted.call_args_list[0].args[0])
+        self.assertIsNone(runner._payout_floor_count(None, 1))
 
     async def test_ui_maintenance_pauses_only_new_risk(self):
         runner, _, notifier = self.build_runner()

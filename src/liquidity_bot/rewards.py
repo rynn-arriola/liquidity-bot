@@ -47,9 +47,10 @@ class RewardProjection:
     Liquidity rewards are normalized independently on each side of every
     snapshot.  The projection therefore uses no more than half of the period
     pool for one side and discounts the current order's observed score share.
-    ``minimum_payout`` remains available to research callers, but live
-    commissioning passes zero because the venue's $1 settlement threshold is
-    aggregate rather than a per-market entry requirement.
+    ``minimum_payout`` remains available to research callers. Live
+    commissioning passes zero while the venue's currently stated per-market,
+    per-period $1 settlement rule is measured rather than enforced; historical
+    venue rows marked ``PAID`` below $1 make a trading gate premature.
     """
 
     eligible: bool

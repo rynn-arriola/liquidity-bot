@@ -1,4 +1,5 @@
 # Findings index — [archived findings](docs/history/FINDINGS_THROUGH_2026-08-27.md) · [September15 rollover](docs/history/INDEX_ROLLOVER_2026-09-15.md)
+- **September18 payout interpretation corrected:** support says $1 per market/reward period, conflicting with historical authenticated PAID rows below $1. Old rows do not disprove today's rule; aggregate-settlement claims are withdrawn. Operator chose measurement without trading changes. [Evidence/limits](docs/history/REWARD_PAYOUT_MEASUREMENT_2026-09-18.md).
 - **September18 daily timing/review:** official304-page audit and16:44:58Z scan found136 daily_event/zero day_of reward rows in138 six-hour moneylines. Follow-up approves bounded24h daily entries, not today-only dates; active programs and ET-day reward rates remain distinct from the rolling entry horizon. Tests prove current-day evidence/midnight refusal, day_of priority and reward-share rather than headline-pool rank. Net-value gate remains advisory; better realized profitability is not yet measured. [Entry-window work](docs/history/DAILY_EVENT_ENTRY_WINDOW_2026-09-18.md) · [API conflicts/audit](docs/history/API_DOCUMENTATION_REVIEW_2026-09-18.md).
 - **September18 maintenance buffer:** one startup-imported constant controls cached and fresh schedule release. The operator selected900s instead of3600s; this does not hot-reload the live runner or bypass late completion, fresh feed, authenticated health, UI or risk gates. The old-buffer reversal fails6 assertions without errors. [Review](docs/history/MAINTENANCE_BUFFER_2026-09-18.md).
 - **September15–16 reward-report coverage/presentation:** late/missing midnight baselines left only3/7 account-marked rows and hid known closed-fill P&L; the first repair exposed settled P&L beside Account/Net, but its64-character row wrapped on Discord mobile. The final42-character webhook shows only chronological settled Trading P&L plus paid/pending reward; Account/Net stay dashboard/CLI-only. September12 +$191.03 is supported by a verified +$230.4549 large round trip after fees, offset by other losses. [Coverage](docs/history/REWARD_TABLE_SETTLED_REPORTING_2026-09-15.md) · [presentation](docs/history/REWARD_WEBHOOK_SIMPLIFICATION_2026-09-16.md).
@@ -86,8 +87,7 @@
   snapshots remain strict. Deployed acceptance resolved August 26 to
   `-$64.4870` trading and `+$145.12` finalized net.
 - **GitHub `main` is the tracked-file source of truth.** Production source/tests
-  are verified against `DEPLOYED_COMMIT`; venue state remains a separate live
-  authority.
+  are verified against `DEPLOYED_COMMIT`; venue state remains a separate live authority.
 - **Trader guides are not all Retail wire contracts.** Institutional examples are conceptual unless the Retail API/SDK documents them; use the audited map
   in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md).
 - **The 2026-07-01 fee schedule matches the bot's signed-fee accounting.** Retail execution commission is already a USD `MoneyAmount`: positive taker fees are costs and negative maker rebates are credits. Partner fixed-point

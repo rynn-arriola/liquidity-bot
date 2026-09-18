@@ -21,6 +21,27 @@ NOW = datetime(2026, 9, 7, 13, tzinfo=timezone.utc)
 
 
 class DiscordReportLayoutTests(unittest.TestCase):
+    def test_remaining_reward_measurement_is_compact_and_missing_stays_absent(self):
+        summary = LiquiditySummary(
+            mode="LIVE", readiness_status="SCALE_ELIGIBLE", observed_at=NOW,
+            session_started_at=NOW, slot_capacity=32, viable_markets=20)
+
+        def slots(value):
+            return next(f["value"] for f in
+                        build_liquidity_summary(value)["embeds"][0]["fields"]
+                        if "Slots" in f["name"])
+
+        self.assertNotIn("Remain est.", slots(summary))
+        report = slots(replace(summary, payout_floor_one_markets=12,
+                               payout_floor_buffer_markets=8))
+        lines = [line for line in report.splitlines() if "Remain est." in line]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("12/20", lines[0])
+        self.assertIn("8/20", lines[1])
+        self.assertTrue(all(len(line) <= 29 for line in lines))
+        self.assertIn("0/0", slots(replace(summary, viable_markets=0,
+                                          payout_floor_one_markets=0)))
+
     def test_window_meter_never_falls_back_to_daily_pnl_when_unknown(self):
         summary = LiquiditySummary(
             mode="LIVE", readiness_status="SCALE_ELIGIBLE", observed_at=NOW,

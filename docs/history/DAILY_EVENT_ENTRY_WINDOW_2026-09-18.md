@@ -95,3 +95,15 @@ Naturally observe widened-scan pages/latency/API load, early daily resting order
 mixed-program priority, ET rollover and unchanged exits. Do not induce fills or
 failure. Compare paid rewards plus closed trading P&L per resting side-hour
 before claiming better profitability; pending rewards remain provisional.
+
+## Later Command 1 release
+
+The operator subsequently authorized Command 1. The old runner stopped
+gracefully, two authenticated flat/clear gates passed, source parity matched,
+and all1,778 installed tests passed in169.852s. Source `34f52b1d7` started
+September18 18:45:19Z as supervisor239275 / runner239293, REST size10/32.
+Initial scan:45,989 event rows,402 executable,376 rewarded,100 public-WS books,
+63 viable and zero REST book fallback. Five-minute acceptance:30 orders,
+zero positions/unresolved/unknown state. These are historical observations;
+later current exposure requires fresh venue proof. The later payout-measurement
+task confirms the same running process without restarting it.

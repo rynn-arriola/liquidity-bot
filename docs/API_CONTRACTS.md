@@ -93,8 +93,11 @@ Official references:
   accepted for reward calibration; the documented minimum payout and settlement
   delay must not be modeled as immediate cash. On 2026-08-10 the authenticated
   endpoint returned 86 `PAID` market rows totaling $32.06, including 37 rows
-  below $0.10. That observation disproves a $1-per-market interpretation, so
-  commissioning treats $1 as an aggregate reporting/settlement threshold.
+  below $0.10. September18 support instead states $1 is evaluated separately
+  per market/reward period. The historical rows do not prove today's rule;
+  preserve that conflict rather than claim aggregation. The operator chose
+  measurement only: current-share remaining estimates at $1/$1.50 do not
+  filter or rank markets. [Measurement scope](history/REWARD_PAYOUT_MEASUREMENT_2026-09-18.md).
 - First-fill risk is calibrated only from the 301 maker-lab order lifetimes in
   those paid markets: 114 first fills over 372,259.527 exposure-seconds. The
   global 30-second Wilson upper bound is 1.1024%. Commissioning takes the

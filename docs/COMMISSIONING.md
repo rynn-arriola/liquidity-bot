@@ -59,8 +59,8 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
 - continue computing the 30-second normalized-score reward model with a 50%
   haircut and conservative first-fill probability, but do not enforce that
   experimental cost gate for entry;
-- report the venue's $1 aggregate payout floor, but never apply it to one
-  market or one order;
+- measure the currently stated $1 per-market/reward-period payout floor,
+  with a $1.50 comparison, without enforcing a new entry or retention gate;
 - use no projected spread or maker rebate until live evidence supports it;
 - cancel the opposite building order immediately after the first fill;
 - work the exact reducing quantity passively at the active touch with no

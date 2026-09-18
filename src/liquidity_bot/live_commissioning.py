@@ -1165,6 +1165,15 @@ class CommissioningRunner:
             )
         return tuple(resolved)
 
+    @staticmethod
+    def _payout_floor_count(selection: RewardMarketSelection | None,
+                            floor: float) -> int | None:
+        """Optional telemetry must not make scan or summary handling fail."""
+        try:
+            return selection.payout_floor_market_count(floor)
+        except Exception:
+            return None
+
     def _log_selection_scan(self, selection: RewardMarketSelection) -> None:
         """Expose discovery headroom once for every successful full scan."""
 
@@ -1180,9 +1189,28 @@ class CommissioningRunner:
             f"rewarded={getattr(selection, 'rewarded_executable_markets', 0)} "
             f"books_ranked={getattr(selection, 'books_evaluated', 0)} "
             f"viable={getattr(selection, 'viable_markets', 0)} "
+            f"payout_est_ge_1={self._payout_floor_count(selection, 1.0)} "
+            f"payout_est_ge_1_5={self._payout_floor_count(selection, 1.5)} "
             f"scan_seconds={elapsed}",
             flush=True,
         )
+        # Preserve market/program/rank evidence for later payout comparison.
+        # These bounded, local scan records add no request and feed no decision.
+        try:
+            for rank, item in enumerate(
+                    (item for item in selection.opportunities if item.viable_sides),
+                    start=1):
+                print(
+                    f"[payout-estimate] at={self._now().isoformat()} "
+                    f"market={item.market.slug} program={item.period.program_id} "
+                    f"period={item.period.period} rank={rank} "
+                    f"sides={','.join(item.viable_sides)} "
+                    f"remaining_usd={item.maximum_remaining_reward_total:.6f} "
+                    "basis=current_share_remaining_only enforcement=none",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[payout-estimate] unavailable={type(exc).__name__}", flush=True)
 
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
@@ -3866,8 +3894,8 @@ class CommissioningRunner:
                 now=now,
                 horizon_seconds=self.config.reward_projection_horizon_seconds,
                 haircut=float(self.config.reward_projection_haircut),
-                # The venue's $1 threshold is aggregate settlement policy, not
-                # a per-market or per-order eligibility threshold.
+                # Preserve live economics while the currently stated
+                # per-market/period $1 payout floor is measured separately.
                 minimum_payout=0.0,
                 order_already_resting=already_resting,
             )
@@ -7374,6 +7402,10 @@ class CommissioningRunner:
             selection_failures=(
                 len(self._market_selection.failures)
                 if self._market_selection is not None else 0),
+            payout_floor_one_markets=(
+                self._payout_floor_count(self._market_selection, 1.0)),
+            payout_floor_buffer_markets=(
+                self._payout_floor_count(self._market_selection, 1.5)),
             # Marked trading P&L against the DAY's opening equity, from the
             # ledger so a restart cannot reset it. Account-wide by nature:
             # equity carries no per-system attribution. Proven rewards,
@@ -7500,6 +7532,10 @@ class CommissioningRunner:
                f" rewarded={self._market_selection.rewarded_executable_markets}"
                f" books_ranked={self._market_selection.books_evaluated}"
                f" viable={self._market_selection.viable_markets}"
+               f" payout_est_ge_1="
+               f"{self._payout_floor_count(self._market_selection, 1.0)}"
+               f" payout_est_ge_1_5="
+               f"{self._payout_floor_count(self._market_selection, 1.5)}"
                if self._market_selection is not None else "")
             + (f" scan_seconds={self._selection_scan_seconds_last:.1f}"
                if self._selection_scan_seconds_last is not None else ""),

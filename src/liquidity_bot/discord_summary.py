@@ -116,6 +116,11 @@ class LiquiditySummary:
     rewarded_markets: int = 0
     spread_filtered_markets: int = 0
     selection_failures: int = 0
+    # Shadow-only estimate from the last selection scan. It changes no market
+    # admission, ranking, sizing, or order behavior. The denominator shown in
+    # Discord is ``viable_markets``.
+    payout_floor_one_markets: int | None = None
+    payout_floor_buffer_markets: int | None = None
     # Idle slots held only because their market has already started. Not
     # faults -- a started market can never quote again and is just waiting
     # for the next rotation sweep -- so they are reported apart from the
@@ -393,6 +398,14 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             + _row("Rewarded in window", summary.rewarded_markets)
             + _row("Refused, tight book", summary.spread_filtered_markets)
             + _row("Lost to errors", summary.selection_failures))
+        if summary.payout_floor_one_markets is not None:
+            slots_text += _row(
+                "Remain est. >=$1",
+                f"{summary.payout_floor_one_markets}/{summary.viable_markets}")
+        if summary.payout_floor_buffer_markets is not None:
+            slots_text += _row(
+                "Remain est. >=$1.50",
+                f"{summary.payout_floor_buffer_markets}/{summary.viable_markets}")
 
     hard_cap = _money(summary.hard_stop_loss_usd)
     # The HARD meter must read exactly what its own stop fires on. Live callers

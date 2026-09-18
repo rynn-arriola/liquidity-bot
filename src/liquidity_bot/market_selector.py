@@ -8,6 +8,7 @@ selected slug only after it has proved the account flat and order-free.
 
 from __future__ import annotations
 
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -190,6 +191,23 @@ class RewardMarketOpportunity:
         )
 
     @property
+    def maximum_remaining_reward_total(self) -> float:
+        """Conservative reward still reachable across currently viable sides.
+
+        Assumes continuous participation at the current share until the
+        accessible period ends; earlier accrued reward is unknown. This is
+        report-only shadow evidence for the venue's per-market,
+        per-reward-period payout floor. It deliberately excludes blocked sides
+        and must not be used to admit, reject, or rank a market.
+        """
+
+        return sum(
+            item.projection.maximum_remaining_reward
+            for item in self.sides
+            if item.viable and item.projection.eligible
+        )
+
+    @property
     def projected_reward_total(self) -> float:
         """What this market is actually expected to pay us.
 
@@ -275,6 +293,23 @@ class RewardMarketSelection:
     def viable_markets(self) -> int:
         return sum(bool(item.viable_sides) for item in self.opportunities)
 
+    def payout_floor_market_count(self, floor: float) -> int:
+        """Count viable markets whose remaining reward estimate clears floor.
+
+        The estimate does not include reward accrued before the current scan,
+        and venue settlement remains authoritative. This method is telemetry;
+        ``top_viable`` intentionally does not call it.
+        """
+
+        floor = float(floor)
+        if not math.isfinite(floor) or floor < 0:
+            raise ValueError("payout floor must be a finite non-negative number")
+        return sum(
+            item.maximum_remaining_reward_total + 1e-12 >= floor
+            for item in self.opportunities
+            if item.viable_sides
+        )
+
 
 def evaluate_market_opportunity(
     market: MarketMetadata,
@@ -315,9 +350,10 @@ def evaluate_market_opportunity(
             now=now,
             horizon_seconds=policy.projection_horizon_seconds,
             haircut=policy.projection_haircut,
-            # The venue's $1 threshold applies to aggregate reward settlement,
-            # not to every market row.  Per-order economics must therefore use
-            # the actual sub-dollar projection.
+            # Support currently describes the $1 threshold as per market and
+            # reward period, while historical venue rows include PAID amounts
+            # below $1. Live behavior therefore stays unchanged at zero while
+            # a separate report-only measurement collects current evidence.
             minimum_payout=0.0,
         )
         queue_ahead = (

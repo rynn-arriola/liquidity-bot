@@ -206,3 +206,39 @@ trading-rule change or fresh exposure check occurred. Current orders/positions
 were not asserted from historical ledger rows. Windows/GitHub contain prepared
 work; WSL must remain on its existing reviewed source until a later authorized
 deployment/restart. Documentation and final diff audits pass.
+
+## Command 1 deployment and live acceptance
+
+The operator subsequently issued Command1. The supervisor and runner stopped
+normally; the terminal record at22:13:10Z said `flat=true`. An independent
+authenticated22:16:29Z snapshot proved zero open orders and zero positions.
+Parity captured a verified stopped-ledger recovery copy before deployment.
+
+Pushed commit `f2e6aba5bcb0b88c4d8a9707cba3a41764c3bf48` fast-forwarded the clean
+WSL checkout through a verified local git bundle, preserving every untracked
+runtime artifact. The exact installed checkout passed all1,835 tests in
+173.584 seconds. Its marker and all207 normalized source/test/config/script
+hashes then matched Windows and the reviewed commit. A fresh22:23:50Z gate
+proved zero venue orders/positions, zero ledger working orders/positions and
+zero unresolved/unknown ownership before restart.
+
+Supervisor350908 and runner350932 started22:23:58–22:23:59Z using explicit
+size10/32/REST. The first scan used24 public-WebSocket books with zero REST
+fallbacks, found19 viable markets and emitted the new complete
+`[market-measurement]` record with `enforcement=none`. No analysis result was
+read back by selection. The scan logger therefore received live acceptance as
+an isolated observer, not reward-estimate accuracy or strategy acceptance.
+
+The first API window made256 attempts at1.863/s with zero429; a report-lane
+earnings timeout was isolated and later windows ran3.507/3.141/3.002/s with
+zero429. Normal individual-order publication404s reconciled. Authenticated
+22:27:21Z state showed30 flat-entry orders and two position-market orders,
+zero unresolved/unknown state. At22:28:18Z both -10 positions had exactly one
+matching BUY10 reducer. Final parity matched Windows, GitHub, WSL HEAD and the
+loaded marker; the offline PC remained explicitly pending.
+
+Existing four$25 settled-loss windows, cap30/25/20/15/10, day_of priority,
+daily spare-capacity entries, entry-quality rule, ownership, reducers and exits
+are unchanged. Continue collecting complete prospective periods; estimates
+remain unvalidated until later paid outcomes and coverage thresholds support
+them.

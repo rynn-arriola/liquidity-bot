@@ -84,3 +84,27 @@ diagnostic fetch process was terminated, never the supervisor or runner.
   evidence is available: graceful stop, positive post-stop flat/clear proof,
   verified stopped recovery backup, fresh startup gate and live acceptance.
   Do not misreport installed source or a maintenance hold as live acceptance.
+
+## Authorized restart into the hold
+
+At07:34 ET the official summary was operational and authenticated reads had
+recovered, but completion at07:30:07 ET left the new hold active until07:45:07.
+The operator explicitly requested restarting immediately so the bot would be
+ready later. Fresh pre-stop proof at11:35:23Z showed zero venue orders,
+positions, unresolved intents, unknown orders, working ledger orders or ledger
+positions. The old supervisor432/runner446 then stopped normally with
+`flat=true`; no force kill was used. Parity captured and verified the stopped
+ledger backup. A second authenticated gate at11:36:27Z proved the same complete
+zero state.
+
+Supervisor136210 and runner136224 started at07:36:30 ET with persisted size10,
+32 slots and manual REST mode. Startup loaded release `0e097b51a` and reported:
+
+- official completed schedule, `resume_at=2026-09-18T11:45:07.368Z`;
+- `ENTRY_PAUSED` for `scheduled_maintenance_resume_hold`;
+- six-hour loss0, hard25, pending-entry cap30, no provisional/held state;
+- REST account mode, private socket disabled, automatic source switch disabled.
+
+This proves correct startup/hold behavior, not automatic release or quoting.
+At the boundary the existing three authenticated health reads plus stream,
+reconciliation, UI and risk gates must pass before entries can resume.

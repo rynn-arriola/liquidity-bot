@@ -108,3 +108,19 @@ Supervisor136210 and runner136224 started at07:36:30 ET with persisted size10,
 This proves correct startup/hold behavior, not automatic release or quoting.
 At the boundary the existing three authenticated health reads plus stream,
 reconciliation, UI and risk gates must pass before entries can resume.
+
+## Automatic release acceptance
+
+The runner passed the release gates and resumed without another restart. At
+11:58:53Z the authenticated account held27 flat entry orders across22 markets,
+zero positions and zero unknown orders. One order intent was in flight during
+that asynchronous snapshot; the ordinary repair loop reported remaining0 at
+11:59:06Z. The process remained alive and active.
+
+The first completed active API window covered77 seconds/291 attempts at3.782
+requests per second: zero429s/cooldowns, six individual-order404 publication
+delays and no account-read cooldown. Those404s reached normal terminal/repair
+handling. Startup repricing produced heavy create/cancel activity and an early
+decision-latency p95 of31.081 seconds, so this is successful release and risk
+ownership acceptance, not sustained performance acceptance. No position had
+yet naturally exercised yesterday's deferred-exit repair.

@@ -111,3 +111,46 @@ reducer for the sole+10 jialu/enashi position; ledger31 orders/one position agre
 with zero unresolved/unknown state. Runner282322 remained the original process.
 Prepared changes require separately authorized reviewed deployment and restart;
 natural reward-idle replacement acceptance remains pending that activation.
+
+## Command 1 deployment — September18
+
+The operator subsequently issued Command1, authorizing the reviewed stop,
+deployment and restart workflow. Supervisor282304 was stopped before SIGTERM
+to runner282322. The old runner ended21:03:23.275705Z with `flat=false`, having
+parked two exact reducers under the existing shutdown policy. This was not
+treated as flat proof.
+
+Authenticated21:04:05Z reads then found zero venue orders/positions, but the
+stopped ledger still held two orders/positions. The stopped-only prestart helper
+acquired the exclusive lease, proved the venue flat and both exact orders
+`CANCELED` at21:04:35Z, then ran normal account/history reconciliation with venue
+mutation entry points disabled. No raw ledger repair or venue mutation occurred.
+The21:05:26.852077Z gate proved zero venue and ledger orders/positions plus zero
+unresolved/unknown state. Stopped-runtime backup captured21:05:20Z was verified
+at712,433,664 bytes/SHA-256 prefix5dc935217c40.
+
+Reviewed/pushed `59691b29b4192fb36551d94ad206454fc15d170d` was deployed by
+fast-forward from a local git bundle, preserving untracked runtime artifacts.
+All204 normalized source/test/config/script hashes matched Windows and the
+reviewed commit. All1,790 tests passed in171.321 seconds in the exact installed
+checkout; only then was `DEPLOYED_COMMIT` updated. A fresh authenticated
+21:09:07.465884Z gate again proved zero orders/positions/ambiguity on venue and
+ledger. Restart used explicit auto/size10/32/REST, supervisor302233 and
+runner302251. Existing persisted risk and source settings were not reset.
+The21:09:40Z startup scan used4 event pages/52,719 nested rows,716 executable,
+602 rewarded,33 books ranked and23 viable;1 remaining estimate cleared$1 and
+none cleared$1.50. Selection and validation books used public WebSocket data
+with no REST fallback. Known-started/unproved-pregame owners remained gated.
+
+The first121.2-second API window through21:11:10Z made250 attempts at2.063/s,
+including28 mutations and four individual-order404s; zero429/cooldown. This is
+initial acceptance, not a long-term rate-limit guarantee. Persisted settled
+window P&L was-$6.38 against$25, entrycap25, no HARD/released flags; restart did
+not erase losses or restore the higher ceiling.
+
+Authenticated21:11:48.153931Z state:26 orders across20 markets, consisting of25
+flat entries and one exactOPEN SELL10 reducer for the sole+10 mocdav/urevad
+position. Ledger26 orders/one position agreed; zero unresolved/unknown state.
+This proves initial quoting/coverage, not a complete exit cycle or a natural
+reward-idle swap. The new dwell starts fresh with the process and optional
+replacement remains on normal scans; natural acceptance must not be induced.

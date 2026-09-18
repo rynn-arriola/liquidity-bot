@@ -169,7 +169,7 @@ manual trigger. It polls once per minute and keeps a verified local cache so a
 later feed failure cannot postpone a known boundary. Thirty minutes before the
 announced start it withdraws flat entry orders and sends any held inventory
 through the existing one-order-at-a-time cancel-confirm/exact-IOC exit path.
-New risk stays blocked through the window and until one hour after the later of
+New risk stays blocked through the window and until 15 minutes after the later of
 the announced end or official completion, then three complete authenticated
 health cycles and every normal stream/reconciliation/UI gate must pass. The
 process stays alive; schedule evidence never proves an order canceled or a

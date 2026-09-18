@@ -32,7 +32,7 @@ PRODUCTION_COMPONENT_NAME = "[Production] Polymarket US Exchange"
 MAINTENANCE_PROBE_TIMEOUT_SECONDS = 5.0
 MAINTENANCE_PROBE_MAX_BYTES = 1024 * 1024
 MAINTENANCE_EVACUATION_LEAD_SECONDS = 30 * 60
-MAINTENANCE_RESUME_DELAY_SECONDS = 60 * 60
+MAINTENANCE_RESUME_DELAY_SECONDS = 15 * 60
 MAINTENANCE_SCHEDULE_POLL_SECONDS = 60.0
 MAINTENANCE_CACHE_PATH = Path("data/polymarket-maintenance-schedule.json")
 STATUSPAGE_RECORD_ABSENT_AFTER_END = "record_absent_after_end"
@@ -184,7 +184,7 @@ def _parse_window(raw: object) -> MaintenanceWindow | None:
     if status == "completed" and completed_at is None:
         # Some Statuspage list responses omit update detail.  ``updated_at``
         # is positive completion-state evidence, and using it can only extend
-        # the operator's one-hour hold if it reflects a later edit.
+        # the operator's 15-minute hold if it reflects a later edit.
         completed_at = updated_at
     return MaintenanceWindow(
         maintenance_id=maintenance_id,
@@ -275,7 +275,7 @@ def probe_polymarket_us_maintenance_schedule(
         # a successful complete-history read prove the record absent (normal
         # polls also require successful upcoming and active reads). Preserve
         # the planned end as the conservative completion boundary so the
-        # ordinary one-hour hold and authenticated recovery checks still
+        # ordinary 15-minute hold and authenticated recovery checks still
         # apply. Any disappearance before the scheduled end, non-404 detail
         # failure, or failed history read remains UNKNOWN.
         cutoff = observed_at - timedelta(days=2)

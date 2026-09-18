@@ -1,4 +1,5 @@
 # Open work only
+**September18 maintenance buffer prepared; restart authorized after all work including yesterday's fixes:** 15-minute hold passes 1,752 tests; deployment/native verification and fresh account/ownership gates remain. Current process retains the old one-hour constant; venue HTTP503 blocks safe restart proof. Preserve 30-minute evacuation, later-completion boundary and three health cycles. [Evidence](docs/history/MAINTENANCE_BUFFER_2026-09-18.md).
 **September17 `ee500e4db` installed; activation awaits authorized restart:**107 focused and both1,749-test suites pass; both reversals detect defects and207 deployed hashes match. No restart/reload occurred. Reuse this unchanged-source deployment evidence, require fresh ownership/account/start gates when restart is authorized, then observe natural deferred-exit/boundary behavior without induced faults. Exchange-resolution accounting remains separate. [Details](docs/history/END_TO_END_REVIEW_2026-09-17.md).
 **Host outage protection is prepared, not active:** final review and1,739-test suite passed; operator is handling exposure. At September16 00:21:36Z there were18 resting orders/zero positions while stopped. Before activation require fresh account proof, reviewed deployment/tests, Windows task installation and explicit safe-start authority. Naturally accept GTD expiry/recovery and measure reward/API cost; do not induce fills/outages. [Handoff](docs/history/HOST_OUTAGE_PROTECTION_2026-09-15.md).
 **September15 settled-fill correction `87381d91d` is loaded and initially accepted:** both1,713-test suites, parity/backup/hashes and flat gate passed. Live meter corrected old ~$19.33/cap15 to fresh -$3.0506/cap30; open positions did not consume loss. At5m40s authenticated state had30 flat entries plus one exact reducer, zero ambiguity; another position flattened naturally. One cash-history429 recovered and the next three windows had zero429/cooldown. Continue natural partial-close, tier, HARD and boundary observation without inducing loss or fills. [Evidence](docs/history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md).
@@ -106,8 +107,7 @@ global fallback.
 The operator explicitly authorized the 70% filter and Command 1 on September 7.
 Enabled-config review/native suites pass 1,173 tests; deployed `b089b3a6e` and
 restarted after a fresh flat/clear gate. Initial quotes/API accepted; evaluate net.
-The first matched reward sensitivity is unfavorable before replacements:
-$207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
+The first matched reward sensitivity is unfavorable before replacements: $207 flagged loss versus $376–$385 modeled reward sacrifice, substantially
 pending. Validate reward/replacement net; saved labels remain non-authoritative. [Tradeoff](docs/history/ENTRY_QUALITY_REWARD_TRADEOFF_2026-09-07.md) · [implementation](docs/history/ENTRY_QUALITY_FILTER_2026-09-07.md).
 
 The queue-reset, daily selection-probe and fixed-GTC collectors are closed. Their databases and reports remain evidence; do not restart them merely to add sample volume.

@@ -73,19 +73,64 @@ class MaintenanceScheduleTests(unittest.TestCase):
 
         completed_early = window(
             status="completed", completed_at=END - timedelta(minutes=30))
-        self.assertEqual(completed_early.resume_at, END + timedelta(hours=1))
+        self.assertEqual(completed_early.resume_at, END + timedelta(minutes=15))
         self.assertEqual(
             maintenance_decision((completed_early,), END).phase,
             MaintenancePhase.RESUME_HOLD)
         self.assertEqual(
             maintenance_decision(
-                (completed_early,), END + timedelta(hours=1)).phase,
+                (completed_early,), END + timedelta(minutes=15)).phase,
             MaintenancePhase.NORMAL)
 
         completed_late = window(
             status="completed", completed_at=END + timedelta(minutes=20))
         self.assertEqual(
-            completed_late.resume_at, END + timedelta(hours=1, minutes=20))
+            completed_late.resume_at, END + timedelta(minutes=35))
+
+    def test_fifteen_minute_release_boundary_and_late_completion(self):
+        for completion_delay in (timedelta(), timedelta(minutes=20)):
+            completed = window(
+                status="completed", completed_at=END + completion_delay)
+            release = END + completion_delay + timedelta(minutes=15)
+            with self.subTest(completion_delay=completion_delay):
+                self.assertEqual(completed.resume_at, release)
+                self.assertEqual(
+                    maintenance_decision(
+                        (completed,), release - timedelta(microseconds=1)).phase,
+                    MaintenancePhase.RESUME_HOLD)
+                self.assertEqual(
+                    maintenance_decision((completed,), release).phase,
+                    MaintenancePhase.NORMAL)
+
+    def test_elapsed_buffer_does_not_complete_active_or_unknown_window(self):
+        for status in ("scheduled", "in_progress", "verifying", "unknown"):
+            with self.subTest(status=status):
+                active = window(status=status)
+                self.assertIsNone(active.resume_at)
+                self.assertEqual(
+                    maintenance_decision(
+                        (active,), END + timedelta(hours=2)).phase,
+                    MaintenancePhase.MAINTENANCE)
+
+    def test_seven_am_et_end_releases_schedule_at_seven_fifteen(self):
+        eastern = timezone(timedelta(hours=-4))
+        start = datetime(2026, 9, 18, 5, tzinfo=eastern)
+        end = datetime(2026, 9, 18, 7, tzinfo=eastern)
+        completed = MaintenanceWindow(
+            "friday", "Maintenance", "completed", start, end, end, end)
+        self.assertEqual(
+            completed.resume_at,
+            datetime(2026, 9, 18, 7, 15, tzinfo=eastern))
+        self.assertEqual(completed.evacuation_at, start - timedelta(minutes=30))
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "schedule.json"
+            write_maintenance_cache((completed,), end, path)
+            restored = load_maintenance_cache(path)
+        self.assertEqual(restored[0].resume_at, completed.resume_at)
+        self.assertEqual(
+            maintenance_decision(
+                restored, datetime(2026, 9, 18, 11, 15, tzinfo=UTC)).phase,
+            MaintenancePhase.NORMAL)
 
     def test_history_probe_keeps_only_exact_production_component(self):
         preprod = production_row()
@@ -157,7 +202,7 @@ class MaintenanceScheduleTests(unittest.TestCase):
             STATUSPAGE_RECORD_ABSENT_AFTER_END)
         self.assertEqual(result.windows[0].completed_at, END)
         self.assertEqual(
-            result.windows[0].resume_at, END + timedelta(hours=1))
+            result.windows[0].resume_at, END + timedelta(minutes=15))
         self.assertEqual(read.call_count, 4)
 
     def test_deleted_known_window_before_end_remains_unknown(self):
@@ -238,7 +283,7 @@ class MaintenanceScheduleTests(unittest.TestCase):
         self.assertEqual(result.windows[0].completed_at, completed_at)
         self.assertEqual(
             result.windows[0].resume_at,
-            completed_at + timedelta(hours=1))
+            completed_at + timedelta(minutes=15))
 
     def test_startup_history_preserves_deleted_post_end_window(self):
         detail_url = (

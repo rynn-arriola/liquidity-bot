@@ -894,7 +894,7 @@ These are implementation requirements, not suggestions.
     failed or malformed read, the state remains unknown. This classification
     does not claim official completion: it uses `scheduled_until` as the
     boundary, while any later official completed update replaces it and extends
-    the hold. New risk remains blocked through maintenance and until one hour
+    the hold. New risk remains blocked through maintenance and until 15 minutes
     after the later of that boundary or the first official completed update,
     followed by three complete authenticated order/position/balance reads.
     Normal stream, reconciliation, UI-participation and account-risk gates

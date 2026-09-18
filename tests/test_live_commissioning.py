@@ -1107,10 +1107,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
     async def test_scheduled_resume_waits_for_three_authenticated_reads(self):
         runner, _, notifier = self.build_runner()
         await runner.preflight()
-        completed_at = NOW - timedelta(hours=2)
+        completed_at = NOW - timedelta(minutes=15)
         maintenance = MaintenanceWindow(
             "scheduled-one", "Production Maintenance", "completed",
-            NOW - timedelta(hours=7), NOW - timedelta(hours=2),
+            NOW - timedelta(hours=7), completed_at,
             completed_at, completed_at)
         runner._maintenance_health_required_for = "scheduled-one"
         runner._apply_maintenance_schedule(MaintenanceScheduleProbe(
@@ -1184,10 +1184,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_pre_boundary_feed_cannot_start_resume_health_gate(self):
         runner, _, _ = self.build_runner()
-        completed_at = NOW - timedelta(hours=1)
+        completed_at = NOW - timedelta(minutes=15)
         maintenance = MaintenanceWindow(
             "scheduled-one", "Production Maintenance", "completed",
-            NOW - timedelta(hours=6), NOW - timedelta(hours=1),
+            NOW - timedelta(hours=6), completed_at,
             completed_at, completed_at)
         runner._maintenance_windows = (maintenance,)
         runner._maintenance_health_required_for = "scheduled-one"

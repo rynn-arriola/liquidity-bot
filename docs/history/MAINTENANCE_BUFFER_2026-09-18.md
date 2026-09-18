@@ -61,3 +61,26 @@ that cannot yet pass its account gate. Deployment can proceed without reload.
 
 Activation remains pending reviewed deployment and successful restart gates.
 The earlier `ee500e4db` exit/receipt fixes remain installed but not loaded.
+
+## Installed release; restart remains venue-blocked
+
+Reviewed release `0e097b51a6f2df1aac71eb027682cfe1ccd46378` was pushed
+before the clean native WSL fast-forward. A local Git bundle of that pushed
+commit transported the change after WSL's direct fetch stalled; only that
+diagnostic fetch process was terminated, never the supervisor or runner.
+
+- All207 tracked source/test/script/config/web normalized hashes match.
+- Exact installed production checkout: all1,752 tests pass in168.283s,
+  zero failures/errors. `DEPLOYED_COMMIT` identifies this installed release.
+- Yesterday's deferred-reducer and post-read receipt fixes are included.
+- The official public summary still says `Service Under Maintenance`, with
+  the05:00–07:00 ET maintenance `in_progress`. At09:50:17Z the running bot's
+  orders read returnedHTTP503/code14, stable0/3. No repeated account probe
+  or throttle bypass was added.
+- No process stop/restart/reload, risk reset, ledger repair or venue mutation
+  occurred. The old runner retains its imported one-hour buffer and old fixes.
+  Authenticated account exposure remains unknown, so restart cannot yet pass.
+- Continue the already-authorized restart only once fresh account/ownership
+  evidence is available: graceful stop, positive post-stop flat/clear proof,
+  verified stopped recovery backup, fresh startup gate and live acceptance.
+  Do not misreport installed source or a maintenance hold as live acceptance.

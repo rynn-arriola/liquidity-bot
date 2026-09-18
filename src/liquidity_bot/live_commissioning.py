@@ -1216,6 +1216,16 @@ class CommissioningRunner:
         except Exception as exc:
             print(f"[payout-estimate] unavailable={type(exc).__name__}", flush=True)
 
+        # One bounded local record of the evaluated slate. No network reads,
+        # influence on selection, or propagation of optional logging failure.
+        try:
+            from .selection_measurement import selection_measurement
+            print("[market-measurement] " + selection_measurement(
+                selection, self.config, self._now()), flush=True)
+        except Exception:
+            # Even unavailable telemetry is optional; retain trading's result.
+            pass
+
     async def _select_reward_market(self, now: datetime) -> str:
         """Wait for a viable reward market rather than refusing to start.
 

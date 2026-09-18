@@ -985,6 +985,24 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("market=market-one program=reward-market-one", detail)
         self.assertIn("rank=1 sides=bid remaining_usd=1.000000", detail)
         self.assertIn("enforcement=none", detail)
+        evidence = emitted.call_args_list[2].args[0]
+        self.assertTrue(evidence.startswith("[market-measurement] "))
+        document = json.loads(evidence.split(" ", 1)[1])
+        self.assertEqual(document["enforcement"], "none")
+        self.assertEqual(document["projection_seconds"], 30)
+        self.assertEqual(document["candidates"][0]["current_rank"], 1)
+        self.assertEqual(document["candidates"][0]["program"], "reward-market-one")
+        self.assertEqual(document["candidates"][0]["quantity"], str(runner.config.quote_size))
+
+    def test_shadow_measurement_failure_preserves_selection(self):
+        runner, gateway, _ = self.build_runner()
+        selection = fake_selection("market-one")
+        before = selection.top_viable(1)
+        with patch("liquidity_bot.selection_measurement.selection_measurement",
+                   side_effect=ValueError("bad optional evidence")):
+            with patch("builtins.print"):
+                runner._log_selection_scan(selection)
+        self.assertEqual(selection.top_viable(1), before)
 
     def test_payout_measurement_failure_cannot_abort_selection_logging(self):
         runner, _, _ = self.build_runner()

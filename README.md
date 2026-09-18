@@ -290,6 +290,16 @@ succeeds on the third held-out day. A partial deployment day is warm-up, not a
 cohort. The candidate must then run in would-refuse shadow mode before
 enforcement.
 
+## Market economics measurement
+
+`scripts/market_economics.py` produces private per-market/day rewards, entry
+resting time, closed-fill P&L, coverage flags and a proposed ranking comparison.
+It is measurement only and never feeds the trader. Default mode is offline;
+authenticated reports require the active owner's explicit shared limiter.
+Complete-scan logging starts only after the prepared logger is loaded in a
+separately authorized restart. See the [measurement design, commands and
+limitations](docs/history/MARKET_ECONOMICS_MEASUREMENT_2026-09-18.md).
+
 ## Discord summaries and alerts
 
 The shadow runner reuses maker-lab's normal and error webhooks. Every five

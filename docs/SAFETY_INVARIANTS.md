@@ -191,6 +191,11 @@ These are implementation requirements, not suggestions.
     by the pregame executor; `tournament_with_cutoff` was observed live but has
     no documented timing/pool-allocation rule. Both remain read-only until
     explicitly modeled and tested.
+    Approved `daily_event` fallback stays inside the same six-hour pregame
+    window, behind eligible `day_of` candidates, with actual-live and kickoff
+    exits unchanged. Daily projections use the full ET day, never a six-hour
+    denominator or stacked concurrent pools. Disabling fallback never disables
+    reduction/exit of existing inventory.
 40. New risk is limited to markets whose normalized `sportsMarketTypeV2` is
     exactly `SPORTS_MARKET_TYPE_MONEYLINE`. A two-side count is never accepted
     as a substitute because futures and props are also two-sided.

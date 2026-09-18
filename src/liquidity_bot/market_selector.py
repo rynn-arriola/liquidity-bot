@@ -42,6 +42,8 @@ SUPPORTED_EVENT_PERIODS = frozenset({
     "day_of",
     "day-of",
     "dayof",
+    "daily_event",
+    "daily-event",
     "live",
 })
 
@@ -67,6 +69,10 @@ class RewardSelectionPolicy:
     max_book_candidates: int = 25
     minimum_entry_spread: float = 0.02
     minimum_entry_price: float = 0.10
+    # Daily-per-event is an explicit fallback only. The established day-of
+    # program keeps priority whenever both are present, and the runner exposes
+    # a restart-scoped disable switch for fast rollback.
+    allow_daily_event_rewards: bool = True
     # Mirrors CommissioningConfig.enforce_reward_cost_gate. The same test
     # existed here and in the runner's per-market pass; disabling it in one
     # place only did nothing, because a market that never becomes viable here
@@ -107,6 +113,8 @@ class RewardSelectionPolicy:
     entry_quality_policy: EntryQualityPolicy = EntryQualityPolicy()
 
     def __post_init__(self) -> None:
+        if type(self.allow_daily_event_rewards) is not bool:
+            raise ValueError("allow_daily_event_rewards must be boolean")
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
             raise ValueError("selection size and horizon must be positive")
         if not 0 < self.selection_horizon_seconds <= 21600:
@@ -388,8 +396,11 @@ def _candidate_key(
     item: tuple[MarketMetadata, MarketIncentive, IncentivePeriod],
 ) -> tuple[int, float, float, float, datetime, str]:
     market, _, period = item
-    # Day-of can be projected from its proven six-hour clock.
-    phase = 0 if period.period == "day_of" else 1
+    # Preserve the established event-lifecycle strategy. Daily-per-event can
+    # fill otherwise empty capacity, but never displaces a valid day-of row.
+    phase = 0 if str(period.period).strip().lower() in {
+        "day_of", "day-of", "dayof",
+    } else 1
     density = period.reward_pool / period.target_size
     midpoint_distance = 1.0
     if (market.catalog_best_bid is not None
@@ -408,10 +419,13 @@ def _candidate_key(
 
 def _opportunity_key(
     item: RewardMarketOpportunity,
-) -> tuple[int, float, float, float, float, float, datetime, str]:
+) -> tuple[int, int, float, float, float, float, float, float, datetime, str]:
     best = item.best_expected_net_value
     return (
         0 if item.viable_sides else 1,
+        0 if str(item.period.period).strip().lower() in {
+            "day_of", "day-of", "dayof",
+        } else 1,
         # Projected reward first, because it is the quantity we are paid on.
         #
         # This was `-best_expected_net_value`, which is floored to 1e-09 for
@@ -514,9 +528,9 @@ class RewardMarketSelector:
                     in SUPPORTED_EVENT_PERIODS
                     for period in incentive.periods):
                 # The venue currently emits values not implemented by the
-                # pregame executor, including documented ``daily`` and
-                # undocumented ``tournament_with_cutoff``. They remain visible
-                # in universe counts but cannot authorize REST fan-out or risk.
+                # pregame executor, including generic ``daily`` and observed
+                # ``tournament_with_cutoff``. They remain visible in universe
+                # counts but cannot authorize REST fan-out or risk.
                 unsupported += 1
                 continue
             try:
@@ -749,7 +763,16 @@ class RewardMarketSelector:
         budget = self.policy.max_book_candidates
         if len(ranked) <= budget:
             return list(ranked), ()
-        head_count = min(5, max(1, budget // 5))
+        all_ranked = ranked
+        day_of = [item for item in ranked if _candidate_key(item)[0] == 0]
+        # Scan priority must survive the rotating tail too. Daily candidates
+        # get only leftover book capacity; a previously selected daily market
+        # cannot evict an unexamined day-of candidate from this scan.
+        if len(day_of) >= budget:
+            ranked = day_of
+        head_count = min(budget, max(
+            min(5, max(1, budget // 5)),
+            len(day_of) if len(day_of) < budget else 0))
         chosen = list(ranked[:head_count])
         chosen_slugs = {item[0].slug for item in chosen}
         if self._last_selected_slug and len(chosen) < budget:
@@ -771,7 +794,7 @@ class RewardMarketSelector:
             self._book_cursor = (start + count) % len(tail)
         selected_slugs = {item[0].slug for item in chosen}
         deferred = tuple(
-            item[0].slug for item in ranked
+            item[0].slug for item in all_ranked
             if item[0].slug not in selected_slugs)
         return chosen, deferred
 
@@ -792,7 +815,8 @@ class RewardMarketSelector:
                 or not market.is_supported_moneyline):
             return None
         period = select_applicable_period(
-            incentive.periods, market.game_start, now)
+            incentive.periods, market.game_start, now,
+            allow_daily_event=self.policy.allow_daily_event_rewards)
         if period is None or period.period == "live":
             return None
         return period

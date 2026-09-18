@@ -1379,7 +1379,8 @@ class CommissioningRunner:
             raise CommissioningUnavailable(f"{slug} event pregame state is unavailable")
         try:
             period = select_applicable_period(
-                state.incentive.periods, state.market.game_start, now)
+                state.incentive.periods, state.market.game_start, now,
+                allow_daily_event=self.config.allow_daily_event_rewards)
         except AmbiguousIncentiveError as exc:
             raise CommissioningUnavailable(
                 f"{slug} has ambiguous incentive periods") from exc
@@ -3764,13 +3765,14 @@ class CommissioningRunner:
             return
         try:
             period = select_applicable_period(
-                state.incentive.periods, state.market.game_start, now)
+                state.incentive.periods, state.market.game_start, now,
+                allow_daily_event=self.config.allow_daily_event_rewards)
         except AmbiguousIncentiveError:
             state.economic_blocker_by_side = {
                 "bid": "ambiguous_incentive", "offer": "ambiguous_incentive"}
             return
         if period is None or period.period == "live" or state.market.tick_size is None:
-            # Invariant 39: only `day_of` has a provable clock. Which of the
+            # Invariant 39: only approved pregame reward clocks qualify. Which of the
             # three it is matters -- "no applicable period" is a slate that has
             # not opened yet, "live" is a market we may never quote, and a
             # missing tick is bad metadata. Reporting only.
@@ -4257,7 +4259,8 @@ class CommissioningRunner:
                     or state.market.slug != action.market_slug):
                 raise RuntimeError("market observation identity is inconsistent")
             period = select_applicable_period(
-                state.incentive.periods, state.market.game_start, now)
+                state.incentive.periods, state.market.game_start, now,
+                allow_daily_event=self.config.allow_daily_event_rewards)
             if period is None:
                 raise RuntimeError("applicable reward period is unavailable")
             side = action.side
@@ -10914,6 +10917,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     except (ValueError, OSError) as exc:
         raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
+        allow_daily_event_rewards=not getattr(args, "disable_daily_event_rewards", False),
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
         economic_risk_accepted=args.accept_one_contract_risk,
         exclusive_api_key_confirmed=args.exclusive_api_key,
@@ -11007,6 +11011,10 @@ def main() -> int:
     parser.add_argument("--lock-file", type=Path,
                         default=Path("data/commissioning.lock"))
     parser.add_argument("--arm-live", action="store_true")
+    parser.add_argument(
+        "--disable-daily-event-rewards", action="store_true",
+        help="disable daily-event fallback; retain established day-of selection",
+    )
     parser.add_argument("--recovery-only", action="store_true",
                         help="recover identified account exposure, never start entries")
     parser.add_argument("--accept-one-contract-risk", action="store_true")

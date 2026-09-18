@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Iterable, Sequence
+from zoneinfo import ZoneInfo
 
 
 class AmbiguousIncentiveError(ValueError):
@@ -67,8 +68,12 @@ _PERIOD_ALIASES = {
     "day_of": "day_of",
     "day-of": "day_of",
     "dayof": "day_of",
+    "daily_event": "daily_event",
+    "daily-event": "daily_event",
     "live": "live",
 }
+
+_REWARD_TIMEZONE = ZoneInfo("America/New_York")
 
 
 def _require_aware(value: datetime, name: str) -> None:
@@ -86,7 +91,8 @@ def phase_for_event(event_start: datetime, now: datetime) -> str:
 
     _require_aware(event_start, "event_start")
     _require_aware(now, "now")
-    seconds = (event_start - now).total_seconds()
+    seconds = (event_start.astimezone(timezone.utc)
+               - now.astimezone(timezone.utc)).total_seconds()
     if seconds > 6 * 60 * 60:
         return "early"
     if seconds > 0:
@@ -102,6 +108,8 @@ def select_applicable_period(
     periods: Iterable[IncentivePeriod],
     event_start: datetime,
     now: datetime,
+    *,
+    allow_daily_event: bool = False,
 ) -> IncentivePeriod | None:
     """Select exactly one active period for the event clock, or fail closed.
 
@@ -109,8 +117,17 @@ def select_applicable_period(
     same time. Status alone therefore cannot select the program. If duplicate
     rows claim the same current phase, guessing which pool applies would make
     expected revenue optimistic, so ambiguity raises explicitly.
+
+    ``daily_event`` is a separate midnight-to-midnight ET program.  When it is
+    enabled it is only a fallback during the six-hour pregame/day-of phase;
+    an applicable event-lifecycle row always wins.  This preserves the
+    established day-of strategy and cannot use a daily row to authorize live
+    trading.
     """
 
+    # Materialize once: callers may supply a generator, and fallback needs a
+    # second pass after the event-lifecycle lookup.
+    periods = tuple(periods)
     phase = phase_for_event(event_start, now)
     matches = [
         item for item in periods
@@ -119,13 +136,75 @@ def select_applicable_period(
         and (item.starts_at is None or item.starts_at <= now)
         and (item.ends_at is None or now < item.ends_at)
     ]
-    if not matches:
-        return None
     if len(matches) > 1:
         ids = ", ".join(sorted(item.program_id for item in matches))
         raise AmbiguousIncentiveError(
             f"multiple active {phase} incentive programs: {ids}")
-    return matches[0]
+    if matches:
+        return matches[0]
+    if not allow_daily_event or phase != "day_of":
+        return None
+
+    daily_matches = [
+        item for item in periods
+        if str(item.status).strip().lower() == "active"
+        and _normalized_period(item.period) == "daily_event"
+        and (item.starts_at is None or item.starts_at <= now)
+        and (item.ends_at is None or now < item.ends_at)
+    ]
+    if len(daily_matches) > 1:
+        ids = ", ".join(sorted(item.program_id for item in daily_matches))
+        raise AmbiguousIncentiveError(
+            f"multiple active daily_event incentive programs: {ids}")
+    return daily_matches[0] if daily_matches else None
+
+
+def _projection_period_bounds(
+    incentive: IncentivePeriod,
+    event_start: datetime,
+    now: datetime,
+) -> tuple[datetime, datetime, datetime] | None:
+    """Return pool start/end and this pregame bot's accessible end.
+
+    The pool duration determines dollars per second.  ``accessible_end`` can
+    be earlier: a daily pool may continue after kickoff, but this executor may
+    not.  All arithmetic is converted to UTC so 23/25-hour New York DST days
+    remain real 23/25-hour reward windows rather than nominal 24-hour days.
+    """
+
+    kind = _normalized_period(incentive.period)
+    if kind == "day_of":
+        period_start = event_start - timedelta(hours=6)
+        period_end = event_start
+    elif kind == "daily_event":
+        local_date = now.astimezone(_REWARD_TIMEZONE).date()
+        period_start = datetime.combine(
+            local_date, time.min, tzinfo=_REWARD_TIMEZONE,
+        ).astimezone(timezone.utc)
+        period_end = datetime.combine(
+            local_date + timedelta(days=1), time.min,
+            tzinfo=_REWARD_TIMEZONE,
+        ).astimezone(timezone.utc)
+    else:
+        return None
+
+    # A daily headline remains a per-day amount. A partial first/last day
+    # must not compress that denominator and inflate the projected rate.
+    if kind == "daily_event":
+        accessible_end = min(period_end, event_start)
+        if incentive.ends_at is not None:
+            _require_aware(incentive.ends_at, "incentive.ends_at")
+            accessible_end = min(accessible_end, incentive.ends_at)
+        return period_start, period_end, accessible_end
+
+    if incentive.starts_at is not None:
+        _require_aware(incentive.starts_at, "incentive.starts_at")
+        period_start = max(period_start, incentive.starts_at)
+    if incentive.ends_at is not None:
+        _require_aware(incentive.ends_at, "incentive.ends_at")
+        period_end = min(period_end, incentive.ends_at)
+    accessible_end = min(period_end, event_start)
+    return period_start, period_end, accessible_end
 
 
 def _validated_levels(levels: Sequence[tuple[float, float]]) -> dict[float, float]:
@@ -265,14 +344,18 @@ def project_order_reward(
 ) -> RewardProjection:
     """Project a conservative one-side reward from the current full book.
 
-    The documented ``day_of`` period has an exact six-hour duration.  Other
-    periods do not expose a reliable per-market start/end clock in the Retail
-    API, so they fail closed instead of dividing a headline pool by a guessed
-    duration.  This is an entry authorization estimate, not booked income.
+    ``day_of`` uses its documented six-hour window. ``daily_event`` uses the
+    documented midnight-to-midnight ET window, including 23/25-hour DST days,
+    while stopping this pregame executor's accessible reward at kickoff.
+    Other periods fail closed instead of dividing a headline pool by a guessed
+    duration. This is a ranking estimate, not booked income; venue payouts
+    remain authoritative.
     """
 
     _require_aware(event_start, "event_start")
     _require_aware(now, "now")
+    event_start = event_start.astimezone(timezone.utc)
+    now = now.astimezone(timezone.utc)
     horizon = float(horizon_seconds)
     haircut = float(haircut)
     minimum_payout = float(minimum_payout)
@@ -296,24 +379,23 @@ def project_order_reward(
         return RewardProjection(
             False, 0.0, 0.0, 0.0, 0.0, 0.0, score.reason)
 
-    if _normalized_period(incentive.period) != "day_of":
+    bounds = _projection_period_bounds(incentive, event_start, now)
+    if bounds is None:
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,
             "period_duration_unproven")
-    nominal_start = event_start - timedelta(hours=6)
-    period_start = nominal_start
-    period_end = event_start
+    period_start, period_end, accessible_end = bounds
     if incentive.starts_at is not None:
         _require_aware(incentive.starts_at, "incentive.starts_at")
-        period_start = max(period_start, incentive.starts_at)
-    if incentive.ends_at is not None:
-        _require_aware(incentive.ends_at, "incentive.ends_at")
-        period_end = min(period_end, incentive.ends_at)
+        if now < incentive.starts_at:
+            return RewardProjection(
+                False, score.score, 0.0, 0.0, 0.0, 0.0,
+                "outside_projection_period")
     if period_end <= period_start:
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,
             "period_duration_unproven")
-    if not period_start <= now < period_end:
+    if not period_start <= now < accessible_end:
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,
             "outside_projection_period")
@@ -360,7 +442,7 @@ def project_order_reward(
 
     share = min(1.0, score.score / total_score)
     duration = (period_end - period_start).total_seconds()
-    remaining = (period_end - now).total_seconds()
+    remaining = (accessible_end - now).total_seconds()
     # Each side is independently normalized to 1.0.  Reserving no more than
     # half the pool for either side is conservative when both sides qualify.
     dollars_per_second = (

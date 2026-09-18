@@ -21,6 +21,38 @@ implemented.
 
 ## Interface actually used by this project
 
+### September 18, 2026 documentation review
+
+The complete official [documentation index](https://docs.polymarket.us/llms.txt)
+was inventoried and all 304 distinct linked Markdown pages were retrieved.
+Retrieval is not API acceptance: the review screens the full interface map and
+examines the Retail contracts used by this bot in depth. Institutional, FIX,
+gRPC, partner onboarding/payment and data-vendor interfaces are scope-screened,
+not implemented or live-tested. See the [coverage and findings](history/API_DOCUMENTATION_REVIEW_2026-09-18.md)
+and [source inventory](history/API_DOCUMENTATION_INVENTORY_2026-09-18.md).
+
+| Area | Current official contract and implication for this bot |
+|---|---|
+| Reward windows | [Liquidity rules](https://docs.polymarket.us/incentives/liquidity) retain `day_of` from six hours before kickoff until kickoff. Daily per-event pools run midnight-to-midnight ET; the guide describes events without a fixed start, while exact September18 Retail responses also attached `daily_event` to scheduled sports markets. This observation does not prove when the venue introduced it. |
+| Approved selection policy | The operator authorized `day_of` first, with `daily_event` filling spare capacity only, within the same six-hour pregame horizon and existing safety gates. Concurrent pools are never added together. The restart-scoped `allow_daily_event_rewards` setting/`--disable-daily-event-rewards` runner flag provides rollback. Implementation/release state belongs to STATUS/NEXT, not this contract. |
+| Daily reward estimates | Use the real ET calendar day (23/24/25 elapsed hours), capped by kickoff, ET midnight and an explicit program end. Do not compress a daily pool into six hours or a partial day's duration. A repeated `rewardPool` is not a fresh independent dollar pool for every member market. Actual allocation across concurrent programs/events is not fully specified by the exact-market response; projections are ranking estimates, never guaranteed income or a substitute for authenticated earnings. |
+| Incentive queries | The [Retail overview](https://docs.polymarket.us/api-reference/incentives/overview) specifies authenticated `api.polymarket.us`, snake_case queries, `nextPageToken`, optional `end`, and filters including `program_type`, `category`, `subcategory`, `instrument_states` and `query`. Current exact-symbol batches already use the verified snake_case path. Additional filters are research opportunities, not permission to skip exact metadata/lifecycle proof or widen discovery. |
+| Incentive documentation conflict | [Generated programs](https://docs.polymarket.us/api-reference/incentives/get-incentive-programs) embeds an **Institutional** schema/host with camelCase queries and no authentication. [Generated earnings](https://docs.polymarket.us/api-reference/incentives/get-your-incentive-earnings) shows the public gateway/no security while describing authenticated caller data. Do not change the working Retail host/auth/query convention to match these contradictory snippets. |
+| Earnings and accounting | Earnings are ET-date, market and payout-status observations; multiple programs cannot be separated from those rows without additional evidence. Preserve `PAID`/`PENDING`/`SKIPPED`, retain ambiguous program attribution as unallocated, and never treat headline pools or pending rewards as settled trading income. Deposits/withdrawals remain separate from matched trading P&L. |
+| Rate limits | [Retail limits](https://docs.polymarket.us/api-reference/rate-limits) say 20 requests/s per API key for authenticated endpoints, 20/s per IP for public endpoints. The [incentives overview](https://docs.polymarket.us/api-reference/incentives/overview) additionally lists **5/s for each incentives endpoint**. The bot's shared 4/s aggregate remains lower. HTTP429 remains a real throttle; an order rejection named `Global Rate Limit Exceeded` describes a separate five-second latency safeguard. No document proves an observed Cloudflare cooldown has ended. |
+| Batch orders | Retail [create](https://docs.polymarket.us/api-reference/orders/create-multiple-orders), [cancel](https://docs.polymarket.us/api-reference/orders/cancel-multiple-orders) and [modify](https://docs.polymarket.us/api-reference/orders/modify-multiple-orders) accept up to20 entries. Shape validation can reject the whole batch; exchange outcomes are independent. Cancel/modify ID lists echo submissions, not success. Batching is a future performance candidate requiring per-order durable intents, partial/unknown outcome reconciliation, capacity reservation and safety priority; it is not enabled by this review. The changelog documented batches in April, so this is not claimed as a new September feature. |
+| Order precision and exits | [Orders](https://docs.polymarket.us/api-reference/orders/overview) requires exact `minimumTradeQty`/tick alignment and automated-order indication. Retail quantities support fractions; app help saying whole contracts is not the API contract. Asynchronous IDs do not prove resting/fills. The bot retains GTD entries, GTC reducers and bounded price-capped IOC exits; the convenience close-position endpoint is not proof of flatness and default market slippage can be unlimited. |
+| WebSockets | [Private](https://docs.polymarket.us/api-reference/websocket/private) and [markets](https://docs.polymarket.us/api-reference/websocket/markets) still document the same two Retail endpoints. Detailed pages/SDK use camelCase envelopes while the [overview](https://docs.polymarket.us/api-reference/websocket/overview) says snake_case. No alternative Retail balance/position stream was found. A documented snapshot or healthy Ping/Pong is not evidence that private data delivery is repaired; mode promotion still requires actual account proof. |
+| Discovery | `/v1/events` remains documented with start-time filters and `live`/`ended` fields. [Sports v2](https://docs.polymarket.us/api-reference/sports/overview) adds league/sport event routes; it does not deprecate the bot's event route. Structured moneyline and parent live-state checks stay authoritative. League-by-league discovery would need coverage/load evidence before replacing the bounded six-hour scan. |
+| Positions and balances | [Portfolio](https://docs.polymarket.us/api-reference/portfolio/overview) retains exact decimal quantities, cursor/EOF pagination, BUSTED reversals and separate cash activities. Generated position schema calls `cashValue` unrealized P&L, while overview/SDK call it a position cash value; retain the existing observed valuation contract rather than rewriting equity from that wording alone. Buying power is not withdrawal availability or settled trading P&L. |
+| Research data | [Price history](https://docs.polymarket.us/api-reference/price-history/get-price-history) contains book-derived YES/NO display prices, not executions; custom windows are at most24h and may have irregular observations. It may help future markout research, but cannot replace complete books for depth/exitability or fills for realized P&L. |
+| Maintenance and other interfaces | Changelog `v0.0.91` announces the September18 05:00–07:00 ET maintenance; `v0.0.89` warns DAY orders may not auto-cancel at day roll. There is no matched September announcement proving the daily-event rollout or private-stream repair. Institutional firm quotas, JWT tokens, gRPC resume streams, FIX cancel-on-disconnect/MQP and partner funding require their own access/contract; they are not drop-in Retail features. |
+
+Documentation review does not authorize deployment, restart, broader market
+types, earlier entries, altered risk budgets, automatic account-source switching,
+batch mutations, or a new quoting strategy. Preserve observed API evidence when
+examples conflict, and verify proposed replacements with bounded read-only probes.
+
 Account-read outage handling in the reviewed implementation is endpoint-specific:
 balance, positions, open orders, individual-order retrieval, and activities
 (trade/cash history together). The September14 deployed extension includes
@@ -140,7 +172,10 @@ which was false in the same live responses. The implemented event guard retains
 positive live evidence and overrides future clocks for entries and exits.
 [Evidence](history/ACTUAL_LIVE_EVENT_GUARD_2026-09-08.md).
 
-1. The exact Retail endpoint page under `/api-reference/`.
+1. The matching Retail overview and exact endpoint contract, checking its host,
+   authentication and embedded schema first. A path under `/api-reference/`
+   alone does not establish Retail scope; generated pages can embed
+   Institutional contracts and disagree with their Retail overview.
 2. The matching Retail Python SDK page and the pinned SDK implementation.
 3. The applicable trader guide for conceptual and operational guidance.
 4. Institutional documentation only when the project is explicitly adopting
@@ -174,7 +209,8 @@ runner. Production polls it hourly at minute 23 through an isolated schedule.
 
 ## Audited official pages
 
-Last reviewed: **2026-09-12**.
+Last reviewed: **2026-09-18**. The dated review above supplements the earlier
+implementation/evidence map below; historical observations are not fresh proof.
 
 | Topic | Official sources | Project coverage | Known difference or open review |
 |---|---|---|---|

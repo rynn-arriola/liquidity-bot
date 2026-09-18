@@ -161,6 +161,78 @@ class FixedFillHazard:
 
 
 class PacedSelectionClockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_daily_only_selection_and_revalidation_obey_toggle(self):
+        for enabled in (True, False):
+            gateway = FakeGateway({"daily": market("daily")},
+                {"daily": incentive("daily", pool=1000, phase="daily_event")},
+                {"daily": book("daily")})
+            selector = RewardMarketSelector(gateway, RewardSelectionPolicy(
+                allow_daily_event_rewards=enabled), clock=lambda: NOW)
+            selected = await selector.select(now=NOW)
+            self.assertEqual(selected.selected is not None, enabled)
+            self.assertEqual(bool(await selector.revalidate_viable(
+                ["daily"], now=NOW)), enabled)
+            self.assertEqual(len(gateway.book_calls), 2 if enabled else 0)
+
+    async def test_day_of_wins_before_and_after_book_ranking(self):
+        for cap in (1, 2):
+            gateway = FakeGateway(
+                {slug: market(slug) for slug in ("daily", "old")},
+                {"daily": incentive("daily", pool=1_000_000, phase="daily_event"),
+                 "old": incentive("old", pool=35)},
+                {slug: book(slug) for slug in ("daily", "old")})
+            selector = RewardMarketSelector(gateway, RewardSelectionPolicy(
+                max_book_candidates=cap), clock=lambda: NOW)
+            result = await selector.select(now=NOW)
+            self.assertEqual(result.selected.market.slug, "old")
+            self.assertEqual(gateway.book_calls[0], "old")
+            self.assertEqual([o.market.slug for o in result.opportunities],
+                             ["old"] if cap == 1 else ["old", "daily"])
+
+    async def test_daily_cannot_rotate_ahead_of_day_of_book_capacity(self):
+        for old_count in (2, 4):
+            old = [f"old{i}" for i in range(old_count)]
+            daily = [f"daily{i}" for i in range(4)]
+            slugs = old + daily
+            gateway = FakeGateway({s: market(s) for s in slugs},
+                {s: incentive(s, pool=1000,
+                    phase="day_of" if s in old else "daily_event") for s in slugs},
+                {s: book(s) for s in slugs})
+            selector = RewardMarketSelector(gateway, RewardSelectionPolicy(
+                max_book_candidates=3), clock=lambda: NOW)
+            seen = set()
+            for _ in range(5):
+                # Prior daily ownership must not take priority book capacity.
+                selector._last_selected_slug = daily[-1]
+                gateway.book_calls.clear()
+                result = await selector.select(now=NOW)
+                scanned = set(gateway.book_calls)
+                seen.update(scanned)
+                self.assertEqual(len(scanned), 3)
+                self.assertEqual(len(scanned.intersection(old)), min(3, old_count))
+                self.assertEqual(set(result.deferred_markets), set(slugs) - scanned)
+            self.assertTrue(set(old).issubset(seen))
+
+    async def test_daily_scan_cannot_extend_six_hour_window_or_survive_kickoff(self):
+        gateway = FakeGateway({"early": market("early", starts_in_hours=7),
+                               "live": market("live", starts_in_hours=0)},
+            {s: incentive(s, pool=1000, phase="daily_event") for s in ("early", "live")}, {})
+        result = await RewardMarketSelector(gateway, clock=lambda: NOW).select(now=NOW)
+        self.assertIsNone(result.selected)
+        self.assertEqual(gateway.book_calls, [])
+        moment = [NOW]
+        gateway = FakeGateway({"daily": market("daily")},
+            {"daily": incentive("daily", pool=1000, phase="daily_event")},
+            {"daily": book("daily")})
+        original = gateway.fetch_book
+        async def delayed(slug):
+            result = await original(slug)
+            moment[0] += timedelta(hours=1)
+            return result
+        gateway.fetch_book = delayed
+        result = await RewardMarketSelector(gateway, clock=lambda: moment[0]).select(now=NOW)
+        self.assertIsNone(result.selected)
+
     async def test_scan_and_revalidation_drop_games_started_during_book_wait(self):
         for revalidate in (False, True):
             moment = [NOW]

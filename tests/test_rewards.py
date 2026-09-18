@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from liquidity_bot.rewards import (
     AmbiguousIncentiveError,
@@ -35,6 +36,51 @@ def period(name: str, *, status: str = "active", target: float = 5000,
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_daily_fallback_and_day_of_priority_including_generators(self):
+        daily = period("daily_event", pool=1000)
+        day_of = period("day_of", pool=35)
+        start = NOW + timedelta(hours=2)
+        self.assertIsNone(select_applicable_period([daily], start, NOW))
+        self.assertEqual(select_applicable_period(
+            iter([daily]), start, NOW, allow_daily_event=True), daily)
+        for rows in ([daily, day_of], [day_of, daily]):
+            self.assertEqual(select_applicable_period(
+                iter(rows), start, NOW, allow_daily_event=True), day_of)
+
+    def test_daily_fallback_respects_six_hours_and_kickoff(self):
+        for seconds, expected in ((21601, False), (21600, True),
+                                  (1, True), (0, False), (-1, False)):
+            with self.subTest(seconds=seconds):
+                selected = select_applicable_period(
+                    [period("daily_event")], NOW + timedelta(seconds=seconds),
+                    NOW, allow_daily_event=True)
+                self.assertEqual(selected is not None, expected)
+
+    def test_daily_fallback_filters_status_timestamps_and_ambiguity(self):
+        start = NOW + timedelta(hours=2)
+        for inactive in (period("daily_event", status="ended"),
+                         period("daily_event", starts_at=NOW+timedelta(seconds=1)),
+                         period("daily_event", ends_at=NOW),
+                         period("daily")):
+            self.assertIsNone(select_applicable_period(
+                [inactive], start, NOW, allow_daily_event=True))
+        daily = period("daily_event", starts_at=NOW)
+        self.assertEqual(select_applicable_period(
+            [period("day_of", ends_at=NOW), daily], start, NOW,
+            allow_daily_event=True), daily)
+        for name in ("day_of", "daily_event"):
+            with self.assertRaises(AmbiguousIncentiveError):
+                select_applicable_period(
+                    [period(name, program_id="a"), period(name, program_id="b")],
+                    start, NOW, allow_daily_event=True)
+
+    def test_six_hour_boundary_uses_elapsed_time_across_dst(self):
+        zone = ZoneInfo("America/New_York")
+        start = datetime(2026, 11, 1, 6, tzinfo=zone)
+        now = datetime(2026, 11, 1, 0, tzinfo=zone)
+        self.assertIsNone(select_applicable_period(
+            [period("daily_event")], start, now, allow_daily_event=True))
+
     def test_more_than_six_hours_is_early(self):
         self.assertEqual(phase_for_event(NOW + timedelta(hours=6, seconds=1), NOW), "early")
 
@@ -66,6 +112,48 @@ class LifecycleTests(unittest.TestCase):
 
 
 class RewardScoreTests(unittest.TestCase):
+    def daily_projection(self, now=NOW, *, starts_at=None, ends_at=None,
+                         event_start=None, horizon=30):
+        return project_order_reward(
+            side="bid", price=.50, size=1, levels=[(.50, 99)],
+            incentive=period("daily_event", pool=20000, target=100,
+                             starts_at=starts_at, ends_at=ends_at),
+            tick_size=.01, event_start=event_start or now+timedelta(hours=1),
+            now=now, horizon_seconds=horizon, haircut=.5, minimum_payout=0)
+
+    def test_daily_projection_uses_real_et_day_duration(self):
+        for now, hours in ((NOW, 24),
+                           (datetime(2026, 3, 8, 12, tzinfo=UTC), 23),
+                           (datetime(2026, 11, 1, 12, tzinfo=UTC), 25)):
+            with self.subTest(hours=hours):
+                result = self.daily_projection(now)
+                self.assertTrue(result.eligible)
+                self.assertAlmostEqual(result.projected_reward, 50*30/(hours*3600))
+                self.assertAlmostEqual(result.maximum_remaining_reward, 50/hours)
+
+    def test_daily_projection_stops_at_midnight_kickoff_or_program_end(self):
+        before_midnight = datetime(2026, 9, 19, 3, 59, 50, tzinfo=UTC)
+        for result in (
+            self.daily_projection(before_midnight),
+            self.daily_projection(event_start=NOW+timedelta(seconds=10)),
+            self.daily_projection(ends_at=NOW+timedelta(seconds=10)),
+        ):
+            self.assertTrue(result.eligible)
+            self.assertAlmostEqual(result.projected_reward, 50*10/86400)
+            self.assertAlmostEqual(result.maximum_remaining_reward, 50*10/86400)
+        midnight = before_midnight + timedelta(seconds=10)
+        self.assertAlmostEqual(self.daily_projection(midnight).projected_reward,
+                               50*30/86400)
+
+    def test_partial_daily_program_does_not_inflate_rate(self):
+        result = self.daily_projection(starts_at=NOW-timedelta(seconds=10),
+                                       ends_at=NOW+timedelta(seconds=10))
+        self.assertAlmostEqual(result.projected_reward, 50*10/86400)
+        for result in (self.daily_projection(starts_at=NOW+timedelta(seconds=1)),
+                       self.daily_projection(ends_at=NOW),
+                       self.daily_projection(event_start=NOW)):
+            self.assertFalse(result.eligible)
+
     def test_best_bid_scores_full_size_when_side_reaches_target(self):
         result = evaluate_order_score(
             side="bid", price=0.50, size=10,

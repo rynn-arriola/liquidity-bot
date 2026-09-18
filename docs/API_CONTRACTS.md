@@ -63,6 +63,13 @@ Official references:
   scoring. A volume program is not equivalent.
 - A program contains `timePeriods`, and several periods can have active status;
   select only the lifecycle phase applying at the verified market clock.
+  The approved `daily_event` fallback is considered only when no active
+  applicable `day_of` row exists and only inside six elapsed hours before
+  kickoff. Exact status/time bounds and ambiguity checks still apply. Daily
+  pools use ET midnight boundaries (including DST), not the day-of denominator;
+  this is a ranking estimate, not independently allocated revenue per market.
+  See [the current reference](POLYMARKET_API_REFERENCE.md) for the September18
+  Retail/Institutional documentation conflicts and source coverage.
 - `gameStartTime` can move after a market was selected. A successful refresh
   may therefore return the same active program ID while its `day_of` period no
   longer applies because the event moved back outside six hours. That exact-row

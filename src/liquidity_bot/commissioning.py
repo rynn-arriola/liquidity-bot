@@ -230,6 +230,8 @@ class CommissioningConfig:
     # re-armed from measured data rather than from the arbitrary 0.5 and 2x it
     # was built on.
     enforce_reward_cost_gate: bool = False
+    # Restart-scoped daily ET reward fallback, inside the same six-hour horizon.
+    allow_daily_event_rewards: bool = True
     # How long a mutation may sit unresolved before the session is stopped as
     # critical. This was hardcoded at 10 seconds and stopped the bot twice in
     # forty minutes on 2026-08-17.
@@ -424,6 +426,7 @@ class CommissioningConfig:
             minimum_entry_spread=float(self.minimum_entry_spread),
             minimum_entry_price=float(self.minimum_entry_price),
             enforce_reward_cost_gate=self.enforce_reward_cost_gate,
+            allow_daily_event_rewards=self.allow_daily_event_rewards,
             entry_quality_policy=self.entry_quality_policy,
         )
 
@@ -431,6 +434,8 @@ class CommissioningConfig:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         problems: list[str] = []
+        if type(self.allow_daily_event_rewards) is not bool:
+            problems.append("allow_daily_event_rewards must be boolean")
         if type(self.recovery_only) is not bool:
             problems.append("recovery_only must be boolean")
         if not isinstance(self.entry_expiry_policy, EntryExpiryPolicy):

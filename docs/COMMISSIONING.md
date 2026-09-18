@@ -179,19 +179,30 @@ observational and never authorizes entry or blocks order service.
 `marketSides=2` is not used as a structure test because rewarded futures are
 also two-sided. Metadata BBO can reject a known-tight row before a full-book
 request, but only a fresh full book can authorize entry.
-Only documented early/day-of/live lifecycle names enter validation, and only
-the currently applicable pregame `day_of` period can authorize this executor.
-Lifecycle names not implemented by the pregame executor—including documented
-`daily`/`daily_event` and observed but undocumented
-`tournament_with_cutoff`—remain read-only and are reported in Discord; they do
-not trigger book fan-out or order entry. Reward amount changes ranking
-and does not exclude a program from discovery.
+The currently applicable pregame `day_of` period has priority. With
+`CommissioningConfig.allow_daily_event_rewards=True` (the approved default),
+`daily_event` fills spare selection capacity inside the same six-hour pregame
+window. Day-of candidates also have priority within the bounded book scan;
+rotation cannot give their scan capacity to daily candidates. Healthy existing
+owners are not forcibly displaced. Generic `daily` and undocumented
+`tournament_with_cutoff` remain read-only and cannot authorize book fan-out or
+entry. The direct runner flag `--disable-daily-event-rewards` disables the
+fallback at process start; the detached launcher has no passthrough for this
+flag. Supervised rollback requires reviewed configuration/launcher wiring or a
+source rollback before restart. No live hot-toggle or persisted launcher setting is claimed.
+See STATUS/NEXT for whether this source is deployed.
+Legacy standalone `probe`/shadow tools retain their original lifecycle-only
+scope; use `scripts/usable_markets.py` and `scripts/period_mix.py` for the
+commissioning selector's daily-event diagnostics.
 
 Reward eligibility alone never authorizes an order. The runtime computes the
 proposed order's share of all discounted score inside the target-size cutoff,
 reserves no more than half of the pool for either independently normalized
-side, and projects only the documented six-hour `day_of` period. Periods whose
-per-market duration cannot be proven fail closed. The process can therefore run
+side. Day-of uses the six-hour period; daily-event uses the full elapsed ET
+calendar day (23/24/25 hours), with available time capped at kickoff, midnight
+and an explicit program end. A partial program day must not compress the pool
+denominator. Estimates never sum concurrent pools or promise an independently
+available pool per member market. Other unmodeled periods fail closed. The process can therefore run
 normally with zero working orders; that is an economic refusal, not a fault.
 Discovery and flat-rotation durations are reported in Discord so REST scan and
 cancel/flat/rebind downtime can be measured before any concurrency change.

@@ -2,10 +2,9 @@
 """Which reward PERIODS does each league currently offer?
 
 Answers "why is the bot quoting so little?" when the funnel says the drain is
-`no applicable period`. A pregame executor may only quote `day_of` -- invariant
-39, because that is the one period with a provable per-market clock -- so a
-league that carries only `live` is invisible to this bot however good its books
-look.
+`no applicable period`. The executor uses `day_of` first, with `daily_event`
+as an enabled fallback inside the same six-hour pregame window. A league
+carrying only `live` remains unavailable however good its books look.
 
 Written 2026-08-20, when order flow collapsed and the cause turned out to be
 the venue moving every league this bot earns in to live-only:
@@ -50,6 +49,8 @@ from liquidity_bot.market_selector import (  # noqa: E402
     EVENT_DISCOVERY_PAGE_SIZE,
 )
 from liquidity_bot.probe import client_from_environment  # noqa: E402
+from liquidity_bot.rewards import (  # noqa: E402
+    AmbiguousIncentiveError, select_applicable_period)
 
 LEAGUE = re.compile(r"^aec-([a-z0-9]+)-")
 
@@ -100,19 +101,33 @@ async def main() -> int:
         periods = ",".join(sorted({str(p.period) for p in incentive.periods}))
         by_league[league][periods] += 1
 
-    quotable = 0
+    available = Counter()
+    metadata = {m.slug: m for m in in_window}
+    for slug, incentive in incentives.items():
+        market = metadata.get(slug)
+        if market is None:
+            continue
+        try:
+            selected = select_applicable_period(
+                incentive.periods, market.game_start, now,
+                allow_daily_event=policy.allow_daily_event_rewards)
+        except (AmbiguousIncentiveError, ValueError):
+            continue
+        if selected is not None and selected.period != "live":
+            available[selected.period] += 1
+    quotable = sum(available.values())
     print()
     print(f"{'league':14} {'earned':>8}  periods offered")
     for league in sorted(by_league, key=lambda k: -sum(by_league[k].values())):
         combos = by_league[league]
         share = EARNING_SHARE.get(league, "")
         rendered = "   ".join(f"[{k}] x{v}" for k, v in combos.most_common())
-        quotable += sum(v for k, v in combos.items() if "day_of" in k)
         print(f"  {league:12} {share:>8}  {rendered}")
 
     print()
-    print(f"markets offering day_of (quotable by this executor): "
-          f"{quotable} of {len(incentives)}")
+    print(f"markets with an applicable pregame reward: "
+          f"{quotable} of {len(incentives)}; selected periods: {dict(available)}")
+    print("Reward timing only; full book and execution gates still apply.")
     if quotable == 0:
         print("NONE. A pregame executor has no addressable universe right now.")
     return 0

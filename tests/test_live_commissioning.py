@@ -1487,6 +1487,39 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             for slug in slugs[8:]
         ))
 
+    async def test_daily_contracts_economics_and_observation_share_the_live_toggle(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        state = runner.state_for("market-one")
+        original = state.incentive.periods[0]
+        daily = replace(original, period="daily_event", program_id="daily-test")
+        incentive = MarketIncentive(state.slug, (daily,))
+        runner._apply_contracts(state, market=state.market, incentive=incentive,
+                                now=NOW, for_exit=False)
+        self.assertEqual(state.reward_program_id, "daily-test")
+        runner._evaluate_rewards_inner(NOW, state.slug)
+        self.assertTrue(state.reward_eligible)
+        observation = runner._quote_observation_for_action(
+            state, PlanAction(ActionKind.PLACE_POST_ONLY, state.slug,
+                "reward_positive_candidate", side="bid", price=.49,
+                qty=runner.config.quote_size), NOW, Decimal("0"))
+        self.assertIsNotNone(observation)
+        runner.config = replace(runner.config, allow_daily_event_rewards=False)
+        runner._evaluate_rewards_inner(NOW, state.slug)
+        self.assertFalse(state.reward_eligible)
+        runner._apply_contracts(state, market=state.market, incentive=incentive,
+                                now=NOW, for_exit=False)
+        self.assertIsNone(state.incentive)
+        self.assertEqual(state.reward_authorization_loss_reason, "no_longer_applicable")
+        # A newly bound owner has no prior program to retire and refuses.
+        state.reward_program_id = None
+        with self.assertRaises(CommissioningUnavailable):
+            runner._apply_contracts(state, market=state.market, incentive=incentive,
+                                    now=NOW, for_exit=False)
+        # Losing reward authorization must not prevent position handling.
+        runner._apply_contracts(state, market=state.market, incentive=incentive,
+                                now=NOW, for_exit=True)
+
     async def test_building_observation_records_actual_queue_separately_from_model(self):
         runner, _, _ = self.build_runner()
         state = runner.state_for("market-one")

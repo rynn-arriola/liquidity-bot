@@ -233,7 +233,8 @@ async def _print_rejects(
             unsupported.append(slug)
             continue
         period = select_applicable_period(
-            incentive.periods, market.game_start, now)
+            incentive.periods, market.game_start, now,
+            allow_daily_event=policy.allow_daily_event_rewards)
         if period is None or str(period.period) == "live":
             names = ",".join(sorted({str(p.period) for p in incentive.periods}))
             live_only.append((slug, names))
@@ -264,7 +265,7 @@ async def _print_rejects(
         _show("reward program not implemented", unsupported,
               lambda slug: f"{slug[:46]:<46}")
     if live_only:
-        _show("no applicable pregame period (live-only)", live_only,
+        _show("no applicable pregame period", live_only,
               lambda row: f"{row[0][:46]:<46} periods: {row[1]}")
     if tight:
         # Widest first: near-misses are the only rows that speak to whether the

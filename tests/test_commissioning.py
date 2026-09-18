@@ -26,6 +26,15 @@ from liquidity_bot.slot_capacity import main as slot_capacity_main
 
 
 class CommissioningTests(unittest.TestCase):
+    def test_daily_event_switch_propagates_to_selector_and_rejects_non_bool(self):
+        for enabled in (True, False):
+            config = self.authorized(allow_daily_event_rewards=enabled)
+            self.assertEqual(config.reward_selection_policy().allow_daily_event_rewards,
+                             enabled)
+        config = self.authorized(allow_daily_event_rewards="false")
+        self.assertIn("allow_daily_event_rewards must be boolean",
+                      config.blockers(now=datetime(2026, 9, 18, tzinfo=timezone.utc)))
+
     def authorized(self, **changes):
         values = {
             "market_slug": "market-one",

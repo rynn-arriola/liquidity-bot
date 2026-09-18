@@ -163,3 +163,33 @@ was high (p9585.458s); this sample is startup acceptance, not steady-state
 latency proof. Corrected telemetry has live acceptance, while reward accuracy
 still requires prospective complete-period payout comparison; no profitability
 or sustained zero429 claim is made.
+
+## Post-restart order-count dip (read-only diagnosis)
+
+The operator reported fewer orders. The same runner/supervisor remained live.
+Authenticated23:18:46Z showed20 flat entry orders plus two exact reducers for
+positions+10/-7, zero unresolved intents/unknown orders. Read-only ledger evidence
+found26 EXPIRED orders observed23:17:37–23:18:38Z; their event times match the
+existing five-minute GTD lifetimes of the clustered startup placements. This
+is the September15 host-outage safeguard, not either new measurement change.
+Position-priority cancellation/repricing and entry-quality/touch changes also
+overlapped the refill; replacement entries appear throughout23:18Z.
+
+The23:19:15Z settled-risk checkpoint was+$1.75, cap30, no hard-stop trip. Completed
+API windows through23:19:08Z all show zero429/cooldown; last window3.684/s with
+two ordinary order-retrieve404s. There is no evidence this dip was a loss-cap
+reduction, global recovery or new measurement enforcement.
+
+A23:19:59Z account read overlapped replacement of the-7 position's reducer and
+showed no reducer in that order snapshot; it was not called protected then.
+Subsequent logs show cancel confirmation and replacement acknowledgements.
+Authenticated23:20:40Z independently confirmed28 flat entries plus one OPEN
+BUY7 reducer for the sole-7 position, zero unknown orders, one in-flight intent.
+The earlier+10 position had naturally returned flat23:19:03Z. Counts and the
+ledger can differ transiently because these are sequential reads during trading.
+
+The expiry/refill gap is real. Repeated reducer repricing was also observed,
+but this read-only diagnosis does not establish that each reprice was unnecessary.
+A follow-up may review renewal distribution/refill scheduling and reducer churn
+without weakening expiry or position priority; no change is authorized by this
+status question. No trading code/configuration change, deployment or restart.

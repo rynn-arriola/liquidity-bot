@@ -124,3 +124,42 @@ parity matched Windows/GitHub/WSL d77cac1a1 and verified an online backup captur
 22:45:56Z; the known offline PC was skipped. Corrected runtime telemetry requires
 reviewed deployment and a separately authorized safe restart. The standalone
 offline script is usable from the reviewed source without restarting trading.
+
+## Command 1 deployment and restart
+
+The operator subsequently authorized Command1. The supervisor was stopped first
+and the runner exited gracefully at23:05:53Z with `flat=true`. Authenticated
+23:06:49Z reads independently proved zero venue orders/positions and zero
+unresolved intents, unknown orders, working ledger rows or ledger positions.
+The stopped-runtime online backup captured23:06:34Z was verified privately.
+
+Windows/GitHub release `aae33765855ebb7a03dd79336a1a709acc960362` was already
+pushed and reviewed. WSL fast-forwarded only that prepared commit; all207
+runtime/test/config/script hashes matched it and the Windows source. Reused the
+completed regression/reversal/edge review; the exact installed checkout then
+passed all1,842 tests in176.017s. The deployed marker was advanced only after
+those checks. A second authenticated flat/clear gate passed at23:10:47Z.
+
+Restarted supervisor388103/runner388121 at23:10:47Z using saved REST account mode,
+size10 and32 market slots. Four$25 settled-loss windows, loss-scaled pending-entry
+caps, entry quality, day_of priority, daily spare-capacity admission, reducers
+and exits remain unchanged. No ledger/risk reset or source promotion occurred.
+
+The23:11:27Z complete scan records38 candidates and70 measured sides; all70
+cutoff-aware amounts are lower than their retained raw projections. The record
+explicitly reports `enforcement=none`, exit buffer300s and book-age bound5s.
+Initial scans used39 and30 public-WebSocket books with zero REST fallback.
+The23:11:45Z risk meter retained loss0/hard25/cap30, no hold, matched-fill basis
+and open orders/positions excluded. Initial deployed parity passed with the
+runtime and marker onaae337658; known offline PC remained unchecked.
+
+Authenticated23:13:26Z acceptance showed29 flat-market entry orders across27
+markets, zero positions and zero unknown orders. One in-flight create remained
+at that instant and was positively resolved in the23:13:26.270Z runner record
+with remaining0; subsequent cancel/create transitions also resolved normally.
+The first141.6-second API window made282 attempts (1.992/s), zero429/cooldown
+and five ordinary individual-order publication404s. Startup decision latency
+was high (p9585.458s); this sample is startup acceptance, not steady-state
+latency proof. Corrected telemetry has live acceptance, while reward accuracy
+still requires prospective complete-period payout comparison; no profitability
+or sustained zero429 claim is made.

@@ -374,7 +374,8 @@ def fake_selection(slug: str, *, discovered: int = 4) -> RewardMarketSelection:
         price=.49,
         reward_score_eligible=True,
         projection=RewardProjection(
-            True, 1.0, 10.0, .1, .001, 1.0, "projected"),
+            True, 1.0, 10.0, .1, .001, 1.5, "projected",
+            remaining_entry_reward=1.0),
         stressed_exit_complete=True,
         stressed_exit_pnl=-.01,
         expected_net_value=.0005,

@@ -60,6 +60,15 @@ class RewardProjection:
     projected_reward: float
     maximum_remaining_reward: float
     reason: str
+    # Telemetry only. The established projection/maximum above remain ranking
+    # inputs; this separate amount excludes the bot's pre-kickoff exit buffer.
+    # None means an older/synthetic projection did not measure this amount.
+    remaining_entry_reward: float | None = None
+
+
+# Commissioning validates its existing pre-kickoff buffer at exactly 300s.
+# This names the same boundary for measurement; it is not execution authority.
+ENTRY_REWARD_EXIT_BUFFER_SECONDS = 300
 
 
 _PERIOD_ALIASES = {
@@ -478,6 +487,10 @@ def project_order_reward(
             False, score.score, total_score, share, 0.0, maximum,
             "below_minimum_payout")
     projected = dollars_per_second * min(horizon, remaining)
+    entry_end = min(
+        accessible_end,
+        event_start - timedelta(seconds=ENTRY_REWARD_EXIT_BUFFER_SECONDS))
+    entry_seconds = max(0.0, (entry_end - now).total_seconds())
     return RewardProjection(
         True, score.score, total_score, share, projected, maximum,
-        "projected")
+        "projected", remaining_entry_reward=dollars_per_second * entry_seconds)

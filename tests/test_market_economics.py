@@ -61,6 +61,7 @@ def candidate_scan():
     return {"schema":1,"enforcement":"none","at":NOW.isoformat(),"projection_seconds":30,
             "candidates":[{"market":SLUG,"period":"daily_event","program":"test-program",
                "pool":100,"discount":0.3,"target":1000,"quantity":10,"current_rank":2,
+               "book_observed_at":NOW.isoformat(),
                "game_start":"2026-09-18T20:00:00+00:00","program_end":None,
                "sides":[{"viable":True,"reward_eligible":True,"projected_reward":"0.01"}]}]}
 
@@ -250,6 +251,55 @@ class EconomicsTests(unittest.TestCase):
         scan["candidates"][0]["pool"]=101
         self.assertIsNone(shadow_rank(models,scan,now=NOW)["rows"][0]["shadow_rank"])
 
+    def test_shadow_rejects_missing_invalid_stale_and_future_book_times(self):
+        models=build_cohorts(report(),min_markets=1,min_days=1,min_hours=D(1))
+        cases = (
+            (None, "book_timestamp_unavailable"),
+            ("bad-time", "book_timestamp_unavailable"),
+            ("2026-09-18T14:00:00", "book_timestamp_unavailable"),
+            ((NOW-timedelta(days=1)).isoformat(), "stale_or_future_book"),
+            ((NOW-timedelta(seconds=5,microseconds=1)).isoformat(), "stale_or_future_book"),
+            ((NOW+timedelta(microseconds=1)).isoformat(), "stale_or_future_book"),
+            ((NOW+timedelta(days=1)).isoformat(), "stale_or_future_book"),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                scan=candidate_scan();scan["candidates"][0]["book_observed_at"]=value
+                row=shadow_rank(models,scan,now=NOW)["rows"][0]
+                self.assertEqual(row["status"],expected)
+                self.assertIsNone(row["score_per_side_hour"])
+                self.assertIsNone(row["shadow_rank"])
+                self.assertNotIn("remaining_reward_scenario",row)
+        scan=candidate_scan();del scan["candidates"][0]["book_observed_at"]
+        self.assertEqual(shadow_rank(models,scan,now=NOW)["rows"][0]["status"],
+                         "book_timestamp_unavailable")
+
+    def test_shadow_book_freshness_uses_scan_time_and_cannot_be_widened_by_log(self):
+        models=build_cohorts(report(),min_markets=1,min_days=1,min_hours=D(1))
+        for age in (0, 5):
+            scan=candidate_scan()
+            scan["candidates"][0]["book_observed_at"]=(NOW-timedelta(seconds=age)).isoformat()
+            row=shadow_rank(models,scan,now=NOW+timedelta(minutes=15))["rows"][0]
+            self.assertEqual(row["status"],"positive_observational")
+            self.assertEqual(row["shadow_rank"],1)
+        scan["measurement_max_book_age_seconds"]=86400
+        scan["candidates"][0]["book_observed_at"]=(NOW-timedelta(seconds=6)).isoformat()
+        self.assertEqual(shadow_rank(models,scan,now=NOW)["rows"][0]["status"],
+                         "stale_or_future_book")
+
+    def test_bad_book_does_not_gain_rank_or_hide_other_candidates(self):
+        models=build_cohorts(report(),min_markets=1,min_days=1,min_hours=D(1))
+        scan=candidate_scan()
+        bad=deepcopy(scan["candidates"][0]);bad["market"]="aec-wtt-c-d-2026-09-18"
+        bad["current_rank"]=1;bad["book_observed_at"]=(NOW-timedelta(days=1)).isoformat()
+        scan["candidates"].insert(0,bad)
+        before=deepcopy(scan)
+        rows=shadow_rank(models,scan,now=NOW)["rows"]
+        self.assertEqual(rows[0]["status"],"stale_or_future_book")
+        self.assertIsNone(rows[0]["shadow_rank"])
+        self.assertEqual(rows[1]["shadow_rank"],1)
+        self.assertEqual(scan,before)
+
     def test_shadow_no_lookahead_stale_or_exit_boundary(self):
         models=build_cohorts(report(),min_markets=1,min_days=1,min_hours=D(1))
         models[0]["reward_observed_through"]=(NOW+timedelta(seconds=1)).isoformat()
@@ -335,7 +385,8 @@ class EconomicsTests(unittest.TestCase):
 
 class SelectionMeasurementTests(unittest.TestCase):
     def inputs(self):
-        projection=NS(eligible=True,snapshot_share=.2,projected_reward=.01,maximum_remaining_reward=2)
+        projection=NS(eligible=True,snapshot_share=.2,projected_reward=.01,
+                      maximum_remaining_reward=2,remaining_entry_reward=1.5)
         side=NS(side="bid",price=.5,viable=True,blocker=None,projection=projection,
                 fill_probability=.1,stressed_exit_pnl=-1,stressed_exit_complete=True)
         market=NS(slug=SLUG,event_slug="event-one",game_start=NOW+timedelta(hours=4))
@@ -352,6 +403,10 @@ class SelectionMeasurementTests(unittest.TestCase):
         self.assertEqual(d["enforcement"],"none");self.assertEqual(len(d["candidates"]),1)
         self.assertEqual(d["candidates"][0]["event"],"event-one")
         self.assertEqual(d["candidates"][0]["sides"][0]["share"],.2)
+        self.assertEqual(d["candidates"][0]["sides"][0]["remaining_entry_reward"],1.5)
+        self.assertEqual(d["candidates"][0]["sides"][0]["remaining_reward"],2)
+        self.assertEqual(d["entry_exit_buffer_seconds"],300)
+        self.assertEqual(d["measurement_max_book_age_seconds"],5)
         self.assertEqual(repr(selection),before)
 
     def test_empty_full_overflow_nonfinite(self):

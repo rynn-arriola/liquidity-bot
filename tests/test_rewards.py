@@ -171,6 +171,37 @@ class LifecycleTests(unittest.TestCase):
 
 
 class RewardScoreTests(unittest.TestCase):
+    def test_entry_remaining_reward_excludes_cutoff_without_changing_ranking(self):
+        for kind, pool in (("day_of", 28800), ("daily_event", 115200)):
+            with self.subTest(kind=kind):
+                result = project_order_reward(
+                    side="bid", price=.50, size=1, levels=[(.50, 99)],
+                    incentive=period(kind, pool=pool, target=100),
+                    tick_size=.01, event_start=NOW+timedelta(minutes=6),
+                    now=NOW, horizon_seconds=30, haircut=.5, minimum_payout=0)
+                self.assertTrue(result.eligible)
+                self.assertAlmostEqual(result.maximum_remaining_reward, 1.20)
+                self.assertAlmostEqual(result.projected_reward, .10)
+                self.assertAlmostEqual(result.remaining_entry_reward, .20)
+
+    def test_entry_reward_cutoff_boundary_does_not_block_original_projection(self):
+        for seconds in (1, 299, 300, 301, 360):
+            with self.subTest(seconds=seconds):
+                result = self.daily_projection(event_start=NOW+timedelta(seconds=seconds))
+                self.assertTrue(result.eligible)
+                self.assertGreater(result.projected_reward, 0)
+                self.assertAlmostEqual(
+                    result.remaining_entry_reward, 50*max(0, seconds-300)/86400)
+
+    def test_entry_reward_retains_earlier_midnight_and_expiry(self):
+        before_midnight = datetime(2026, 9, 19, 3, 59, 50, tzinfo=UTC)
+        for result, seconds in (
+            (self.daily_projection(before_midnight), 10),
+            (self.daily_projection(ends_at=NOW+timedelta(seconds=20)), 20),
+        ):
+            self.assertAlmostEqual(result.remaining_entry_reward, 50*seconds/86400)
+            self.assertEqual(result.remaining_entry_reward, result.maximum_remaining_reward)
+
     def daily_projection(self, now=NOW, *, starts_at=None, ends_at=None,
                          event_start=None, horizon=30):
         return project_order_reward(
@@ -189,6 +220,7 @@ class RewardScoreTests(unittest.TestCase):
                 self.assertTrue(result.eligible)
                 self.assertAlmostEqual(result.projected_reward, 50*30/(hours*3600))
                 self.assertAlmostEqual(result.maximum_remaining_reward, 50/hours)
+                self.assertAlmostEqual(result.remaining_entry_reward, 50*55/(hours*60))
 
     def test_daily_projection_stops_at_midnight_kickoff_or_program_end(self):
         before_midnight = datetime(2026, 9, 19, 3, 59, 50, tzinfo=UTC)

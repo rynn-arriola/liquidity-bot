@@ -576,7 +576,8 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
                 replace(side,
                         expected_net_value=None if index in blocked else .01,
                         projection=replace(side.projection,
-                            maximum_remaining_reward=amount))
+                            maximum_remaining_reward=amount+10,
+                            remaining_entry_reward=amount))
                 for index, (side, amount) in enumerate(zip(item.sides, amounts))))
 
         # Different markets cannot combine .60 + .70. Both sides of the same
@@ -602,6 +603,22 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
                 selection.payout_floor_market_count(floor)
         empty = replace(selection, opportunities=(), selected=None)
         self.assertEqual(empty.payout_floor_market_count(1), 0)
+
+    async def test_missing_cutoff_measurement_is_unknown_without_changing_selection(self):
+        gateway = FakeGateway({"one": market("one")},
+            {"one": incentive("one", pool=1000)}, {"one": book("one")})
+        selection = await RewardMarketSelector(gateway).select(now=NOW)
+        original = selection.selected
+        for missing in (None, -1, float("nan"), float("inf")):
+            with self.subTest(missing=missing):
+                item = replace(original, sides=(replace(original.sides[0],
+                    projection=replace(original.sides[0].projection,
+                        remaining_entry_reward=missing)),))
+                measured = replace(selection, selected=item, opportunities=(item,))
+                before = measured.top_viable(1)
+                with self.assertRaisesRegex(ValueError, "measurement is unavailable"):
+                    measured.payout_floor_market_count(1)
+                self.assertEqual(measured.top_viable(1), before)
 
     async def test_real_429_stops_selection_and_revalidation_after_one_book(self):
         for revalidate in (False, True):

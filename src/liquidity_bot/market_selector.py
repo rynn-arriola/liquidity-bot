@@ -195,17 +195,22 @@ class RewardMarketOpportunity:
         """Conservative reward still reachable across currently viable sides.
 
         Assumes continuous participation at the current share until the
-        accessible period ends; earlier accrued reward is unknown. This is
+        earlier of the reward-period end and the bot's pre-kickoff cutoff;
+        earlier accrued reward is unknown. This is
         report-only shadow evidence for the venue's per-market,
         per-reward-period payout floor. It deliberately excludes blocked sides
         and must not be used to admit, reject, or rank a market.
         """
 
-        return sum(
-            item.projection.maximum_remaining_reward
+        amounts = tuple(
+            item.projection.remaining_entry_reward
             for item in self.sides
             if item.viable and item.projection.eligible
         )
+        if any(value is None or not math.isfinite(value) or value < 0
+               for value in amounts):
+            raise ValueError("remaining entry reward measurement is unavailable")
+        return sum(amounts)
 
     @property
     def projected_reward_total(self) -> float:

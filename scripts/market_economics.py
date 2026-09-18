@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from liquidity_bot.pnl import MatchedInventory, intent_direction  # noqa: E402
+from liquidity_bot.rewards import ENTRY_REWARD_EXIT_BUFFER_SECONDS  # noqa: E402
+from liquidity_bot.selection_measurement import MEASUREMENT_MAX_BOOK_AGE_SECONDS  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
@@ -432,6 +434,13 @@ def shadow_rank(cohorts: list[dict], scan: dict | None, *, now: datetime) -> dic
         if row["current_rank"] is None:
             row["status"] = "current_strategy_ineligible"; continue
         try:
+            book_at = stamp(candidate["book_observed_at"])
+        except (ValueError, KeyError, TypeError):
+            row["status"] = "book_timestamp_unavailable"; continue
+        book_age = (at-book_at).total_seconds()
+        if not 0 <= book_age <= MEASUREMENT_MAX_BOOK_AGE_SECONDS:
+            row["status"] = "stale_or_future_book"; continue
+        try:
             model = models.get(signature(candidate))
             if model is None: continue
             # Never learn from outcomes received after the prospective scan.
@@ -442,7 +451,7 @@ def shadow_rank(cohorts: list[dict], scan: dict | None, *, now: datetime) -> dic
             if (at.astimezone(ET).date()-date.fromisoformat(model["last_day"])).days > 14:
                 row["status"] = "stale_history"; continue
             start = stamp(candidate["game_start"])
-            if start <= at+timedelta(minutes=5):
+            if start <= at+timedelta(seconds=ENTRY_REWARD_EXIT_BUFFER_SECONDS):
                 row["status"] = "at_exit_boundary"; continue
             if candidate["program_end"] and stamp(candidate["program_end"]) <= at:
                 row["status"] = "program_ended"; continue
@@ -457,7 +466,7 @@ def shadow_rank(cohorts: list[dict], scan: dict | None, *, now: datetime) -> dic
                 model_end = min(model_end, boundary(at.astimezone(ET).date()+timedelta(days=1)))
             if candidate["program_end"]:
                 model_end = min(model_end, stamp(candidate["program_end"]))
-            usable_end = min(model_end, start-timedelta(minutes=5))
+            usable_end = min(model_end, start-timedelta(seconds=ENTRY_REWARD_EXIT_BUFFER_SECONDS))
             if usable_end <= at:
                 row["status"] = "no_accessible_reward_time"; continue
             modeled_seconds = min(seconds, D(str((model_end-at).total_seconds())))
@@ -568,6 +577,7 @@ def render(report: dict) -> str:
                   "- Resting starts at local intent time; partial fills, downtime and qualifying depth can overstate useful time.",
                   "- Placement-based reward rates are held constant only for an explicitly approximate calibration; repeated scans are never summed as income. Time/price-band exposure is recorded, but market-day earnings cannot be exactly allocated to individual entries or bands.",
                   "- Historical parameter matches and sample size do not guarantee future profitability. Full market/day detail is in report.json.",
+                  "- Candidate books must have a valid receipt timestamp no more than five seconds old at scan time; missing, stale or future data has no shadow rank. Remaining entry reward excludes the five-minute pre-kickoff exit buffer.",
                   "- Preserve all current entry/exit/cap/risk rules. No minimum-payout gate or automatic source switch."])
     return "\n".join(lines)+"\n"
 

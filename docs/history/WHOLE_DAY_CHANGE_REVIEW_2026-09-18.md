@@ -71,3 +71,56 @@ Pre-review parity matched Windows/GitHub/WSL HEAD66c63eea9 and loaded source
 f2e6aba5b; verified online-backup copy captured22:39:34Z. The known offline PC
 was explicitly skipped. Review findings are recorded for follow-up; both
 measurement repairs remain outstanding and no strategy enforcement is enabled.
+
+## Authorized measurement repair (subsequent task)
+
+The operator then requested both fixes. They are prepared in the Windows
+checkout, not loaded into the running trader. No stop, restart, order mutation,
+API probe, ledger repair or risk/strategy change is part of this repair.
+
+The reward calculator now supplies a separate optional `remaining_entry_reward`
+measurement through the earlier of program expiry, daily ET midnight and the
+existing kickoff-minus-300-second boundary. The payout counters and log consume
+that field; established projected reward, raw maximum and ranking inputs are
+unchanged. Missing, negative or nonfinite measurement is unavailable, not a
+fallback to the overstated raw amount. Logging failures remain isolated.
+Scan JSON retains the original field and adds the corrected measurement plus
+its timing constants; existing schema-1 records remain readable.
+
+Offline shadow comparison requires each candidate's timezone-aware book receipt
+to be between zero and five seconds old at the recorded scan time. Missing,
+invalid, naive, future and over-age books receive no scenario, score or shadow
+rank. Validation cannot be widened by editing the logged age setting. A later
+report time does not invalidate a book that was fresh at the scan. This can
+withhold more research candidates after long scans, intentionally; it does not
+refresh books, add API requests or reject live entries.
+
+Focused verification passed123 tests including runner logging/failure isolation.
+Deliberately removing the cutoff, restoring the old raw telemetry source and
+disabling book-age rejection caused seven expected failures across three
+regression tests. Restoring all repairs returned the123-test set to green.
+
+Dedicated edge review covered zero/empty/blocked sides, both reward periods,
+expiry before kickoff, ET midnight, 23/24/25-hour DST days, exact300-second exit
+boundary, missing/negative/nonfinite measurements, absent/malformed/naive book
+timestamps, exact zero/five-second freshness, microsecond stale/future bounds,
+mixed valid/invalid candidates and unchanged input objects. Existing eligibility,
+ranking, quantities, entry capacity, reducers, ownership, loss accounting,
+recovery/shutdown and source selection remain authoritative. No persistent schema
+migration or background task is added; rollback requires no ledger rewrite.
+The first complete run passed all code tests but failed the documentation audit:
+BUGFIXES briefly exceeded its100-line budget while the suite was running. That
+index was compacted, and the final full suite passed all1,842 tests in177.799s
+using the production virtual environment against an isolated native copy whose
+368 tracked-file hashes matched the reviewed Windows tree. Focused tests and
+deliberate reversals ran directly against that Windows source. The documentation
+audit and final diff check pass. No production source was overwritten for testing.
+
+At23:01:39Z the original supervisor350908/runner350932 were still running with
+their22:23:58/59Z start times; loaded source remainsf2e6aba5b. No authenticated
+exposure read was repeated for this measurement-only repair, so22:40:46Z remains
+the last dated venue proof, not a current order/position assertion. Pre-work
+parity matched Windows/GitHub/WSL d77cac1a1 and verified an online backup captured
+22:45:56Z; the known offline PC was skipped. Corrected runtime telemetry requires
+reviewed deployment and a separately authorized safe restart. The standalone
+offline script is usable from the reviewed source without restarting trading.

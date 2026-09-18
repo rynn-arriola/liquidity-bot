@@ -5,6 +5,13 @@ import json
 from datetime import datetime
 from typing import Any
 
+from .rewards import ENTRY_REWARD_EXIT_BUFFER_SECONDS
+
+
+# Compare book receipt with the scan timestamp, never with report run time.
+# Matches the five-second live book age bound without authorizing any order.
+MEASUREMENT_MAX_BOOK_AGE_SECONDS = 5
+
 
 def selection_measurement(selection: Any, config: Any, now: datetime) -> str:
     """Serialize one whole scan, so truncated/mixed scans cannot become a slate.
@@ -42,6 +49,7 @@ def selection_measurement(selection: Any, config: Any, now: datetime) -> str:
                 "share": side.projection.snapshot_share,
                 "projected_reward": side.projection.projected_reward,
                 "remaining_reward": side.projection.maximum_remaining_reward,
+                "remaining_entry_reward": side.projection.remaining_entry_reward,
                 "fill_probability": side.fill_probability,
                 "stressed_exit_pnl": side.stressed_exit_pnl,
                 "stressed_exit_complete": side.stressed_exit_complete,
@@ -52,5 +60,7 @@ def selection_measurement(selection: Any, config: Any, now: datetime) -> str:
         "scope": "evaluated_books_not_entire_market_universe",
         "projection_seconds": config.reward_projection_horizon_seconds,
         "projection_haircut": float(config.reward_projection_haircut),
+        "entry_exit_buffer_seconds": ENTRY_REWARD_EXIT_BUFFER_SECONDS,
+        "measurement_max_book_age_seconds": MEASUREMENT_MAX_BOOK_AGE_SECONDS,
         "candidates": rows,
     }, allow_nan=False, separators=(",", ":"))

@@ -161,8 +161,9 @@ The command refuses before order entry unless all of these are true:
 9. Authenticated earnings for the active liquidity program can be read and
    persisted separately from execution P&L.
 
-Automatic discovery pages active/open sports events over the six-hour strategy
-horizon plus a one-day clock-skew buffer, flattens their nested market metadata,
+Automatic discovery pages active/open sports events over the largest enabled
+entry horizon (six-hour day-of,24-hour daily-event) plus a one-day clock-skew buffer,
+flattens their nested market metadata,
 and applies the market-level clock and V2-moneyline gates before requesting
 rewards only for those exact symbols. The wider event window retains delayed
 or rescheduled games whose event `startTime` lags their market
@@ -181,14 +182,20 @@ also two-sided. Metadata BBO can reject a known-tight row before a full-book
 request, but only a fresh full book can authorize entry.
 The currently applicable pregame `day_of` period has priority. With
 `CommissioningConfig.allow_daily_event_rewards=True` (the approved default),
-`daily_event` fills spare selection capacity inside the same six-hour pregame
-window. Day-of candidates also have priority within the bounded book scan;
+`daily_event` fills spare selection capacity up to24 elapsed hours before
+kickoff, including tomorrow's games only when exact daily rewards are active
+now. Fetch evidence must belong to the current ET reward day; crossing midnight
+blocks new daily entries until an ordinary bounded refresh succeeds. Missing
+proof is not positive reward-end/slot-release evidence. The send-time gate also
+rechecks midnight and explicit program expiry after any admission wait.
+Day-of candidates also have priority within the bounded book scan;
 rotation cannot give their scan capacity to daily candidates. Healthy existing
 owners are not forcibly displaced. Generic `daily` and undocumented
 `tournament_with_cutoff` remain read-only and cannot authorize book fan-out or
 entry. The direct runner flag `--disable-daily-event-rewards` disables the
-fallback at process start; the detached launcher has no passthrough for this
-flag. Supervised rollback requires reviewed configuration/launcher wiring or a
+fallback at process start. `daily_event_horizon_seconds=21600` or direct flag
+`--daily-event-entry-hours 6` restores six-hour timing (default86400/24).
+The detached launcher has no passthrough for these flags. Supervised rollback requires reviewed configuration/launcher wiring or a
 source rollback before restart. No live hot-toggle or persisted launcher setting is claimed.
 See STATUS/NEXT for whether this source is deployed.
 Legacy standalone `probe`/shadow tools retain their original lifecycle-only

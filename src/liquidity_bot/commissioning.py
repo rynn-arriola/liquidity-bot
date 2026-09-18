@@ -230,8 +230,9 @@ class CommissioningConfig:
     # re-armed from measured data rather than from the arbitrary 0.5 and 2x it
     # was built on.
     enforce_reward_cost_gate: bool = False
-    # Restart-scoped daily ET reward fallback, inside the same six-hour horizon.
+    # Restart-scoped daily ET fallback; day-of keeps its separate six-hour phase.
     allow_daily_event_rewards: bool = True
+    daily_event_horizon_seconds: float = 86400.0
     # How long a mutation may sit unresolved before the session is stopped as
     # critical. This was hardcoded at 10 seconds and stopped the bot twice in
     # forty minutes on 2026-08-17.
@@ -427,6 +428,7 @@ class CommissioningConfig:
             minimum_entry_price=float(self.minimum_entry_price),
             enforce_reward_cost_gate=self.enforce_reward_cost_gate,
             allow_daily_event_rewards=self.allow_daily_event_rewards,
+            daily_event_horizon_seconds=self.daily_event_horizon_seconds,
             entry_quality_policy=self.entry_quality_policy,
         )
 
@@ -436,6 +438,8 @@ class CommissioningConfig:
         problems: list[str] = []
         if type(self.allow_daily_event_rewards) is not bool:
             problems.append("allow_daily_event_rewards must be boolean")
+        if not 21600 <= self.daily_event_horizon_seconds <= 86400:
+            problems.append("daily event horizon must be between six and 24 hours")
         if type(self.recovery_only) is not bool:
             problems.append("recovery_only must be boolean")
         if not isinstance(self.entry_expiry_policy, EntryExpiryPolicy):

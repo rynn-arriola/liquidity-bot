@@ -64,8 +64,12 @@ Official references:
 - A program contains `timePeriods`, and several periods can have active status;
   select only the lifecycle phase applying at the verified market clock.
   The approved `daily_event` fallback is considered only when no active
-  applicable `day_of` row exists and only inside six elapsed hours before
-  kickoff. Exact status/time bounds and ambiguity checks still apply. Daily
+  applicable `day_of` row exists, with a separate bounded lookahead of up to
+  24 elapsed hours before kickoff. The game's calendar date does not grant or
+  deny daily eligibility. Exact status/time bounds and ambiguity checks still apply.
+  Expanded mode requires an incentive fetch begun during the current ET day;
+  a scan spanning midnight needs a new response before daily entry. This
+  receipt is local evidence, not a new venue field. Daily
   pools use ET midnight boundaries (including DST), not the day-of denominator;
   this is a ranking estimate, not independently allocated revenue per market.
   See [the current reference](POLYMARKET_API_REFERENCE.md) for the September18

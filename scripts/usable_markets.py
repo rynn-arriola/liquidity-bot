@@ -44,7 +44,6 @@ from liquidity_bot.market_selector import (  # noqa: E402
     RewardSelectionPolicy,
 )
 from liquidity_bot.probe import client_from_environment  # noqa: E402
-from liquidity_bot.rewards import select_applicable_period  # noqa: E402
 
 CONFIG = CommissioningConfig.diagnostic_defaults()
 MAX_MARKETS = CONFIG.max_markets
@@ -61,9 +60,10 @@ async def main() -> int:
         client_from_environment(), limiter=shared_api_limiter(),
         default_traffic_class="report")
     policy = CONFIG.reward_selection_policy()
-    selection = await RewardMarketSelector(gateway, policy=policy).select(now=now)
+    selection = await RewardMarketSelector(
+        gateway, policy=policy, clock=lambda: datetime.now(timezone.utc)).select(now=now)
 
-    horizon_h = policy.selection_horizon_seconds / 3600.0
+    horizon_h = (policy.discovery_window_end(now) - now).total_seconds() / 3600.0
     viable = [o for o in selection.opportunities if o.viable_sides]
 
     # Derived, not reported by the selector. `_applicable_period` returning
@@ -161,8 +161,8 @@ async def main() -> int:
         share = 100.0 * period_dropped / rewarded
         print(f"  {share:.0f}% of rewarded markets have NO APPLICABLE PREGAME "
               "PERIOD -- their")
-        print("  reward window has rolled into `live`, which this executor may")
-        print("  not quote (invariant 39: only day_of has a projectable clock).")
+        print("  day-of/daily-event reward clock is inactive, unproven or outside")
+        print("  the configured pregame horizon; live-only rewards cannot qualify.")
         print("  This is the dominant drain and it is NOT the spread filter.")
         print("  The lever is the lifecycle, not minimum_entry_spread.")
     elif selection.catalog_spread_filtered_markets > 0.5 * rewarded:
@@ -205,7 +205,7 @@ async def _print_rejects(
     """
 
     selector = RewardMarketSelector(gateway, policy=policy)
-    window_end = now + timedelta(seconds=policy.selection_horizon_seconds)
+    window_end = policy.discovery_window_end(now)
     clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
     catalog = await gateway.list_upcoming_sports_markets(
         start=now - clock_skew,
@@ -220,6 +220,7 @@ async def _print_rejects(
             market, now=now, window_end=window_end)
     }
     incentives = await gateway.fetch_incentives(sorted(in_horizon))
+    now = datetime.now(timezone.utc)
 
     unsupported: list[str] = []
     live_only: list[tuple[str, str]] = []
@@ -232,9 +233,8 @@ async def _print_rejects(
                    for period in incentive.periods):
             unsupported.append(slug)
             continue
-        period = select_applicable_period(
-            incentive.periods, market.game_start, now,
-            allow_daily_event=policy.allow_daily_event_rewards)
+        period = selector._applicable_period(
+            market, incentive, now, require_event_freshness=False)
         if period is None or str(period.period) == "live":
             names = ",".join(sorted({str(p.period) for p in incentive.periods}))
             live_only.append((slug, names))

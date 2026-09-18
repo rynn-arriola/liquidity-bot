@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
 
 from .adapters import AsyncReadOnlyGateway
@@ -73,12 +73,14 @@ class RewardSelectionPolicy:
     # program keeps priority whenever both are present, and the runner exposes
     # a restart-scoped disable switch for fast rollback.
     allow_daily_event_rewards: bool = True
+    daily_event_horizon_seconds: float = 86400.0
     # Mirrors CommissioningConfig.enforce_reward_cost_gate. The same test
     # existed here and in the runner's per-market pass; disabling it in one
     # place only did nothing, because a market that never becomes viable here
     # is never bound for the runner to evaluate at all.
     enforce_reward_cost_gate: bool = False
-    # How far ahead of kickoff a market may be and still be selected.
+    # How far ahead of kickoff a day-of market may be selected. Daily-event
+    # discovery/authorization has its own bounded, restart-scoped horizon.
     #
     # **Restored to the full six hours on 2026-08-23, operator decision, after
     # the evidence for narrowing it did not survive re-checking.** It was 7200
@@ -115,6 +117,8 @@ class RewardSelectionPolicy:
     def __post_init__(self) -> None:
         if type(self.allow_daily_event_rewards) is not bool:
             raise ValueError("allow_daily_event_rewards must be boolean")
+        if not 21600 <= self.daily_event_horizon_seconds <= 86400:
+            raise ValueError("daily event horizon must be between six and 24 hours")
         if self.quote_size <= 0 or self.projection_horizon_seconds <= 0:
             raise ValueError("selection size and horizon must be positive")
         if not 0 < self.selection_horizon_seconds <= 21600:
@@ -132,6 +136,14 @@ class RewardSelectionPolicy:
             raise ValueError("selection entry spread must be in (0, 1)")
         if not 0 < self.minimum_entry_price < .5:
             raise ValueError("selection entry price must be in (0, .5)")
+
+    def discovery_window_end(self, now: datetime) -> datetime:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("selection clock must be timezone-aware")
+        horizon = self.selection_horizon_seconds
+        if self.allow_daily_event_rewards:
+            horizon = max(horizon, self.daily_event_horizon_seconds)
+        return now.astimezone(timezone.utc) + timedelta(seconds=horizon)
 
 
 @dataclass(frozen=True)
@@ -489,8 +501,7 @@ class RewardMarketSelector:
         # Event clocks are discovery hints only.  The one-day superset retains
         # delayed/rescheduled events; market.game_start remains the execution
         # authority, so no horizon or lifecycle policy changes here.
-        window_end = now + timedelta(
-            seconds=self.policy.selection_horizon_seconds)
+        window_end = self.policy.discovery_window_end(now)
         clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
         catalog = await self.gateway.list_upcoming_sports_markets(
             start=now - clock_skew,
@@ -638,8 +649,7 @@ class RewardMarketSelector:
         markets = await self.gateway.fetch_markets_by_slugs(clean)
         incentives = await self.gateway.fetch_incentives(clean)
         now = self.clock() if self.clock is not None else now
-        window_end = now + timedelta(
-            seconds=self.policy.selection_horizon_seconds)
+        window_end = self.policy.discovery_window_end(now)
         opportunities: list[RewardMarketOpportunity] = []
         for slug in clean:
             market = markets.get(slug)
@@ -816,8 +826,17 @@ class RewardMarketSelector:
             return None
         period = select_applicable_period(
             incentive.periods, market.game_start, now,
-            allow_daily_event=self.policy.allow_daily_event_rewards)
-        if period is None or period.period == "live":
+            allow_daily_event=self.policy.allow_daily_event_rewards,
+            daily_event_horizon_seconds=self.policy.daily_event_horizon_seconds,
+            daily_event_observed_at=incentive.observed_at)
+        if period is None:
+            return None
+        kind = str(period.period).strip().lower()
+        if kind not in {"day_of", "day-of", "dayof", "daily_event", "daily-event"}:
+            return None
+        if kind in {"day_of", "day-of", "dayof"} and (
+                market.game_start.astimezone(timezone.utc)
+                - now.astimezone(timezone.utc)).total_seconds() > self.policy.selection_horizon_seconds:
             return None
         return period
 

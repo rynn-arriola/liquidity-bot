@@ -134,6 +134,7 @@ from .rewards import (
     AmbiguousIncentiveError,
     IncentivePeriod,
     RewardProjection,
+    daily_reward_evidence_is_current,
     evaluate_order_score,
     project_order_reward,
     select_applicable_period,
@@ -1380,11 +1381,22 @@ class CommissioningRunner:
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
-                allow_daily_event=self.config.allow_daily_event_rewards)
+                allow_daily_event=self.config.allow_daily_event_rewards,
+                daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
+                daily_event_observed_at=state.incentive.observed_at)
         except AmbiguousIncentiveError as exc:
             raise CommissioningUnavailable(
                 f"{slug} has ambiguous incentive periods") from exc
         if period is None:
+            if (self.config.allow_daily_event_rewards
+                    and self.config.daily_event_horizon_seconds > 21600
+                    and any(str(p.period).strip().lower() in {"daily_event", "daily-event"}
+                            for p in state.incentive.periods)
+                    and not daily_reward_evidence_is_current(
+                        state.incentive.observed_at, now)):
+                # A scan crossing midnight needs new proof, not retirement of
+                # the prior owner based on an unrefreshed reward response.
+                raise CommissioningUnavailable(f"{slug} daily reward day is unproven")
             prior = next((
                 item for item in state.incentive.periods
                 if item.program_id == state.reward_program_id
@@ -3766,7 +3778,9 @@ class CommissioningRunner:
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
-                allow_daily_event=self.config.allow_daily_event_rewards)
+                allow_daily_event=self.config.allow_daily_event_rewards,
+                daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
+                daily_event_observed_at=state.incentive.observed_at)
         except AmbiguousIncentiveError:
             state.economic_blocker_by_side = {
                 "bid": "ambiguous_incentive", "offer": "ambiguous_incentive"}
@@ -4209,8 +4223,26 @@ class CommissioningRunner:
         seconds_to_event = (
             (market.game_start - now).total_seconds()
             if market.game_start is not None else None)
+        daily_clock_allowed = True
+        if (state.incentive is not None and market.game_start is not None
+                and any(str(p.period).strip().lower() in {"daily_event", "daily-event"}
+                        for p in state.incentive.periods)):
+            # Admission can wait across midnight or an explicit reward end.
+            # This is a local recheck, never another API call or an exit gate.
+            try:
+                current_period = select_applicable_period(
+                    state.incentive.periods, market.game_start, now,
+                    allow_daily_event=self.config.allow_daily_event_rewards,
+                    daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
+                    daily_event_observed_at=state.incentive.observed_at)
+                daily_clock_allowed = current_period is not None and (
+                    str(current_period.period).strip().lower()
+                    in {"day_of", "day-of", "dayof", "daily_event", "daily-event"})
+            except (AmbiguousIncentiveError, ValueError):
+                daily_clock_allowed = False
         allowed = (
             not self._stop_requested
+            and daily_clock_allowed
             and not self.config.recovery_only
             and position == 0
             and not self._public_book_invalid(slug)
@@ -4260,7 +4292,9 @@ class CommissioningRunner:
                 raise RuntimeError("market observation identity is inconsistent")
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
-                allow_daily_event=self.config.allow_daily_event_rewards)
+                allow_daily_event=self.config.allow_daily_event_rewards,
+                daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
+                daily_event_observed_at=state.incentive.observed_at)
             if period is None:
                 raise RuntimeError("applicable reward period is unavailable")
             side = action.side
@@ -10918,6 +10952,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
         allow_daily_event_rewards=not getattr(args, "disable_daily_event_rewards", False),
+        daily_event_horizon_seconds=3600 * getattr(args, "daily_event_entry_hours", 24),
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
         economic_risk_accepted=args.accept_one_contract_risk,
         exclusive_api_key_confirmed=args.exclusive_api_key,
@@ -11014,6 +11049,10 @@ def main() -> int:
     parser.add_argument(
         "--disable-daily-event-rewards", action="store_true",
         help="disable daily-event fallback; retain established day-of selection",
+    )
+    parser.add_argument(
+        "--daily-event-entry-hours", type=int, choices=(6, 24), default=24,
+        help="daily-event entry lookahead; 6 restores the previous horizon",
     )
     parser.add_argument("--recovery-only", action="store_true",
                         help="recover identified account exposure, never start entries")

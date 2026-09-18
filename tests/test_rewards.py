@@ -36,6 +36,65 @@ def period(name: str, *, status: str = "active", target: float = 5000,
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_expanded_daily_uses_active_rewards_not_game_date(self):
+        daily = period("daily_event")
+        for seconds, expected in ((86401, False), (86400, True), (43200, True),
+                                  (21601, True), (21600, True), (1, True),
+                                  (0, False), (-1, False)):
+            with self.subTest(seconds=seconds):
+                selected = select_applicable_period(
+                    [daily], NOW+timedelta(seconds=seconds), NOW,
+                    allow_daily_event=True, daily_event_horizon_seconds=86400,
+                    daily_event_observed_at=NOW)
+                self.assertEqual(selected == daily, expected)
+        # Active early rows do not hide the separate daily pool; day-of is
+        # still preferred once the actual six-hour lifecycle begins.
+        rows = [period("early"), period("day_of"), daily]
+        for hours, expected in ((12, daily), (6, rows[1])):
+            self.assertEqual(select_applicable_period(
+                iter(rows), NOW+timedelta(hours=hours), NOW,
+                allow_daily_event=True, daily_event_horizon_seconds=86400,
+                daily_event_observed_at=NOW), expected)
+
+    def test_expanded_daily_midnight_needs_fresh_evidence(self):
+        before = datetime(2026, 9, 19, 3, 59, 59, tzinfo=UTC)
+        after = before + timedelta(seconds=1)
+        start = after + timedelta(hours=12)
+        for stamp, expected in ((None, False), (before, False), (after, True),
+                                (after+timedelta(seconds=1), False)):
+            with self.subTest(stamp=stamp):
+                selected = select_applicable_period(
+                    [period("daily_event")], start, after,
+                    allow_daily_event=True, daily_event_horizon_seconds=86400,
+                    daily_event_observed_at=stamp)
+                self.assertEqual(selected is not None, expected)
+
+    def test_expanded_daily_keeps_bounds_duplicates_and_disable(self):
+        for rows, enabled in (([period("daily_event", starts_at=NOW+timedelta(seconds=1))], True),
+                              ([period("daily_event", ends_at=NOW)], True),
+                              ([period("daily_event", status="pending")], True),
+                              ([period("daily")], True),
+                              ([period("early")], True),
+                              ([period("daily_event")], False)):
+            self.assertIsNone(select_applicable_period(
+                rows, NOW+timedelta(hours=12), NOW, allow_daily_event=enabled,
+                daily_event_horizon_seconds=86400, daily_event_observed_at=NOW))
+        with self.assertRaises(AmbiguousIncentiveError):
+            select_applicable_period(
+                [period("daily_event", program_id="a"), period("daily-event", program_id="b")],
+                NOW+timedelta(hours=12), NOW, allow_daily_event=True,
+                daily_event_horizon_seconds=86400, daily_event_observed_at=NOW)
+
+    def test_expanded_daily_horizon_uses_elapsed_time_across_dst(self):
+        zone = ZoneInfo("America/New_York")
+        for month, day, hour, expected in ((11, 1, 0, False), (3, 8, 1, True)):
+            now = datetime(2026, month, day, hour, tzinfo=zone)
+            start = now + timedelta(days=1)
+            selected = select_applicable_period(
+                [period("daily_event")], start, now, allow_daily_event=True,
+                daily_event_horizon_seconds=86400, daily_event_observed_at=now)
+            self.assertEqual(selected is not None, expected)
+
     def test_daily_fallback_and_day_of_priority_including_generators(self):
         daily = period("daily_event", pool=1000)
         day_of = period("day_of", pool=35)

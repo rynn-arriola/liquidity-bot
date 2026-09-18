@@ -41,8 +41,9 @@ These are implementation requirements, not suggestions.
     be explicitly set only from 20 through the authorized canary ceiling of 32;
     32 remains a measured canary, not a durable default or proof that the
     whole slate can fall back to REST. A bare restart must return to 20. The
-    six-hour selection horizon does not
-    change. Early-exit loss (`0.8 × size`), stressed-exit entry cap (`4 × size`),
+    day-of horizon remains six hours; explicitly enabled daily-event rewards
+    may use the bounded 24-hour pregame lookahead in invariant 39.
+    Early-exit loss (`0.8 × size`), stressed-exit entry cap (`4 × size`),
     per-market exposure (`9 × size`), portfolio exposure
     (`(slots + 10) × size`), HARD (fixed configured dollars per ET window),
     and the cent-rounded ET-day gross taker-fee telemetry reference
@@ -191,9 +192,13 @@ These are implementation requirements, not suggestions.
     by the pregame executor; `tournament_with_cutoff` was observed live but has
     no documented timing/pool-allocation rule. Both remain read-only until
     explicitly modeled and tested.
-    Approved `daily_event` fallback stays inside the same six-hour pregame
-    window, behind eligible `day_of` candidates, with actual-live and kickoff
-    exits unchanged. Daily projections use the full ET day, never a six-hour
+    Approved `daily_event` fallback may enter up to 24 elapsed hours before
+    kickoff, including tomorrow's games, only with a currently active exact
+    reward row and evidence fetched during the current ET reward day. Midnight
+    or a future-dated/missing receipt blocks new daily entries pending fresh
+    proof, including after admission waits; stale proof alone cannot retire
+    ownership. Day-of retains six-hour timing and priority. Actual-live and
+    kickoff exits are unchanged. Daily projections use the full ET day, never a six-hour
     denominator or stacked concurrent pools. Disabling fallback never disables
     reduction/exit of existing inventory.
 40. New risk is limited to markets whose normalized `sportsMarketTypeV2` is
@@ -847,13 +852,15 @@ These are implementation requirements, not suggestions.
     ambiguity recovery must never be demoted to report traffic.
 95. Automatic selection may not depend on an unbounded account-wide market or
     incentive enumeration. Discovery must page active/open sports events only
-    inside the six-hour strategy horizon plus the reviewed one-day event-clock
-    skew buffer, fail closed at the explicit event-page ceiling, and apply the
+    inside the maximum enabled strategy horizon (six-hour day-of, up to24-hour
+    daily-event) plus the reviewed one-day event-clock skew buffer, fail closed
+    at the explicit event-page ceiling, and apply the
     authoritative market-level lifecycle, `game_start`, V2-moneyline, tick and
     minimum-quantity gates before any symbol-filtered incentive fan-out. Event
     time is a discovery hint and cannot widen the strategy horizon. A missing,
     malformed, truncated or failed event/incentive response authorizes no new
-    risk. This routing may reduce API work only; it cannot alter quote price,
+    risk. The wider daily scope can increase metadata/incentive reads but never
+    the existing page, batch,100-book or shared admission ceilings. It cannot alter quote price,
     quantity, reward period, economics, ranking, ownership, risk or exit
     authority.
 96. Window loss-scaled capacity uses the same confirmed-loss evidence as HARD.

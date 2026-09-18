@@ -110,6 +110,8 @@ def select_applicable_period(
     now: datetime,
     *,
     allow_daily_event: bool = False,
+    daily_event_horizon_seconds: float = 21600.0,
+    daily_event_observed_at: datetime | None = None,
 ) -> IncentivePeriod | None:
     """Select exactly one active period for the event clock, or fail closed.
 
@@ -119,20 +121,25 @@ def select_applicable_period(
     expected revenue optimistic, so ambiguity raises explicitly.
 
     ``daily_event`` is a separate midnight-to-midnight ET program.  When it is
-    enabled it is only a fallback during the six-hour pregame/day-of phase;
-    an applicable event-lifecycle row always wins.  This preserves the
-    established day-of strategy and cannot use a daily row to authorize live
-    trading.
+    enabled, day-of wins inside its six-hour phase. The separately configured
+    daily horizon may extend to 24 elapsed hours before kickoff, regardless of
+    the game's ET date. Expanded mode requires incentive evidence from the
+    current ET reward day; cached yesterday's parameters cannot roll forward.
+    Legacy callers retain the six-hour behavior unless explicitly configured.
     """
 
     # Materialize once: callers may supply a generator, and fallback needs a
     # second pass after the event-lifecycle lookup.
     periods = tuple(periods)
     phase = phase_for_event(event_start, now)
+    if not 21600 <= daily_event_horizon_seconds <= 86400:
+        raise ValueError("daily event horizon must be between six and 24 hours")
+    expanded_daily = allow_daily_event and daily_event_horizon_seconds > 21600
     matches = [
         item for item in periods
         if str(item.status).strip().lower() == "active"
         and _normalized_period(item.period) == phase
+        and not (expanded_daily and phase == "early")
         and (item.starts_at is None or item.starts_at <= now)
         and (item.ends_at is None or now < item.ends_at)
     ]
@@ -142,7 +149,12 @@ def select_applicable_period(
             f"multiple active {phase} incentive programs: {ids}")
     if matches:
         return matches[0]
-    if not allow_daily_event or phase != "day_of":
+    remaining = (event_start.astimezone(timezone.utc)
+                 - now.astimezone(timezone.utc)).total_seconds()
+    if not allow_daily_event or not 0 < remaining <= daily_event_horizon_seconds:
+        return None
+    if expanded_daily and not daily_reward_evidence_is_current(
+            daily_event_observed_at, now):
         return None
 
     daily_matches = [
@@ -157,6 +169,18 @@ def select_applicable_period(
         raise AmbiguousIncentiveError(
             f"multiple active daily_event incentive programs: {ids}")
     return daily_matches[0] if daily_matches else None
+
+
+def daily_reward_evidence_is_current(observed_at: datetime | None,
+                                     now: datetime) -> bool:
+    """Do not carry daily parameters across ET midnight or from the future."""
+    if observed_at is None:
+        return False
+    _require_aware(observed_at, "daily_event_observed_at")
+    _require_aware(now, "now")
+    return (observed_at.astimezone(timezone.utc) <= now.astimezone(timezone.utc)
+            and observed_at.astimezone(_REWARD_TIMEZONE).date()
+            == now.astimezone(_REWARD_TIMEZONE).date())
 
 
 def _projection_period_bounds(

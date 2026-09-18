@@ -312,6 +312,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         RewardSelectionPolicy(
             max_book_candidates=CENSUS_BOOK_CANDIDATES,
             enforce_reward_cost_gate=True),
+        clock=lambda: datetime.now(timezone.utc),
     )
     results: list[CensusResult] = []
     try:

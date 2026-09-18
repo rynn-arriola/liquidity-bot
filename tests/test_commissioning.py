@@ -26,6 +26,16 @@ from liquidity_bot.slot_capacity import main as slot_capacity_main
 
 
 class CommissioningTests(unittest.TestCase):
+    def test_daily_horizon_is_bounded_and_propagated(self):
+        for seconds in (21600, 86400):
+            config = self.authorized(daily_event_horizon_seconds=seconds)
+            self.assertEqual(config.reward_selection_policy().daily_event_horizon_seconds,
+                             seconds)
+        for seconds in (0, 21599, 86401, float("nan"), float("inf")):
+            config = self.authorized(daily_event_horizon_seconds=seconds)
+            self.assertIn("daily event horizon must be between six and 24 hours",
+                          config.blockers(now=datetime(2026, 9, 18, tzinfo=timezone.utc)))
+
     def test_daily_event_switch_propagates_to_selector_and_rejects_non_bool(self):
         for enabled in (True, False):
             config = self.authorized(allow_daily_event_rewards=enabled)

@@ -1687,6 +1687,7 @@ class AsyncReadOnlyGateway:
     async def fetch_incentives(
         self, symbols: Iterable[str]
     ) -> dict[str, MarketIncentive]:
+        observed_at = datetime.now(timezone.utc)
         clean = list(dict.fromkeys(str(symbol).strip() for symbol in symbols
                                    if str(symbol).strip()))
         if not clean:
@@ -1700,7 +1701,7 @@ class AsyncReadOnlyGateway:
                 reported_clocks,
                 symbols=chunk,
             )
-        return self._incentive_models(found_periods, reported_clocks)
+        return self._incentive_models(found_periods, reported_clocks, observed_at)
 
     async def list_incentives(
         self,
@@ -1738,12 +1739,14 @@ class AsyncReadOnlyGateway:
     def _incentive_models(
         found_periods: dict[str, list[IncentivePeriod]],
         reported_clocks: dict[str, datetime | None],
+        observed_at: datetime | None = None,
     ) -> dict[str, MarketIncentive]:
         return {
             slug: MarketIncentive(
                 slug=slug,
                 periods=tuple(periods),
                 reported_event_start=reported_clocks.get(slug),
+                observed_at=observed_at,
             )
             for slug, periods in found_periods.items()
         }

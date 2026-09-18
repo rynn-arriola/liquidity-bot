@@ -102,14 +102,28 @@ class GatewayTests(unittest.TestCase):
     def run_async(self, coro):
         return asyncio.run(coro)
 
+    def test_incentive_evidence_uses_fetch_start_not_completion(self):
+        client = FakeClient()
+        client.get_responses = [fixture("incentives_page_1.json"), fixture("incentives_page_2.json")]
+        before = datetime(2026, 9, 19, 3, 59, 59, tzinfo=timezone.utc)
+        after = datetime(2026, 9, 19, 4, 0, 0, tzinfo=timezone.utc)
+        with patch("liquidity_bot.adapters.datetime", wraps=datetime) as clock:
+            clock.now.side_effect = [before, after]
+            found = self.run_async(AsyncReadOnlyGateway(client).fetch_incentives(["market-one", "market-two"]))
+        self.assertTrue(all(row.observed_at == before for row in found.values()))
+
     def test_incentives_follow_next_page_token_and_preserve_all_periods(self):
         client = FakeClient()
         client.get_responses = [fixture("incentives_page_1.json"),
                                 fixture("incentives_page_2.json")]
         gateway = AsyncReadOnlyGateway(client)
+        before = datetime.now(timezone.utc)
         found = self.run_async(gateway.fetch_incentives(["market-one", "market-two"]))
 
         self.assertEqual(set(found), {"market-one", "market-two"})
+        self.assertTrue(all(before <= item.observed_at <= datetime.now(timezone.utc)
+                            for item in found.values()))
+        self.assertEqual(found["market-one"].observed_at, found["market-two"].observed_at)
         self.assertEqual([p.period for p in found["market-one"].periods],
                          ["day_of", "live"])
         self.assertIsNone(found["market-one"].reported_event_start)

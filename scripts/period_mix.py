@@ -3,7 +3,7 @@
 
 Answers "why is the bot quoting so little?" when the funnel says the drain is
 `no applicable period`. The executor uses `day_of` first, with `daily_event`
-as an enabled fallback inside the same six-hour pregame window. A league
+as an enabled fallback up to 24 elapsed hours before kickoff. A league
 carrying only `live` remains unavailable however good its books look.
 
 Written 2026-08-20, when order flow collapsed and the cause turned out to be
@@ -71,7 +71,7 @@ async def main() -> int:
         default_traffic_class="report")
     policy = CommissioningConfig.diagnostic_defaults().reward_selection_policy()
     now = datetime.now(timezone.utc)
-    window = now + timedelta(seconds=policy.selection_horizon_seconds)
+    window = policy.discovery_window_end(now)
 
     clock_skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
     catalog = await gateway.list_upcoming_sports_markets(
@@ -86,14 +86,16 @@ async def main() -> int:
         and now < m.game_start <= window and m.is_supported_moneyline
         and m.tick_size is not None and m.minimum_trade_qty is not None]
 
-    print(f"at {now.isoformat()[:19]}Z   horizon "
-          f"{policy.selection_horizon_seconds / 3600:.0f}h")
+    print(f"at {now.isoformat()[:19]}Z   day-of "
+          f"{policy.selection_horizon_seconds / 3600:.0f}h / daily "
+          f"{policy.daily_event_horizon_seconds / 3600:.0f}h")
     print(f"in-horizon moneylines: {len(in_window)}")
     if not in_window:
         print("nothing in the horizon: a schedule trough, not a program change")
         return 0
 
     incentives = await gateway.fetch_incentives(sorted(m.slug for m in in_window))
+    now = datetime.now(timezone.utc)
     by_league: dict[str, Counter] = defaultdict(Counter)
     for slug, incentive in incentives.items():
         match = LEAGUE.match(slug)
@@ -110,10 +112,12 @@ async def main() -> int:
         try:
             selected = select_applicable_period(
                 incentive.periods, market.game_start, now,
-                allow_daily_event=policy.allow_daily_event_rewards)
+                allow_daily_event=policy.allow_daily_event_rewards,
+                daily_event_horizon_seconds=policy.daily_event_horizon_seconds,
+                daily_event_observed_at=incentive.observed_at)
         except (AmbiguousIncentiveError, ValueError):
             continue
-        if selected is not None and selected.period != "live":
+        if selected is not None and selected.period in {"day_of", "day-of", "dayof", "daily_event", "daily-event"}:
             available[selected.period] += 1
     quotable = sum(available.values())
     print()

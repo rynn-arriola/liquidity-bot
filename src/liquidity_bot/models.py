@@ -17,6 +17,8 @@ class MarketIncentive:
     slug: str
     periods: tuple[IncentivePeriod, ...]
     reported_event_start: datetime | None = None
+    # Conservative start of the complete fetch, never a cache-read timestamp.
+    observed_at: datetime | None = None
 
 
 @dataclass(frozen=True)

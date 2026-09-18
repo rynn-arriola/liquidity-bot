@@ -623,7 +623,8 @@ async def _sections(args, now, lines, gateway, orders, quoted, positions,
             from liquidity_bot.market_selector import RewardMarketSelector
             policy = CONFIG.reward_selection_policy()
             selection = await RewardMarketSelector(
-                gateway, policy=policy).select(now=now)
+                gateway, policy=policy,
+                clock=lambda: datetime.now(timezone.utc)).select(now=now)
             viable = len([o for o in selection.opportunities if o.viable_sides])
             tight = selection.catalog_spread_filtered_markets
             rewarded = selection.rewarded_executable_markets

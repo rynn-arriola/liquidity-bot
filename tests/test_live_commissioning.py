@@ -1493,7 +1493,8 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         state = runner.state_for("market-one")
         original = state.incentive.periods[0]
         daily = replace(original, period="daily_event", program_id="daily-test")
-        incentive = MarketIncentive(state.slug, (daily,))
+        state.market = replace(state.market, game_start=NOW+timedelta(hours=24))
+        incentive = MarketIncentive(state.slug, (daily,), observed_at=NOW)
         runner._apply_contracts(state, market=state.market, incentive=incentive,
                                 now=NOW, for_exit=False)
         self.assertEqual(state.reward_program_id, "daily-test")
@@ -1519,6 +1520,53 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         # Losing reward authorization must not prevent position handling.
         runner._apply_contracts(state, market=state.market, incentive=incentive,
                                 now=NOW, for_exit=True)
+
+    async def test_daily_stale_reward_day_is_not_retirement_or_exit_block(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        state = runner.state_for("market-one")
+        state.market = replace(state.market, game_start=NOW+timedelta(hours=12))
+        daily = replace(state.incentive.periods[0], period="daily_event", program_id="daily-test")
+        stale = MarketIncentive(state.slug, (daily,), observed_at=NOW-timedelta(days=1))
+        state.reward_program_id = daily.program_id
+        with self.assertRaisesRegex(CommissioningUnavailable, "reward day is unproven"):
+            runner._apply_contracts(state, market=state.market, incentive=stale,
+                                    now=NOW, for_exit=False)
+        self.assertIsNone(state.reward_authorization_loss_confirmed_at)
+        runner._evaluate_rewards_inner(NOW, state.slug)
+        self.assertFalse(state.reward_eligible)
+        runner._apply_contracts(state, market=state.market, incentive=stale,
+                                now=NOW, for_exit=True)
+        fresh = replace(stale, observed_at=NOW)
+        runner._apply_contracts(state, market=state.market, incentive=fresh,
+                                now=NOW, for_exit=False)
+        runner._evaluate_rewards_inner(NOW, state.slug)
+        self.assertTrue(state.reward_eligible)
+        runner.config = replace(runner.config, daily_event_horizon_seconds=21600)
+        runner._evaluate_rewards_inner(NOW, state.slug)
+        self.assertFalse(state.reward_eligible)
+        runner._apply_contracts(state, market=state.market, incentive=fresh,
+                                now=NOW, for_exit=True)
+
+    async def test_daily_send_time_rechecks_reward_clock_without_api(self):
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        state = runner.state_for("market-one")
+        daily = replace(state.incentive.periods[0], period="daily_event")
+        fresh = MarketIncentive(state.slug, (daily,), observed_at=NOW)
+        state.incentive = fresh
+        # A valid baseline proves the negative cases fail for reward authority,
+        # not a pre-existing account/book/ownership refusal.
+        runner._check_entry_admission({"marketSlug": state.slug})
+        for value in (replace(fresh, observed_at=NOW-timedelta(days=1)),
+                      replace(fresh, periods=(replace(daily, ends_at=NOW),)),
+                      replace(fresh, periods=(daily, replace(daily, program_id="duplicate")))):
+            state.incentive = value
+            with self.assertRaises(ApiAdmissionDeferred):
+                runner._check_entry_admission({"marketSlug": state.slug})
+        self.assertEqual(client.orders.create_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
 
     async def test_building_observation_records_actual_queue_separately_from_model(self):
         runner, _, _ = self.build_runner()

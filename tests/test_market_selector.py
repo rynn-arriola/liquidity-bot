@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -64,7 +65,7 @@ def incentive(
         target_size=target,
         starts_at=starts_at,
         ends_at=ends_at,
-    ),))
+    ),), observed_at=NOW)
 
 
 def book(
@@ -146,6 +147,79 @@ class FakeGateway:
         return value
 
 
+class ExpandedDailySelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_future_daily_keeps_day_of_priority_and_book_bound(self):
+        markets = {"old": market("old"), "daily": market("daily", starts_in_hours=24),
+                   "too-far": market("too-far", starts_in_hours=25),
+                   "early-only": market("early-only", starts_in_hours=12),
+                   "live": market("live", starts_in_hours=0)}
+        incentives = {s: incentive(s, pool=1_000_000, phase="daily_event") for s in markets}
+        incentives["old"] = incentive("old", pool=35)
+        incentives["early-only"] = incentive("early-only", pool=1_000_000, phase="early")
+        for cap in (1, 2):
+            gateway = FakeGateway(markets, incentives, {s: book(s) for s in markets})
+            selector = RewardMarketSelector(gateway, RewardSelectionPolicy(
+                max_book_candidates=cap), clock=lambda: NOW)
+            selected = await selector.select(now=NOW)
+            self.assertEqual(selected.selected.market.slug, "old")
+            self.assertEqual(gateway.book_calls, ["old"] if cap == 1 else ["old", "daily"])
+            self.assertEqual(gateway.incentive_symbol_calls, [("daily", "early-only", "old")])
+            validated = await selector.revalidate_viable(["daily"], now=NOW)
+            self.assertEqual([o.market.slug for o in validated], ["daily"])
+
+    async def test_daily_rollback_and_disable_prevent_early_books(self):
+        for policy in (RewardSelectionPolicy(daily_event_horizon_seconds=21600),
+                       RewardSelectionPolicy(allow_daily_event_rewards=False)):
+            gateway = FakeGateway({"daily": market("daily", starts_in_hours=24)},
+                {"daily": incentive("daily", pool=1000, phase="daily_event")}, {})
+            selector = RewardMarketSelector(gateway, policy, clock=lambda: NOW)
+            self.assertIsNone((await selector.select(now=NOW)).selected)
+            self.assertEqual(await selector.revalidate_viable(["daily"], now=NOW), ())
+            self.assertEqual(gateway.book_calls, [])
+            self.assertEqual(gateway.upcoming_calls[0][1], NOW+timedelta(hours=30))
+
+    async def test_midnight_drops_cached_rewards_until_fresh_read(self):
+        before = datetime(2026, 9, 19, 3, 59, 59, tzinfo=timezone.utc)
+        after = before + timedelta(seconds=1)
+        for revalidate in (False, True):
+            moment = [before]
+            meta = replace(market("daily"), game_start=after+timedelta(hours=12))
+            rewards = replace(incentive("daily", pool=1000, phase="daily_event"),
+                              observed_at=before)
+            gateway = FakeGateway({"daily": meta}, {"daily": rewards}, {"daily": book("daily")})
+            original = gateway.fetch_book
+            async def delayed(slug):
+                value = await original(slug)
+                moment[0] = after
+                return value
+            gateway.fetch_book = delayed
+            selector = RewardMarketSelector(gateway, clock=lambda: moment[0])
+            if revalidate:
+                self.assertEqual(await selector.revalidate_viable(["daily"], now=before), ())
+            else:
+                self.assertIsNone((await selector.select(now=before)).selected)
+            gateway.incentives["daily"] = replace(rewards, observed_at=after)
+            self.assertEqual(len(await selector.revalidate_viable(["daily"], now=after)), 1)
+
+    async def test_daily_reward_rank_does_not_follow_headline_pool(self):
+        gateway = FakeGateway({s: market(s, starts_in_hours=12) for s in ("small", "large")},
+            {"small": incentive("small", pool=100, phase="daily_event"),
+             "large": incentive("large", pool=1000, target=100000, phase="daily_event")},
+            {"small": book("small"), "large": book("large", touch_size=100000)})
+        result = await RewardMarketSelector(gateway, clock=lambda: NOW).select(now=NOW)
+        self.assertEqual(result.selected.market.slug, "small")
+        self.assertEqual(sum(bool(o.viable_sides) for o in result.opportunities), 2)
+
+    def test_discovery_elapsed_horizon_and_invalid_policy(self):
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 11, 1, 0, tzinfo=ZoneInfo("America/New_York"))
+        self.assertEqual(RewardSelectionPolicy().discovery_window_end(now),
+                         now.astimezone(timezone.utc)+timedelta(hours=24))
+        for value in (0, 86401, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                RewardSelectionPolicy(daily_event_horizon_seconds=value)
+
+
 class FixedFillHazard:
     def __init__(self, probability: float):
         self.probability = probability
@@ -217,7 +291,8 @@ class PacedSelectionClockTests(unittest.IsolatedAsyncioTestCase):
         gateway = FakeGateway({"early": market("early", starts_in_hours=7),
                                "live": market("live", starts_in_hours=0)},
             {s: incentive(s, pool=1000, phase="daily_event") for s in ("early", "live")}, {})
-        result = await RewardMarketSelector(gateway, clock=lambda: NOW).select(now=NOW)
+        result = await RewardMarketSelector(gateway, RewardSelectionPolicy(
+            daily_event_horizon_seconds=21600), clock=lambda: NOW).select(now=NOW)
         self.assertIsNone(result.selected)
         self.assertEqual(gateway.book_calls, [])
         moment = [NOW]
@@ -801,10 +876,10 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         result = await RewardMarketSelector(gateway).select(now=NOW)
 
         self.assertEqual(result.catalog_markets, 4)
-        self.assertEqual(result.executable_catalog_markets, 1)
+        self.assertEqual(result.executable_catalog_markets, 2)
         self.assertEqual(gateway.incentive_universe_calls, [])
         self.assertEqual(gateway.metadata_calls, [])
-        self.assertEqual(gateway.incentive_symbol_calls, [("valid",)])
+        self.assertEqual(gateway.incentive_symbol_calls, [("early", "valid")])
         self.assertEqual(gateway.book_calls, ["valid"])
 
     async def test_structure_filter_uses_v2_not_two_way_side_count(self):
@@ -847,7 +922,7 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
         (discovery_start, discovery_end, discovery_limit,
          require_complete) = gateway.upcoming_calls[0]
         self.assertEqual(discovery_start, NOW - timedelta(days=1))
-        self.assertEqual(discovery_end, NOW + timedelta(hours=6, days=1))
+        self.assertEqual(discovery_end, NOW + timedelta(days=2))
         self.assertEqual(discovery_limit, 500)
         self.assertTrue(require_complete)
         self.assertEqual(gateway.incentive_universe_calls, [])

@@ -134,9 +134,42 @@ implied by unit tests.
 Superseded September17 root handoffs were preserved in the
 [September18 rollover](INDEX_ROLLOVER_2026-09-18.md), not discarded.
 
-After a separately authorized deployment/restart, verify actual old-first/daily
-selection, normal entry and position exits, bounded load and natural midnight
-transition. Do not induce fills/failures. Confirm cross-event daily pool
+After release, continue natural old-first/daily selection, position exits,
+bounded load and midnight-transition acceptance. Do not induce fills/failures.
+Confirm cross-event daily pool
 allocation with the venue before claiming precise reward income. Batch orders,
 new discovery routes and Institutional migration remain research, not approved
 implementation in this change.
+
+## Authorized deployment and restart
+
+The operator subsequently authorized restart. The old supervisor136210 and
+runner136224 stopped normally with `operator_sigterm` and terminal `flat=true`.
+An authenticated post-stop gate at17:13:57Z proved zero orders, positions,
+unresolved intents, unknown orders, ledger working orders and ledger positions.
+Because the WSL GitHub fetch stalled, it was interrupted while the bot remained
+stopped; an exact locally verified bundle of the already-pushed commit was used
+to fast-forward the clean tracked runtime checkout from b3fd5d7f to af811c874.
+
+The exact installed checkout passed all1,765 tests in171.270s. DEPLOYED_COMMIT,
+Windows, GitHub and WSL then matched af811c874; the stopped ledger recovery copy
+was verified at697,942,016 bytes with SHA-256 prefix17b3ed3200ca. A second
+authenticated17:19:49Z start gate was entirely flat and clear.
+
+Supervisor186455/runner186471 started17:19:51Z in explicit REST mode at size10
+and32 configured slots. Startup retained the $25 12:00–18:00 ET window with
+loss0/cap30, healthy official maintenance state and automatic source switching
+disabled. It found140 rewarded markets, evaluated56 fresh streamed books with
+zero REST fallback and ranked46 viable opportunities. A fresh17:23:11Z period
+read found141 in-horizon moneylines and140 reward rows: all daily_event, zero
+day_of. This proves the fallback works on the current slate, not the future
+mixed-period priority path or exact payout.
+
+At17:25:01Z authenticated state showed30 flat entry orders plus one exact
+SELL-10 open reducer covering the only +10 position; unresolved intents,
+unknown orders and unrelated position-market orders were zero. The position
+was observed through REST and its reducer acknowledged about0.08 seconds later.
+The first two API windows reported2.954 and2.156 requests/s, zero429/cooldown;
+five expected individual order-publication404s reconciled. Natural flattening,
+midnight rollover, future day_of priority and sustained reward/load behavior
+remain observational and must not be induced. The bot was not restarted again.

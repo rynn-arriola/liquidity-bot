@@ -97,6 +97,14 @@ class MarketState:
     # immediately reset the clock instead of rotating on a transient tick.
     economically_ineligible_since: datetime | None = None
     economic_ineligibility_reasons: tuple[str, ...] = ()
+    # Consecutive successful contract reads cannot authorize this idle owner.
+    # This is optional replacement evidence, never proof a program ended.
+    reward_unavailable_since: datetime | None = None
+    reward_unavailable_observed_at: datetime | None = None
+
+    def clear_reward_unavailability(self) -> None:
+        self.reward_unavailable_since = None
+        self.reward_unavailable_observed_at = None
 
     def clear_economics(self) -> None:
         """Drop every derived per-side value before a fresh evaluation.
@@ -138,6 +146,7 @@ class MarketState:
         self.reward_authorization_loss_confirmed_at = None
         self.economically_ineligible_since = None
         self.economic_ineligibility_reasons = ()
+        self.clear_reward_unavailability()
         self.clear_economics()
 
     def observe_book_touch(

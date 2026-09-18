@@ -452,7 +452,9 @@ These are implementation requirements, not suggestions.
     that exact row and prove either its explicit `ends_at` elapsed or that it no
     longer applies to freshly-read event metadata (for example, kickoff moved
     back outside the six-hour day-of window). A missing row, different program
-    or failed refresh is not proof. Even after confirmation, a nonzero
+    or failed refresh is not proof of authorization loss. The separate optional
+    idle replacement rule in invariant 82 does not claim a program ended. Even
+    after confirmation, a nonzero
     position, working order, `UNKNOWN_ABSENT` order or unresolved intent retains
     the market in the active ownership scope. Incremental replacement preserves
     every healthy venue order, rechecks release safety at the commit boundary,
@@ -643,6 +645,15 @@ These are implementation requirements, not suggestions.
     optional owner before release. It may not cancel retained orders, lower the
     active count when replacement supply is short, bypass complete pre-commit
     account reconciliation or exceed the validated restart capacity.
+    The same optional cadence/dwell/capacity rule may replace a reward-unavailable
+    owner after repeated successful, complete contract reads spanning at least
+    600 seconds find no applicable reward on a known-open pregame event. Reads
+    more than the existing 900-second backoff plus 5-second coalescing allowance
+    apart, failed/unknown reads, valid rewards, retirement or ownership prevent
+    or reset this evidence. Fresh bulk contract proof is required again before
+    release, in addition to complete account proof. No replacement means no
+    release; positions, orders, absent orders and unresolved intents always retain
+    ownership. Missing rewards never authorize entry or prove program closure.
 83. Post-flat refill priority may shorten only avoidable scheduler delay. It
     requires a transition from positively held near-deadline inventory to no
     remaining near-deadline position, observed through the normal private

@@ -183,6 +183,10 @@ MAX_RECOVERY_ATTEMPTS = 12
 class _ConfirmedMarketNotOpen(CommissioningUnavailable):
     """Exact fetched metadata says the owner cannot currently accept orders."""
 
+
+class _RewardUnavailable(CommissioningUnavailable):
+    """Successful contract reads lack applicable rewards for an open event."""
+
 # Ordinary reconnects are bounded so a local/schema defect cannot hold a live
 # process dormant forever. Positively classified venue transport/5xx outages
 # cross into the maintenance coordinator below instead. Neither path infers
@@ -1300,8 +1304,12 @@ class CommissioningRunner:
         """
         state = self.state_for(slug or self.market_slug)
         slug = state.slug
-        market = await self.gateway.fetch_market(slug)
-        incentives = await self.gateway.fetch_incentives([slug])
+        try:
+            market = await self.gateway.fetch_market(slug)
+            incentives = await self.gateway.fetch_incentives([slug])
+        except Exception:
+            state.clear_reward_unavailability()
+            raise
         self._apply_contracts(
             state,
             market=market,
@@ -1358,6 +1366,39 @@ class CommissioningRunner:
         for_exit: bool,
         accept_bound_lifecycle_end: bool = False,
     ) -> None:
+        """Keep successful reward absence distinct from failed/unknown reads."""
+
+        try:
+            self._apply_contract_rows(
+                state, market=market, incentive=incentive, now=now,
+                for_exit=for_exit,
+                accept_bound_lifecycle_end=accept_bound_lifecycle_end)
+        except _RewardUnavailable:
+            state.incentive = None
+            state.clear_economics()
+            if (accept_bound_lifecycle_end and not for_exit
+                    and not self._is_barred_from_quoting(state.slug)
+                    and self._owner_is_flat_and_clear(state.slug)):
+                previous = state.reward_unavailable_observed_at
+                if (previous is None or not 0 <= (now - previous).total_seconds()
+                        <= CONTRACT_REFRESH_MAX_BACKOFF_SECONDS
+                        + CONTRACT_REFRESH_LOOKAHEAD_SECONDS):
+                    state.reward_unavailable_since = now
+                state.reward_unavailable_observed_at = now
+            else:
+                state.clear_reward_unavailability()
+            raise
+        except Exception:
+            state.clear_reward_unavailability()
+            raise
+        else:
+            state.clear_reward_unavailability()
+
+    def _apply_contract_rows(
+        self, state: MarketState, *, market: MarketMetadata,
+        incentive: MarketIncentive | None, now: datetime, for_exit: bool,
+        accept_bound_lifecycle_end: bool = False,
+    ) -> None:
         """Apply already-fetched rows with the original per-market gates."""
 
         slug = state.slug
@@ -1387,9 +1428,6 @@ class CommissioningRunner:
         self._leave_inactive_market_wait(slug, now, "market_open")
         if for_exit:
             return
-        if state.incentive is None:
-            raise CommissioningUnavailable(
-                f"{slug} has no liquidityProgram incentive")
         if state.market.game_start is None:
             raise CommissioningUnavailable(
                 f"{slug} start clock is unavailable")
@@ -1406,6 +1444,9 @@ class CommissioningRunner:
             state.reward_eligible = frozenset()
             state.clear_economics()
             raise CommissioningUnavailable(f"{slug} event pregame state is unavailable")
+        if state.incentive is None:
+            raise _RewardUnavailable(
+                f"{slug} has no liquidityProgram incentive")
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
@@ -1455,7 +1496,7 @@ class CommissioningRunner:
                 state.clear_economics()
                 return
         if period is None or period.period == "live":
-            raise CommissioningUnavailable(
+            raise _RewardUnavailable(
                 f"{slug} has no applicable pregame liquidity period")
         state.reward_program_id = period.program_id
         state.reward_program_ends_at = period.ends_at
@@ -1490,6 +1531,7 @@ class CommissioningRunner:
             except Exception as exc:
                 for slug in chunk:
                     state = self.state_for(slug)
+                    state.clear_reward_unavailability()
                     state.incentive = None
                     state.reward_eligible = frozenset()
                     await self._report_runtime_error(
@@ -1524,6 +1566,8 @@ class CommissioningRunner:
                     self._runtime_error_counts.pop(
                         f"market_incentive_refresh:{slug}", None)
                 except Exception as exc:
+                    if not isinstance(exc, _RewardUnavailable):
+                        state.clear_reward_unavailability()
                     state.incentive = None
                     state.reward_eligible = frozenset()
                     await self._report_runtime_error(
@@ -8040,8 +8084,9 @@ class CommissioningRunner:
     ) -> bool:
         """True only after fresh metadata proves this slot is no longer paid.
 
-        Missing reward rows are not proof: a partial/transient incentive
-        response must make the market idle, never release its ownership scope.
+        Missing reward rows are not proof of authorization loss. The separate
+        optional idle replacement path never claims a program ended and may
+        release only a freshly proved empty owner for a viable replacement.
         `_refresh_contracts` records confirmation only when a later complete
         response still contains the exact program that previously authorized
         entry and that row no longer applies to the freshly read event clock.
@@ -8093,6 +8138,36 @@ class CommissioningRunner:
         return (
             held >= self.config.economic_idle_replacement_seconds
             and self._owner_is_flat_and_clear(slug)
+        )
+
+    def _reward_idle_and_flat(self, slug: str, now: datetime) -> bool:
+        """Repeated unavailable rewards can replace an empty slot, not risk."""
+
+        state = self._markets.get(slug)
+        if state is None:
+            return False
+        if (self._is_barred_from_quoting(slug)
+                or not self._owner_is_flat_and_clear(slug)):
+            state.clear_reward_unavailability()
+            return False
+        since = state.reward_unavailable_since
+        observed = state.reward_unavailable_observed_at
+        if since is None or observed is None:
+            return False
+        if not 0 <= (now - observed).total_seconds() <= (
+                CONTRACT_REFRESH_MAX_BACKOFF_SECONDS
+                + CONTRACT_REFRESH_LOOKAHEAD_SECONDS):
+            state.clear_reward_unavailability()
+            return False
+        return (
+            state.incentive is None
+            and state.market is not None
+            and state.market.game_start is not None
+            and state.market.game_start > now
+            and state.market.event_allows_entry(now)
+            and not self._market_metadata_proves_not_open(state.market)
+            and (observed - since).total_seconds()
+            >= self.config.economic_idle_replacement_seconds
         )
 
     def _position_near_its_flatten_deadline(self, now: datetime) -> bool:
@@ -8228,6 +8303,8 @@ class CommissioningRunner:
             or any(self._reward_authorization_lost_and_flat(slug, now)
                    for slug in self.active_slugs)
             or any(self._economically_idle_and_flat(slug, now)
+                   for slug in self.active_slugs)
+            or any(self._reward_idle_and_flat(slug, now)
                    for slug in self.active_slugs)
         )
 
@@ -8407,7 +8484,9 @@ class CommissioningRunner:
         which are flat with no order ownership left.  It may also replace a
         flat, clear pregame owner after ten continuous minutes of a named
         current-book economic refusal, but only when the same scan supplies an
-        actual viable replacement. It keeps every other market and its resting
+        actual viable replacement. The same optional rule covers repeated
+        successful contract reads without applicable rewards, but requires
+        fresh contract proof again before release. It keeps every other market and its resting
         orders exactly where they are, fills any capacity startup validation
         left free, and never quarantines. Streams are restarted because they
         cannot subscribe incrementally, but a stream restart does not touch
@@ -8448,11 +8527,24 @@ class CommissioningRunner:
                 slug,
             ),
         )
+        reward_idle_candidates = [
+            slug for slug in self.active_slugs
+            if slug not in mandatory_released
+            and slug not in economic_idle_candidates
+            and allow_economic_idle
+            and self._reward_idle_and_flat(slug, now)]
+        optional_candidates = sorted(
+            economic_idle_candidates + reward_idle_candidates,
+            key=lambda slug: (
+                (self.state_for(slug).reward_unavailable_since
+                 if slug in reward_idle_candidates
+                 else self.state_for(slug).economically_ineligible_since)
+                or datetime.max.replace(tzinfo=timezone.utc), slug))
         base_keep = tuple(slug for slug in self.active_slugs
                           if slug not in mandatory_released)
         capacity_without_optional_release = max(
             0, self.config.max_markets - len(base_keep))
-        if (not mandatory_released and not economic_idle_candidates
+        if (not mandatory_released and not optional_candidates
                 and capacity_without_optional_release == 0):
             return False
         # Exclude every current owner, including optional idle candidates.  An
@@ -8460,10 +8552,10 @@ class CommissioningRunner:
         # as its own replacement and manufacture a no-op stream rebind.
         exclude = (self._barred_slugs() | set(base_keep)
                    | set(mandatory_released)
-                   | set(economic_idle_candidates))
+                   | set(optional_candidates))
         wanted = max(
             1,
-            capacity_without_optional_release + len(economic_idle_candidates),
+            capacity_without_optional_release + len(optional_candidates),
         )
         replacement_candidates, selection_source, cache_age = (
             await self._replacement_candidates_for_top_up(
@@ -8474,8 +8566,10 @@ class CommissioningRunner:
             ))
         optional_capacity = max(
             0, len(replacement_candidates) - capacity_without_optional_release)
-        economic_idle = economic_idle_candidates[:optional_capacity]
-        released = mandatory_released + economic_idle
+        optional_released = optional_candidates[:optional_capacity]
+        economic_idle = [s for s in optional_released if s in economic_idle_candidates]
+        reward_idle = [s for s in optional_released if s in reward_idle_candidates]
+        released = mandatory_released + optional_released
         keep = tuple(slug for slug in self.active_slugs
                      if slug not in released)
         free = max(0, self.config.max_markets - len(keep))
@@ -8492,6 +8586,8 @@ class CommissioningRunner:
             f"reward_inactive={len(reward_inactive)} "
             f"economic_idle={len(economic_idle)} "
             f"economic_idle_candidates={len(economic_idle_candidates)} "
+            f"reward_idle={len(reward_idle)} "
+            f"reward_idle_candidates={len(reward_idle_candidates)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )
@@ -8531,6 +8627,15 @@ class CommissioningRunner:
         # active tuple or either healthy stream changes.
         for slug in closed:
             self.state_for(slug).market = await self.gateway.fetch_market(slug)
+        # Reuse the bounded bulk reader and its normal error/backoff handling.
+        # A returned reward, failed read or unknown lifecycle invalidates the
+        # optional plan while the old owners and streams are still intact.
+        for slug in reward_idle:
+            self.state_for(slug).next_contract_refresh = None
+        if reward_idle:
+            await self._refresh_due_contract_batches(self._now(), tuple(reward_idle))
+            if self._stop_requested:
+                return False
         self._assert_runtime_scope()
         # The complete snapshot above can discover a fill, a newly absent
         # order, or another unresolved mutation. Recheck the release predicate
@@ -8543,7 +8648,8 @@ class CommissioningRunner:
                     or self._reward_authorization_lost_and_flat(
                         slug, self._now())
                     or self._economically_idle_and_flat(
-                        slug, self._now()))]
+                        slug, self._now())
+                    or self._reward_idle_and_flat(slug, self._now()))]
         if no_longer_releasable:
             raise AdapterError(
                 "top-up release proof changed during preflight: "
@@ -8576,6 +8682,7 @@ class CommissioningRunner:
             f"reward_ended={len(reward_ended)} "
             f"reward_inactive={len(reward_inactive)} "
             f"economic_idle={len(economic_idle)} "
+            f"reward_idle={len(reward_idle)} "
             f"released_slugs={','.join(sorted(released))}",
             flush=True,
         )

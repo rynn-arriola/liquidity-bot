@@ -12260,6 +12260,211 @@ class TopUpSafetyTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    def mark_reward_unavailable(self, runner, slug):
+        """Two successful contract reads missing rewards over the idle dwell."""
+        now = runner._now()
+        state = runner.state_for(slug)
+        for observed_at in (now - timedelta(seconds=601), now):
+            with self.assertRaisesRegex(CommissioningUnavailable, "no liquidityProgram"):
+                runner._apply_contracts(
+                    state, market=self.metadata(slug, now), incentive=None,
+                    now=observed_at, for_exit=False,
+                    accept_bound_lifecycle_end=True)
+        return state
+
+    async def test_persistent_missing_reward_replaces_only_flat_idle_slot(self):
+        runner = await self.armed(replacements=("market-three", "market-four"))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        runner.state_for("market-one").market = self.metadata("market-one", runner._now())
+        self.mark_reward_unavailable(runner, "market-two")
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(return_value={
+            "market-two": self.metadata("market-two", runner._now())})
+        runner.gateway.fetch_incentives = AsyncMock(return_value={})
+
+        self.assertTrue(runner._active_set_needs_top_up(runner._now()))
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+        self.assertEqual(runner.active_slugs, ("market-one", "market-three"))
+        self.assertEqual(runner.client.orders.cancel_calls, [])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_idle_requires_repeated_reads_and_full_dwell(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        now = runner._now()
+        for seconds, expected in ((0, False), (599, False), (600, True)):
+            observed = now + timedelta(seconds=seconds)
+            with self.assertRaises(CommissioningUnavailable):
+                runner._apply_contracts(
+                    state, market=self.metadata(slug, now), incentive=None,
+                    now=observed, for_exit=False, accept_bound_lifecycle_end=True)
+            self.assertEqual(runner._reward_idle_and_flat(slug, observed), expected)
+        self.assertFalse(runner._reward_authorization_lost_and_flat(slug, observed))
+        self.assertFalse(runner._reward_idle_and_flat(slug, observed + timedelta(seconds=906)))
+        self.assertIsNone(state.reward_unavailable_since)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_idle_kept_without_replacement_or_on_urgent_scan(self):
+        for replacements, allow_idle in (((), True), (("market-two",), False)):
+            with self.subTest(replacements=replacements, allow_idle=allow_idle):
+                runner = await self.armed(replacements=replacements)
+                runner.config = replace(runner.config, max_markets=1)
+                self.mark_reward_unavailable(runner, runner.market_slug)
+                before = runner.market_stream
+                runner.gateway.fetch_markets_by_slugs = AsyncMock()
+                self.assertFalse(await runner._top_up_active_markets(
+                    runner._now(), allow_economic_idle=allow_idle))
+                self.assertEqual(runner.active_slugs, ("market-one",))
+                self.assertIs(runner.market_stream, before)
+                runner.gateway.fetch_markets_by_slugs.assert_not_awaited()
+                await runner.private_stream.close()
+                await runner.market_stream.close()
+
+    async def test_reward_idle_preflight_changed_contracts_preserve_scope(self):
+        for change in ("reward_returned", "read_failed", "metadata_missing", "clock_unknown"):
+            with self.subTest(change=change):
+                runner = await self.armed(replacements=("market-two",))
+                runner.config = replace(runner.config, max_markets=1)
+                slug = runner.market_slug
+                incentive = runner.state_for(slug).incentive
+                state = self.mark_reward_unavailable(runner, slug)
+                before = runner.market_stream
+                market = self.metadata(slug, runner._now())
+                if change == "clock_unknown":
+                    market = replace(market, game_start=None)
+                runner.gateway.fetch_markets_by_slugs = AsyncMock(
+                    return_value={} if change == "metadata_missing" else {slug: market})
+                runner.gateway.fetch_incentives = AsyncMock(return_value=(
+                    {slug: incentive} if change == "reward_returned" else {}))
+                if change == "read_failed":
+                    runner.gateway.fetch_incentives.side_effect = AdapterError("read failed")
+                with self.assertRaisesRegex(AdapterError, "release proof changed"):
+                    await runner._top_up_active_markets(runner._now())
+                self.assertIsNone(state.reward_unavailable_since)
+                self.assertEqual(runner.active_slugs, (slug,))
+                self.assertIs(runner.market_stream, before)
+                self.assertFalse(before.closed)
+                self.assertEqual(runner.client.orders.cancel_calls, [])
+                await runner.private_stream.close()
+                await runner.market_stream.close()
+
+    async def test_reward_idle_preflight_fill_preserves_owner(self):
+        from liquidity_bot.execution_ledger import PositionState
+
+        runner = await self.armed(replacements=("market-two",))
+        runner.config = replace(runner.config, max_markets=1)
+        slug = runner.market_slug
+        self.mark_reward_unavailable(runner, slug)
+        before = runner.market_stream
+
+        async def discovers_position(*args, **kwargs):
+            runner.ledger.apply_position_event(
+                "rest", "reward-idle-race", PositionState(slug, Decimal("1"), runner._now()),
+                received_at=runner._now())
+
+        runner._rest_reconcile = discovers_position
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(
+            return_value={slug: self.metadata(slug, runner._now())})
+        runner.gateway.fetch_incentives = AsyncMock(return_value={})
+        with self.assertRaisesRegex(AdapterError, "release proof changed"):
+            await runner._top_up_active_markets(runner._now())
+        self.assertEqual(runner.active_slugs, (slug,))
+        self.assertIs(runner.market_stream, before)
+        self.assertFalse(before.closed)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_idle_ownership_and_unknown_reads_reset_dwell(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        state = self.mark_reward_unavailable(runner, slug)
+        with patch.object(runner, "_owner_is_flat_and_clear", return_value=False):
+            self.assertFalse(runner._reward_idle_and_flat(slug, runner._now()))
+        self.assertIsNone(state.reward_unavailable_since)
+        self.mark_reward_unavailable(runner, slug)
+        runner.gateway.fetch_market = AsyncMock(side_effect=AdapterError("failed"))
+        with self.assertRaises(AdapterError):
+            await runner._refresh_contracts(runner._now(), slug)
+        self.assertIsNone(state.reward_unavailable_since)
+        self.mark_reward_unavailable(runner, slug)
+        state.forget_contracts()
+        self.assertIsNone(state.reward_unavailable_since)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_only_oldest_reward_idle_owner_released_for_one_replacement(self):
+        runner = await self.armed(replacements=("market-three",))
+        runner.config = replace(runner.config, max_markets=2)
+        runner._bind_markets(("market-one", "market-two"))
+        self.mark_reward_unavailable(runner, "market-one")
+        self.mark_reward_unavailable(runner, "market-two")
+        runner.gateway.fetch_markets_by_slugs = AsyncMock(return_value={
+            "market-one": self.metadata("market-one", runner._now())})
+        runner.gateway.fetch_incentives = AsyncMock(return_value={})
+        self.assertTrue(await runner._top_up_active_markets(runner._now()))
+        self.assertEqual(runner.active_slugs, ("market-two", "market-three"))
+        self.assertEqual(runner.gateway.fetch_markets_by_slugs.await_count, 1)
+        self.assertEqual(runner.gateway.fetch_incentives.await_count, 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_reward_idle_real_order_and_intent_ownership_prevent_release(self):
+        for ownership in ("OPEN", "UNKNOWN_ABSENT", "intent"):
+            with self.subTest(ownership=ownership):
+                runner = await self.armed()
+                slug = runner.market_slug
+                state = self.mark_reward_unavailable(runner, slug)
+                if ownership == "intent":
+                    runner.ledger.prepare_intent(
+                        "idle-intent", "CANCEL", slug, "idle-client", {},
+                        created_at=runner._now())
+                else:
+                    runner.ledger.apply_order_event(
+                        "ws", "idle-order", OrderState(
+                            client_order_id="idle-client", exchange_order_id="idle-exchange",
+                            market_slug=slug, side="ORDER_SIDE_BUY", price=Decimal("0.49"),
+                            original_qty=Decimal("1"), filled_qty=Decimal("0"),
+                            status="OPEN", event_at=runner._now()), received_at=runner._now())
+                    if ownership == "UNKNOWN_ABSENT":
+                        runner.ledger.connection.execute(
+                            "UPDATE execution_orders SET status='UNKNOWN_ABSENT', "
+                            "unknown_reason='missing_from_complete_snapshot' "
+                            "WHERE exchange_order_id='idle-exchange'")
+                        runner.ledger.connection.commit()
+                self.assertFalse(runner._reward_idle_and_flat(slug, runner._now()))
+                self.assertIsNone(state.reward_unavailable_since)
+                await runner.private_stream.close()
+                await runner.market_stream.close()
+
+    async def test_reward_idle_no_applicable_period_and_unknown_day_are_distinct(self):
+        runner = await self.armed()
+        slug = runner.market_slug
+        state = runner.state_for(slug)
+        now = runner._now()
+        incentive = self.ended_incentive(
+            slug, now - timedelta(seconds=601), program_id="different-program")
+        for observed in (now - timedelta(seconds=601), now):
+            with self.assertRaisesRegex(CommissioningUnavailable, "no applicable pregame"):
+                runner._apply_contracts(
+                    state, market=self.metadata(slug, now), incentive=incentive,
+                    now=observed, for_exit=False, accept_bound_lifecycle_end=True)
+        self.assertTrue(runner._reward_idle_and_flat(slug, now))
+        self.assertFalse(runner._reward_authorization_lost_and_flat(slug, now))
+        runner.config = replace(runner.config, allow_daily_event_rewards=True,
+                                daily_event_horizon_seconds=86400)
+        daily = replace(incentive, periods=(replace(
+            incentive.periods[0], period="daily_event"),), observed_at=None)
+        with self.assertRaisesRegex(CommissioningUnavailable, "reward day is unproven"):
+            runner._apply_contracts(
+                state, market=self.metadata(slug, now), incentive=daily,
+                now=now, for_exit=False, accept_bound_lifecycle_end=True)
+        self.assertIsNone(state.reward_unavailable_since)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_economic_refusal_must_hold_for_the_full_dwell(self):
         runner = await self.armed(replacements=("market-three",))
         slug = runner.market_slug

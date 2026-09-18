@@ -110,3 +110,32 @@ rate-limit guarantee is claimed. The first startup decision latency p95 was
 claim a performance repair. Subsequent scheduled Discord presentation, complete
 reward-period earnings comparison and sustained trading/exit/load observation
 remain natural acceptance work. No forced fill/failure or strategy change.
+
+## Operator follow-up: order count increased, then dropped
+
+Read-only diagnosis after restart distinguished two mechanisms:
+
+- Before restart,16 incentive-refresh failures at20:20–20:22Z named separate
+  retained markets with missing incentives or no applicable period. One sample
+  repeated at19:35/19:50/20:05/20:20Z. The20:19 top-up released one expired owner,
+  kept31 and added one, with no reward-inactive or economic-idle replacement.
+  Code requires the exact prior program row to prove authorization loss; missing
+  rows remain idle without release. Restart rebuilt the slate. This supports a
+  capacity-retention concern; it does not prove that every earlier order-count
+  change had that cause or that missing venue data proves program termination.
+- The new run's dip had direct expiry/fill evidence: the read-only ledger recorded
+  25 EXPIRED orders between20:39:31.645840Z and20:40:24.870213Z, matching the existing
+  five-minute GTD entries placed at startup. Logs show replacements, cancellation
+  of builders after fills, exact reducers, and one70%-quality refusal.
+  Authenticated20:40:52.997946Z state was26 orders:23 flat entries plus3 exact
+  reducers covering+10,+6.88,-4. Unknown/unresolved state was zero. The20:40:30
+  API period had3.465rps and zero429. These are separate observations from the
+  five-minute acceptance above; the30-entry cap remains a ceiling, not a target
+  guaranteed at every instant. Positions/reducers remain excluded from that cap.
+
+No additional code, config, restart or venue mutation was performed for this
+diagnosis. Follow up on safe replacement of persistently reward-unproven,
+flat/clear owners without inferring cancellation, stranding positions or treating
+a missing incentive as positive termination. Also measure synchronized GTD
+rebuild gaps before changing expiry/renewal policy. The payout measurement itself
+neither increased the cap nor repaired those pre-existing paths.

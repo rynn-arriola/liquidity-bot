@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from scripts.daily_pnl import CLEAN_FROM, reward_by_day, trading_by_day  # noqa: E402
+from scripts.reward_liquidity import resting_period_hours_by_day  # noqa: E402
 from liquidity_bot.account_snapshots import (  # noqa: E402
     AsyncAccountSnapshotGateway, account_equity_snapshot)
 from liquidity_bot.adapters import (  # noqa: E402
@@ -745,6 +746,21 @@ def render_table(
     return "\n".join(lines)
 
 
+def _discord_amount(value: str, width: int) -> str:
+    """The table heading supplies USD; bound large values without wrapping."""
+    text = value.replace("$", "").replace(",", "")
+    if len(text) <= width:
+        return text
+    amount = Decimal(text)
+    # Scientific notation remains explicitly approximate display, never a
+    # change to the source amounts or the unabridged headline totals.
+    for precision in (2, 1, 0):
+        compact = f"{amount:.{precision}E}"
+        if len(compact) <= width:
+            return compact
+    return "--"
+
+
 def build_discord_payload(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
@@ -752,6 +768,7 @@ def build_discord_payload(
     account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
     settled_history: dict[str, Decimal] | None = None,
+    period_hours: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Build a compact settled-trading and reward report for Discord.
 
@@ -766,13 +783,14 @@ def build_discord_payload(
         raise ValueError("the Discord table layout supports at most 7 days")
 
     pnl_lines = [
-        f"{'Date ET':<11}  {'Trading':>9}  {'Paid':>8}  {'Pending':>8}",
-        "-----------  ---------  --------  --------",
+        f"{'Date':<6} {'P&L':>8} {'Paid':>7} {'Pend':>7}",
+        "------ -------- ------- -------",
     ]
     resting_lines = [
-        "Date ET          Hours  Avg sides",
-        "-----------  ---------  ---------",
+        f"{'Date':<6} {'Day h':>7} {'Daily h':>7} {'Avg':>5}",
+        "------ ------- ------- -----",
     ]
+    partial_split = False
     for day_value in days:
         key = day_value.isoformat()
         paid_reward = paid.get(key)
@@ -780,55 +798,65 @@ def build_discord_payload(
         has_reward = paid_reward is not None or pending_reward is not None
         settled = (settled_history.get(key)
                    if settled_history is not None else None)
-        trading_text = _trading_money(settled, missing="--")
+        trading_text = _discord_amount(_trading_money(settled, missing="--"), 8)
         if has_reward:
-            paid_text = _money(paid_reward, zero_if_missing=True)
-            pending_text = _money(pending_reward, zero_if_missing=True)
+            paid_text = _discord_amount(_money(paid_reward, zero_if_missing=True), 7)
+            pending_text = _discord_amount(_money(pending_reward, zero_if_missing=True), 7)
         else:
             paid_text = "--"
             pending_text = "--"
         resting = float(resting_hours.get(key, 0.0))
         elapsed = float(elapsed_hours.get(key, 0.0))
         average = resting / elapsed if elapsed > 0 else 0.0
-        label = f"{key}{'*' if day_value == today else ''}"
+        label = f"{day_value.month}/{day_value.day}{'*' if day_value == today else ''}"
         pnl_lines.append(
-            f"{label:<11}  {trading_text:>9}  {paid_text:>8}  "
-            f"{pending_text:>8}")
+            f"{label:<6} {trading_text:>8} {paid_text:>7} {pending_text:>7}")
+        split = period_hours.get(key) if period_hours is not None else None
+        if split is None:
+            day_text = daily_text = "--"
+        else:
+            incomplete = split.get("unallocated", 0.0) > 1e-9
+            partial_split |= incomplete
+            suffix = "+" if incomplete else ""
+            day_text = _discord_amount(f"{split['day_of']:.1f}", 7-len(suffix)) + suffix
+            daily_text = _discord_amount(f"{split['daily_event']:.1f}", 7-len(suffix)) + suffix
         resting_lines.append(
-            f"{label:<11}  {resting:>9.2f}  {average:>9.2f}")
+            f"{label:<6} {day_text:>7} {daily_text:>7} "
+            f"{_discord_amount(f'{average:.1f}', 5):>5}")
     paid_total = sum(
         (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     settled_total = (sum(
-        (settled_history.get(day.isoformat(), Decimal(0)) for day in days),
-        Decimal(0)) if settled_history is not None else None)
+        (settled_history[day.isoformat()] for day in days),
+        Decimal(0)) if settled_history is not None and days and all(
+            settled_history.get(day.isoformat()) is not None for day in days) else None)
     reward_observed = any(
         paid.get(day.isoformat()) is not None
         or pending.get(day.isoformat()) is not None for day in days)
     fields = [
         {
-            "name": "Daily results",
+            "name": "Results ($)",
             "value": "```text\n" + "\n".join(pnl_lines) + "\n```",
             "inline": False,
         },
         {
-            "name": "Liquidity",
+            "name": "Liquidity · Avg sides",
             "value": "```text\n" + "\n".join(resting_lines) + "\n```",
             "inline": False,
         },
     ]
     embed = {
-        "title": f"Liquidity Bot · Last {len(days)} ET Days",
+        "title": f"Rewards · {len(days)}d · ET",
         "description": (
-            f"**Trading P&L:** {_trading_money(settled_total)}\n"
-            f"**Rewards:** "
-            f"{_money(paid_total) if reward_observed else '--'} paid · "
-            f"{_money(pending_total) if reward_observed else '--'} pending"),
+            f"**P&L:** {_trading_money(settled_total)}\n"
+            f"**Paid:** {_money(paid_total) if reward_observed else '--'}\n"
+            f"**Pend:** {_money(pending_total) if reward_observed else '--'}"),
         "fields": fields,
         "color": 0x3498DB,
         "timestamp": generated_at.isoformat(),
-        "footer": {"text": "Trading = settled closed fills · * today"},
+        "footer": {"text": "P&L: closed fills · * today" + (
+            " · + partial split; Avg includes untyped hours" if partial_split else "")},
     }
     total_chars = (
         len(embed["title"]) + len(embed["description"])
@@ -929,18 +957,29 @@ async def main() -> int:
     if args.post_discord:
         from liquidity_bot.notifications import DiscordNotifier
         from liquidity_bot.runtime_secrets import load_runtime_secrets
+        from scripts.reward_image import send_reward_report
 
-        notifier = DiscordNotifier(load_runtime_secrets(
-            require_rewards_webhook=True))
-        result = await notifier.send_payload_async(
+        secrets = load_runtime_secrets(require_rewards_webhook=True)
+        notifier = DiscordNotifier(secrets)
+        try:
+            period_hours = resting_period_hours_by_day(args.db, days, now=now)
+        except (sqlite3.Error, OSError):
+            # Optional classification must not suppress the existing financial
+            # report or fabricate zero hours if the evidence cannot be read.
+            period_hours = None
+            print("Reward-period hours unavailable; totals retained.", file=sys.stderr)
+        result = await send_reward_report(
             build_discord_payload(
                 days, pnl=pnl, paid=paid, pending=pending,
-                resting_hours=resting, elapsed_hours=elapsed, today=today,
+                resting_hours=({key: sum(values.values()) for key, values in period_hours.items()}
+                               if period_hours is not None else resting),
+                elapsed_hours=elapsed, today=today,
                 generated_at=now, unbalanced_markets=unbalanced,
+                period_hours=period_hours,
                 account_realized=account_realized,
                 account_history=history,
                 settled_history=settled_history),
-            channel="rewards")
+            secrets, notifier)
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",
                   file=sys.stderr)

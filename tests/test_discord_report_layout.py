@@ -132,12 +132,13 @@ class DiscordReportLayoutTests(unittest.TestCase):
             elapsed_hours={}, today=today, generated_at=NOW, unbalanced_markets=999)
         embed = payload["embeds"][0]
         self.assertEqual(len(embed["fields"]), 2)
-        self.assertEqual(len(embed["description"].splitlines()), 2)
-        self.assertIn("Trading", embed["fields"][0]["value"])
+        self.assertEqual(len(embed["description"].splitlines()), 3)
+        self.assertIn("P&L", embed["fields"][0]["value"])
         self.assertIn("--", embed["fields"][0]["value"])
         self.assertNotIn("unavail", embed["fields"][0]["value"])
-        self.assertIn("**Trading P&L:** —", embed["description"])
-        self.assertIn("**Rewards:** -- paid · -- pending", embed["description"])
+        self.assertIn("**P&L:** —", embed["description"])
+        self.assertIn("**Paid:** --", embed["description"])
+        self.assertIn("**Pend:** --", embed["description"])
         self.assertNotIn("account", json.dumps(payload).lower())
         self.assertNotIn("finalized", json.dumps(payload).lower())
         for noise in ("Balanced-pair", "unbalanced", "Snapshot intervals",

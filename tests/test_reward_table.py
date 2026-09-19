@@ -125,26 +125,27 @@ class RewardTableTests(unittest.TestCase):
                 Decimal("-30.9844"), "ok"))
 
         embed = payload["embeds"][0]
-        self.assertEqual(embed["title"], "Liquidity Bot · Last 7 ET Days")
+        self.assertEqual(embed["title"], "Rewards · 7d · ET")
         self.assertEqual(len(embed["fields"]), 2)
         pnl_table = embed["fields"][0]["value"]
         resting_table = embed["fields"][1]["value"]
-        self.assertIn("Date ET        Trading", pnl_table)
-        self.assertIn("2026-08-19      -$8.00", pnl_table)
-        self.assertIn("2026-08-25*     -$8.00", pnl_table)
+        self.assertIn("Date        P&L    Paid    Pend", pnl_table)
+        self.assertIn("8/19      -8.00   15.00    0.00", pnl_table)
+        self.assertIn("8/25*     -8.00   15.00    0.00", pnl_table)
         self.assertNotIn("Account", pnl_table)
         self.assertNotIn("Net", pnl_table)
-        self.assertIn("Hours  Avg sides", resting_table)
-        self.assertIn("2026-08-25*      24.00       1.00", resting_table)
+        self.assertIn("Date     Day h Daily h   Avg", resting_table)
+        self.assertIn("8/25*       --      --   1.0", resting_table)
         self.assertNotIn("|", pnl_table)
         pnl_lines = pnl_table.splitlines()[1:-1]
         resting_lines = resting_table.splitlines()[1:-1]
-        self.assertEqual({len(line) for line in pnl_lines}, {42})
-        self.assertEqual({len(line) for line in resting_lines}, {33})
+        self.assertEqual({len(line) for line in pnl_lines}, {31})
+        self.assertEqual({len(line) for line in resting_lines}, {28})
         self.assertEqual(
             embed["description"],
-            "**Trading P&L:** -$56.00\n"
-            "**Rewards:** $105.00 paid · $0.00 pending")
+            "**P&L:** -$56.00\n"
+            "**Paid:** $105.00\n"
+            "**Pend:** $0.00")
         self.assertNotIn("account", embed["description"].lower())
         self.assertNotIn("finalized", embed["description"].lower())
         self.assertNotIn("Balanced-pair", embed["description"])
@@ -171,6 +172,30 @@ class RewardTableTests(unittest.TestCase):
             output)
         self.assertIn(
             "Balanced-pair estimate (7d): **$-26.41**", output)
+
+    def test_discord_missing_settled_day_does_not_become_zero_in_total(self):
+        days = [date(2026, 9, 18), date(2026, 9, 19)]
+        report = build_discord_payload(days, pnl={}, paid={}, pending={},
+            resting_hours={}, elapsed_hours={}, today=days[-1],
+            generated_at=datetime(2026, 9, 19, 12, tzinfo=timezone.utc),
+            unbalanced_markets=0, settled_history={"2026-09-18": Decimal("-10")})
+        self.assertIn("**P&L:** —", report["embeds"][0]["description"])
+
+    def test_discord_partial_split_and_large_values_stay_compact(self):
+        day = date(2026, 12, 31)
+        report = build_discord_payload([day], pnl={}, paid={day.isoformat(): Decimal("123456789")},
+            pending={}, resting_hours={day.isoformat(): 48}, elapsed_hours={day.isoformat(): 24},
+            today=day, generated_at=datetime(2027, 1, 1, tzinfo=timezone.utc), unbalanced_markets=0,
+            settled_history={day.isoformat(): Decimal("-123456789")},
+            period_hours={day.isoformat(): dict(day_of=10, daily_event=20, unallocated=18)})
+        embed = report["embeds"][0]
+        self.assertIn("12/31*", embed["fields"][0]["value"])
+        self.assertIn("10.0+", embed["fields"][1]["value"])
+        self.assertIn("20.0+", embed["fields"][1]["value"])
+        self.assertIn("2.0", embed["fields"][1]["value"])
+        self.assertIn("partial split", embed["footer"]["text"])
+        for f in embed["fields"]:
+            self.assertTrue(all(len(line) <= 31 for line in f["value"].splitlines()))
 
     def test_discord_post_refuses_more_days_than_the_visual_layout_allows(self):
         days = [date(2026, 8, 18) + timedelta(days=offset)
@@ -455,7 +480,8 @@ class RewardTableTests(unittest.TestCase):
         payload = build_discord_payload(
             days, elapsed_hours={}, generated_at=datetime(2026, 9, 4, 12,
             tzinfo=timezone.utc), unbalanced_markets=136, **kwargs)
-        self.assertIn("2026-09-03     -$80.32    $85.76", payload["embeds"][0]["fields"][0]["value"])
+        self.assertIn("9/3      -80.32   85.76    0.00",
+                      payload["embeds"][0]["fields"][0]["value"])
         self.assertNotIn("$-66.90", payload["embeds"][0]["fields"][0]["value"])
         snapshot = build_dashboard_snapshot(
             days, generated_at=datetime(2026, 9, 4, 12, tzinfo=timezone.utc),

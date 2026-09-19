@@ -12,6 +12,9 @@ dependencies = [
     "polymarket-us==0.1.2",
 ]
 
+[project.optional-dependencies]
+reports = ["Pillow==12.3.0"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

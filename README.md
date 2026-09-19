@@ -247,16 +247,24 @@ net, and the current ET day is marked partial.
 
 The server can post the same table hourly to a dedicated Discord channel with
 `scripts/post_hourly_reward_table.sh`. The wrapper uses a nonblocking file lock,
-a 90-second timeout and reduced CPU priority; it is a separate process and has
-no order mutation path. Its `DISCORD_REWARDS_WEBHOOK_URL` lives only in the
-server-side shared credentials file. Discord receives an embed containing two
-narrow, fixed-width tables: daily P&L/rewards and daily liquidity supplied.
-Every header, separator and row has the same measured character width, so the
-columns do not depend on Discord's unsupported Markdown table rendering. The
-layout is deliberately capped at seven days. The hourly cron is currently
-active after visual acceptance of this revised format. It runs at minute 7 of
-every hour and writes only redacted success/failure status to
-`logs/reward-table-hourly.log`.
+a bounded timeout and reduced CPU priority; it is a separate process and has no
+order mutation path. Its `DISCORD_REWARDS_WEBHOOK_URL` lives only in the
+server-side shared credentials file. Discord normally receives one deterministic
+PNG attachment with totals, seven daily P&L/reward rows and local resting
+side-hours split by recorded `day_of` and `daily_event` evidence. Missing or
+conflicting historical type evidence stays visibly partial rather than being
+inferred from today's settings. The 1200-pixel canvas is intentionally wide
+enough to fill the mobile attachment area. If rendering fails before any
+delivery attempt, the same values fall back to the compact text embed; an
+ambiguous image upload is never retried as a duplicate text post. Pillow is an
+optional report-only dependency (`pip install '.[reports]'`) and is never
+imported by the trader. `+` means only the known portion of the hour split is
+shown; Avg includes untyped/exit coverage. These are local side-hours, not
+exchange-certified rewarded time. Dates use M/D and all headers stay short.
+The layout
+is deliberately capped at seven days. The hourly timer runs at minute 7 and
+writes only redacted success/failure status (the laptop systemd service uses
+the journal; the standalone shell wrapper uses its configured log).
 
 ## Prospective building-quote observations
 

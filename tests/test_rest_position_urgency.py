@@ -110,6 +110,42 @@ class PositionUrgencyTests(IsolatedAsyncioTestCase):
             visited, _ = await self.sweep(runner, slugs)
         self.assertEqual([s for s, _ in visited], [due, uncovered, covered, flat])
 
+    async def test_cover_expiring_during_another_owner_proof_preempts_reprice(self):
+        for quantity, side in (("10", "offer"), ("-10", "bid")):
+            with self.subTest(quantity=quantity):
+                runner, _, slugs = await self.build(count=2)
+                covered, expired = slugs
+                for slug, suffix in ((covered, "covered"), (expired, "expiring")):
+                    self.position(runner, slug, quantity)
+                    self.order(runner, slug, side, suffix)
+
+                async def refresh(now):
+                    # Positive terminal expiry discovered in account proof,
+                    # not an inference from an order missing from a list.
+                    runner.ledger.connection.execute(
+                        "UPDATE execution_orders SET status='EXPIRED' "
+                        "WHERE exchange_order_id='exchange-expiring'")
+
+                with patch.object(runner, "_position_exit_deadline", return_value=self.now + timedelta(minutes=10)), \
+                        patch.object(runner, "_service_market_book", AsyncMock()):
+                    visited, _ = await self.sweep(runner, slugs, refresh=refresh)
+                self.assertEqual([s for s, _ in visited], [expired, covered])
+
+    async def test_changed_position_invalidates_old_cover_before_reprice(self):
+        runner, _, slugs = await self.build(count=2)
+        covered, changed = slugs
+        for slug, suffix in ((covered, "covered"), (changed, "old-size")):
+            self.position(runner, slug, "10")
+            self.order(runner, slug, "offer", suffix)
+
+        async def refresh(now):
+            self.position(runner, changed, "6.85")
+
+        with patch.object(runner, "_position_exit_deadline", return_value=self.now + timedelta(minutes=10)), \
+                patch.object(runner, "_service_market_book", AsyncMock()):
+            visited, _ = await self.sweep(runner, slugs, refresh=refresh)
+        self.assertEqual([s for s, _ in visited], [changed, covered])
+
     async def test_urgent_outer_pass_includes_builder_and_sorts_due_first(self):
         runner, _, slugs = await self.build(count=2)
         building, due = slugs

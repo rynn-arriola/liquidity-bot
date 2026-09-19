@@ -302,3 +302,46 @@ timed IOC ACK02:03:05.462233Z was12.153s past deadline, flat observed
 flat observed02:03:53.962648Z. This distinguishes the new fill from a stuck
 old position. Prepared priority fixes were committed/pushed as `f54b540fe`;
 running source is unchanged and no deployment or restart occurred.
+
+## Priority-order completion and measurement inventory
+
+The operator requested all fixes in priority order and an inventory of all
+measurements/diagnostics for tomorrow. The two confirmed runtime fixes remain
+exact coverage then due/uncovered/covered scheduling, already pushed in
+`f54b540fe`. Review of the current passive planner confirms it already preserves
+an exact reducer at the touch or passive candidate; repeated replacement prices
+alone still cannot justify suppressing valid reprices. No speculative price
+policy, risk, API, source or holding-period change was introduced.
+
+Two additional regressions exercise the specific exposure transitions reviewed:
+positive EXPIRED evidence for an existing long/short covering order discovered
+while another covered owner is proved; and a position-quantity change making a
+previous exact reducer oversized. Both must preempt optional covered repricing.
+All84 focused tests pass in22.164s. An additional in-memory reversal returning
+constant urgency makes the changed-size test fail as expected, alongside the
+two original reversals. These are test additions; production code is unchanged
+since the previously passed1,866-test run. The expanded complete suite passed
+all1,868 tests in282.324s using the production virtual environment against the
+Windows review checkout. Final diff and documentation audits passed.
+
+Dedicated audit: expiry is positively terminal, not an inference from absence;
+long and short directions are tested; position-size changes cannot authorize
+an oversized exit; normal unknown/backoff/stop/isolated guards and bounded
+visits retain the existing tests. No new API request, executor, persistent
+state, deployment migration or runtime dependency. Exact-price churn still
+requires decision-time diagnostics after authorized activation.
+
+Latest authenticated check02:07:42.623700Z:30 venue orders,29 flat entries,
+one OPEN BUY1.9 exactly covering annfri/deskra-1.9; unknown orders0, one live
+intent in flight. Same runner/supervisor verified up2h56m. No restart, deploy,
+venue mutation or ledger write was performed by this task.
+
+The new [measurement checklist](../MEASUREMENT_CHECKLIST.md) catalogs trading/
+reward observations, diagnostics, operational controls and retired experiments,
+with evidence paths, collection state, limitations and a prioritized next-day
+review. It does not install a reminder or collector. A local read-only inventory
+at02:10:05Z confirms current quote/scan/payout/timing/API logging, but the
+ledger's legacy earnings table last updated August21; tomorrow's reward
+analysis must use a dated saved API snapshot or an explicitly fresh shared-lane
+report. This does not establish the Discord report is stale: it reads separate
+authenticated evidence. Missing or pending rewards remain unknown, not zero.

@@ -7,6 +7,11 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
+The complete [measurement and diagnostic checklist](docs/MEASUREMENT_CHECKLIST.md)
+includes live reward/entry/selection measurements, execution diagnostics,
+prepared-not-loaded hooks, retired collectors and the prioritized next-day review.
+The table below retains the original watchlist experiments, not the whole catalog.
+
 | Measurement | Collection path | Venue/API cost | Trading effect |
 |---|---|---|---|
 | Retained executable value | Normal building PLACE observation plus the most recent already-fetched selector snapshot | No extra call or socket | None; 60/70/80 are `WOULD_REFUSE` labels only |

@@ -1066,7 +1066,12 @@ These are implementation requirements, not suggestions.
     reader before returning. Only exact-scope snapshots with original receipt
     age in [0,3) seconds can replace a REST read; Pong, BBO, future/stale data
     and disconnected caches cannot manufacture depth or freshness. Selection
-    checkpoints remain interruptible; recovery startup bypasses the optional
+    checkpoints remain interruptible, including during an in-flight optional
+    SDK read: the serial owner runs the checkpoint, the raw read worker has no
+    ledger callback, and cancellation joins it before execution resumes. Local
+    interruption is not venue failure or permission to retry; discarded partial
+    collection cannot authorize selection. Unscoped safety reads are unchanged.
+    Recovery startup bypasses the optional
     socket entirely. Missing data uses the normal gated REST path. Background
     and entry books share conservative four-second optional pacing; position
     safety bypasses that allowance, not actual endpoint429 backoff. Account

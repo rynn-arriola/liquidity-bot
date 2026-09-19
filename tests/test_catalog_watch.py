@@ -71,6 +71,39 @@ class CatalogWatchTests(IsolatedAsyncioTestCase):
         self.assertIsNone(runner.gateway._read_checkpoint.get())
         self.assertIsNone(runner.gateway._traffic_class_override.get())
 
+    async def test_fill_interrupts_inflight_catalog_read_and_joins_it(self):
+        runner, client = await self.build()
+        entered, finished = asyncio.Event(), asyncio.Event()
+
+        async def positions(**kwargs):
+            await entered.wait()
+            return (PositionState(runner.market_slug, Decimal("6"), self.now),)
+
+        async def read():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finished.set()
+
+        async def scan(*args, **kwargs):
+            await runner.gateway._call("events.list", read)
+            self.fail("interrupted discovery must not publish a selection")
+
+        runner.account.fetch_positions = positions
+        with patch.object(CommissioningRunner, "_replacement_candidates_for_top_up", scan):
+            try:
+                async with asyncio.timeout(2):
+                    with self.assertRaises(ApiAdmissionDeferred) as caught:
+                        await runner._replacement_candidates_for_top_up(self.now)
+            except TimeoutError:
+                self.fail("new fill stayed blocked behind an in-flight catalog read")
+        self.assertEqual(caught.exception.error_code, "LOCAL_CATALOG_ACCOUNT_CHANGED")
+        self.assertTrue(finished.is_set())
+        self.assertEqual(runner.ledger.position(runner.market_slug), 0)
+        self.assertFalse(runner.gate.rest_reconciled)
+        self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
+
     async def test_disabled_optimization_preserves_five_second_watch_cadence(self):
         from liquidity_bot.rest_polling_policy import RestPollingPolicy
         runner, _ = await self.build()
@@ -81,6 +114,64 @@ class CatalogWatchTests(IsolatedAsyncioTestCase):
         with patch.object(runner, "_position_near_its_flatten_deadline", return_value=False):
             await self.scan(runner)
         self.assertLessEqual(runner.account.fetch_positions.await_count, 6)
+
+    async def test_covered_deadline_interrupts_inflight_read_for_both_signs(self):
+        for quantity, side in (("10", "offer"), ("-10", "bid")):
+            runner, client = await self.build()
+            position = PositionState(runner.market_slug, Decimal(quantity), self.now)
+            runner.ledger.apply_position_event("test", "held", position, received_at=self.now)
+            self.fixture.seed_working_order(runner, slug=runner.market_slug,
+                                            side=side, suffix="covered")
+            runner.account.fetch_positions = AsyncMock(return_value=(position,))
+            deadline = self.now + timedelta(seconds=61)
+            finished = asyncio.Event()
+            async def read():
+                self.now += timedelta(seconds=2)
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    finished.set()
+            async def scan(*args, **kwargs):
+                await runner.gateway._call("events.list", read)
+            with patch.object(runner, "_position_exit_deadline", return_value=deadline), \
+                    patch.object(CommissioningRunner, "_replacement_candidates_for_top_up", scan):
+                self.assertFalse(runner._position_near_its_flatten_deadline(self.now))
+                async with asyncio.timeout(2):
+                    with self.assertRaises(ApiAdmissionDeferred) as caught:
+                        await runner._replacement_candidates_for_top_up(self.now)
+            self.assertEqual(caught.exception.error_code, "LOCAL_CATALOG_POSITION_PRIORITY")
+            self.assertTrue(finished.is_set())
+            self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
+
+    async def test_owner_changes_interrupt_inflight_read_in_both_modes(self):
+        for mode in ("rest", "websocket"):
+            for change in ("stop", "generation", "scope"):
+                with self.subTest(mode=mode, change=change):
+                    runner, client = await self.build(mode)
+                    runner.account.fetch_positions = AsyncMock(return_value=())
+                    finished = asyncio.Event()
+                    async def read():
+                        if change == "stop":
+                            runner.request_stop("operator_stop")
+                        elif change == "generation":
+                            runner.source_control.generation += 1
+                        else:
+                            runner._active_market_slugs = ()
+                        try:
+                            await asyncio.Event().wait()
+                        finally:
+                            finished.set()
+                    async def scan(*args, **kwargs):
+                        await runner.gateway._call("events.list", read)
+                    with patch.object(CommissioningRunner, "_replacement_candidates_for_top_up", scan):
+                        async with asyncio.timeout(2):
+                            with self.assertRaises(ApiAdmissionDeferred) as caught:
+                                await runner._replacement_candidates_for_top_up(self.now)
+                    self.assertEqual(caught.exception.error_code, "LOCAL_CATALOG_INTERRUPTED")
+                    self.assertTrue(finished.is_set())
+                    self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
+                    if mode == "websocket":
+                        runner.account.fetch_positions.assert_not_awaited()
 
     async def test_missing_position_is_only_wakeup_not_flat_proof(self):
         runner, _ = await self.build()

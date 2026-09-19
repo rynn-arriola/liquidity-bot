@@ -1585,6 +1585,27 @@ class AsyncReadOnlyGateway:
             retry_after_seconds=retry_after,
         )
 
+    async def _await_catalog_read(self, call, checkpoint):
+        """Keep the serial owner's checkpoints live during optional network IO.
+
+        Only a read inside an explicit checkpoint scope gets a worker. It has
+        no inherited callback/ledger authority and must be joined before the
+        caller resumes account proof or execution. Ordinary safety reads and
+        every mutation retain their original path.
+        """
+        with self.read_checkpoints(None):
+            task = asyncio.create_task(call())
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=0.25)
+                if not task.done():
+                    await checkpoint()
+            return await task
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):
             admission_token = None
@@ -1609,8 +1630,19 @@ class AsyncReadOnlyGateway:
                 # the original zero-argument protocol.
                 await self.limiter.wait()
             started_at = time.monotonic()
+            checkpoint_error = None
+
+            async def checkpoint():
+                nonlocal checkpoint_error
+                try:
+                    await self._checkpoint_before_read()
+                except BaseException as exc:
+                    checkpoint_error = exc
+                    raise
+
             try:
-                result = await call()
+                result = (await call() if self._read_checkpoint.get() is None
+                          else await self._await_catalog_read(call, checkpoint))
                 if isinstance(self.limiter, AsyncIntervalLimiter):
                     await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
@@ -1619,6 +1651,10 @@ class AsyncReadOnlyGateway:
                         admission_token=admission_token)
                 return result
             except AdapterError as exc:
+                if exc is checkpoint_error:
+                    # Local scheduling is not a failed venue request and must
+                    # not publish a cooldown or enter an API retry ladder.
+                    raise
                 if isinstance(self.limiter, AsyncIntervalLimiter):
                     await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,
@@ -1633,6 +1669,8 @@ class AsyncReadOnlyGateway:
                     )
                 raise
             except Exception as exc:
+                if exc is checkpoint_error:
+                    raise
                 if isinstance(self.limiter, AsyncIntervalLimiter):
                     await self.limiter.record_result(
                         duration_seconds=time.monotonic() - started_at,

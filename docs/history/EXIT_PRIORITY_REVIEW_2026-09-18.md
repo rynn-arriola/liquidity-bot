@@ -80,3 +80,67 @@ ledger read had33 working orders/three positions, so it is not identical-count
 venue proof. Earlier01:21:56Z snapshot had four positions including a builder
 and one reprice gap; it was not claimed fully protected. No API/trading mutation
 was made by this review. Documentation-only handoff is committed separately.
+
+## Follow-up: diagnostics first (operator authorized)
+
+The operator requested item3 first so actual repricing evidence can inform a
+combined repair. This authorizes observation code, not activation of the two
+scheduling changes. No price, size, cap, risk, scheduler, source-selection,
+polling or lifecycle policy is changed. The current process cannot acquire new
+Python hooks without a restart; separate observers cannot reconstruct its exact
+decision-time book. Live collection therefore awaits an authorized diagnostic
+deployment/restart, not a guessed reconstruction from later public data.
+
+Implementation adds one `[reducer-decision]` JSON row for an attempted position
+action in the ordinary decision driver (both account-source modes). The exact
+planning frame is copied before the driver awaits; the row is emitted after
+the driver returns/raises. It records target order/price/exact remaining quantity,
+signed position, current bid/offer, existing passive-price helper result,
+entry basis/tick, book observation/receipt/transaction clocks, explicit unknown
+flags, builder/reducer counts, exact matching/preferred orders and action reason.
+The result distinguishes cancel ACK, placement ACK, no ACK and driver exception;
+ACK is never described as terminal cancellation or a working replacement.
+Only exception type is included, not response bodies or error text.
+
+This is bounded event logging, not per-tick logging: one scalar record per
+attempted position action, no full books/order lists, retained history, new
+API requests, WebSocket subscriptions, ledger queries/writes or extra awaits.
+All data comes from the existing immutable frame and original driver result.
+Capture/format/output failures are isolated from execution and remain missing
+evidence. Shutdown has its own driver path and is not covered by this hook;
+locally deferred pre-driver actions and process death before return likewise
+do not produce an acknowledgement record. Existing terminal/timing logs remain
+the independent cancellation proof. Logging cannot be used as trading authority.
+
+### Dedicated edge-case audit
+
+- Long/short, partial size, duplicate exact reducers, builder-only exposure,
+  one-sided/missing books, unknown basis, stale/future clocks, hard/maintenance
+  actions and flat/critical exclusions are covered by focused tests.
+- A simulated book replacement during the awaited driver proves the diagnostic
+  keeps the original frame, not the newer book.
+- Actual fake-client cancellation still succeeds when capture or log output
+  raises. Driver exceptions still reach the original recovery path, with no
+  newly authorized retry or swallowed execution error.
+- Pure capture does not re-run the stateful planner, change its inputs or
+  consume the result. Original self-chase and continuity/priority tests remain
+  unchanged. No new memory cache exists to survive a source switch or restart.
+- Restart/rollback use the existing safe ownership/deployment gates. Removing
+  the hook removes only evidence; no schema migration or ledger repair is needed.
+- Synchronous logging has small CPU/output overhead, so this is not a claim
+  of zero runtime cost or faster trading. No full-slate diagnostic loop is added.
+
+The64 focused tests passed. In-memory reversal disabling the capture hook
+produced exactly one expected integration assertion failure (missing row),
+without changing source or contacting the venue. The complete source suite
+passed all1,854 tests in277.141s using the production virtual environment against
+the Windows working copy through WSL. The twelve new tests include four runner
+integration tests. Final diff/edge audit and documentation audit passed. No live
+repricing conclusion may be claimed from these fake tests; deployment and
+restart remain pending explicit authorization. Code is prepared/pushed only.
+
+Read-only authenticated follow-up01:40:46.147748Z:35 orders across27 markets,
+30 flat entries and five exact reducers. Positions: cosale/filmih+10 SELL10,
+budole/pytiva-10 BUY10, masyev/hohser-10 BUY10, pysyev/cherom+10 SELL10,
+yidwan/elezah-0.06 BUY0.06. Zero unresolved/unknown state; ledger agrees.
+The running bot still has the original loaded code, not the new diagnostic.

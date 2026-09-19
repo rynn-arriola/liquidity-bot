@@ -60,6 +60,7 @@ from .execution_ledger import (
     QuoteObservation,
 )
 from .execution_timing import ExecutionTimings
+from .reducer_diagnostics import capture_reducer_decision, completed_reducer_decision
 from .entry_quality import (
     DEFAULT_ENTRY_QUALITY_POLICY_PATH, load_entry_quality_policy)
 from .risk_windows import WindowRiskMeter, load_risk_window_policy
@@ -2831,6 +2832,20 @@ class CommissioningRunner:
                 self._execution_timings.action(at=at, source=source, deadline=deadline, **fields)
         except Exception:
             # A missing timing row remains missing; never report fabricated 0s.
+            pass
+
+    def _record_reducer_decision(self, record, *, result=None, error_type=None):
+        # A failed measurement must never turn a successful order into an
+        # execution failure. One bounded row per attempted position action,
+        # no API/ledger query and no raw exception/payload/credential logging.
+        if record is None:
+            return
+        try:
+            row = completed_reducer_decision(
+                record, at=self._now(), result=result, error_type=error_type)
+            print("[reducer-decision] " + json.dumps(row, sort_keys=True, allow_nan=False),
+                  flush=True)
+        except Exception:
             pass
 
     async def _drain_private_events(self) -> int:
@@ -6427,10 +6442,24 @@ class CommissioningRunner:
                 self._quote_observation_for_action(
                     state, actions[0], self._now(), position)
                 if actions else None)
-            result = await self.driver.apply_one(
-                actions, market=state.market,
-                position=position, now=now,
-                quote_observation=quote_observation)
+            reducer_record = None
+            try:
+                if actions:
+                    reducer_record = capture_reducer_decision(
+                        frame, actions[0],
+                        source=getattr(self, "account_state_mode", "websocket"),
+                        apply_position=position)
+            except Exception:
+                pass  # Missing evidence never changes an execution decision.
+            try:
+                result = await self.driver.apply_one(
+                    actions, market=state.market,
+                    position=position, now=now,
+                    quote_observation=quote_observation)
+            except Exception as exc:
+                self._record_reducer_decision(reducer_record, error_type=type(exc).__name__)
+                raise
+            self._record_reducer_decision(reducer_record, result=result)
             if actions and result is not None:
                 self._record_execution_timing("action", action=actions[0],
                                               result=result, position=position)

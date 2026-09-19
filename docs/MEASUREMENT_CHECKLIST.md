@@ -5,7 +5,29 @@ and review catalog, not the current runtime handoff: check [STATUS](../STATUS.md
 and live evidence first. No new collector, timer, reminder or trading rule is
 created by this checklist.
 
-## Tomorrow: review in this order
+## Operator-confirmed review priority — September19
+
+Review all measurements in this order; this is not new trading authority:
+
+1. **Position safety and accounting:** exact exit coverage/deadlines; response
+   timing; cancellation/repricing; position priority; account ownership;
+   settled P&L/fees/manual attribution; six-hour meter and cap resets.
+2. **Reliability/performance:** REST load/errors; scheduler/scan latency;
+   public-feed recovery; maintenance; reports/watchdog/backups/storage;
+   private WebSocket delivery only on demand.
+3. **Actual profitability:** reward accuracy; resting participation;
+   per-market net; reward/net per hour; daily versus day_of; exact cohorts;
+   selection-rank performance.
+4. **Selection improvement:** estimates versus earnings; payout potential;
+   entry quality; fill calibration; stressed exit; refusal shadow;
+   replacement/idle-slot cost; candidate/turnover coverage; shadow ranking.
+5. **Supporting evidence:** modeled local reward-score accrual.
+
+The operator requested Priority1 first. See the
+[September19 review](history/PRIORITY_ONE_REVIEW_2026-09-19.md). Do not restart
+retired collectors or enable any shadow rule from this ordering.
+
+## Detailed review procedure
 
 1. **Positions and exits:** verify current venue quantities and exact exit
    coverage, then measure observed fill to builder cancel, replacement gaps,
@@ -79,8 +101,8 @@ These observations do not themselves authorize a new filter or ranking.
 | Item | What to check | Evidence | Collection state |
 |---|---|---|---|
 | Position response latency | Fill observation, builder cancel ACK, positive terminal proof, exact replacement ACK, deadline offset, actual flat observation | `[execution-timing]`, `[action]`, durable order/fill history | Live. Original opposite-side entries may already cover inventory; first new reducer age is not automatically uncovered time |
-| Exact reducer decisions | Cancel-time bid/offer, candidate price, order direction/remaining size, preferred order, book age, reason and outcome | `[reducer-decision]` | **Prepared/pushed, NOT loaded as of this audit**; requires approved deployment/restart. ACK is not terminal/working proof |
-| Position priority/fairness | Due exits before uncovered positions before optional covered repricing; simultaneous fills; expired/mismatched exit coverage | Existing timing/actions plus new priority repair `f54b540fe` and regression tests | Fix prepared/pushed, NOT loaded; live benefit still requires comparable post-restart observations |
+| Exact reducer decisions | Cancel-time bid/offer, candidate price, order direction/remaining size, preferred order, book age, reason and outcome | `[reducer-decision]` | Loaded02:52Z September19; live records verified. ACK is not terminal/working proof |
+| Position priority/fairness | Due exits before uncovered positions before optional covered repricing; simultaneous fills; expired/mismatched exit coverage | Existing timing/actions plus priority repair `f54b540fe` and regression tests | Loaded02:52Z September19; recovery/deadline latency remains under review |
 | REST quota and latency | Weighted attempts/elapsed time, categories, reads/mutations, endpoint429s,404s, wait/response percentiles and cooldown | `[api-budget]`, `[api-backpressure]`; `scripts/api_capacity_report.py` | Live periodic counters; capacity projections are hypothetical, not permission to raise limits |
 | Scheduler performance | Decision/action percentiles, event-loop delay, CPU, evaluated/skipped owners | `[decision-scheduler]`, `[priority-replan]` | Live. Whole-slate decision latency is not position-exit latency |
 | Account proof and ownership | Reconciliation age, unresolved intents, unknown/absent orders, terminal repair and exact size | `[account-watch]`, `[rest-reconcile]`, `[unresolved-repair]`, ledger plus bounded authenticated snapshot | Live safety machinery. Sequential venue reads are not an atomic snapshot; no safety bypass |

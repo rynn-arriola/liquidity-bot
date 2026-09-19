@@ -76,3 +76,29 @@ Same supervisor388103/runner388121 on `aae337658`. Authenticated September19
 zero unresolved/unknown, local counts agree. Earlier unknown record cleared
 naturally without repair. Not a flat restart gate. Latest checked02:32:27Z API
 window:238 requests/69.8s=3.410/s, zero failures/429.
+
+## Authorized stop; activation blocked by nonflat account
+
+Reviewed source committed/pushed as `683cf4160`. Graceful stop disarmed the host
+watchdog, stopped supervisor388103 and signaled runner388121. It exited at
+02:44:20.473954Z with `stop_reason=operator_sigterm`, explicitly `flat=false`.
+Both PIDs are absent. Shutdown canceled flat-market entries but its existing
+park path retained three pregame positions and matching exit orders.
+
+Authenticated02:44:36.868437Z:three orders/three positions, zero flat-market
+entry orders, zero unresolved/unknown; ledger counts agree:
+
+| Market | Position | Remaining exit |
+|---|---:|---|
+|pyrboh/bolole|+9|SELL9 OPEN|
+|volyur/kryvit|+6|SELL6 PARTIAL|
+|annfri/deskra|+10|SELL10 OPEN|
+
+This fails the explicit flat/clear activation gate. No deployment, marker
+update or restart occurred. WSL remains HEAD`67d11c0dd`, previous source marker
+`aae337658`; Windows/GitHub match`683cf4160`. Existing exits remain at the venue
+but no runner now manages them. Do not infer settlement, cancellation or safety
+from process exit. Ask whether the operator will close manually or authorizes
+the existing price-capped cancel/close procedure, which can realize losses.
+Then repeat authenticated gates, stopped recovery backup, reviewed deployment,
+hashes/installed suite and fresh restart gate. Do not bypass the nonflat state.

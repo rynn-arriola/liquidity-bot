@@ -102,3 +102,61 @@ from process exit. Ask whether the operator will close manually or authorizes
 the existing price-capped cancel/close procedure, which can realize losses.
 Then repeat authenticated gates, stopped recovery backup, reviewed deployment,
 hashes/installed suite and fresh restart gate. Do not bypass the nonflat state.
+
+## Command1 continuation
+
+Operator issued Command1. Repeated graceful stop confirmed no runner. At
+02:47:14.164337Z authenticated venue was order/position-free, while the stopped
+ledger retained three orders/positions. Read-only exact proof at02:47:36Z
+confirmed CANCELED/CANCELED/FILLED for those orders, with zero venue/ledger
+mutations. Verified stopped recovery copy at02:47:33Z:733,495,296 bytes,
+SHA-256 prefix0827f5c39733. Normal stopped prestart reconciliation then consumed
+complete account/history evidence; no venue mutation or ad-hoc ledger repair.
+Authenticated02:48:32.800867Z gate proved zero venue orders/positions and zero
+working/position/unresolved/unknown local state.
+
+Reviewed WSL checkout fast-forwarded to`1273aadd7` (same executable source as
+`683cf4160`); all214 tracked source/test/script/web/config hashes match Windows.
+Saved source remains REST; quote10/32, normal/active polling5s/1s, max30 pending
+entries and the four$25 window policy are unchanged. Installed full-suite
+verification precedes marker update and the fresh startup gate.
+
+Installed full suite passed all1,878 tests in183.820s; repeated214 hashes match.
+Post-reconciliation stopped backup02:49:15Z:733,503,488 bytes, hash7d79d667dfbf.
+Marker set to`1273aadd7` only after installed tests. Authenticated02:52:10.584507Z
+fresh gate again proved zero venue/local orders, positions and ambiguity.
+Restart launched supervisor582894/runner582918 with `auto 10 32 saved`.
+Natural acceptance results follow; process startup alone is not trading proof.
+
+### Initial live acceptance
+
+Supervisor582894/runner582918 remain alive at four minutes, marker`1273aadd7`.
+Public startup bound-book scope served32/32 from WebSocket, zero REST fallback.
+REST source stays explicit; window-risk02:53:20Z retains settled loss$1.2248,
+hard$25/cap30, no hold, open positions/orders excluded.
+
+First two completed API windows:324/132.0s=2.455/s and186/65.4s=2.842/s;
+zero429/cooldowns,13 individual-order404s (11 then2), no logged runtime recovery.
+Those errors are not erased or described as an entirely error-free run.
+
+Natural aldden/ivnvol+10 observed02:55:02.610942Z; SELL10 passive reducer ACK
+02:55:02.692184Z,0.081242s later. New exact-frame diagnostic emitted with fresh
+book age0.323895s and `enforcement=none`. ACK alone was not called working proof.
+The02:55:03 sequential account read crossed the fill/placement and showed the
+older BUY; three in-flight intents subsequently resolved02:55:04.242661Z.
+
+Authenticated02:56:10.818267Z positively proves30 flat entry orders plus two
+OPEN SELL10 reducers exactly covering stolud/simjan+10 and aldden/ivnvol+10;
+zero unresolved/unknown and matching ledger counts32 orders/two positions.
+This is useful first-reducer/coverage acceptance, not proof of sustained latency,
+all exits, simultaneous-priority behavior, catalog interruption during a live
+fill, or unnecessary-repricing resolution. No fault/fill was induced. Keep the
+normal measurement checklist; no additional strategy or request-rate change.
+
+Follow-up: aldden/ivnvol flattened naturally02:56:31.334416Z,88.723s after
+initial observation. Third API window02:56:31Z:197/62.5s=3.150/s, two order404s,
+zero429; first three windows total707 attempts/15 order404s/zero429, no logged
+runtime recovery or reducer-reprice decisions. That short sample cannot prove
+churn fixed. Authenticated02:57:46.688560Z (over five minutes after restart):
+30 flat entries plus OPEN SELL10 covering sole stolud/simjan+10, zero unresolved/
+unknown and matching ledger31 orders/one position. No more code or policy edits.

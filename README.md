@@ -310,15 +310,15 @@ limitations](docs/history/MARKET_ECONOMICS_MEASUREMENT_2026-09-18.md).
 
 ## Discord summaries and alerts
 
-Prepared September19: routine LIVE summaries use a mobile-readable image;
+Activated September19: routine LIVE summaries use a mobile-readable image;
 critical/shutdown posts remain text, and optional Pillow/render failures fall
 back to text before upload. Lifetime Results keeps pending beside closed-fill
 gains, losses, fees, trading net, paid bot-era rewards and overall net. Pending
 is excluded from net, never hidden. Historical settlement gaps make lifetime
 totals explicitly PARTIAL; paid is date-scoped, not exact order attribution.
 The existing reporting worker reads the ledger and cached rewards without new
-Polymarket calls. No trading or risk rules change. Activation requires the next
-authorized deployment/restart. [Review](docs/history/SUMMARY_IMAGE_2026-09-19.md).
+Polymarket calls. No trading or risk rules change. Command1 deployed the reviewed
+release with safe startup gates. [Review](docs/history/SUMMARY_IMAGE_2026-09-19.md).
 
 The shadow runner reuses maker-lab's normal and error webhooks. Every five
 minutes and at clean completion it posts a liquidity-specific one-glance

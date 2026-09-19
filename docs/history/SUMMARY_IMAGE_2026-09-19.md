@@ -90,3 +90,40 @@ this is not a hot report-script-only change. Keep existing trading running.
 After activation verify one natural five-minute image, matching text values,
 fresh pending age, explicit partial lifetime coverage, and ongoing normal
 order/exit processing. No faults or fills should be induced for acceptance.
+
+## Command 1 activation — September19
+
+The subsequent Command 1 authorizes the normal stop, reviewed deployment and
+gated restart of this exact reporting release, without changing trading rules.
+The supervisor1153551 and runner1153573 stopped normally. Terminal record
+13:12:08.040545Z: operator_sigterm, flat=true. Fresh authenticated complete
+reads at13:12:38.974617Z proved zero orders/positions; read-only ledger showed
+zero working orders, positions, unresolved intents and unknown orders.
+
+Windows/GitHub matched clean3fc44a674. The stopped-runtime recovery copy
+captured13:12:48.892128Z passed integrity and destination verification:
+767,303,680 bytes, SHA prefix751e46e156c1. The offline PC was not contacted.
+WSL clean tracked HEAD9eb5df4a fast-forwarded through a verified bundle to
+3fc44a6749e8fc9d014d6b2cd3327c91fff7a2c2 under the hourly-report lock.
+All223 installed source/test/config/script hashes match release and Windows.
+Existing untracked deployed marker and egg-info were preserved. No ledger,
+risk baseline, setting, credential or unrelated source was changed.
+
+The installed environment passed all1,970 tests in191.947s. Artifact hashes
+were rechecked before advancing DEPLOYED_COMMIT to3fc44a674. Fresh complete
+authenticated13:17:09.785337Z reads again proved zero orders, positions,
+unresolved intents, unknown orders and ledger exposure. The existing launcher
+`auto 10 32 saved` started supervisor1211173/runner1211201; the independent
+TV observer was already running. Persisted settings remain size10/32 and
+manual REST; current06–12ET settled loss$10.1849/$25 selects cap20 and is not
+reset. New summary presentation adds no venue reads or execution decisions.
+
+Authenticated13:21:59.459980Z acceptance found20 flat entry orders across18
+markets, zero positions, zero unresolved intents and zero unknown orders;
+ledger agrees. The first two API windows reported178/112.4s and292/109.6s
+(1.584/2.664rps), zero429/cooldown and five individual-order404s. One exact
+market lacked confirmed pregame data at13:18:10Z and recovered eligibility
+at13:19:12Z; other markets resumed orders. No trading-code change was needed.
+This flat sample does not establish position-exit or recovery performance.
+The new scheduled summary's visual delivery still needs natural confirmation;
+absence of a notification failure is not independent Discord-image proof.

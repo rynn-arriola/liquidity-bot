@@ -134,6 +134,7 @@ class RestFallbackRunner(CommissioningRunner):
         self._hard_exit_terminal_proofs = {}
         self._hard_exit_retry_authorizations = {}
         self._position_confirmation_proofs = {}
+        self._strategy_recovery_owner = None
         self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
         if self._using_rest_source():
             kwargs["private_stream_factory"] = DisabledPrivateStream
@@ -564,6 +565,95 @@ class RestFallbackRunner(CommissioningRunner):
             self._hard_exit_terminal_proofs[slug] = (token, proved_at)
         return "retry"
 
+    async def _quarantine_strategy_orders(self, slug):
+        """One strict account proof, then exact-owner cancellation proof.
+
+        Only strategy recovery uses this path. Startup, rebind, global
+        quarantine and shutdown retain their strict whole-account checks.
+        The terminal pass still consumes complete orders/positions/history,
+        but never renews the global entry gate or poll clock.
+        """
+        if not self._using_rest_source():
+            return await super()._quarantine_strategy_orders(slug)
+        if self._strategy_recovery_owner is not None:
+            # Urgent service is serial but may itself encounter a critical.
+            # Leave that owner for its normal backed-off recovery; do not
+            # recursively nest another full proof/priority sweep.
+            raise ApiAdmissionDeferred(
+                "strategy recovery already in progress",
+                error_code="LOCAL_RECOVERY_IN_PROGRESS", retry_after_seconds=1)
+        scope = tuple(self.active_slugs)
+        generation = getattr(getattr(self, "source_control", None), "generation", None)
+
+        def checkpoint():
+            if self._stop_requested:
+                return self._stop_requested
+            if (not self._using_rest_source() or tuple(self.active_slugs) != scope
+                    or getattr(self, "_source_switching", False)
+                    or getattr(getattr(self, "source_control", None), "generation", None)
+                    != generation):
+                raise ApiAdmissionDeferred(
+                    "account source or scope changed during recovery",
+                    error_code="LOCAL_ACCOUNT_SOURCE_CHANGED", retry_after_seconds=1)
+            if self._streams_need_rebind:
+                raise (self._pending_market_stream_error or MarketStreamUnavailable(
+                    "public stream failed during scoped strategy recovery"))
+            self._assert_runtime_scope()
+            return None
+
+        self._strategy_recovery_owner = slug
+        try:
+            stop = checkpoint()
+            if stop:
+                return stop
+            print(
+                f"[quarantine] at={self._now().isoformat()} "
+                f"called_by=_quarantine_strategy_orders market={slug} source=rest",
+                flush=True,
+            )
+            await self._rest_reconcile(self._now(), tag="strategy-recovery-start")
+            stop = checkpoint()
+            if stop:
+                return stop
+            # The recovering owner is excluded from priority dispatch until
+            # its quarantine completes; otherwise we could cancel a reducer
+            # that this very checkpoint just placed. Other due/uncovered
+            # owners use the unchanged position-only guarded executor.
+            stop = await self._service_urgent_positions()
+            if stop:
+                return stop
+            stop = checkpoint()
+            if stop:
+                return stop
+            if not self.gate.session_evidence_ready(now=self._now()):
+                raise ApiAdmissionDeferred(
+                    "complete account proof expired during recovery",
+                    error_code="LOCAL_REST_STATE_EXPIRED", retry_after_seconds=1)
+            # Re-read local state after every service await: a fill or terminal
+            # update may have changed this owner. No second pass is needed
+            # when the complete proof already cleared its orders/ambiguity.
+            if (self.ledger.working_orders(slug) or self.ledger.absent_orders(slug)
+                    or self.ledger.market_has_unresolved_intent(slug)):
+                if (not self.ledger.market_has_unresolved_intent(slug)
+                        and self.ledger.working_orders(slug)):
+                    await self.kill_switch.initiate(slug, now=self._now())
+                    stop = checkpoint()
+                    if stop:
+                        return stop
+                await self._reconcile_position_state(slug, tag="strategy-recovery-terminal")
+                stop = checkpoint()
+                if stop:
+                    return stop
+            self._assert_quarantine_terminal((slug,))
+            if self.ledger.absent_orders(slug):
+                raise AdapterError("strategy recovery is waiting for positive order proof")
+            return None
+        except BaseException:
+            self.gate.on_reconciliation_conflict()
+            raise
+        finally:
+            self._strategy_recovery_owner = None
+
     async def _reconcile_position_state(self, slug, *, tag):
         self._position_confirmation_proofs.clear()
         observed_at = self._now()
@@ -795,7 +885,7 @@ class RestFallbackRunner(CommissioningRunner):
                 str(row["exchange_order_id"]))
         priorities = {}
         for slug in managed:
-            if slug not in positions:
+            if slug not in positions or slug == self._strategy_recovery_owner:
                 continue
             # Non-selected exposure still belongs to the existing exit-only
             # service path; creating its state does not grant entry eligibility.

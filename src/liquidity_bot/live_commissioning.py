@@ -7951,6 +7951,11 @@ class CommissioningRunner:
             return stop
         if not require_terminal:
             return None
+        self._assert_quarantine_terminal(slugs)
+        return None
+
+    def _assert_quarantine_terminal(self, slugs: tuple[str, ...]) -> None:
+        """Positive terminal proof, shared by global and scoped recovery."""
         for market in slugs:
             unresolved = self.ledger.unresolved_intents(market)
             if unresolved and all(
@@ -9600,7 +9605,10 @@ class CommissioningRunner:
 
         await self._rest_reconcile(self._now())
 
-    async def _recover_strategy_state(self, reason: str, slug: str) -> None:
+    async def _quarantine_strategy_orders(self, slug: str) -> str | None:
+        return await self._quarantine_working_orders(slug)
+
+    async def _recover_strategy_state(self, reason: str, slug: str) -> str | None:
         """Quarantine an unexpected strategy state without ending the process.
 
         The refresh must target the market that actually went stale. Refreshing
@@ -9639,7 +9647,7 @@ class CommissioningRunner:
                     # stale: the reconciler returns this critical before it can
                     # plan anything, so no quote is placed on stale data.
                     return
-            await self._quarantine_working_orders(slug)
+            return await self._quarantine_strategy_orders(slug)
         except RuntimeInvariantViolation:
             raise
         except MarketStreamUnavailable as exc:
@@ -10029,7 +10037,7 @@ class CommissioningRunner:
             await self._report_runtime_error("strategy_state_terminal", exc)
             return f"critical:{reason}"
         try:
-            await self._recover_strategy_state(reason, slug)
+            return await self._recover_strategy_state(reason, slug)
         except RuntimeInvariantViolation as invariant:
             await self._report_runtime_error(
                 "strategy_state_terminal", invariant)

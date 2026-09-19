@@ -976,6 +976,15 @@ These are implementation requirements, not suggestions.
     retain exact reads; incomplete fields, duplicate/foreign identities fail
     closed. Positive foreign risk must not disappear between proof attempts.
     Startup/rebind/recovery/shutdown and failed/expired proof remain strict.
+    The explicit REST single-market strategy-quarantine exception starts with
+    that same strict complete proof. Before further quarantine work it may
+    serially service other due/uncovered positions, excluding the recovering
+    owner and refusing recursive recovery. Its terminal follow-up may use
+    exact-owner order reads plus complete orders/positions/mandatory history;
+    it never renews the global entry gate or poll clock. If the complete proof
+    already cleared all target orders/ambiguity, no redundant terminal pass
+    is required. Stop, source/scope changes, freshness, unknown ownership and
+    positive terminal proof remain binding. Global quarantine is unchanged.
     A risk-reducing position-transition confirmation may
     limit individual order GETs to the exact position owner, but must still
     consume complete open-order, position and mandatory-history snapshots. It

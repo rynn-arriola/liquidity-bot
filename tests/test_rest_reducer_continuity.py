@@ -341,7 +341,9 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
                 patch.object(runner, "_refresh_equity_for_decision", AsyncMock()), \
                 patch.object(runner, "_decide_for_market", decide):
             await runner._decision_sweep(("flat", held, "other"))
-        self.assertEqual(visited, [held, "other"])
+        # The uncovered owner now precedes the covered owner's optional
+        # reprice; both still receive one visit despite the exhausted budget.
+        self.assertEqual(visited, ["other", held])
 
     async def test_real_cancel_and_three_iocs_complete_before_flat_work(self):
         runner, client, held = await self.build()

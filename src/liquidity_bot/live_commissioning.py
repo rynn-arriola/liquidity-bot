@@ -6521,6 +6521,11 @@ class CommissioningRunner:
 
         return 4
 
+    def _position_priority_rank(self, slug: str) -> int:
+        """Optional inter-position urgency; normal WebSocket order is unchanged."""
+
+        return 2
+
     def _position_priority_replan_immediately(
         self, slug: str, before: tuple[Any, ...], after: tuple[Any, ...],
     ) -> bool:
@@ -6683,9 +6688,7 @@ class CommissioningRunner:
                 # interruption must not turn into an extra flat entry pass.
                 self._mark_market_dirty(slug, self._now())
                 continue
-            if slug in priorities:
-                priority_seen[slug] = priorities[slug]
-            else:
+            if slug not in priorities:
                 # A bounded position budget must not strand an uncovered or
                 # newly due owner behind the remaining flat slate. Yield to a
                 # fresh outer pass instead of increasing mutation/visit limits.
@@ -6699,18 +6702,40 @@ class CommissioningRunner:
                     pending_slugs = [owner for owner in pending_slugs
                                      if owner in priorities and owner != exhausted]
                     continue
-                urgent = next((owner for owner, token in priorities.items()
-                               if priority_seen.get(owner) != token
-                               and priority_visits.get(owner, 0)
-                               < self._position_priority_visit_limit(owner)), None)
-                if urgent is not None:
-                    priority_seen[urgent] = priorities[urgent]
-                    priority_visits[urgent] = priority_visits.get(urgent, 0) + 1
-                    priority_dispatches.add(urgent)
-                    pending_slugs = [urgent, slug, *(
-                        owner for owner in pending_slugs if owner != urgent)]
-                    # No guard, backoff, proof or stop check is bypassed.
-                    continue
+            # A proof for a held owner can discover another owner's fill too.
+            # Urgent inventory must precede a covered owner's optional reprice,
+            # not just flat entries. Stable sorting preserves peer order; only
+            # changed tokens get extra dispatches under the existing budgets.
+            ranks = {owner: self._position_priority_rank(owner) for owner in priorities}
+            current_rank = ranks.get(slug, 3)
+            isolated = self._isolated_unexecutable_slugs() if priorities else frozenset()
+            at = self._now()
+            urgent = next((owner for owner in sorted(priorities, key=ranks.get)
+                           if ranks[owner] < current_rank
+                           and priority_seen.get(owner) != priorities[owner]
+                           and priority_visits.get(owner, 0)
+                           < self._position_priority_visit_limit(owner)
+                           and not self.ledger.market_has_unresolved_intent(owner)
+                           and owner not in isolated
+                           and (self._next_decision_at.get(owner) is None
+                                or at >= self._next_decision_at[owner])), None)
+            if urgent is not None:
+                priority_seen[urgent] = priorities[urgent]
+                priority_visits[urgent] = priority_visits.get(urgent, 0) + 1
+                priority_dispatches.add(urgent)
+                if priority_dispatch:
+                    # Preserve exit-only dispatch if this owner flattens while
+                    # the higher-priority owner is being proved/serviced.
+                    priority_dispatches.add(slug)
+                pending_slugs = [urgent, slug, *(
+                    owner for owner in pending_slugs if owner != urgent)]
+                continue
+            if slug in priorities:
+                priority_seen[slug] = priorities[slug]
+                if not priority_dispatch:
+                    # A naturally reached held owner consumes a visit too;
+                    # inter-position preemption cannot increase its budget.
+                    priority_visits[slug] = priority_visits.get(slug, 0) + 1
             try:
                 # Account reconciliation can take seconds. Its pre-await time
                 # must not make an expired equity mark appear fresh.

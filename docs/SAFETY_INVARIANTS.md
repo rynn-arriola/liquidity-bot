@@ -1010,7 +1010,15 @@ These are implementation requirements, not suggestions.
     completion, never a freshness guarantee or permission to raise API limits.
 105. REST position priority is scheduling only: exact quantity, order and
     unresolved/absent ownership changes may interrupt flat-owner work through
-    the same guarded decision path. Snapshot timestamps cannot cause repeated
+    the same guarded decision path. Due inventory precedes uncovered inventory,
+    which precedes optional repricing of covered inventory, including when a
+    fill is discovered while proving a different held owner. Coverage requires
+    exactly one correctly directed, exact-remaining-size reducer and no builder,
+    duplicate, absent order or unresolved intent; mere order presence is not
+    protection. This same coverage test governs pre-periodic urgent service and
+    discovery deferral. Equal-urgency owners retain stable order; a preempted
+    priority owner remains exit-only if it flattens before resumption.
+    Snapshot timestamps cannot cause repeated
     interruptions. Extra visits are bounded per owner/sweep; unknown intents,
     isolation, backoff, stop and complete proof/admission checks remain binding.
     A priority owner that flattens during proof cannot gain an extra entry pass.

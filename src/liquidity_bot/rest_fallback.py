@@ -654,9 +654,22 @@ class RestFallbackRunner(CommissioningRunner):
         if (self.ledger.position(slug) == 0
                 or slug in self._isolated_unexecutable_slugs()):
             return False
+        return self._position_priority_rank(slug) < 2
+
+    def _position_priority_rank(self, slug):
+        """Due exit, uncovered inventory, then covered routine repricing.
+
+        This is local scheduling evidence only. The normal guarded executor
+        still proves ownership, terminal cancels and exact current quantity.
+        """
+        if not self._using_rest_source():
+            return super()._position_priority_rank(slug)
         deadline = self._position_exit_deadline(slug)
-        return (not self.ledger.working_orders(slug)
-                or deadline is None or self._now() >= deadline)
+        if deadline is not None and self._now() >= deadline:
+            return 0
+        if deadline is None or not self._position_has_exact_reducer(slug):
+            return 1
+        return 2
 
     async def _service_urgent_positions(self):
         if not self._using_rest_source():
@@ -675,6 +688,7 @@ class RestFallbackRunner(CommissioningRunner):
                            or now >= self._next_decision_at[slug]))
         if not slugs:
             return None
+        slugs = tuple(sorted(slugs, key=self._position_priority_rank))
         outcome = await self._service_bound_markets(slugs, refresh_books=False)
         if outcome or self._stop_requested:
             return outcome or self._stop_requested
@@ -684,6 +698,11 @@ class RestFallbackRunner(CommissioningRunner):
 
     def _preserve_position_orders_during_bound_recovery(self, slug):
         """Keep only one exactly-sized reducer during public-feed recovery."""
+
+        return self._position_has_exact_reducer(slug)
+
+    def _position_has_exact_reducer(self, slug):
+        """Builders, duplicates and uncertain orders are not exit coverage."""
 
         position = self.ledger.position(slug)
         if (position == 0 or self.ledger.market_has_unresolved_intent(slug)
@@ -717,8 +736,7 @@ class RestFallbackRunner(CommissioningRunner):
                 continue
             # A gap or pending cancel needs a replacement, not a blocking
             # catalog scan. Include inventory/tiny deadlines as well as kickoff.
-            if (not self.ledger.working_orders(slug)
-                    or self.ledger.unresolved_intents(slug)):
+            if not self._position_has_exact_reducer(slug):
                 return True
             deadline = self._position_exit_deadline(slug)
             if deadline is None or (deadline - now).total_seconds() <= 60:

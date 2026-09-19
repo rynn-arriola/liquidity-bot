@@ -144,3 +144,150 @@ Read-only authenticated follow-up01:40:46.147748Z:35 orders across27 markets,
 budole/pytiva-10 BUY10, masyev/hohser-10 BUY10, pysyev/cherom+10 SELL10,
 yidwan/elezah-0.06 BUY0.06. Zero unresolved/unknown state; ledger agrees.
 The running bot still has the original loaded code, not the new diagnostic.
+
+## Follow-up: both priority repairs authorized, prepared only
+
+The operator subsequently requested the other two fixes. This expands the code
+scope to the confirmed coverage and inter-position scheduling gaps; it does not
+authorize a deployment, restart, new exit-price policy or blanket removal of
+repricing. The diagnostic in `d8ce159cc` remains included for later live evidence.
+
+### Chosen implementation and tradeoff
+
+- Reuse the existing strict reducer-preservation predicate as one named exact
+  coverage helper. Exactly one opposite-side order with remaining quantity
+  equal to absolute inventory, no builders/duplicates, no unresolved intent and
+  no absent order is required. The public-recovery predicate is behaviorally
+  unchanged. Urgent service, exhausted-owner yielding and discovery deferral
+  now share that evidence rather than treating any working order as coverage.
+- Classify REST owners locally: existing due deadline first, unknown-deadline
+  or uncovered inventory second, covered routine work third. No deadline,
+  passive price, IOC permission, quantity or risk policy is changed. The urgent
+  pre-periodic pass also orders due owners first.
+- After existing account proof, allow a higher-urgency changed owner to preempt
+  another held owner through the same guarded decision path. Stable sorting
+  preserves peer order. Backoff, unresolved intent, isolated state, stop,
+  rebind, freshness and mutation admission remain binding. Requeueing a
+  previously prioritized owner preserves its exit-only dispatch marker, so
+  later flatness cannot accidentally create an extra entry decision.
+- Keep bounded visits, counting naturally reached held owners too. An
+  exhausted owner can defer flat work but cannot erase other held owners.
+  WebSocket source retains empty priority tokens and its old scheduling hooks;
+  switching a REST runner instance to WebSocket likewise disables this ranking.
+
+This addresses ordering rather than raising poll frequency, increasing the
+shared governor or introducing parallel mutation executors. The rank/coverage
+checks use only local ledger state. Changed scheduling can change when existing
+proof work occurs; actual REST volume and latency need live acceptance. The
+tradeoff is deferring optional repricing, discovery or refill while urgent
+inventory is serviced, not a guaranteed latency/429/reward improvement.
+
+### Verification and dedicated edge-case audit
+
+The82 focused tests pass, including twelve new urgency tests, existing priority,
+reducer-continuity, diagnostics and shared-recovery tests. Two in-memory
+reversals each produce one expected assertion failure: restoring any-order
+coverage, and removing inter-position urgency ranks. Original source is never
+replaced by the reversal harness. The complete suite passed all1,866 tests in
+282.355s using the production virtual environment against the prepared Windows
+source through WSL. No code changed after that full-suite run.
+
+- Long/short exact coverage, missing reducers, remaining builders, mismatched
+  partial size, duplicates, absent orders and unresolved intents are covered.
+- Known due/near deadline and unknown deadline remain conservative. Existing
+  tiny/kickoff clocks, hard-IOC retries and terminal proof tests still pass.
+- A new fill discovered during proof for a covered owner executes first;
+  due/uncovered/covered/flat order is explicit. A real fake-client builder
+  cancellation reaches positive CANCELED/RECONCILED proof before exact reducer
+  submission and before the covered owner's optional reprice. A new PLACE ACK
+  may still await its own visibility; the test does not call it working proof.
+- Backoff, unknown mutation and isolated ownership do not gain priority bypass.
+  Stop-during-proof and rebind keep existing guards; no new venue client exists.
+- A preempted priority owner that becomes flat does not create an extra entry.
+  Continuously changing tokens and exhausted owners remain bounded; other
+  positions still receive service. One old continuity expectation was updated
+  deliberately: an uncovered second owner now goes before a covered first
+  owner, while both still receive exactly one bounded visit.
+- Both account modes retain their source contracts. No selector, quantity,
+  pending-entry accounting, four$25 window, price, expiry, private stream,
+  proof-age, limiter, execution schema or order driver rule is changed.
+- Recovery shares the already existing exact reducer predicate; shutdown keeps
+  its independent cancellation/flattening path. Startup/restart retain all
+  ownership/flat proof gates. No migration, new persistent state, or ledger
+  repair is introduced; rollback is ordinary reviewed source rollback.
+
+Prepared code is not live acceptance. Before activation require the operator's
+deployment/restart instruction, fresh safe stop/start gates, installed-source
+hashes/tests, and natural acceptance of first-reducer latency, simultaneous
+fills, cancellation proof, request load and diagnostic records. The actual
+necessity of repeated live reprices remains unproved until diagnostics run.
+
+## Open-position-first investigation, September19 01:54–02:02Z
+
+The operator prioritized investigating the number of open positions before
+finishing the release work. No stop, restart, deployment, venue mutation or
+policy change was performed. Supervisor388103/runner388121 remained running
+on the older `aae337658` source, verified again at approximately02:01Z.
+
+Sequential authenticated report-lane snapshots, with local ambiguity checks:
+
+| UTC capture | Open positions | Flat entry orders | Positioned orders | Ambiguity |
+|---|---:|---:|---:|---:|
+|01:54:37|8|17|7|0|
+|01:56:43|6|4|6|0|
+|02:01:31|2|30|2|0|
+
+The missing reducer in the first sample was cosale/filmih during its normal
+cancel-confirm-IOC transition, not proof of a permanently stranded position.
+The last two positions were cherom/tuzole-10 with OPEN BUY10 and
+pysyev/cherom+10 with OPEN SELL10. Venue and ledger agreed at the last check;
+each had exact-size exit coverage. At01:57:43Z the six then-held positions were
+5m23s–13m15s old according to durable fill basis. The pending-entry limit
+intentionally excludes positioned-market orders, so several overlapping fills
+can accumulate while the existing passive-exit windows run. Position count
+alone does not establish an exit failure or breach of the entry-order cap.
+
+Natural timed exits were observed on the unchanged live source:
+
+- cosale/filmih: IOC ACK01:54:37.397028Z,18.876s after its deadline;
+  flat observed01:54:40.678377Z.
+- annfri/deskra: IOC ACK01:59:33.185147Z,4.910s after its deadline;
+  flat observed01:59:35.436840Z.
+- marmak/derdmy: IOC ACK02:00:27.545123Z,6.106s after its deadline;
+  flat observed02:00:30.777048Z.
+
+Authenticated subsequent absence confirms these positions were no longer
+held. This is evidence the old timed exit path runs, not proof every exit is
+on time or that new code is live-accepted. The ordinary900-second clock is
+subject to the existing execution/proof/price rules, not guaranteed flatness
+at exactly15 minutes. No clock or price policy was changed.
+
+### Actual replacement gaps, not misleading first-create ages
+
+Read-only order history shows original opposite-side entry orders already
+covered two positions before their first newly-created reducer. It would be
+incorrect to call the294s and145s initial-observation-to-new-create intervals
+entirely unprotected:
+
+- cherom/tuzole's original BUY10 expired01:49:37.841166Z; replacement ACK
+  01:50:18.830557Z,40.989s later.
+- marmak/derdmy's original SELL10 expired01:49:38.164918Z; replacement ACK
+  01:50:19.086804Z,40.922s later.
+- Both expiry events were durably received01:49:42.307515Z, leaving36.523s
+  and36.779s from known expiry to replacement ACK. ACK is not working-proof
+  time, so these are measured to acknowledgement, not full coverage bounds.
+
+During that interval annfri/deskra continued cancel-confirm-replace cycles;
+its final replacement ACK01:50:18.578118Z immediately preceded the other two.
+It had29 reprice cancellations in the episode by01:57:43Z. This corroborates
+the need to prioritize uncovered positions over a covered owner's optional
+repricing, which the prepared repair targets. It does not prove every reprice
+was unnecessary or attribute the entire41-second interval to one mechanism;
+cancel-time book inputs are not available in the old runtime.
+
+The current work therefore remains exact coverage and urgency scheduling,
+not a new open-position cap, shorter holding period, aggressive exit price,
+higher polling limit or blanket suppression of repricing. The diagnostic
+prepared in `d8ce159cc` is still required for the latter question. Latest
+02:00:44Z API window:200 requests/62.5s=3.198/s, four order-retrieve404s and
+zero429s; this is not a claim that the whole run had no429s.

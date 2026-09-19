@@ -99,6 +99,12 @@ acceptance of the prepared repair. No deployment, stop or restart occurred.
 
 ## Remaining acceptance
 
+Pushed as `8d2e27d18`. Final parity verified Windows/GitHub match and a fresh
+private ledger backup; runtime drift is expected because trading-source
+deployment/restart remains unauthorized. WSL HEAD`704678807` and loaded
+marker`1273aadd7` were left unchanged. The subsequent operator-requested
+[Priority2 review](PRIORITY_TWO_REVIEW_2026-09-19.md) is read-only.
+
 After an authorized activation, inspect natural recovery at configured
 capacity: exact read counts, urgent handoff timing, cancellation-to-terminal
 and replacement intervals, IOC acknowledgement versus deadline and actual

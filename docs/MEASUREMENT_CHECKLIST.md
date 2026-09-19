@@ -26,6 +26,9 @@ Review all measurements in this order; this is not new trading authority:
 The operator requested Priority1 first. See the
 [September19 review](history/PRIORITY_ONE_REVIEW_2026-09-19.md). Do not restart
 retired collectors or enable any shadow rule from this ordering.
+The subsequent [Priority2 review](history/PRIORITY_TWO_REVIEW_2026-09-19.md)
+is complete read-only; account-read429s and decision-age outliers remain
+follow-up evidence. Priority1's prepared repair still awaits authorized rollout.
 
 ## Detailed review procedure
 

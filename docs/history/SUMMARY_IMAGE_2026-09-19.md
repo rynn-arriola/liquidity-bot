@@ -161,3 +161,33 @@ values, long warnings, stale/partial labels, negative net, optional Pillow,
 text fallback and unchanged upload ambiguity handling. Same existing worker,
 no execution/risk changes, migration or state rollback. Future authorized
 deployment must recheck hashes/tests and normal startup safety gates.
+
+## Follow-up: align every section — prepared for next restart
+
+The operator requested properly aligned numbers in every section. Markets and
+Capital/Health were still rendered as whole space-padded strings in a
+proportional font, so their values did not share a column edge. More spaces
+would not reliably fix that. The renderer now recognizes the existing text
+row format before trimming/abbreviating labels, preserves each value verbatim,
+and draws all metrics with the same right edges (566/1146px) and shared label/
+value baselines. This also standardizes top cards and Lifetime rows.
+
+Nested reason counts, large currency values with no separating whitespace,
+UNAVAILABLE/UNKNOWN and capital explanation notes remain intact. Unrecognized
+notes remain full-width text; overflow still selects the complete text report.
+1200x1382 dimensions, main34px type, pending beside paid/net, accounting and
+upload behavior are unchanged. No API/ledger/decision/startup change occurs.
+Runner1211201 was still present during this work; no exposure query or current
+flat claim was needed for the isolated display change. No deployment/restart.
+
+29 focused tests pass. Added cases verify exact coordinate/anchor/baseline
+alignment across all sections, parsing without value changes and capital
+unavailability explanations. Two in-memory reversals (left-anchored values,
+whole-string rendering) cause expected assertion failures, not test errors.
+Native preview visually verified for consistent columns, no collisions and
+retained information. Final native full suite passed1,976 tests in206.783s.
+Dedicated review includes signs/decimals/ratios/units, long/unknown amounts,
+indentation and nested reasons, absent capital proof, row/width overflow,
+unchanged read-only worker and fallback-before-upload. No trading, risk,
+source or rollback-state change; the operator's next-restart-only boundary
+continues to apply.

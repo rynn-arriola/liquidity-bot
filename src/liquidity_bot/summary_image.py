@@ -15,6 +15,36 @@ CANVAS_WIDTH = 1200
 CANVAS_HEIGHT = 1382
 VALUE_FONT_SIZE = 34
 
+METRIC_LABELS = frozenset({
+    'Quoting', 'Stuck', 're-quoting', 'awaiting rotation', 'free, no supply',
+    'Eligible sides', 'Resting side-hours', 'Viable now', 'Rewarded in window',
+    'Refused, tight book', 'Lost to errors', 'Remain est. >=$1',
+    'Remain est. >=$1.50', 'Settled cash', 'Buying power', 'Retained target',
+    'Free to withdraw', 'Market stream', 'Private stream', 'Unresolved',
+    'Unknown orders', 'REST rate', 'REST ceiling', 'Ledger on disk',
+})
+
+
+def metric_rows(block):
+    """Decode the existing fixed-width text rows without changing values.
+
+    Do this before stripping indentation or abbreviating labels. Long money
+    values need not have whitespace between the 19-column label and value.
+    Unrecognized diagnostic notes stay whole rather than being misparsed.
+    """
+    rows = []
+    for line in block.splitlines():
+        if not line.strip() or line.startswith('```'):
+            continue
+        label, value = line[:19].strip(), line[19:].strip()
+        if label in METRIC_LABELS and value:
+            rows.append((label, value))
+        elif line.startswith('      ') and line[21:].strip().isdigit():
+            rows.append((line[6:21].strip(), line[21:].strip()))
+        else:
+            rows.append((line.strip(), None))
+    return rows
+
 
 def font(size, bold=False):
     from PIL import ImageFont
@@ -29,11 +59,9 @@ def font(size, bold=False):
 def render(model):
     from PIL import Image, ImageDraw
     # One authoritative text report feeds both presentation routes.
-    def legacy_rows(block):
-        return [line.strip() for line in block.splitlines() if line.strip() and not line.startswith('```')]
-    slots = legacy_rows(model['slots'])
-    health = legacy_rows(model['health'])
-    capital = legacy_rows(model['capital'])
+    slots = metric_rows(model['slots'])
+    health = metric_rows(model['health'])
+    capital = metric_rows(model['capital'])
     # Compact display-only label aliases; underlying text retains every detail.
     aliases = {'Rewarded in window':'Rewarded', 'Refused, tight book':'Tight books',
                'Resting side-hours':'Rest hours', 'awaiting rotation':'Awaiting rotation',
@@ -43,10 +71,11 @@ def render(model):
     def compact(line):
         for old,new in aliases.items(): line=line.replace(old,new)
         return line
-    slots, health, capital = [[compact(line) for line in group] for group in (slots,health,capital)]
+    slots, health, capital = [[(compact(label), value) for label,value in group]
+                              for group in (slots,health,capital)]
     if model['source'] == 'rest':
-        health = [line for line in health if not line.startswith('Private age')]
-    health.insert(0, 'Account / book   '+model['source'].upper()+' / WS')
+        health = [row for row in health if row[0] != 'Private age']
+    health.insert(0, ('Account / book', model['source'].upper()+' / WS'))
     bottom = max(len(slots),len(capital)+len(health)+1)
     # Never silently omit a diagnostic to meet the fixed mobile canvas.
     if bottom > 12 or len(model['risk']) > 8 or len(model['today']) > 8:
@@ -55,22 +84,27 @@ def render(model):
     image = Image.new('RGB', (CANVAS_WIDTH,height), '#101720')
     d = ImageDraw.Draw(image)
     white,muted,accent = '#EEF3FA','#A5B5C9','#6ABAFF'
-    def text(value,x,y,size=28,color=white,bold=False,right=False,width=1080):
+    def text(value,x,y,size=28,color=white,bold=False,right=False,width=1080,baseline=False):
         value=str(value)
         while d.textlength(value,font=font(size,bold)) > width and size>18: size-=1
         if d.textlength(value,font=font(size,bold)) > width: raise ValueError('summary label too wide')
-        d.text((x,y),value,font=font(size,bold),fill=color,anchor='ra' if right else 'la')
+        anchor = ('rs' if right else 'ls') if baseline else ('ra' if right else 'la')
+        d.text((x,y),value,font=font(size,bold),fill=color,anchor=anchor)
     labels = {'Trading gains':'Gains', 'Trading losses':'Losses',
               'Fees · net rebates':'Fees · net', 'Day-of / daily h':'Day / daily h',
               'Net profit · partial':'Net profit*', 'Net loss · partial':'Net loss*',
               'Overall net · partial':'Overall net*'}
+    def metric(x,y,label,value,size=VALUE_FONT_SIZE):
+        # One column edge and baseline in EVERY section, independent of label
+        # length, proportional fonts, signs, currency symbols or unknown values.
+        text(labels.get(label,label),x+22,y,27,muted,width=268,baseline=True)
+        text(value,x+534,y,size,'#FF959B' if '$-' in value else white,
+             True,True,width=240,baseline=True)
     def card(x,y,w,title,rows,h):
         d.rounded_rectangle((x,y,x+w,y+h),radius=16,fill='#1A2533')
         text(title,x+22,y+18,30,accent,True,width=w-44)
         for i,(label,value) in enumerate(rows):
-            text(labels.get(label,label),x+22,y+62+i*41,27,muted,width=268)
-            color='#FF959B' if '$-' in value else white
-            text(value,x+w-22,y+60+i*41,VALUE_FONT_SIZE,color,True,True,width=240)
+            metric(x,y+90+i*41,label,value)
     text(model['title'].upper(),32,25,38,bold=True)
     text(stamp(model['timestamp']).astimezone(NEW_YORK).strftime('%m/%d · %I:%M %p ET'),32,78,24,muted)
     # Text never relies on color alone; errors and pause details remain explicit.
@@ -88,16 +122,18 @@ def render(model):
             if label.endswith(' · partial'):
                 d.rounded_rectangle((x+12,y-4,x+544,y+37),radius=8,
                                     fill='#35262E' if '$-' in value else '#20362D')
-            text(labels.get(label,label),x+22,y,27,muted,width=268)
-            text(value,x+534,y-2,VALUE_FONT_SIZE,
-                 '#FF959B' if '$-' in value else white,True,True,width=240)
+            metric(x,y+30,label,value)
     # Pending remains alongside paid and overall net, inside Lifetime Results.
     text(model['coverage'],54,817,23,muted)
     text(model['reward_note']+' · Paid: bot-era/date-scoped · Since '+model['since'],54,847,22,muted)
-    for x,title,lines in ((32,'MARKETS',slots),(612,'CAPITAL & HEALTH',capital+['—']+health)):
+    for x,title,lines in ((32,'MARKETS',slots),(612,'CAPITAL & HEALTH',capital+[('—',None)]+health)):
         d.rounded_rectangle((x,896,x+556,1316),radius=16,fill='#1A2533')
         text(title,x+22,914,30,accent,True,width=512)
-        for i,line in enumerate(lines): text(line,x+22,956+i*30,27,width=512)
+        for i,(label,value) in enumerate(lines):
+            if value is None:
+                text(label,x+22,956+i*30,27,width=512)
+            else:
+                metric(x,980+i*30,label,value,size=27)
     text('* Net = closed-fill P&L + paid · Pending excluded · + partial hour split',32,1340,23,muted)
     output=io.BytesIO()
     image.save(output,format='PNG',optimize=True)

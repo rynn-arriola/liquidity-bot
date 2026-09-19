@@ -159,6 +159,47 @@ class SummaryReportTests(unittest.TestCase):
         for label in ('Gains','Losses','Fees · net','Trading net','Paid · bot-era','Net profit*','Pending'):
             self.assertIn(label,values)
 
+    def test_metric_parser_preserves_values_and_unknown_notes(self):
+        from liquidity_bot.summary_image import metric_rows
+        from liquidity_bot.discord_summary import _row
+        rows=metric_rows('```text\n'+_row('Free to withdraw','UNAVAILABLE')
+            +_row('Settled cash','$123,456,789.12')
+            +f"      {'proof_pending':<15}{12:>4}\n"
+            +'  Order confirmation pending\n```')
+        self.assertEqual(rows,[('Free to withdraw','UNAVAILABLE'),
+            ('Settled cash','$123,456,789.12'),('proof_pending','12'),
+            ('Order confirmation pending',None)])
+
+    def test_every_section_uses_common_value_edges_and_baselines(self):
+        from liquidity_bot.summary_image import render
+        from PIL import ImageDraw
+        _,m=prepare_summary(self.payload())
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+            render(m)
+        calls=draw.call_args_list
+        for label,value,edge in (
+            ('Entries / cap','25 / 25',566),('Rest hours','0.0',1146),
+            ('Trading net','$+0.00',566),('Pending','$12.00',1146),
+            ('Quoting','20/32',566),('Settled cash','$1,260.00',1146),
+            ('Book age','UNKNOWN',1146),('REST ceiling','0.00/s',1146),
+        ):
+            label_call=next(c for c in calls if c.args[2]==label)
+            baseline=label_call.args[1][1]
+            value_call=next(c for c in calls if c.args[2]==value and c.args[1]==(edge,baseline))
+            self.assertEqual(label_call.kwargs['anchor'],'ls')
+            self.assertEqual(value_call.kwargs['anchor'],'rs')
+
+    def test_alignment_keeps_unavailable_capital_reason(self):
+        from liquidity_bot.summary_image import render
+        from PIL import ImageDraw
+        _,m=prepare_summary(self.payload(capital_state_proven=False,
+            capital_unavailable_reason='order proof pending'))
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+            render(m)
+        values=[c.args[2] for c in draw.call_args_list]
+        self.assertIn('UNAVAILABLE',values)
+        self.assertIn('Order confirmation pending',values)
+
     def notifier(self):
         return DiscordNotifier(RuntimeSecrets(discord_webhook_url='https://discord.com/api/webhooks/1/test'))
 

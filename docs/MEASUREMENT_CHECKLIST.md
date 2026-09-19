@@ -29,6 +29,10 @@ retired collectors or enable any shadow rule from this ordering.
 The subsequent [Priority2 review](history/PRIORITY_TWO_REVIEW_2026-09-19.md)
 is complete read-only; account-read429s and decision-age outliers remain
 follow-up evidence. Priority1's prepared repair still awaits authorized rollout.
+The [Priority3/4 review](history/PRIORITY_THREE_FOUR_REVIEW_2026-09-19.md)
+checked current earnings, P&L replay, rest, quote capture and shadow candidates.
+All20 cohorts remain withheld; missing current-rank provenance and complete
+reward/held-out calibration remain follow-up, not authorized trading changes.
 
 ## Detailed review procedure
 

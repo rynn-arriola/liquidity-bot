@@ -75,3 +75,56 @@ deadline/recovery latency reproduction and a safety-preserving design review;
 churn-cost analysis remains secondary. No evidence supports rolling back the
 reward adaptation or changing prices, windows, caps or account mode. No
 trading source/configuration changed, and the bot was not restarted.
+
+## Follow-up investigation — operator requested investigation only
+
+An isolated fake-venue experiment executed the production
+AccountSourceRunner -> _recover_strategy_state -> _quarantine_working_orders
+-> RestFallbackRunner._rest_reconcile -> CommissioningRunner._rest_reconcile
+path with30 positively-owned entry orders and one independent held-market
+exit order. The affected recovery market itself was already clear, modeling
+a condition cleared by the first proof. Account/history/order read leaves
+were mocked; the fixture used only a temporary ledger and zero live API calls.
+
+REST performed31 exact-order reads, complete account snapshots and history,
+then repeated31 exact reads plus snapshots/history. The position-service hook
+was never called between them. Synthetic admission cost0.25s per exact read
+plus1s snapshots/history per pass gives17.5s; this is NOT measured production
+duration. The WebSocket-mode control retained scope and read zero unrelated
+IDs, while still collecting complete account snapshots/history twice.
+
+Mechanism: the REST wrapper intentionally drops strict_order_markets before
+calling its parent, disables bulk proof for untagged recovery, and renews a
+whole-account entry gate only after full proof. The normal scoped quarantine
+always runs both initial and terminal checks even when no cancel is needed.
+Unlike shared public-feed recovery, it does not enable held-position service
+between stages. Existing test_scoped_recovery_cannot_skip_owned_orders asserts
+this strict wrapper behavior; it is not safe to merely forward scope or mark
+partial proof account-complete. All47 existing test_rest_fallback and
+test_shared_stream_recovery tests passed in6.599s on the loaded checkout.
+
+This reproduces the local latency mechanism consistent with the05:55 episode,
+not every millisecond of venue/network timing or the cause of initial unknown
+state. No429 appeared in that incident's API window. The16 same-price return
+cases are separate; their cancellation logic was not established defective.
+
+Recommended next design, pending operator fix authorization:
+
+- Keep a full fresh account/ownership proof when global authority is invalid.
+- After valid proof, hand serial control to due/uncovered positions before
+  additional optional/redundant recovery work; avoid recursive recovery and
+  retain stop/source-generation/backoff checks.
+- Use an explicit exact-owner terminal proof for a scoped recovery follow-up,
+  or safely return when no mutation/ambiguity remains; do not renew global
+  entry authority from that narrower proof. Reuse the existing complete
+  order/position/history plus exact-owner semantics where applicable.
+- Recheck quantity, working/absent orders and unresolved intents after every
+  await. Unknown ownership/global conflicts still require global recovery;
+  stale proof cannot license IOC/reducer placement. Do not change WebSocket
+  recovery, prices, size, deadlines, caps, risk windows or API limits.
+- Before any fix/restart: focused real-path fake-venue regressions, deliberate
+  reversal, complete tests, dedicated edge-case audit and normal operator gates.
+
+No source repair, deployment of trading code, live fault injection or restart
+occurred. The next task is a reviewed narrow recovery implementation, not a
+claim that the delay is already fixed.

@@ -10,6 +10,11 @@ import uuid
 from .summary_report import stamp
 from .reward_calendar import NEW_YORK
 
+CANVAS_WIDTH = 1200
+# Match the complete seven-day rewards report's attachment proportions.
+CANVAS_HEIGHT = 1382
+VALUE_FONT_SIZE = 34
+
 
 def font(size, bold=False):
     from PIL import ImageFont
@@ -43,8 +48,11 @@ def render(model):
         health = [line for line in health if not line.startswith('Private age')]
     health.insert(0, 'Account / book   '+model['source'].upper()+' / WS')
     bottom = max(len(slots),len(capital)+len(health)+1)
-    height = 1193+65+bottom*40+95
-    image = Image.new('RGB', (1200,height), '#101720')
+    # Never silently omit a diagnostic to meet the fixed mobile canvas.
+    if bottom > 12 or len(model['risk']) > 8 or len(model['today']) > 8:
+        raise ValueError('expanded summary requires text')
+    height = CANVAS_HEIGHT
+    image = Image.new('RGB', (CANVAS_WIDTH,height), '#101720')
     d = ImageDraw.Draw(image)
     white,muted,accent = '#EEF3FA','#A5B5C9','#6ABAFF'
     def text(value,x,y,size=28,color=white,bold=False,right=False,width=1080):
@@ -52,36 +60,45 @@ def render(model):
         while d.textlength(value,font=font(size,bold)) > width and size>18: size-=1
         if d.textlength(value,font=font(size,bold)) > width: raise ValueError('summary label too wide')
         d.text((x,y),value,font=font(size,bold),fill=color,anchor='ra' if right else 'la')
+    labels = {'Trading gains':'Gains', 'Trading losses':'Losses',
+              'Fees · net rebates':'Fees · net', 'Day-of / daily h':'Day / daily h',
+              'Net profit · partial':'Net profit*', 'Net loss · partial':'Net loss*',
+              'Overall net · partial':'Overall net*'}
     def card(x,y,w,title,rows,h):
         d.rounded_rectangle((x,y,x+w,y+h),radius=16,fill='#1A2533')
         text(title,x+22,y+18,30,accent,True,width=w-44)
         for i,(label,value) in enumerate(rows):
-            text(label,x+22,y+66+i*43,25,muted,width=w*.54)
+            text(labels.get(label,label),x+22,y+62+i*41,27,muted,width=268)
             color='#FF959B' if '$-' in value else white
-            text(value,x+w-22,y+66+i*43,28,color,True,True,width=w*.41)
-    text(model['title'].upper(),36,25,36,bold=True)
-    text(stamp(model['timestamp']).astimezone(NEW_YORK).strftime('%m/%d · %I:%M %p ET'),36,78,24,muted)
+            text(value,x+w-22,y+60+i*41,VALUE_FONT_SIZE,color,True,True,width=240)
+    text(model['title'].upper(),32,25,38,bold=True)
+    text(stamp(model['timestamp']).astimezone(NEW_YORK).strftime('%m/%d · %I:%M %p ET'),32,78,24,muted)
     # Text never relies on color alone; errors and pause details remain explicit.
     state=model['status'].replace('\n',' · ')
     if len(state)>145: raise ValueError('long safety status requires text')
-    text(state,36,122,27,accent,width=1128)
-    card(36,178,552,'STATUS & WINDOW',model['risk'],433)
-    card(612,178,552,'TODAY · CLOSED FILLS',model['today'],433)
-    card(36,631,1128,'LIFETIME RESULTS · PARTIAL',model['lifetime'][:5],290)
-    label,value=model['lifetime'][5]
-    d.rounded_rectangle((58,933,1142,1009),radius=12,fill='#35262E' if '$-' in value else '#20362D')
-    text('OVERALL NET · '+label.replace(' · partial','').upper(),80,953,29,bold=True,width=780)
-    text(value,1120,944,40,'#FF959B' if '$-' in value else '#7BDFB2',True,True,width=310)
-    # Pending is deliberately INSIDE the same Lifetime Results section.
-    text('Pending · not yet paid',58,1029,28,muted)
-    text(model['lifetime'][6][1],1142,1029,30,bold=True,right=True,width=340)
-    text(model['coverage'],58,1081,23,muted)
-    text(model['reward_note']+' · Paid: bot-era/date-scoped · Since '+model['since'],58,1114,22,muted)
-    for x,title,lines in ((36,'MARKETS',slots),(612,'CAPITAL & HEALTH',capital+['—']+health)):
-        d.rounded_rectangle((x,1173,x+552,height-75),radius=16,fill='#1A2533')
-        text(title,x+22,1191,30,accent,True,width=508)
-        for i,line in enumerate(lines): text(line,x+22,1241+i*40,25,width=508)
-    text('Net = closed-fill P&L + paid · Pending excluded · + partial hour split',38,height-51,23,muted)
+    text(state,32,115,27,accent,width=1136)
+    card(32,156,556,'STATUS & WINDOW',model['risk'],400)
+    card(612,156,556,'TODAY · CLOSED FILLS',model['today'],400)
+    # Two columns remove dead space without reducing type or dropping values.
+    d.rounded_rectangle((32,576,1168,876),radius=16,fill='#1A2533')
+    text('LIFETIME RESULTS · PARTIAL',54,594,30,accent,True)
+    for x,rows in ((32,model['lifetime'][:4]),(612,model['lifetime'][4:])):
+        for i,(label,value) in enumerate(rows):
+            y=642+i*41
+            if label.endswith(' · partial'):
+                d.rounded_rectangle((x+12,y-4,x+544,y+37),radius=8,
+                                    fill='#35262E' if '$-' in value else '#20362D')
+            text(labels.get(label,label),x+22,y,27,muted,width=268)
+            text(value,x+534,y-2,VALUE_FONT_SIZE,
+                 '#FF959B' if '$-' in value else white,True,True,width=240)
+    # Pending remains alongside paid and overall net, inside Lifetime Results.
+    text(model['coverage'],54,817,23,muted)
+    text(model['reward_note']+' · Paid: bot-era/date-scoped · Since '+model['since'],54,847,22,muted)
+    for x,title,lines in ((32,'MARKETS',slots),(612,'CAPITAL & HEALTH',capital+['—']+health)):
+        d.rounded_rectangle((x,896,x+556,1316),radius=16,fill='#1A2533')
+        text(title,x+22,914,30,accent,True,width=512)
+        for i,line in enumerate(lines): text(line,x+22,956+i*30,27,width=512)
+    text('* Net = closed-fill P&L + paid · Pending excluded · + partial hour split',32,1340,23,muted)
     output=io.BytesIO()
     image.save(output,format='PNG',optimize=True)
     result=output.getvalue()

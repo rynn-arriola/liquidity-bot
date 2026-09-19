@@ -127,6 +127,38 @@ class SummaryReportTests(unittest.TestCase):
         for _,value in m['lifetime']:
             self.assertIn(value,clean['embeds'][0]['fields'][3]['value'])
 
+    def test_image_matches_full_reward_dimensions_and_value_type(self):
+        from liquidity_bot.summary_image import render, VALUE_FONT_SIZE
+        from scripts.reward_image import render_reward_png
+        from PIL import Image
+        _,m=prepare_summary(self.payload())
+        table='```text\nDate A B C\n---- ---- ---- ----\n'+'9/19 +1 2 3\n'*7+'```'
+        reward={'embeds':[{'title':'Rewards', 'timestamp':NOW.isoformat(),
+            'description':'P&L: +1\nPaid: 2\nPending: 3',
+            'fields':[{'name':'Results','value':table},{'name':'Liquidity','value':table}],
+            'footer':{'text':''}}]}
+        expected=Image.open(io.BytesIO(render_reward_png(reward))).size
+        self.assertEqual(expected,(1200,1382))
+        self.assertEqual(Image.open(io.BytesIO(render(m))).size,expected)
+        self.assertEqual(VALUE_FONT_SIZE,34)
+
+    def test_expanded_diagnostics_fall_back_instead_of_clipping(self):
+        from liquidity_bot.summary_image import render
+        _,m=prepare_summary(self.payload())
+        m['health']+='\n'+'Extra safety detail\n'*13
+        with self.assertRaises(ValueError): render(m)
+
+    def test_compact_image_keeps_all_lifetime_values_and_labels(self):
+        from liquidity_bot.summary_image import render
+        from PIL import ImageDraw
+        _,m=prepare_summary(self.payload())
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+            render(m)
+        values=[str(call.args[2]) for call in draw.call_args_list]
+        for _,value in m['lifetime']: self.assertIn(value,values)
+        for label in ('Gains','Losses','Fees · net','Trading net','Paid · bot-era','Net profit*','Pending'):
+            self.assertIn(label,values)
+
     def notifier(self):
         return DiscordNotifier(RuntimeSecrets(discord_webhook_url='https://discord.com/api/webhooks/1/test'))
 

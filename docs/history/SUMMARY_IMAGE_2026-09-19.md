@@ -127,3 +127,37 @@ at13:19:12Z; other markets resumed orders. No trading-code change was needed.
 This flat sample does not establish position-exit or recovery performance.
 The new scheduled summary's visual delivery still needs natural confirmation;
 absence of a notification failure is not independent Discord-image proof.
+
+## Follow-up: match rewards image size — prepared only
+
+The operator observed that the summary did not match the reward attachment's
+size and then explicitly reserved the correction for the NEXT restart. Do not
+deploy or restart for this follow-up. Runner1211201 remained live on3fc44a674;
+no current exposure claim is made from the earlier acceptance snapshot.
+
+Both renderers already used1200px width, but the standard summary sample was
+1793px tall versus1382px for two complete seven-day reward tables. Main values
+used28px versus rewards34px. Matching width alone missed aspect ratio and
+type scale. The renderer now uses1200x1382 and34px main values, with a compact
+two-column Lifetime section: gains/losses/fees/trading net beside paid/net/
+pending. Pending remains in that section and excluded from net. Short display
+labels preserve the original text/model meaning; no monetary math changes.
+Status, risk, today's metrics, capital, markets, health, partial-history and
+reward-age notes remain. Oversized diagnostics fall back to complete text
+before upload instead of clipping or dropping safety information.
+
+Only renderer and presentation tests change. No API request, ledger change,
+trading decision, upload retry, source selection or restart is added. Shrinking
+the entire old bitmap was rejected because it also shrinks already-small text.
+The native rendered sample was visually checked: no overlap/clipping, all
+lifetime values readable and pending beside paid/net.26 focused tests pass;
+the added tests compare actual summary/reward dimensions, retain every lifetime
+label/value and enforce expanded-diagnostic fallback. Three in-memory reversals
+(old height, old type size, disabled overflow guard) each fail an assertion
+without errors. The final isolated native full suite passed1,973 tests in206.255s.
+
+Edge review: eight-row top cards, twelve-row bottom maximum, unknown/large
+values, long warnings, stale/partial labels, negative net, optional Pillow,
+text fallback and unchanged upload ambiguity handling. Same existing worker,
+no execution/risk changes, migration or state rollback. Future authorized
+deployment must recheck hashes/tests and normal startup safety gates.

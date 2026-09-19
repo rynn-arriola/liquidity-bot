@@ -200,9 +200,11 @@ Same supervisor388103/runner388121 remained live. Authenticated00:58:05Z
 (September19 UTC) read:30 flat entry orders plus exact BUY4.03 for-4.03
 budole/pytiva and SELL7 for+7 hitsat/jiayua; zero unresolved intents or unknown
 orders, ledger32 orders/two positions agrees. At00:58:15Z settled window P&L
-was+$0.0217, cap30 and no HARD trip. Recent completed API windows through00:57:44Z
-had zero429/cooldown; individual-order404s continued, with latest window zero
-failures. Another position naturally flattened at00:57:06Z.
+was+$0.0217, cap30 and no HARD trip. Correction from the wider exit review:
+the00:53:19Z window contained one balance429; the later00:54:40–00:57:44Z
+windows had zero429/cooldown. The earlier blanket recent-window statement was
+too broad. Individual-order404s continued, with latest window zero failures.
+Another position naturally flattened at00:57:06Z.
 
 Not an error-free run: at00:55:58Z one xinyao/prihon strategy-state read raised
 execution_state_unknown; subsequent00:56:18Z positive cancel observation and

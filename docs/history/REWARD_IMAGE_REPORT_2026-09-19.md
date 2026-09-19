@@ -128,3 +128,42 @@ unposted. It reuses that report's settled P&L and timestamp, plus ledger coverag
 clipped to the same time. No new API reads were made for this preview. Unknown
 today values remain `--`, never fabricated zeroes. The normal main path retains
 its existing fresh rewards API read before image generation.
+
+## Report-only deployment
+
+Reviewed report commit `803e82636ffafaaf7fb2d1953edd267e995bc9bc` was pushed
+before installation. At12:11:30Z only `scripts/reward_table.py`,
+`scripts/reward_liquidity.py` and `scripts/reward_image.py` were installed under
+the existing hourly-report file lock. Pinned Pillow12.3.0 was added with
+`--no-deps`; no existing trading dependency was upgraded. A stalled WSL Git
+fetch was stopped before any installation; a verified bundle of the already
+pushed commit supplied the exact objects instead. No bot process was stopped.
+
+The runtime checkout intentionally remains on70467880 with loaded trader marker
+1273aadd; newer Priority1/measurement source changes were NOT fast-forwarded or
+loaded. The report-script override is intentional and recorded in ignored
+`data/reward-report-release.json`, with hashes and a private rollback copy at
+`data/reward-report-rollbacks/803e82636ffafaaf7fb2d1953edd267e995bc9bc/`.
+Rollback restores the backed-up report entrypoint and removes only the two
+new report modules under the same hourly lock; never reset the repo, ledger,
+timer, trading source or process. A later normal full deployment supersedes
+this report-only override after the usual operator authorization/review.
+
+All three installed normalized hashes match GitHub and both tested native
+trees. Trading `src/`, runtime tests, `DEPLOYED_COMMIT` and runner582918's start
+ticks26804112 were unchanged. Installed native rendering passed with a119,556
+byte PNG showing the verified saved paid/pending values; `--help` imports pass.
+The corrected preview upload returned success. The existing08:07 hourly report
+completed before installation; the unchanged timer's next post is09:07 ET and
+is the remaining natural scheduled-image acceptance. No new venue diagnostic
+was run, so current authenticated order/position state was not re-queried.
+
+Post-install complete suite passes **1,898 tests in190.085s** using the actual
+runtime environment and deployed report files, with the compatibility test tree
+as its test input. All three report hashes re-verified; native rendering retains
+the saved paid/pending values. Source/tests remain byte-identical and runner
+start unchanged. Final source review confirms no report imports in trader code.
+Windows/GitHub should be clean after the documentation push; WSL parity remains
+intentionally pending because its core checkout has not received the separate
+authorized-but-unactivated trading changes, and the three scoped report files
+are overrides. This is NOT a claim of complete machine/runtime parity.

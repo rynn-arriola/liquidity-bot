@@ -291,3 +291,14 @@ higher polling limit or blanket suppression of repricing. The diagnostic
 prepared in `d8ce159cc` is still required for the latter question. Latest
 02:00:44Z API window:200 requests/62.5s=3.198/s, four order-retrieve404s and
 zero429s; this is not a claim that the whole run had no429s.
+
+Follow-up02:04:38.230864Z authenticated31 orders:30 flat entries plus exact
+OPEN BUY1.9 covering the only position, a new annfri/deskra-1.9 fill first
+observed02:02:47Z. Unknown orders0; one live intent in flight and ledger30
+orders versus venue31 during sequential reads, so do not claim a flat/clear
+restart gate. All six positions from01:56:43Z were now absent. Cherom/tuzole's
+timed IOC ACK02:03:05.462233Z was12.153s past deadline, flat observed
+02:03:08.665090Z; pysyev/cherom's ACK02:03:51.873091Z was7.262s past deadline,
+flat observed02:03:53.962648Z. This distinguishes the new fill from a stuck
+old position. Prepared priority fixes were committed/pushed as `f54b540fe`;
+running source is unchanged and no deployment or restart occurred.

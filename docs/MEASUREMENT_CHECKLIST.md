@@ -13,6 +13,9 @@ created by this checklist.
 2. **Cancellation churn:** if the new diagnostics have been deployed/restarted,
    inspect the exact cancel-time book and target price. If not, mark this
    question pending; identical replacement prices alone do not prove a bug.
+   Use the [matched pre/post-rewards baseline](history/REWARDS_CHANGE_CANCELLATION_COMPARISON_2026-09-18.md):
+   exit reprices113→352 while entry-touch cancels456→219;70.2% of current exit
+   reprices concentrated in three day_of markets. Preserve interval/market mix.
 3. **REST load and recovery:** inspect all comparable run windows for429s,
    endpoint/error categories, latency, cooldown and recovery completion. Compare
    periods with similar numbers of positions, not only total average requests/s.

@@ -637,6 +637,8 @@ class CommissioningRunner:
             self._mark_market_dirty(slug)
         self._market_selection: RewardMarketSelection | None = None
         self._market_selection_observed_at: datetime | None = None
+        from .selection_provenance import SelectionProvenance
+        self._selection_provenance = SelectionProvenance()
         self.balance: AccountBalance | None = None
         # Cash-stable fiat + per-position `cashValue` snapshot.  Retail
         # currently returns assetNotional=0 even with open positions, so no
@@ -903,6 +905,8 @@ class CommissioningRunner:
                 f"{len(clean)} markets exceeds the authorized "
                 f"{self.config.max_markets}")
         self._active_market_slugs = clean
+        # Optional evidence must never veto a valid scope change.
+        self._remember_selection_binding(clean)
         self._markets = {
             slug: self._markets.get(slug) or MarketState(slug)
             for slug in clean}
@@ -4430,6 +4434,8 @@ class CommissioningRunner:
             seconds_to_event = (
                 max(0.0, (state.market.game_start - now).total_seconds())
                 if state.market.game_start is not None else None)
+            provenance = self._selection_provenance_for_market(now, state.slug)
+            from .fill_hazard import CALIBRATION_ID
             return QuoteObservation(
                 market_slug=state.slug,
                 side=side,
@@ -4499,7 +4505,10 @@ class CommissioningRunner:
                 replacement_selection_age_seconds=replacement[4],
                 replacement_reason=replacement[5],
                 slot_would_go_dark=replacement[6],
-                selection_rank=self._selection_rank_for_market(now, state.slug),
+                selection_rank=provenance.get("current", {}).get("rank"),
+                selection_provenance=provenance,
+                fill_model_horizon_seconds=self.config.reward_projection_horizon_seconds,
+                fill_model_calibration_id=CALIBRATION_ID,
             )
         except Exception as exc:
             # Observation is reporting.  It must never turn a valid action
@@ -4511,6 +4520,34 @@ class CommissioningRunner:
                 flush=True,
             )
             return None
+
+    def _selection_snapshot_for_measurement(self, now: datetime) -> dict:
+        from .selection_provenance import rank_snapshot
+        return rank_snapshot(self._market_selection,
+                             self._market_selection_observed_at, now,
+                             self.config.market_selection_refresh_seconds)
+
+    def _remember_selection_binding(self, slugs: tuple[str, ...]) -> None:
+        try:
+            now = self._now()
+            snapshot = self._selection_snapshot_for_measurement(now)
+            self._selection_provenance.bind(slugs, snapshot, now)
+        except Exception:
+            # Keep retained origins and explicit unknown tombstones for new
+            # owners. A later scan must not backfill a guessed original rank.
+            old = self._selection_provenance.origins
+            self._selection_provenance.origins = {
+                slug: old.get(slug, {"rank": None, "observed_at": None,
+                                    "snapshot_id": None, "bound_at": None,
+                                    "reason": "measurement_error"})
+                for slug in slugs}
+
+    def _selection_provenance_for_market(self, now: datetime, slug: str) -> dict:
+        try:
+            return self._selection_provenance.evidence(
+                slug, self._selection_snapshot_for_measurement(now))
+        except Exception:
+            return {"schema": 1, "reason": "measurement_error", "original": None}
 
     def _selection_rank_for_market(
         self, now: datetime, market_slug: str,

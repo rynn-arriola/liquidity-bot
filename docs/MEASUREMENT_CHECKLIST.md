@@ -31,8 +31,40 @@ is complete read-only; account-read429s and decision-age outliers remain
 follow-up evidence. Priority1's prepared repair still awaits authorized rollout.
 The [Priority3/4 review](history/PRIORITY_THREE_FOUR_REVIEW_2026-09-19.md)
 checked current earnings, P&L replay, rest, quote capture and shadow candidates.
-All20 cohorts remain withheld; missing current-rank provenance and complete
-reward/held-out calibration remain follow-up, not authorized trading changes.
+All20 cohorts remain withheld. The operator subsequently authorized the
+[measurement improvements](history/MEASUREMENT_VALIDATION_2026-09-19.md),
+without changing trading rules or restarting.
+
+## Saved next-session checkpoint — September19
+
+Keep this exact priority order; check current STATUS and deployment before
+claiming a prepared change is collecting live evidence.
+
+| Priority | Current checkpoint | Next check |
+|---|---|---|
+| 1. Position safety/accounting | Scoped recovery fix prepared, not deployed | After authorized rollout, compare exact exit deadlines/coverage and redundant proof reads |
+| 2. Reliability/performance | Account429s and long decision-age outliers remain | Trace affected owners; compare equivalent position-bearing loads after Priority1 |
+| 3. Actual profitability | Reward revision/completeness report available offline; all20 cohorts withheld | Reuse a newer dated earnings snapshot; follow missing/mixed/manual rows and paid net by exact program |
+| 4. Selection improvement | Original/current rank provenance prepared for next restart; offline30s temporal check available; model unchanged | After loading, check provenance coverage; validate later periods and censored fills before proposing any filter/model change |
+| 5. Supporting evidence | Local score accrual remains modeled, not earned dollars | Review only after higher priorities; compare coverage without treating score-seconds as payout |
+
+No automatic reminder, API polling loop, source switch, strategy tuning or
+restart was authorized by remembering this list. Original ranks cannot be
+retroactively manufactured for legacy rows. Continue with existing source
+and risk rules until separately authorized deployment.
+
+Offline validation on the active owner's read-only ledger (after the scripts
+are available there, or from the reviewed development script with explicit DB):
+
+```bash
+PYTHONPATH=src .venv/bin/python -B scripts/measurement_validation.py --days 7 \
+  --earnings-json data/market-economics/NEW/earnings.json \
+  --previous-earnings-json data/market-economics/OLD/earnings.json
+```
+
+Replace NEW/OLD with actual dated directories. The command makes no venue
+request, writes only a new private report directory, and never refits the
+model. The previous snapshot is optional; absent rewards remain unknown.
 
 ## Detailed review procedure
 

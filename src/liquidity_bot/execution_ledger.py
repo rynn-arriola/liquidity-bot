@@ -599,6 +599,10 @@ class QuoteObservation:
     # It is persisted only inside observation_json, so this adds no migration
     # and no execution component can consume it accidentally.
     selection_rank: int | None = None
+    # Additive JSON-only evidence; never a ranking/ownership input.
+    selection_provenance: dict | None = None
+    fill_model_horizon_seconds: float | None = None
+    fill_model_calibration_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug or self.side not in {"bid", "offer"}:

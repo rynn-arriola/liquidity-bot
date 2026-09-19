@@ -1719,6 +1719,41 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             runner._selection_rank_for_market(NOW, "market-24"))
 
+    async def test_binding_rank_survives_new_slate_without_network_reads(self):
+        runner, client, _ = self.build_runner()
+        runner._market_selection = multi_selection("market-a", "market-b")
+        runner._market_selection_observed_at = NOW
+        before = client.markets.book_calls
+        with patch.object(runner, "_now", return_value=NOW):
+            runner._bind_markets(("market-b",))
+            runner._market_selection = multi_selection("market-a")
+            runner._bind_markets(("market-b",))
+        evidence = runner._selection_provenance_for_market(NOW, "market-b")
+        self.assertEqual(evidence["original"]["rank"], 2)
+        self.assertIsNone(evidence["current"]["rank"])
+        self.assertEqual(evidence["current"]["reason"], "not_in_current_viable_slate")
+        self.assertEqual(client.markets.book_calls, before)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_rank_measurement_failure_cannot_block_binding(self):
+        runner, _, _ = self.build_runner()
+        with patch.object(runner, "_selection_snapshot_for_measurement", side_effect=ValueError("bad evidence")):
+            runner._bind_markets(("market-new",))
+            evidence = runner._selection_provenance_for_market(NOW, "market-new")
+        self.assertEqual(runner.active_slugs, ("market-new",))
+        self.assertEqual(evidence["reason"], "measurement_error")
+        runner._market_selection = multi_selection("market-new")
+        runner._market_selection_observed_at = NOW
+        with patch.object(runner, "_now", return_value=NOW):
+            runner._bind_markets(("market-new",))
+        restored = runner._selection_provenance_for_market(NOW, "market-new")
+        self.assertIsNone(restored["original"]["rank"])
+        self.assertEqual(restored["original"]["reason"], "measurement_error")
+        self.assertEqual(restored["current"]["rank"], 1)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_stale_shadow_selection_is_not_claimed_as_replacement(self):
         runner, _, _ = self.build_runner()
         runner._market_selection = multi_selection(
@@ -1782,6 +1817,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(intent["quote_observation_required"], 1)
         self.assertIsNone(observation[0]["trade_volume_30s"])
         self.assertIsNotNone(observation[0]["retained_value_ratio"])
+        evidence = json.loads(observation[0]["observation_json"])
+        self.assertEqual(evidence["selection_provenance"]["schema"], 1)
+        self.assertEqual(evidence["fill_model_horizon_seconds"], 30)
+        self.assertEqual(evidence["fill_model_calibration_id"], "maker_lab_paid_markets_2026_08_10")
         # The concluded queue-reset collector no longer opens a separate
         # public-trade socket or creates per-order tracker rows.
         self.assertEqual(runner.ledger.query(
@@ -1818,6 +1857,22 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             "SELECT state FROM execution_intents WHERE operation='PLACE'")[0][0],
             "FAILED")
         self.assertNotIn("market-one", runner._retired)
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
+    async def test_provenance_failure_preserves_order_and_other_measurements(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW, "market-one")
+        with patch.object(runner, "_selection_snapshot_for_measurement", side_effect=ValueError("diagnostic failure")):
+            outcome, delay = await runner._decide_for_market("market-one", NOW)
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 0)
+        rows = runner.ledger.query("SELECT observation_json FROM execution_quote_observations")
+        self.assertEqual(len(rows), 1)
+        evidence = json.loads(rows[0][0])
+        self.assertEqual(evidence["selection_provenance"]["reason"], "measurement_error")
+        self.assertIsNotNone(evidence["retained_value_ratio"])
         await runner.private_stream.close()
         await runner.market_stream.close()
 

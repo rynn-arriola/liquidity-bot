@@ -193,3 +193,24 @@ but this read-only diagnosis does not establish that each reprice was unnecessar
 A follow-up may review renewal distribution/refill scheduling and reducer churn
 without weakening expiry or position priority; no change is authorized by this
 status question. No trading code/configuration change, deployment or restart.
+
+## September18 20:58 ET log and account follow-up
+
+Same supervisor388103/runner388121 remained live. Authenticated00:58:05Z
+(September19 UTC) read:30 flat entry orders plus exact BUY4.03 for-4.03
+budole/pytiva and SELL7 for+7 hitsat/jiayua; zero unresolved intents or unknown
+orders, ledger32 orders/two positions agrees. At00:58:15Z settled window P&L
+was+$0.0217, cap30 and no HARD trip. Recent completed API windows through00:57:44Z
+had zero429/cooldown; individual-order404s continued, with latest window zero
+failures. Another position naturally flattened at00:57:06Z.
+
+Not an error-free run: at00:55:58Z one xinyao/prihon strategy-state read raised
+execution_state_unknown; subsequent00:56:18Z positive cancel observation and
+the clear authenticated follow-up show no remaining account ambiguity. Hitsat's
+exit quote was repeatedly canceled/replaced. Budole's first reducer was
+acknowledged26.825s after initial position observation, including cancellation
+of its risk-building order. Both current positions have exact working reducers,
+but this does not certify optimal repricing or consistently fast exits.
+Continue the separately recorded refill/reducer-scheduling investigation before
+claiming nothing needs improvement. Status/log review only; no code/config
+change, trading mutation or restart.

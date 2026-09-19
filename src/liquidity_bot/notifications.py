@@ -105,6 +105,34 @@ class DiscordNotifier:
             return NotificationResult(False, "webhook_not_configured")
         if not isinstance(payload, Mapping) or not payload:
             raise ValueError("Discord payload cannot be empty")
+        if channel == "summary" and "_summary_report" in payload:
+            # This method runs in the existing notification worker thread.
+            # Ledger/render failures cannot expose the old marked-P&L headline.
+            from .summary_report import prepare_summary
+            try:
+                payload, model = prepare_summary(payload)
+            except Exception:
+                payload = json.loads(json.dumps(dict(payload)))
+                payload.pop("_summary_report", None)
+                embed = payload["embeds"][0]
+                warning = embed["description"].split("**TRADING TODAY")[0].rstrip()
+                embed["description"] = warning + "\nSummary accounting unavailable; see risk and health below."
+                embed["fields"] = [f for f in embed["fields"] if f["name"] != "Rewards · lifetime"]
+                model = None
+            # Critical/shutdown summaries remain text. An injectable text
+            # transport also stays text, so tests never open an HTTP socket.
+            if not critical and model is not None and self._transport is _discord_post:
+                try:
+                    from .summary_image import render, post
+                    png = render(model)
+                except Exception:
+                    pass  # Fallback only BEFORE attempting an upload.
+                else:
+                    sent = post(url, png, payload)
+                    return NotificationResult(sent, "sent" if sent else "image_delivery_failed")
+        else:
+            # Internal context must never leak to Discord, whatever the route.
+            payload = {k: v for k, v in payload.items() if k != "_summary_report"}
         body = json.dumps(
             dict(payload), ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")

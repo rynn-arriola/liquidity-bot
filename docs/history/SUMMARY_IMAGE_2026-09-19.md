@@ -1,0 +1,92 @@
+# Settled-only summary image — September19, 2026
+
+## Operator scope
+
+The operator approved the sample Discord layout, then clarified that trading
+loss/P&L must use settled trades and pending rewards must remain visible in
+the SAME Lifetime Results section. Pending is excluded only from arithmetic,
+not from that section. No restart or trading/risk change is authorized here.
+The earlier sample image was delivered to the summary webhook, explicitly
+labelled sample data, before production implementation.
+
+## Design and implementation
+
+Reuse the existing five-minute summary, cached earnings and one queued
+notification worker. The serial trading path captures existing state plus
+report context; it does not query new API endpoints or render images. The
+worker opens SQLite read-only, replays fills once, builds both image and text
+from the same monetary values, and uses optional Pillow for a1200px PNG.
+No second scheduler, permanent collector, Polymarket request, API-budget
+increase, ledger mutation or risk-policy change is introduced.
+
+Sections retain status/window loss, entry count/cap, positions/orders/age;
+today's closed-fill gains/losses/fees/net and local rest; lifetime results;
+market supply/blockers; capital and health. Day-of/daily hours share the
+reviewed hourly report's implementation, moved without arithmetic changes
+to `report_liquidity.py`; the existing script retains a compatibility import.
+Unknown/mixed period coverage remains unknown/partial. REST's configured4/s
+value is correctly labelled a ceiling, not measured live request rate.
+
+Lifetime keeps gains, losses, actual fees net of rebates, trading net, paid
+bot-era rewards, overall net profit/loss and pending together. Gross P&L
+comes only from matched/closed inventory, including partial closes. Actual
+fill fees are charged once when incurred, as in the existing closed-fill
+report; open inventory's changing mark, deposits and withdrawals never enter.
+Reversed fills and fills after the captured observation/receipt cutoff are
+excluded. Old fills establish basis for today's ET result; DST elapsed hours
+use UTC differences. The four$25 risk-window calculation is NOT modified.
+
+One important limitation remains explicit: historical market settlements are
+not all represented as closing fills, and paid rewards are date-scoped to the
+bot era rather than perfectly attributed by order/program. Therefore the
+lifetime section and net are labelled PARTIAL, with one concise coverage
+line; no estimate is promoted to a complete total. Exact historical resolution
+reconciliation remains follow-up work. No guessed payout/loss is inserted.
+Reward age is visible; stale cached rewards retain their age label, absent or
+future evidence is unknown. Pending never becomes paid by being displayed.
+
+Alternatives rejected: repeating historical API calls each summary, using
+account marks to fill settlement gaps, rendering on the decision loop, or
+retrying an uncertain image upload as text. Critical/shutdown messages remain
+text; a render/dependency error falls back before upload, while an attempted
+failed upload does not create a duplicate text retry. Preparation failure
+preserves operational warnings and reports unavailable instead of reverting
+to the old marked-P&L headline. Internal local-path context never leaves in
+the Discord payload. No webhook or API credential appears in code or output.
+
+## Verification and edge review
+
+23 focused tests pass. Four in-memory reversals each produce the expected
+assertion failure, with zero test errors: including pending in net, treating
+open acquisition cost as P&L, replacing missing history with zero, and
+narrowing the canvas. Shipping files are never changed by these reversals.
+The preliminary native full suite passes1,965 tests in217.167s. The final
+native full suite passes1,970 tests in217.303s, including all23 focused tests.
+
+Native sample rendering was visually inspected for clipping, hierarchy,
+numeric visibility and the pending row inside Lifetime Results. Tests cover
+long-warning fallback, missing/corrupt DB, no reward snapshot, stale/future
+rewards, positive/negative net, fees/rebates, partial close, long/short pairing,
+reversed/future fills, prior-day basis, DST, unchanged read-only DB bytes,
+critical text, stripped context and one-shot failed uploads. Existing hourly
+report compatibility and all runner tests are included in the full suite.
+
+Read-only native real-ledger check: closed-fill replay0.106s, period hours
+1.198s, zero venue requests. These costs occur only in the existing reporting
+worker, not at every order. This is one measured sample, not a latency bound.
+The runner remained1153573 on loaded6a1032a61; no deployment or restart.
+
+Final audit reviewed success/failure, empty/partial/large values, timestamps,
+queue isolation, source selection, startup/critical/shutdown routing, optional
+dependency absence, upload ambiguity, configured capacity and rollback.
+No migration/backfill or persistent risk latch exists. Rollback is the prior
+reporting source after normal deployment gates; never restore a ledger.
+
+## Release boundary
+
+Prepared only for a separately authorized reviewed deployment/restart.
+Because the live runner must capture the new context and notifier routing,
+this is not a hot report-script-only change. Keep existing trading running.
+After activation verify one natural five-minute image, matching text values,
+fresh pending age, explicit partial lifetime coverage, and ongoing normal
+order/exit processing. No faults or fills should be induced for acceptance.

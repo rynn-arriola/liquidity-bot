@@ -7627,6 +7627,11 @@ class CommissioningRunner:
             private_stream_age_seconds=private_age,
             ledger_bytes=self._ledger_bytes_on_disk(),
             integrity_problems=problems,
+            report_database=str(self.ledger.path.resolve()),
+            rewards_observed_at=self._earnings_observed_at,
+            account_source=("rest" if getattr(self, "_using_rest_source", lambda: False)()
+                            else "websocket"),
+            inventory_limit_seconds=self.config.max_inventory_age_seconds,
         ))
         # Expose actual create count only in the description, never imply that
         # shadow observations were venue orders.

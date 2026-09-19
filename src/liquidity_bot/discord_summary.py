@@ -149,6 +149,11 @@ class LiquiditySummary:
     # understate the disk actually in use.
     ledger_bytes: int = 0
     integrity_problems: tuple[str, ...] = ()
+    # Optional reporting context, consumed only by the notification worker.
+    report_database: str | None = None
+    rewards_observed_at: datetime | None = None
+    account_source: str | None = None
+    inventory_limit_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"SHADOW", "DRY_RUN", "LIVE"}:
@@ -489,7 +494,7 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
         })
     fields.append({"name": "Health", "inline": False,
                    "value": fence + health_text + "```"})
-    return {"embeds": [{
+    payload = {"embeds": [{
         "title": f"Liquidity Bot · {summary.mode.replace('_', ' ')}",
         "description": description,
         "color": color,
@@ -501,6 +506,11 @@ def build_liquidity_summary(summary: LiquiditySummary) -> dict[str, Any]:
             f"Uptime {uptime / 3600:,.1f}h")},
         "timestamp": now.isoformat(),
     }]}
+    if summary.report_database is not None and summary.mode == "LIVE":
+        import json
+        from dataclasses import asdict
+        payload["_summary_report"] = json.loads(json.dumps(asdict(summary), default=str))
+    return payload
 
 
 def build_runtime_alert(

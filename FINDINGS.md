@@ -91,8 +91,7 @@
   are verified against `DEPLOYED_COMMIT`; venue state remains a separate live authority.
 - **Trader guides are not all Retail wire contracts.** Institutional examples are conceptual unless the Retail API/SDK documents them; use the audited map
   in [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md).
-- **The 2026-07-01 fee schedule matches the bot's signed-fee accounting.** Retail execution commission is already a USD `MoneyAmount`: positive taker fees are costs and negative maker rebates are credits. Partner fixed-point
-  decoding is a different interface and would overstate some Retail fees if
+- **The 2026-07-01 fee schedule matches the bot's signed-fee accounting.** Retail execution commission is already a USD `MoneyAmount`: positive taker fees are costs and negative maker rebates are credits. Partner fixed-point decoding is a different interface and would overstate some Retail fees if
   applied here. No fee-handling defect was found in this documentation review.
 - **Changelog `v0.0.79` explains the 2026-08-27 interruption/history boundary.** Polymarket announced extended 02:00-08:00 ET maintenance for Retail and Institutional APIs and deletion of stored execution history during that window. A post-maintenance empty pre-window history result is not positive proof of no fill, cancellation or flatness; retain normal durable-ledger and current authenticated-state requirements.
 - **Trade state is independent of fill delivery.** Retail activity can retain a trade as `TRADE_STATE_BUSTED` after its execution leg was booked. Trade ID, lifecycle state and an exactly-once reversal are therefore separate durable facts; a current authoritative position snapshot outranks fill arithmetic.

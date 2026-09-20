@@ -52,3 +52,38 @@ remain on loaded release `2f607b679`; the bot was not stopped or restarted.
 The new presentation therefore loads at the next operator-authorized restart.
 The first natural summary after that restart is the remaining delivery-level
 acceptance check.
+
+## Command 1 activation
+
+The operator authorized Command 1. The existing supervisor and runner stopped
+gracefully at 21:04:34Z with the runner recording `flat=true`. Two independent
+authenticated gates, at 21:05:08Z and 21:06:57Z, proved zero venue orders and
+positions plus zero unresolved intents, unknown orders, working ledger orders
+and ledger positions. No force kill, venue mutation from diagnostics, risk reset
+or configuration change was used. The deployed commit marker was advanced only
+after the reviewed source and full installed suite were verified.
+
+Supervisor 22198 and runner 22212 started at 21:07:02Z with the persisted
+size 10, capacity 32 and manual REST account source. At 21:08:46Z an
+authenticated read found 14 flat-market orders, zero positions, zero
+unresolved intents and zero unknown orders. The one-order ledger/venue count
+gap was an in-flight publication observation, not yet a confirmed mismatch.
+The confirmed 12:00–18:00 ET settled-loss window showed $18.8445 of $25 used,
+so the unchanged policy selected the 15 pending-entry tier without a hold.
+The first completed API window averaged 2.770 requests/second, had zero 429s
+and three ordinary individual-order 404 reconciliation reads. Startup book
+selection used the public stream with zero REST fallback. The first natural
+post-restart summary image and sustained position/recovery behavior remain to
+be accepted from live evidence.
+
+At 21:12:45Z, after more than five minutes with the same runner, authenticated
+state showed 14 flat-market entry orders and one exact BUY 3.27 reducing order
+covering the sole -3.27 position. Unresolved intents and unknown orders were
+zero. The ledger's 16 working rows versus 15 currently visible venue orders
+is a publication-time observation, not proof of an unmanaged order; continued
+reconciliation remains necessary. The first four completed API windows averaged
+2.770, 2.407, 2.358 and 3.204 requests/second, each with zero 429 responses.
+Ordinary individual-order 404 reads were reconciled; no summary-image fallback
+error appeared in the observed log. Because successful image uploads are not
+logged, this does not prove the actual Discord attachment was received. That
+natural presentation receipt and a later position flatten remain open checks.

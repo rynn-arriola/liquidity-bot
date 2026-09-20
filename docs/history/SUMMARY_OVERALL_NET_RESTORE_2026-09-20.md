@@ -40,6 +40,17 @@ or runner lifecycle behavior.
 
 ## Operational state
 
-The live bot was not stopped, deployed, or restarted for this correction. It
-continues running the previously loaded release `2f607b679`. This presentation
-correction is for the next authorized deployment/restart.
+Commit `46ea761ad` was pushed and fast-forwarded into the laptop WSL checkout
+under the report lock. The installed focused suite passed all 32 tests and the
+Windows/WSL source and test hashes match. The runner was not stopped or
+restarted: PID 1063 continues using the previously loaded release `2f607b679`.
+The restored presentation therefore loads on the next authorized restart.
+
+The no-restart deployment did not disturb live inventory handling. At
+15:36:16Z the authenticated account had three open positions (`-10`, `-10`,
+and `-3`), each with exactly one full-quantity BUY reducer. During observation,
+a separate `+10` position partially reduced to `+2.06`; the runner cancelled
+the stale 10-contract reducer, acknowledged an exact SELL `2.06` replacement
+7.82 seconds after the changed-position observation, and then executed the
+normal 15-minute IOC exit. Authenticated state recorded that position flat at
+15:35:59Z. No diagnostic placed, cancelled, or modified an order.

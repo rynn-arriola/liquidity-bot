@@ -123,28 +123,41 @@ def render(model):
         d.rounded_rectangle((316,520,316+250*min(percent,100)/100,540),
                             radius=6,fill=fill)
     card(612,156,556,'TODAY · CLOSED FILLS',model['today'],400)
-    # Two columns remove dead space without reducing type or dropping values.
-    d.rounded_rectangle((32,576,1168,876),radius=16,fill='#1A2533')
+    # Preserve the original lifetime/overall-profit hierarchy: five full-width
+    # rows, one prominent net bar, then pending outside that net. Compact the
+    # lower diagnostics, not the money result the operator uses most.
+    d.rounded_rectangle((32,576,1168,840),radius=16,fill='#1A2533')
     text('LIFETIME RESULTS · PARTIAL',54,594,30,accent,True)
-    for x,rows in ((32,model['lifetime'][:4]),(612,model['lifetime'][4:])):
-        for i,(label,value) in enumerate(rows):
-            y=642+i*41
-            if label.endswith(' · partial'):
-                d.rounded_rectangle((x+12,y-4,x+544,y+37),radius=8,
-                                    fill='#35262E' if '$-' in value else '#20362D')
-            metric(x,y+30,label,value)
-    # Pending remains alongside paid and overall net, inside Lifetime Results.
-    text(model['coverage'],54,817,23,muted)
-    text(model['reward_note']+' · Paid: bot-era/date-scoped · Since '+model['since'],54,847,22,muted)
+    for i,(label,value) in enumerate(model['lifetime'][:5]):
+        y=650+i*36
+        text(label,54,y,25,muted,width=700,baseline=True)
+        text(value,1146,y,32,'#FF959B' if '$-' in value else white,
+             True,True,width=340,baseline=True)
+    net_label,net_value=model['lifetime'][5]
+    d.rounded_rectangle((54,852,1146,910),radius=10,
+                        fill='#35262E' if '$-' in net_value else '#20362D')
+    text('OVERALL NET · '+net_label.replace(' · partial','').upper(),76,867,
+         27,bold=True,width=760)
+    text(net_value,1124,859,40,
+         '#FF959B' if '$-' in net_value else '#7BDFB2',True,True,width=300)
+    # Pending stays visibly separate and excluded from the highlighted net.
+    text('Pending · not yet paid',54,922,26,muted)
+    text(model['lifetime'][6][1],1146,922,30,bold=True,right=True,width=340)
+    text(model['coverage'],54,963,20,muted,width=1092)
+    text(model['reward_note']+' · Paid: bot-era/date-scoped · Since '+model['since'],
+         54,989,19,muted,width=1092)
     for x,title,lines in ((32,'MARKETS',slots),(612,'CAPITAL & HEALTH',capital+[('—',None)]+health)):
-        d.rounded_rectangle((x,896,x+556,1316),radius=16,fill='#1A2533')
-        text(title,x+22,914,30,accent,True,width=512)
+        d.rounded_rectangle((x,1022,x+556,1332),radius=16,fill='#1A2533')
+        text(title,x+22,1038,28,accent,True,width=512)
         for i,(label,value) in enumerate(lines):
+            y=1082+i*22
             if value is None:
-                text(label,x+22,956+i*30,27,width=512)
+                text(label,x+22,y,21,width=512,baseline=True)
             else:
-                metric(x,980+i*30,label,value,size=27)
-    text('* Net = closed-fill P&L + paid · Pending excluded · + partial hour split',32,1340,23,muted)
+                text(label,x+22,y,21,muted,width=300,baseline=True)
+                text(value,x+534,y,22,'#FF959B' if '$-' in value else white,
+                     True,True,width=200,baseline=True)
+    text('Net = closed-fill P&L + paid · Pending excluded · + partial hour split',32,1348,21,muted)
     output=io.BytesIO()
     image.save(output,format='PNG',optimize=True)
     result=output.getvalue()

@@ -182,16 +182,20 @@ class SummaryReportTests(unittest.TestCase):
         m['health']+='\n'+'Extra safety detail\n'*13
         with self.assertRaises(ValueError): render(m)
 
-    def test_compact_image_keeps_all_lifetime_values_and_labels(self):
+    def test_compact_image_keeps_original_overall_net_design_and_all_values(self):
         from liquidity_bot.summary_image import render
         from PIL import ImageDraw
         _,m=prepare_summary(self.payload())
-        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw, \
+                patch.object(ImageDraw.ImageDraw,'rounded_rectangle',autospec=True) as rect:
             render(m)
         values=[str(call.args[2]) for call in draw.call_args_list]
         for _,value in m['lifetime']: self.assertIn(value,values)
-        for label in ('Gains','Losses','Fees · net','Trading net','Paid · bot-era','Net profit*','Pending'):
+        for label in ('Trading gains','Trading losses','Fees · net rebates',
+                      'Trading net','Paid · bot-era',
+                      'OVERALL NET · NET PROFIT','Pending · not yet paid'):
             self.assertIn(label,values)
+        self.assertIn((54,852,1146,910),[c.args[1] for c in rect.call_args_list])
 
     def test_metric_parser_preserves_values_and_unknown_notes(self):
         from liquidity_bot.summary_image import metric_rows
@@ -213,7 +217,7 @@ class SummaryReportTests(unittest.TestCase):
         calls=draw.call_args_list
         for label,value,edge in (
             ('Entries / cap','25 / 25',566),('Rest hours','0.0',1146),
-            ('Trading net','$+0.00',566),('Pending','$12.00',1146),
+            ('Trading net','$+0.00',1146),
             ('Quoting','20/32',566),('Settled cash','$1,260.00',1146),
             ('Book age','UNKNOWN',1146),('REST ceiling','0.00/s',1146),
         ):

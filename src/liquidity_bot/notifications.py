@@ -125,8 +125,14 @@ class DiscordNotifier:
                 try:
                     from .summary_image import render, post
                     png = render(model)
-                except Exception:
-                    pass  # Fallback only BEFORE attempting an upload.
+                except Exception as exc:
+                    # Keep reporting independent from trading, but make a
+                    # presentation fallback diagnosable. Exception values are
+                    # intentionally excluded because third-party messages may
+                    # contain local paths; the class is sufficient to route a
+                    # focused offline reproduction.
+                    print("[summary-image] state=text_fallback "
+                          f"reason={type(exc).__name__}", flush=True)
                 else:
                     sent = post(url, png, payload)
                     return NotificationResult(sent, "sent" if sent else "image_delivery_failed")

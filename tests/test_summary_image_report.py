@@ -119,8 +119,9 @@ class SummaryReportTests(unittest.TestCase):
                     render(m)
                 self.assertIn(label, [c.args[2] for c in draw.call_args_list])
                 fills = [c.args[1] for c in rect.call_args_list
-                         if c.args[1][0:2] == (316,520) and c.kwargs['fill'] != '#394657']
-                self.assertEqual(fills, [] if edge is None else [(316,520,edge,540)])
+                         if c.args[1][0:2] == (312,562) and c.kwargs['fill'] != '#394657']
+                adjusted = None if edge is None else 312+254*(edge-316)/250
+                self.assertEqual(fills, [] if adjusted is None else [(312,562,adjusted,582)])
 
     def test_missing_db_is_unknown_not_zero(self):
         clean,m=prepare_summary(self.payload(report_database=str(self.db)+'missing'))
@@ -161,7 +162,7 @@ class SummaryReportTests(unittest.TestCase):
         for _,value in m['lifetime']:
             self.assertIn(value,clean['embeds'][0]['fields'][3]['value'])
 
-    def test_image_matches_full_reward_dimensions_and_value_type(self):
+    def test_summary_returns_to_readable_pre_resize_dimensions(self):
         from liquidity_bot.summary_image import render, VALUE_FONT_SIZE
         from scripts.reward_image import render_reward_png
         from PIL import Image
@@ -171,18 +172,44 @@ class SummaryReportTests(unittest.TestCase):
             'description':'P&L: +1\nPaid: 2\nPending: 3',
             'fields':[{'name':'Results','value':table},{'name':'Liquidity','value':table}],
             'footer':{'text':''}}]}
-        expected=Image.open(io.BytesIO(render_reward_png(reward))).size
-        self.assertEqual(expected,(1200,1382))
-        self.assertEqual(Image.open(io.BytesIO(render(m))).size,expected)
+        reward_size=Image.open(io.BytesIO(render_reward_png(reward))).size
+        summary_size=Image.open(io.BytesIO(render(m))).size
+        self.assertEqual(reward_size,(1200,1382))
+        self.assertEqual(summary_size,(1200,1793))
         self.assertEqual(VALUE_FONT_SIZE,34)
 
-    def test_expanded_diagnostics_fall_back_instead_of_clipping(self):
+    def test_expanded_diagnostics_grow_image_instead_of_using_tiny_text(self):
         from liquidity_bot.summary_image import render
+        from PIL import Image, ImageDraw
         _,m=prepare_summary(self.payload())
         m['health']+='\n'+'Extra safety detail\n'*13
-        with self.assertRaises(ValueError): render(m)
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+            png=render(m)
+        self.assertEqual(Image.open(io.BytesIO(png)).size,(1200,2313))
+        self.assertEqual(
+            [c.args[2] for c in draw.call_args_list].count('Extra safety detail'),13)
 
-    def test_compact_image_keeps_original_overall_net_design_and_all_values(self):
+    def test_busy_market_rows_grow_one_aligned_readable_column(self):
+        from liquidity_bot.summary_image import render
+        from liquidity_bot.discord_summary import _row
+        from PIL import ImageDraw
+        _,m=prepare_summary(self.payload())
+        m['slots'] += (
+            '\n'+_row('re-quoting',5)+_row('awaiting rotation',2)
+            +f"      {'target_not_met':<15}{4:>4}\n"
+            +f"      {'no_quote_yet':<15}{3:>4}\n")
+        with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw:
+            render(m)
+        calls=draw.call_args_list
+        for label in ('re-quoting','Awaiting rotation','target_not_met','no_quote_yet'):
+            self.assertIn(label,[c.args[2] for c in calls])
+        # The restored readable layout keeps one aligned right edge.
+        for value in ('5','2','4','3'):
+            call=next(c for c in calls if c.args[2]==value)
+            self.assertEqual(call.args[1][0],566)
+            self.assertEqual(call.kwargs['anchor'],'rs')
+
+    def test_summary_keeps_original_overall_net_design_and_all_values(self):
         from liquidity_bot.summary_image import render
         from PIL import ImageDraw
         _,m=prepare_summary(self.payload())
@@ -195,7 +222,7 @@ class SummaryReportTests(unittest.TestCase):
                       'Trading net','Paid · bot-era',
                       'OVERALL NET · NET PROFIT','Pending · not yet paid'):
             self.assertIn(label,values)
-        self.assertIn((54,852,1146,910),[c.args[1] for c in rect.call_args_list])
+        self.assertIn((58,933,1142,1009),[c.args[1] for c in rect.call_args_list])
 
     def test_metric_parser_preserves_values_and_unknown_notes(self):
         from liquidity_bot.summary_image import metric_rows
@@ -216,10 +243,10 @@ class SummaryReportTests(unittest.TestCase):
             render(m)
         calls=draw.call_args_list
         for label,value,edge in (
-            ('Entries / cap','25 / 25',566),('Rest hours','0.0',1146),
-            ('Trading net','$+0.00',1146),
-            ('Quoting','20/32',566),('Settled cash','$1,260.00',1146),
-            ('Book age','UNKNOWN',1146),('REST ceiling','0.00/s',1146),
+            ('Entries / cap','25 / 25',570),('Rest hours','0.0',1146),
+            ('Trading net','$+0.00',1142),
+            ('Quoting','20/32',566),('Settled cash','$1,260.00',1142),
+            ('Book age','UNKNOWN',1142),('REST ceiling','0.00/s',1142),
         ):
             label_call=next(c for c in calls if c.args[2]==label)
             baseline=label_call.args[1][1]
@@ -251,7 +278,9 @@ class SummaryReportTests(unittest.TestCase):
     def test_render_failure_uses_settled_text(self):
         calls=[]
         n=self.notifier()
-        with patch('liquidity_bot.summary_image.render',side_effect=ValueError), patch('liquidity_bot.notifications.urllib.request.urlopen') as http:
+        with patch('liquidity_bot.summary_image.render',side_effect=ValueError), \
+                patch('liquidity_bot.notifications.urllib.request.urlopen') as http, \
+                patch('builtins.print') as log:
             http.return_value.__enter__.return_value.status=200
             result=n.send_payload(self.payload(),channel='summary')
             body=json.loads(http.call_args.args[0].data)
@@ -259,6 +288,8 @@ class SummaryReportTests(unittest.TestCase):
             self.assertNotIn('_summary_report',body)
             self.assertIn('SETTLED',body['embeds'][0]['description'])
             self.assertNotIn('-999',json.dumps(body))
+        log.assert_any_call(
+            '[summary-image] state=text_fallback reason=ValueError',flush=True)
 
     def test_critical_stays_text_and_preserves_warning(self):
         calls=[]

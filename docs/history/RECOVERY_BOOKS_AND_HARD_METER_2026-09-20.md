@@ -92,7 +92,30 @@ complete text instead of overlapping the meter. No additional API calls.
   window and fresh flat proof. No calculation/policy defect was found and no
   risk implementation/configuration was changed by this follow-up.
 
-Remaining operational work: reviewed deployment/start only when separately
-authorized, then natural recovery/exit/stream acceptance. Host-shutdown cause
-needs additional host evidence; changing sleep settings or automatic entry
-resumption is not part of this repair.
+## Authorized release and initial acceptance
+
+Operator subsequently authorized restart. At14:56:55Z and15:01:06Z, separate
+authenticated gates proved zero venue orders/positions and zero unresolved,
+unknown, working or ledger positions. WSL fast-forwarded cleanly to reviewed
+commit `2f607b679316202b05f1918dc15f0624822e9fd3`; the installed environment
+passed all1,985 tests in196.736s before the deployment marker changed.
+
+Supervisor1049/runner1063 started15:01:19Z with unchanged REST account source,
+quote size10 and capacity32. Initial selection found19 viable of20 ranked books;
+19/19 selected books came from the public stream with zero REST fallback. The
+fresh confirmed meter at15:01:56Z showed loss$0.7547/$25, cap30, not held.
+
+At15:05:51Z authenticated state had26 flat-entry orders and three positions;
+each position had one exact reducing SELL for its remaining quantity. There
+were zero unresolved/unknown orders. One briefly observed positioned-market
+building order was canceled normally; follow-up proved only reducers remained.
+First API windows ran2.741 and3.192requests/s. One cash-history read received
+429 and recovered; the following window had zero429. Public book REST was not
+used. Individual-order404 reconciliation remained bounded. A transient group
+of unavailable event-pregame refreshes failed closed by marking incentive data
+unavailable; positions/reducers remained managed. Natural recovery observation
+continues and this release does not claim venue-error immunity.
+
+Host-shutdown cause still needs additional host evidence. Sleep settings and
+automatic entry resumption remain unchanged. Natural recovery, exit, threshold
+and the next scheduled Discord image remain the outstanding acceptance items.

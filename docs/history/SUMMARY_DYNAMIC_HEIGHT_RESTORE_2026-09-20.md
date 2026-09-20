@@ -45,7 +45,10 @@ scheduler, or lifecycle behavior.
 
 ## Operational boundary
 
-The source is intended for a no-restart deployment. The live process continues
-to use its already loaded release until the next operator-authorized restart.
-The next natural summary after that restart is the remaining delivery-level
+Commit `137121f22` was pushed and fast-forwarded into the laptop WSL checkout
+under the report lock. All 33 focused tests and the complete 1,986-test suite
+passed again in that exact deployed checkout. PID 1063 and `DEPLOYED_COMMIT`
+remain on loaded release `2f607b679`; the bot was not stopped or restarted.
+The new presentation therefore loads at the next operator-authorized restart.
+The first natural summary after that restart is the remaining delivery-level
 acceptance check.

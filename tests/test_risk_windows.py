@@ -318,6 +318,50 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(overflow), 5)
         self.assertNotIn("exchange-reducer", overflow)
 
+    async def test_all_tiers_connect_settled_fills_entry_reducer_and_summary_meter(self):
+        from liquidity_bot.summary_report import prepare_summary
+
+        runner, client, notifier = await self.runner(max_markets=32)
+        runner._bind_markets(("market-one", "market-two"))
+        for number in range(30):
+            self.fixture.seed_working_order(
+                runner, slug="market-one", side="bid", suffix=f"tier-{number}")
+        self.fixture.seed_working_order(
+            runner, slug="market-two", side="offer", suffix="tier-reducer")
+        runner.ledger.apply_position_snapshot("positioned", (
+            PositionState("market-two", D(10), live.NOW),),
+            as_of=live.NOW, observed_at=live.NOW, complete_account=True)
+        previous = D(0)
+        for index, (loss, cap) in enumerate((
+                ("0", 30), ("4.999", 30), ("5", 25), ("9.999", 25),
+                ("10", 20), ("14.999", 20), ("15", 15),
+                ("19.999", 15), ("20", 10), ("24.999", 10), ("25", 0))):
+            with self.subTest(loss=loss):
+                loss = D(loss)
+                if loss != previous:
+                    self.settle_loss(runner, loss - previous, suffix=f"tier-{index}")
+                previous = loss
+                await runner._refresh_balance(live.NOW)
+                self.assertEqual(runner.risk_guard.current_equity, -loss)
+                self.assertEqual(runner._effective_entry_order_cap(live.NOW), cap)
+                overflow = runner._loss_cap_overflow_order_ids(live.NOW)
+                self.assertEqual(len(overflow), 30 - cap)
+                self.assertNotIn("exchange-tier-reducer", overflow)
+                self.assertTrue(runner._loss_cap_blocks_new_entry(live.NOW))
+                await runner._send_summary(live.NOW)
+                _, model = prepare_summary(notifier.payloads[-1][0])
+                self.assertEqual(model["hard_stop_meter"], float(loss / D(25) * 100))
+                self.assertIn(("Entries / cap", f"30 / {cap}"), model["risk"])
+                self.assertEqual(runner._hard_stop_active(), loss >= 25)
+        # A later gain changes the displayed net loss, not a latched HARD/cap.
+        self.settle_loss(runner, D(-24), suffix="recovery-gain")
+        await runner._refresh_balance(live.NOW)
+        await runner._send_summary(live.NOW)
+        _, model = prepare_summary(notifier.payloads[-1][0])
+        self.assertEqual(model["hard_stop_meter"], 4)
+        self.assertEqual(runner._effective_entry_order_cap(live.NOW), 0)
+        self.assertTrue(runner._hard_stop_active())
+
     async def test_partial_close_counts_only_realized_part_not_remaining_paper_loss(self):
         runner, client, _ = await self.runner()
         slug = runner.market_slug

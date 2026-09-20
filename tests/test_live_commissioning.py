@@ -7206,14 +7206,77 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.book_observed_at, received)
         self.assertTrue(stream.closed)
 
-    async def test_recovery_startup_does_not_wait_for_collection_socket(self):
+    async def test_recovery_startup_uses_fresh_stream_even_when_rest_is_limited(self):
         from liquidity_bot.selection_books import SelectionBookSource
+        from tests.test_selection_books import Stream
         runner, client, _ = self.build_runner()
-        runner._recovery_slugs = (runner.market_slug,)
-        factory = Mock(side_effect=AssertionError("recovery must not open collector"))
-        runner.gateway.selection_books = SelectionBookSource(client, stream_factory=factory)
+        slug = runner.market_slug
+        runner._recovery_slugs = {slug}
+        snapshot = replace(await runner.gateway.fetch_book(slug),
+                           received_at=NOW-timedelta(seconds=1))
+        stream = Stream([snapshot])
+        runner.gateway.selection_books = SelectionBookSource(
+            client, stream_factory=lambda _: stream, clock=lambda: NOW)
+        with patch.object(client.markets, "book", new=AsyncMock(
+                side_effect=AdapterError("rate limited", status_code=429))) as rest:
+            await runner._refresh_bound_books(NOW)
+        rest.assert_not_awaited()
+        self.assertEqual(runner.book_observed_at, snapshot.received_at)
+        self.assertEqual(runner.active_slugs, (slug,))
+        self.assertEqual(runner._recovery_slugs, {slug})
+        self.assertTrue(stream.closed)
+
+    async def test_recovery_bad_stream_keeps_rest_proof_and_429_failure(self):
+        from liquidity_bot.selection_books import SelectionBookSource
+        from tests.test_selection_books import Stream
+        for age in (4, -1, None):
+            with self.subTest(age=age):
+                runner, client, _ = self.build_runner()
+                slug = runner.market_slug
+                runner._recovery_slugs = {slug}
+                snapshot = await runner.gateway.fetch_book(slug)
+                stream = (Stream(error=AdapterError("connect failed")) if age is None
+                          else Stream([replace(snapshot, received_at=NOW-timedelta(seconds=age))]))
+                runner.gateway.selection_books = SelectionBookSource(
+                    client, stream_factory=lambda _: stream, clock=lambda: NOW,
+                    wait_seconds=.01)
+                with patch.object(client.markets, "book", new=AsyncMock(
+                        side_effect=AdapterError("limited", status_code=429))):
+                    with self.assertRaises(AdapterError):
+                        await runner._refresh_bound_books(NOW)
+                self.assertEqual(runner.active_slugs, (slug,))
+                self.assertFalse(runner._settlement_wait_slugs)
+                self.assertTrue(stream.closed)
+
+    async def test_recovery_missing_stream_falls_back_without_dropping_owner(self):
+        from liquidity_bot.selection_books import SelectionBookSource
+        from tests.test_selection_books import Stream
+        runner, client, _ = self.build_runner()
+        runner._recovery_slugs = {runner.market_slug}
+        stream = Stream()
+        runner.gateway.selection_books = SelectionBookSource(
+            client, stream_factory=lambda _: stream, clock=lambda: NOW,
+            wait_seconds=.01)
         await runner._refresh_bound_books(NOW)
-        factory.assert_not_called()
+        self.assertTrue(runner.book.is_two_sided)
+        self.assertEqual(runner.active_slugs, ("market-one",))
+        self.assertTrue(stream.closed)
+
+    async def test_recovery_collector_stop_closes_without_rest_or_scope_release(self):
+        from liquidity_bot.selection_books import SelectionBookSource
+        from tests.test_selection_books import Stream
+        runner, client, _ = self.build_runner()
+        runner._recovery_slugs = {runner.market_slug}
+        stream = Stream()
+        runner.gateway.selection_books = SelectionBookSource(
+            client, stream_factory=lambda _: stream,
+            checkpoint=AsyncMock(side_effect=CommissioningRefused("operator stop")))
+        with patch.object(client.markets, "book", new=AsyncMock()) as rest:
+            with self.assertRaisesRegex(CommissioningRefused, "operator stop"):
+                await runner._refresh_bound_books(NOW)
+        rest.assert_not_awaited()
+        self.assertEqual(runner.active_slugs, ("market-one",))
+        self.assertTrue(stream.closed)
 
     async def test_one_sided_book_refresh_does_not_dereference_missing_side(self):
         runner, client, _ = self.build_runner()

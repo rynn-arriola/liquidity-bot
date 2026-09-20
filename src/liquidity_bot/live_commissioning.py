@@ -7044,11 +7044,13 @@ class CommissioningRunner:
 
     async def _refresh_bound_books(self, now: datetime) -> None:
         from .selection_books import book_scope
-        # Recovery must not wait for an optional discovery socket to connect.
-        # Keep its existing direct safety reads, including exact empty-book
-        # evidence required for settlement handling.
-        slugs = () if set(self._recovery_slugs) & set(self.active_slugs) else self.active_slugs
-        async with book_scope(self.gateway, slugs):
+        # Recovery needs the same current depth, not a mandatory REST source.
+        # A bounded, stop-aware public collector can supply it even while the
+        # public REST book endpoint is throttled. This scope discovers nothing
+        # and cannot alter account/ownership proof. Missing/failed stream data
+        # retains the existing paced REST path, including exact empty-book
+        # evidence required for settlement handling; never infer an empty book.
+        async with book_scope(self.gateway, self.active_slugs):
             await self._refresh_bound_books_inner(now)
 
     async def _refresh_bound_books_inner(self, now: datetime) -> None:

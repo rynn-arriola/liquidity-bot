@@ -88,6 +88,40 @@ class SummaryReportTests(unittest.TestCase):
         self.assertEqual(a['lifetime'][5],b['lifetime'][5])
         self.assertNotEqual(a['lifetime'][6],b['lifetime'][6])
 
+    def test_hard_meter_uses_window_loss_not_daily_or_open_marks(self):
+        _, model = prepare_summary(self.payload())
+        self.assertEqual(model['hard_stop_meter'], 24)
+        self.assertIn(('Loss / limit', '$6.00 / $25.00'), model['risk'])
+        _, changed = prepare_summary(self.payload(today_pnl_usd=Decimal('-5000'), today_realized_pnl_usd=Decimal('-1000'),
+            today_unrealized_pnl_usd=Decimal('-4000'), pending_rewards_usd=Decimal('1000')))
+        self.assertEqual(changed['hard_stop_meter'], 24)
+
+    def test_hard_meter_unknown_profit_boundary_and_overshoot(self):
+        for pnl, cap, expected in ((None, '25', None), ('2', '25', 0),
+                ('-25', '25', 100), ('-30', '25', 120), ('-1', '0', None)):
+            with self.subTest(pnl=pnl, cap=cap):
+                _, m = prepare_summary(self.payload(
+                    hard_stop_pnl_usd=None if pnl is None else Decimal(pnl),
+                    hard_stop_loss_usd=Decimal(cap)))
+                self.assertEqual(m['hard_stop_meter'], expected)
+
+    def test_hard_meter_render_label_and_bounded_fill(self):
+        from liquidity_bot.summary_image import render
+        from PIL import ImageDraw
+        for pnl, label, edge in (('-6', 'HARD · 24% used', 376),
+                ('-30', 'HARD · 120% used', 566),
+                (None, 'HARD · unavailable', None), ('1', 'HARD · 0% used', None)):
+            with self.subTest(pnl=pnl):
+                _, m = prepare_summary(self.payload(
+                    hard_stop_pnl_usd=None if pnl is None else Decimal(pnl)))
+                with patch.object(ImageDraw.ImageDraw,'text',autospec=True) as draw, \
+                        patch.object(ImageDraw.ImageDraw,'rounded_rectangle',autospec=True) as rect:
+                    render(m)
+                self.assertIn(label, [c.args[2] for c in draw.call_args_list])
+                fills = [c.args[1] for c in rect.call_args_list
+                         if c.args[1][0:2] == (316,520) and c.kwargs['fill'] != '#394657']
+                self.assertEqual(fills, [] if edge is None else [(316,520,edge,540)])
+
     def test_missing_db_is_unknown_not_zero(self):
         clean,m=prepare_summary(self.payload(report_database=str(self.db)+'missing'))
         self.assertEqual(m['lifetime'][5][1],'--')

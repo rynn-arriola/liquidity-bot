@@ -312,6 +312,34 @@ class RecoveryRunnerTests(unittest.IsolatedAsyncioTestCase):
         await runner._shutdown("startup_recovery_only")
         self.assertTrue(client.orders.cancel_calls)
 
+    async def test_recovery_stream_allows_flat_cleanup_during_rest_book_throttle(self):
+        from test_live_commissioning import TickingClock
+        from test_selection_books import Stream, book
+        from liquidity_bot.selection_books import SelectionBookSource
+        from liquidity_bot.errors import AdapterError
+        runner, client, harness = self.build(clock=TickingClock())
+        for index, slug in enumerate(('market-one', 'market-two')):
+            self.seed_order(runner, client, harness, slug, index)
+        class FreshStream(Stream):
+            async def fresh_book(self, slug, *, clock, checkpoint=None):
+                if checkpoint:
+                    await checkpoint()
+                return replace(book(slug), received_at=clock())
+        stream = FreshStream()
+        runner.gateway.selection_books = SelectionBookSource(
+            client, stream_factory=lambda _: stream, clock=runner._now)
+        runner._select_reward_market = AsyncMock(side_effect=AssertionError('new selection'))
+        with patch.object(client.markets, 'book', new=AsyncMock(
+                side_effect=AdapterError('limited', status_code=429))) as rest:
+            result = await runner.run()
+        self.assertTrue(result.flat)
+        self.assertEqual(result.stop_reason, 'startup_recovery_only')
+        self.assertEqual(len(client.orders.cancel_calls), 2)
+        self.assertFalse(client.orders.create_calls)
+        self.assertTrue(stream.closed)
+        rest.assert_not_awaited()
+        runner._select_reward_market.assert_not_awaited()
+
     async def test_managed_position_exception_never_enables_host_entries(self):
         from test_live_commissioning import TickingClock
         runner, client, _ = self.build(clock=TickingClock())

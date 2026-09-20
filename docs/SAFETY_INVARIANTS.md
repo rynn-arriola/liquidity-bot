@@ -1080,8 +1080,10 @@ These are implementation requirements, not suggestions.
     ledger callback, and cancellation joins it before execution resumes. Local
     interruption is not venue failure or permission to retry; discarded partial
     collection cannot authorize selection. Unscoped safety reads are unchanged.
-    Recovery startup bypasses the optional
-    socket entirely. Missing data uses the normal gated REST path. Background
+    Recovery startup may use the same bounded, stop-aware full-book collector
+    for its already-identified scope; it performs no discovery or account
+    promotion. Missing/failed stream data uses the normal gated REST path;
+    silence never proves an empty book or authorizes settlement wait. Background
     and entry books share conservative four-second optional pacing; position
     safety bypasses that allowance, not actual endpoint429 backoff. Account
     source choice, all pricing/ranking/lifecycle rules, ownership and exit

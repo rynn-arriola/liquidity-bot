@@ -129,6 +129,8 @@ def prepare_summary(payload):
             if s.get('hard_stop_pnl_usd') is not None else None)
     hard = number(s['hard_stop_loss_usd'])
     remaining = max(Decimal(0), hard-loss) if loss is not None else None
+    # Display the exact window HARD coordinate, never daily P&L/open marks.
+    hard_percent = loss / hard * 100 if loss is not None and hard > 0 else None
     count = s.get('pending_entry_count')
     cap = s.get('pending_entry_cap')
     age = s['max_inventory_age_seconds']
@@ -174,6 +176,7 @@ def prepare_summary(payload):
                  color=embed['color'], risk=risk_rows, today=today_rows,
                  lifetime=lifetime_rows, coverage=coverage, reward_note=reward_note,
                  since=BOT_ERA_START_DATE, source=source,
+                 hard_stop_meter=(None if hard_percent is None else float(hard_percent)),
                  slots=slots, health=health, capital=capital)
     fields.insert(1, {'name':'Today · closed fills','inline':False,
                      'value':'```text\n'+'\n'.join(f'{k}: {v}' for k,v in today_rows)+'\n```'})

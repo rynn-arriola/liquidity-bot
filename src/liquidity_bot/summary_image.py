@@ -78,7 +78,7 @@ def render(model):
     health.insert(0, ('Account / book', model['source'].upper()+' / WS'))
     bottom = max(len(slots),len(capital)+len(health)+1)
     # Never silently omit a diagnostic to meet the fixed mobile canvas.
-    if bottom > 12 or len(model['risk']) > 8 or len(model['today']) > 8:
+    if bottom > 12 or len(model['risk']) > 7 or len(model['today']) > 8:
         raise ValueError('expanded summary requires text')
     height = CANVAS_HEIGHT
     image = Image.new('RGB', (CANVAS_WIDTH,height), '#101720')
@@ -112,6 +112,16 @@ def render(model):
     if len(state)>145: raise ValueError('long safety status requires text')
     text(state,32,115,27,accent,width=1136)
     card(32,156,556,'STATUS & WINDOW',model['risk'],400)
+    # Keep the loss dollars above and add an explicitly labelled visual meter.
+    # Unknown is not zero; overshoot stays numeric while fill width is capped.
+    percent = model.get('hard_stop_meter')
+    label = 'HARD · unavailable' if percent is None else f'HARD · {percent:.0f}% used'
+    text(label,54,522,23,muted,width=252)
+    d.rounded_rectangle((316,520,566,540),radius=6,fill='#394657')
+    if percent is not None and percent > 0:
+        fill = '#FF959B' if percent >= 80 else '#6ABAFF'
+        d.rounded_rectangle((316,520,316+250*min(percent,100)/100,540),
+                            radius=6,fill=fill)
     card(612,156,556,'TODAY · CLOSED FILLS',model['today'],400)
     # Two columns remove dead space without reducing type or dropping values.
     d.rounded_rectangle((32,576,1168,876),radius=16,fill='#1A2533')

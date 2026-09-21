@@ -125,7 +125,7 @@ After the UI-maintenance entry gate is loaded, **"pause entries"** runs `PYTHONP
 
 ## How to work with the operator
 
-- Before substantive work on each request, use the [development model workflow](docs/DEVELOPMENT_WORKFLOW.md) to recommend Astra or 5.6 Sol and state why; Sol is the usage-efficient default, while Astra is reserved for architecture, uncertain high-risk diagnosis and meaningful review. Honor its switch boundary, but never delay urgent authorized safety action.
+- Lead with the result and current bot state. The operator chooses the active model manually; do not recommend, require or pause for model switching.
 - Explain technical findings in plain language before naming implementation
   details. Translate an error into what it means for orders, positions,
   rewards and risk.

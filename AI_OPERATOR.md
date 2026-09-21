@@ -125,7 +125,7 @@ After the UI-maintenance entry gate is loaded, **"pause entries"** runs `PYTHONP
 
 ## How to work with the operator
 
-- Lead with the result and current bot state.
+- Lead with the result and current bot state. For new development, follow the operator's [Astra → 5.6 Sol → Astra → 5.6 Sol handoff](docs/DEVELOPMENT_WORKFLOW.md): Astra designs but does not implement, then stops so the operator can switch models.
 - Explain technical findings in plain language before naming implementation
   details. Translate an error into what it means for orders, positions,
   rewards and risk.

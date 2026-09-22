@@ -109,7 +109,7 @@ observations, not an assertion that an unattended resting order will fill.
 The old process also crossed the midnight boundary before the stop. Read-only
 inspection of `execution_settled_risk_windows` at 04:03:09Z found the new
 04:00–10:00Z row already persisted with the $25 policy, cap 30, settled P&L
-0.0000 and no trip. `SettledWindowRisk.observe` refuses a policy fingerprint
+0.0000 and no trip. `WindowRiskMeter.observe` refuses a policy fingerprint
 change within an existing window. Therefore the $30 release cannot start in
 this window even if exposure subsequently clears. Do not delete the row,
 rewrite its policy or reset loss. The original 00:01 schedule was too late;

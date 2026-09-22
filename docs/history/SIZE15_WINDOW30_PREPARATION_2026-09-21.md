@@ -130,3 +130,57 @@ heartbeat was paused after the failed attempt, preventing automatic retries.
 Both bot processes are stopped and the normal stop disarmed host recovery.
 Remaining work is account/ledger clearance plus a reviewed policy transition,
 then deployment/hash/native-suite/start gates and 5–7 minute live acceptance.
+
+## September 22 Command 1 follow-up
+
+The operator renewed Command 1 after the failed scheduled attempt. The normal
+stop command confirmed production stopped. At 04:06:57Z authenticated state
+was zero venue orders/positions; only the stopped ledger retained two owners.
+At 04:07:37Z exact retrieval positively proved their orders CANCELED and
+FILLED, with no ambiguity. The existing exclusive-lease stopped prestart
+reconciler then imported normal order/fill/position evidence with all venue
+mutation entry points disabled. It did not rewrite risk-window state.
+Authenticated 04:08:27Z proof confirmed all six counts zero: venue orders,
+venue positions, unresolved intents, unknown orders, working ledger orders
+and ledger positions. The verified pre-reconciliation private backup remains
+available (04:07:37Z, 966,148,096 bytes, hash prefix `6709238d3a27`).
+
+The clean WSL checkout switched back to main and fast-forwarded to `4ebf85913`.
+Its executable/test/config/script content exactly matches reviewed `5bbfa5550`;
+223 normalized artifact comparisons passed against Git and Windows.
+The exact installed full suite was launched; completion follows below.
+
+The account blocker is cleared, but the persisted $25 current-window policy
+still blocks $30 startup. Command 1 does not authorize deleting that window,
+resetting loss or silently extending the temporary $25 policy. No start or
+venue mutation was issued. The previously scheduled heartbeat remains paused.
+
+### Explicit current-window $30 authorization and restart
+
+The operator then explicitly instructed applying $30 immediately, replacing
+the existing current-window setting. This supersedes the earlier requirement
+to wait for an unused window, but does not authorize forgiving any trading
+loss, clearing a HARD hold or changing quote/exit rules.
+
+The exact installed suite passed all 1,999 tests in 192.978 seconds; all 223
+artifact hashes matched reviewed `5bbfa5550`. A stopped SQLite online backup
+at 04:14:10Z passed integrity `ok`: 966,152,192 bytes, SHA-256
+`31723caf8eb398efbc9db486ad987458bd0b11073b56fb90dfe34410727ffc68`.
+
+The one-off migration held the exclusive bot lease and checked that both
+executors were stopped, authenticated orders/positions were zero, the ledger
+was flat/clear, and the exact 04:00–10:00Z window had the old $25 policy and
+no HARD trip/release. It conditionally changed only that row's `policy` to
+the configured $30 fingerprint. Row count, all other columns and all other
+windows were compared unchanged. A transactional dry run rolled back and
+proved the original row identical; isolated normal risk replay accepted $30
+and preserved the actual matched-fill P&L of -$1.45000000, selecting cap 30.
+The stored 0.0000 pre-shutdown mark was not a P&L reset: startup recomputes
+the total from the durable fills, including the stopped reconciliation.
+
+The migration committed at 04:14:39Z under explicit authorization. A fresh
+04:14:44Z authenticated gate again found all six account/ledger counts zero.
+The marker was set to `5bbfa55505a0ca55e0a9aea18b4cc0eeb2d1c543`, and
+explicit REST size15/32 launched supervisor121616 and runner121634.
+Natural five-to-seven-minute acceptance follows below; no synthetic fill or
+failure is induced. The obsolete midnight activation heartbeat stays paused.

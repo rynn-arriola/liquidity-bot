@@ -46,3 +46,19 @@ No process, order, position or venue state was changed by this preparation.
   contract test fail; restoring $30 makes it pass again.
 - The complete WSL production-environment suite passes all 1,987 tests.
 - Documentation audit and diff whitespace checks pass.
+
+## Command 1 activation progress
+
+Command1 stopped supervisor22198/runner22212 at00:34:08Z with final
+`flat=true`. Authenticated proof at00:35:32Z found zero venue orders,
+positions, unresolved intents, unknown orders, working ledger orders and ledger
+positions. A stopped online backup passed integrity at954732544bytes with
+SHA-256 `f0d77afe6f33781bb5b4bcce0b3a3953903d4a36f03d4ca7f96f081cbcab7a46`.
+
+Release `ab26a2182` is pushed, deployed and marked. The exact WSL checkout
+passed all1,987 tests and223 tracked runtime/test/config/script comparisons;
+Windows/GitHub/WSL/marker parity passes. It remains stopped until the next
+00:00ET boundary because the active18:00–00:00 row was written under the old
+$25 fingerprint. At or after the boundary, repeat the authenticated flat gate,
+start explicit REST size15/32, and verify the new hard30/cap30 row plus5–7
+minutes of live behavior. Any failed gate leaves the bot stopped.

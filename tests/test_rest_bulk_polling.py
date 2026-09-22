@@ -350,7 +350,7 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
             await self.poll(runner)
         self.assertEqual(exact.await_count, 1)
 
-    async def test_pending_create_and_unknown_absence_are_never_skipped(self):
+    async def test_mismatched_pending_create_and_unknown_absence_stay_exact(self):
         runner, client = await self.build(2)
         runner.ledger.prepare_intent("new", "PLACE", "market-0", "new-client", {},
                                      created_at=self.now)
@@ -368,6 +368,193 @@ class RestBulkPollingTests(IsolatedAsyncioTestCase):
         with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
             await self.poll(runner)
         self.assertEqual(exact.await_count, 2)
+
+    async def test_matching_pending_create_uses_two_positive_bulk_rows(self):
+        runner, client = await self.build(0)
+        payload = {
+            "marketSlug": "market-new",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 10,
+        }
+        runner.ledger.prepare_intent(
+            "new", "PLACE", "market-new", "new-client", payload,
+            created_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "ACKNOWLEDGED", updated_at=self.now,
+            exchange_order_id="new-exchange")
+        client.orders.rows["new-exchange"] = raw_order(
+            id="new-exchange", marketSlug="market-new",
+            side="ORDER_SIDE_BUY", intent="ORDER_INTENT_BUY_LONG",
+            quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+            price={"value": "0.49", "currency": "USD"},
+            createTime=self.now.isoformat())
+
+        with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact, \
+                patch.object(client.orders, "list", wraps=client.orders.list) as bulk:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 0)
+        self.assertEqual(bulk.await_count, 2)
+        self.assertFalse(runner.ledger.unresolved_intents())
+        self.assertEqual(len(runner.ledger.working_orders()), 1)
+
+    async def test_pending_create_mismatch_retains_exact_lookup(self):
+        runner, client = await self.build(0)
+        payload = {
+            "marketSlug": "market-new",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 10,
+        }
+        runner.ledger.prepare_intent(
+            "new", "PLACE", "market-new", "new-client", payload,
+            created_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "ACKNOWLEDGED", updated_at=self.now,
+            exchange_order_id="new-exchange")
+        client.orders.rows["new-exchange"] = raw_order(
+            id="new-exchange", marketSlug="market-new",
+            side="ORDER_SIDE_BUY", intent="ORDER_INTENT_BUY_LONG",
+            quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+            price={"value": "0.48", "currency": "USD"},
+            createTime=self.now.isoformat())
+
+        with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 1)
+
+    async def test_pending_create_change_between_snapshots_is_read_exactly(self):
+        runner, client = await self.build(0)
+        payload = {
+            "marketSlug": "market-new",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 10,
+        }
+        runner.ledger.prepare_intent(
+            "new", "PLACE", "market-new", "new-client", payload,
+            created_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "ACKNOWLEDGED", updated_at=self.now,
+            exchange_order_id="new-exchange")
+        client.orders.rows["new-exchange"] = raw_order(
+            id="new-exchange", marketSlug="market-new",
+            side="ORDER_SIDE_BUY", intent="ORDER_INTENT_BUY_LONG",
+            quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+            price={"value": "0.49", "currency": "USD"},
+            createTime=self.now.isoformat())
+        original = client.orders.list
+        calls = 0
+
+        async def fill_between(params):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                client.orders.rows["new-exchange"].update(
+                    state="ORDER_STATE_PARTIALLY_FILLED", cumQuantity="2",
+                    lastTransactTime=self.now.isoformat())
+                client.portfolio.rows["market-new"] = {
+                    "netPositionDecimal": "2"}
+            return await original(params)
+
+        with patch.object(client.orders, "list", side_effect=fill_between), \
+                patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 1)
+        self.assertFalse(runner.ledger.unresolved_intents())
+        self.assertEqual(runner.ledger.position("market-new"), Decimal("2"))
+        self.assertEqual(
+            runner._rest_order_proof_counts["second_snapshot_changed"], 1)
+
+    async def test_pending_cancel_still_requires_exact_lookup(self):
+        runner, client = await self.build(1)
+        runner.ledger.prepare_intent(
+            "cancel", "CANCEL", "market-0", "client-0",
+            {"orderId": "exchange-0", "marketSlug": "market-0"},
+            created_at=self.now)
+        runner.ledger.transition_intent(
+            "cancel", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent(
+            "cancel", "ACKNOWLEDGED", updated_at=self.now,
+            exchange_order_id="exchange-0")
+
+        with patch.object(runner, "_retry_uncertain_cancels", AsyncMock()), \
+                patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 1)
+
+    async def test_pending_create_with_position_still_requires_exact_lookup(self):
+        runner, client = await self.build(0)
+        payload = {
+            "marketSlug": "market-new",
+            "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"},
+            "quantity": 10,
+        }
+        runner.ledger.prepare_intent(
+            "new", "PLACE", "market-new", "new-client", payload,
+            created_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent(
+            "new", "ACKNOWLEDGED", updated_at=self.now,
+            exchange_order_id="new-exchange")
+        client.orders.rows["new-exchange"] = raw_order(
+            id="new-exchange", marketSlug="market-new",
+            side="ORDER_SIDE_BUY", intent="ORDER_INTENT_BUY_LONG",
+            quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+            price={"value": "0.49", "currency": "USD"},
+            createTime=self.now.isoformat())
+        runner.ledger.apply_position_event(
+            "test", "position", PositionState(
+                "market-new", Decimal("1"), self.now),
+            received_at=self.now)
+        client.portfolio.rows["market-new"] = {
+            "netPositionDecimal": "1"}
+
+        with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 1)
+
+    async def test_duplicate_pending_exchange_identity_stays_exact(self):
+        runner, client = await self.build(0)
+        for suffix, market in (("one", "market-new"), ("two", "market-other")):
+            payload = {
+                "marketSlug": market,
+                "intent": "ORDER_INTENT_BUY_LONG",
+                "price": {"value": "0.49", "currency": "USD"},
+                "quantity": 10,
+            }
+            runner.ledger.prepare_intent(
+                suffix, "PLACE", market, f"client-{suffix}", payload,
+                created_at=self.now)
+            runner.ledger.transition_intent(
+                suffix, "SUBMITTING", updated_at=self.now)
+            runner.ledger.transition_intent(
+                suffix, "ACKNOWLEDGED", updated_at=self.now,
+                exchange_order_id="duplicate-exchange")
+        client.orders.rows["duplicate-exchange"] = raw_order(
+            id="duplicate-exchange", marketSlug="market-new",
+            side="ORDER_SIDE_BUY", intent="ORDER_INTENT_BUY_LONG",
+            quantity="10", cumQuantity="0", state="ORDER_STATE_NEW",
+            price={"value": "0.49", "currency": "USD"},
+            createTime=self.now.isoformat())
+
+        with patch.object(client.orders, "retrieve", wraps=client.orders.retrieve) as exact:
+            await self.poll(runner)
+
+        self.assertEqual(exact.await_count, 1)
 
     async def test_empty_account_needs_only_one_bulk_read(self):
         runner, client = await self.build(0)

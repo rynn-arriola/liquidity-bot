@@ -10,6 +10,8 @@ from __future__ import annotations
 from . import read_backoff
 
 import asyncio
+import json
+from collections import Counter
 from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -135,6 +137,8 @@ class RestFallbackRunner(CommissioningRunner):
         self._hard_exit_retry_authorizations = {}
         self._position_confirmation_proofs = {}
         self._strategy_recovery_owner = None
+        self._rest_order_proof_counts = Counter()
+        self._rest_order_proof_last_report = None
         self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
         if self._using_rest_source():
             kwargs["private_stream_factory"] = DisabledPrivateStream
@@ -179,23 +183,46 @@ class RestFallbackRunner(CommissioningRunner):
             by_id = self._checked_bulk_orders(orders)
             local = {str(row["exchange_order_id"]): row
                      for row in self.ledger.working_orders(owned_only=True)}
-            uncertain = {str(row["market_slug"])
-                         for row in self.ledger.unresolved_intents()}
-            uncertain.update(str(row["market_slug"])
-                             for row in self.ledger.absent_orders())
+            unresolved = self.ledger.unresolved_intents()
+            unresolved_by_exchange = {}
+            unresolved_by_market = {}
+            for intent in unresolved:
+                exchange_id = str(intent["exchange_order_id"] or "").strip()
+                if exchange_id:
+                    unresolved_by_exchange.setdefault(
+                        exchange_id, []).append(intent)
+                unresolved_by_market.setdefault(
+                    str(intent["market_slug"]), []).append(intent)
+            absent_markets = {str(row["market_slug"])
+                              for row in self.ledger.absent_orders()}
             read_ids = []
             for exchange_id in exchange_ids:
                 order, row = by_id.get(exchange_id), local.get(exchange_id)
-                if (order is not None and row is not None
-                        and order.market_slug not in uncertain
-                        and self.ledger.position(order.market_slug) == 0
-                        and order.status == "OPEN" and order.filled_qty == 0
-                        and order.event_at >= datetime.fromisoformat(row["event_at"])
-                        and self._order_matches_row(order, row)):
+                ordinary_unchanged = (
+                    order is not None and row is not None
+                    and order.market_slug not in unresolved_by_market
+                    and order.market_slug not in absent_markets
+                    and self.ledger.position(order.market_slug) == 0
+                    and order.status == "OPEN" and order.filled_qty == 0
+                    and order.event_at >= datetime.fromisoformat(row["event_at"])
+                    and self._order_matches_row(order, row))
+                pending_places = unresolved_by_exchange.get(exchange_id, ())
+                pending_place = (
+                    pending_places[0] if len(pending_places) == 1 else None)
+                positive_create = (
+                    order is not None and row is None and pending_place is not None
+                    and order.market_slug not in absent_markets
+                    and len(unresolved_by_market.get(order.market_slug, ())) == 1
+                    and self.ledger.position(order.market_slug) == 0
+                    and self._pending_place_matches_order(order, pending_place))
+                if ordinary_unchanged or positive_create:
                     self._bulk_skipped[exchange_id] = order
+                    self._rest_order_proof_counts[
+                        "bulk_create" if positive_create else "bulk_unchanged"] += 1
                 else:
                     read_ids.append(exchange_id)
             exchange_ids = read_ids
+        self._rest_order_proof_counts["exact"] += len(exchange_ids)
         return await self._read_exact_order_states(exchange_ids, now)
 
     @staticmethod
@@ -209,6 +236,51 @@ class RestFallbackRunner(CommissioningRunner):
             and order.price == Decimal(row["price"])
             and order.original_qty == Decimal(row["original_qty"])
             and order.filled_qty == Decimal(row["filled_qty"]))
+
+    @staticmethod
+    def _pending_place_matches_order(order, intent):
+        """Use a complete positive OPEN row as create proof, never absence.
+
+        A create response supplies the exchange id but remains unresolved until
+        venue order state arrives.  During an optimized steady-state proof the
+        first complete open-order snapshot is already positive venue evidence.
+        When every immutable economic/identity field matches the one pending
+        PLACE, a second matching complete snapshot can safely replace the
+        otherwise redundant GET-by-id.  Cancels/modifies, missing rows,
+        partials, positions, ambiguous owners and any mismatch retain exact
+        retrieval.
+        """
+
+        if (str(intent["operation"]).upper() != "PLACE"
+                or str(intent["state"]).upper() not in {
+                    "SUBMITTING", "ACKNOWLEDGED", "UNCERTAIN"}
+                or str(intent["exchange_order_id"] or "")
+                    != order.exchange_order_id
+                or str(intent["client_order_id"]) != order.client_order_id
+                or str(intent["market_slug"]) != order.market_slug
+                or order.status != "OPEN" or order.filled_qty != 0):
+            return False
+        try:
+            payload = json.loads(str(intent["payload_json"]))
+            if not isinstance(payload, dict):
+                return False
+            venue_intent = str(payload.get("intent") or "").upper()
+            expected_side = {
+                "ORDER_INTENT_BUY_LONG": "ORDER_SIDE_BUY",
+                "ORDER_INTENT_BUY_SHORT": "ORDER_SIDE_SELL",
+            }.get(venue_intent)
+            raw_price = payload.get("price")
+            if isinstance(raw_price, dict):
+                raw_price = raw_price.get("value")
+            return (
+                expected_side is not None
+                and order.side.upper() == expected_side
+                and order.price == Decimal(str(raw_price))
+                and order.original_qty == Decimal(str(payload.get("quantity")))
+                and order.event_at >= datetime.fromisoformat(
+                    str(intent["created_at"])))
+        except (json.JSONDecodeError, TypeError, ValueError, ArithmeticError):
+            return False
 
     def _checked_bulk_orders(self, orders):
         """A transient foreign/duplicate row must not disappear between reads."""
@@ -251,10 +323,30 @@ class RestFallbackRunner(CommissioningRunner):
                                          "status", "price", "original_qty", "filled_qty"))):
                 changed.append(exchange_id)
         failures = await self._read_exact_order_states(changed, now)
+        self._rest_order_proof_counts["second_snapshot_changed"] += len(changed)
         if failures:
             raise AdapterError("changed/missing order lacks exact REST proof: "
                                + "; ".join(f"{key}: {detail}" for key, detail in failures))
         return orders
+
+    def _report_rest_order_proofs(self, now):
+        """Report proof-path counts without another venue request."""
+
+        last = self._rest_order_proof_last_report
+        if last is not None and 0 <= (now - last).total_seconds() < 60:
+            return
+        counts = self._rest_order_proof_counts
+        if sum(counts.values()):
+            print(
+                f"[rest-order-proof] at={now.isoformat()} "
+                f"bulk_unchanged={counts['bulk_unchanged']} "
+                f"bulk_create={counts['bulk_create']} "
+                f"exact={counts['exact']} "
+                f"second_snapshot_changed={counts['second_snapshot_changed']}",
+                flush=True,
+            )
+        counts.clear()
+        self._rest_order_proof_last_report = now
 
     async def _read_exact_order_states(self, exchange_ids, now):
         # Only independent reads overlap. All still share the unchanged host
@@ -355,6 +447,7 @@ class RestFallbackRunner(CommissioningRunner):
             self._bulk_order_proof = False
             self._bulk_skipped = {}
         self._rest_poll_completed_at = self._now()
+        self._report_rest_order_proofs(self._now())
         # REST has no event to dirty an owner after a partial fill, position
         # quantity change or terminal order. Re-evaluate the bounded slate.
         for slug in self.active_slugs:

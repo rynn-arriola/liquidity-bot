@@ -16,6 +16,7 @@ The table below retains the original watchlist experiments, not the whole catalo
 |---|---|---|---|
 | Retained executable value | Normal building PLACE observation plus the most recent already-fetched selector snapshot | No extra call or socket | None; 60/70/80 are `WOULD_REFUSE` labels only |
 | Ledger growth slope | Existing SQLite file sizes and read-only diagnostics | None | None |
+| Private WebSocket availability | Separate local45-second balance/order/position probe about once per minute; daily aggregate-only JSONL | One private socket, three subscriptions, zero REST | None; REST remains authoritative and no source switching is allowed from this measurement |
 
 Hourly seven-day reward reporting, public changelog monitoring and nightly
 SQLite backup are operational controls rather than strategy experiments. They

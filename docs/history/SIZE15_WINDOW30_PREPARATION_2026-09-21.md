@@ -184,3 +184,31 @@ The marker was set to `5bbfa55505a0ca55e0a9aea18b4cc0eeb2d1c543`, and
 explicit REST size15/32 launched supervisor121616 and runner121634.
 Natural five-to-seven-minute acceptance follows below; no synthetic fill or
 failure is induced. The obsolete midnight activation heartbeat stays paused.
+
+### Initial live acceptance
+
+At 04:20:21Z the same supervisor121616/runner121634 remained live after
+5m35s. Authenticated proof found 30 flat pending entries plus three separate
+position-market reducing orders, with zero unresolved intents or unknown
+orders and exact ledger count agreement. Positions +13.27 Lymole/Mirser,
++3 Marole/Pyrboh and +15 Nebdmy/Romiva each had one OPEN SELL for the exact
+remaining quantity. This proves initial reducer coverage, not future final
+exit timing. The Nebdmy/Romiva first reducer ACK followed position observation
+by 0.085s; later cancel confirmations and reducer replacements were logged.
+
+The current risk row retained the $30 policy, cap30 and no hold, with normal
+fill replay updating settled P&L to -$1.04 by04:20:12Z. Earlier -$1.45 was
+carried through restart and was not forgiven by the migration.
+
+The first three complete API windows had 687 attempts, zero429s, and three
+individual-order404s, at2.576/2.671/2.802 requests/s. A single market's public
+snapshot recovery warning occurred during startup; no account-wide crash or
+quarantine was observed. The create-proof counters reported33 bulk-create
+shortcuts across the first two telemetry lines, with zero second-snapshot
+changes in those lines. This confirms execution of the optimization, not a
+representative long-run saving or a guarantee against429s.
+
+Workstation/GitHub/WSL source parity passed with marker5bbfa5550; the offline
+PC remains unverified. The immediate restart is complete. Continue natural
+position exits, window-tier transitions and representative API/load savings
+measurement; do not induce failures or fills.

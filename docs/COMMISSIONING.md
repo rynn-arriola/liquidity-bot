@@ -8,7 +8,7 @@ operator's choices in [DECISIONS.md](../DECISIONS.md).
 This is an operator-accepted data-collection exception, not evidence that the
 strategy is profitable and not permission to scale.
 
-The September15 authorized risk replacement uses fixed $25 six-hour ET windows
+The authorized risk policy uses fixed $30 six-hour ET windows
 and durable matched closing fills; it supersedes the older $90 daily and
 overnight/daytime cap descriptions below once loaded. Configuration is
 [`risk_window_policy.json`](../config/risk_window_policy.json); immutable window
@@ -46,8 +46,8 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
 - 5 contracts per quote by default across 20-32 concurrently bound markets;
   widths above the loaded 24 are reviewed canary inputs, not durable defaults
   (one bid and one offer may rest per market while flat). Size is a
-  restart-scoped whole number from 5 through 30; the current reviewed canary
-  uses size 10. `quote_size.py` is the single
+  restart-scoped whole number from 5 through 30; the next authorized run uses
+  size 15. `quote_size.py` is the single
   quantity authority; `slot_capacity.py`
   independently validates breadth, and a bare launcher invocation always
   restores the 20-slot baseline rather than inheriting a prior canary;
@@ -74,7 +74,7 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
   runner flatten the exact position with a stressed-depth, price-capped IOC;
   allow at most three confirmed-terminal IOC
   attempts within 30 seconds and 10 seconds to confirm an individual attempt.
-  An early cross costing more than `0.8 × quote size` ($8 at next-run size 10) is refused
+  An early cross costing more than `0.8 × quote size` ($12 at size 15) is refused
   and the position keeps resting
   -- but the kickoff deadline overrides that cap, because nothing may settle
   (corrected 2026-08-16; this read "at 30 seconds");
@@ -83,7 +83,7 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
   `$10 × (quote size / 10) × (slots / 24)` ($10 at size 10 / 24 slots).
   Neither count nor fee observation can block/cancel quotes, pause/stop trading
   or change an exit path. Crossing the fee reference logs/reports once;
-- one fixed configured $25 matched, closed-trade-loss HARD per six-hour ET window
+- one fixed configured $30 matched, closed-trade-loss HARD per six-hour ET window
   is the sole money-loss authority in the new release. Boundaries are
   00:00,06:00,12:00,18:00 America/New_York including DST. Durable fills are
   replayed to establish basis, but only matched closure and actual fill fees
@@ -97,8 +97,8 @@ use REST-only scheduling or its additional cap. [Safety and verification](histor
   current settled-loss proof and normal maintenance/stream/entry gates. Open
   inventory never creates a provisional window loss;
 - use that same confirmed window loss to ratchet the account-wide
-  flat-entry ceiling from30 to25/20/15/10 at $5/$10/$15/$20 loss.
-  HARD at $25 remains the sole loss stop. The tightest reached tier
+  flat-entry ceiling from30 to25/20/15/10 at $6/$12/$18/$24 loss.
+  HARD at $30 remains the sole loss stop. The tightest reached tier
   survives restart and cannot loosen until the next window. Unresolved creates
   reserve capacity; excess owned entries drain one cancellation at a time from
   the lowest-ranked markets. Position-market orders, reducers, IOC exits and

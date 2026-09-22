@@ -49,8 +49,9 @@ class RiskWindowTests(unittest.TestCase):
             self.policy.bounds(datetime(2026, 9, 15))
 
     def test_exact_remaining_budget_tiers_profit_and_full_stop(self):
-        for loss, cap in ((-20, 30), (0, 30), (4.99, 30), (5, 25),
-                          (9.99, 25), (10, 20), (15, 15), (20, 10), (24.99, 10), (25, 0), (30, 0)):
+        for loss, cap in ((-20, 30), (0, 30), (5.99, 30), (6, 25),
+                          (11.99, 25), (12, 20), (18, 15), (24, 10),
+                          (29.99, 10), (30, 0), (36, 0)):
             with self.subTest(loss=loss):
                 self.assertEqual(self.policy.cap(D(str(loss)), full_cap=64), cap)
         self.assertEqual(self.policy.cap(D(0), full_cap=8), 8)
@@ -59,15 +60,30 @@ class RiskWindowTests(unittest.TestCase):
         for size, slots in ((5, 20), (10, 32), (30, 24)):
             config = CommissioningConfig("market", True, True, True,
                                          quote_size=D(size), max_markets=slots)
-            self.assertEqual(config.hard_stop_loss_usd, D(25))
-            self.assertEqual(config.weekly_operating_reserve_usd, D(700))
-            self.assertEqual(config.entry_order_cap_for_loss(D(10)), 20)
+            self.assertEqual(config.hard_stop_loss_usd, D(30))
+            self.assertEqual(config.weekly_operating_reserve_usd, D(840))
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 20)
             for hour in range(24):
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 30)
 
+    def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
+        config = CommissioningConfig(
+            "market", True, True, True, quote_size=D(15), max_markets=32)
+        self.assertEqual(config.hard_stop_loss_usd, D(30))
+        self.assertEqual(config.max_early_exit_loss_usd, D(12))
+        self.assertEqual(config.max_stressed_exit_loss_usd, D(60))
+        self.assertEqual(config.max_market_exposure_usd, D(135))
+        self.assertEqual(config.max_portfolio_exposure_usd, D(630))
+        self.assertEqual(config.execution_fee_observation_usd, D(20))
+        self.assertEqual(config.weekly_operating_reserve_usd, D(840))
+        self.assertEqual(
+            [config.entry_order_cap_for_loss(D(loss))
+             for loss in (0, 6, 12, 18, 24, 30)],
+            [30, 25, 20, 15, 10, 0])
+
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
         self.observe(0)
-        self.assertEqual(self.observe(-15).cap, 15)
+        self.assertEqual(self.observe(-18).cap, 15)
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
         self.assertFalse(self.meter.ready(START))
         self.assertEqual(self.observe(-1).cap, 15)
@@ -80,19 +96,19 @@ class RiskWindowTests(unittest.TestCase):
     def test_close_in_boundary_gap_counts_in_new_window(self):
         self.observe(0)
         self.observe(0, at=START + timedelta(hours=6, seconds=-3))
-        result = self.observe(-10, at=START + timedelta(hours=6, seconds=3))
+        result = self.observe(-12, at=START + timedelta(hours=6, seconds=3))
         self.assertEqual(result.opening_equity, D(0))
         self.assertEqual(result.cap, 20)
 
     def test_new_window_uses_its_own_settled_pnl(self):
-        self.observe(-20, at=START + timedelta(hours=23, minutes=59))
+        self.observe(-24, at=START + timedelta(hours=23, minutes=59))
         next_day = START + timedelta(days=1)
-        result = self.observe(-10, at=next_day)
+        result = self.observe(-12, at=next_day)
         self.assertEqual(result.opening_equity, D(0))
-        self.assertEqual(self.meter.realized_equity, D(-10))
+        self.assertEqual(self.meter.realized_equity, D(-12))
         self.assertEqual(result.cap, 20)
-        result = self.observe(-10, at=next_day + timedelta(seconds=5))
-        self.assertEqual(self.meter.realized_equity, D(-10))
+        result = self.observe(-12, at=next_day + timedelta(seconds=5))
+        self.assertEqual(self.meter.realized_equity, D(-12))
         self.assertEqual(result.cap, 20)
 
     def test_only_settled_pnl_can_change_the_budget(self):
@@ -101,7 +117,7 @@ class RiskWindowTests(unittest.TestCase):
         self.assertFalse(self.meter.held)
         self.assertEqual(mark.cap, 30)
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
-        mark = self.observe(-5)
+        mark = self.observe(-6)
         self.assertFalse(self.meter.provisional)
         self.assertFalse(self.meter.held)
         self.assertEqual(mark.cap, 25)
@@ -136,7 +152,7 @@ class RiskWindowTests(unittest.TestCase):
 
     def test_confirmed_stop_survives_restart_and_needs_later_flat_proof(self):
         self.observe(0)
-        self.observe(-25)
+        self.observe(-30)
         self.assertTrue(self.meter.held)
         path = self.ledger.path
         self.ledger.close()
@@ -157,7 +173,7 @@ class RiskWindowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "boundary"):
             self.meter.observe(settled_pnl=D(0), observed_at=START,
                                now=START + timedelta(hours=6), full_cap=64)
-        self.meter = WindowRiskMeter(self.ledger.connection, RiskWindowPolicy(stop_loss_usd=D(30)))
+        self.meter = WindowRiskMeter(self.ledger.connection, RiskWindowPolicy(stop_loss_usd=D(25)))
         with self.assertRaisesRegex(ValueError, "policy changed"):
             self.observe(0)
         for amount in ("NaN", "Infinity", "0", "-25"):
@@ -215,8 +231,8 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._frame(now).new_risk_allowed)
         self.assertEqual(runner._equity_snapshot.marked_trading_pnl(
             opening_equity=runner._day_opening_equity, nontrading_cash=D(0)), D(-30))
-        # Only a completed matched pair confirms the $26 loss.
-        self.settle_loss(runner, D(26), suffix="hard")
+        # Only a completed matched pair confirms the $31 loss.
+        self.settle_loss(runner, D(31), suffix="hard")
         client.portfolio.rows = {}
         now += timedelta(seconds=1)
         runner.clock = lambda: now
@@ -232,7 +248,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_window_needs_new_account_proof_and_preserves_other_pauses(self):
         runner, client, _ = await self.runner()
-        self.settle_loss(runner, D(25), suffix="prior-hard")
+        self.settle_loss(runner, D(30), suffix="prior-hard")
         await runner._refresh_balance(live.NOW)
         self.assertTrue(runner._hard_stop_active())
         later = runner._window_risk.current.end
@@ -312,7 +328,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
             PositionState("market-two", D(10), live.NOW),),
             as_of=live.NOW, observed_at=live.NOW, complete_account=True)
         self.assertEqual(runner._loss_cap_overflow_order_ids(live.NOW), frozenset())
-        self.settle_loss(runner, D(5), suffix="cap")
+        self.settle_loss(runner, D(6), suffix="cap")
         await runner._refresh_balance(live.NOW)
         overflow = runner._loss_cap_overflow_order_ids(live.NOW)
         self.assertEqual(len(overflow), 5)
@@ -333,9 +349,9 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
             as_of=live.NOW, observed_at=live.NOW, complete_account=True)
         previous = D(0)
         for index, (loss, cap) in enumerate((
-                ("0", 30), ("4.999", 30), ("5", 25), ("9.999", 25),
-                ("10", 20), ("14.999", 20), ("15", 15),
-                ("19.999", 15), ("20", 10), ("24.999", 10), ("25", 0))):
+                ("0", 30), ("5.999", 30), ("6", 25), ("11.999", 25),
+                ("12", 20), ("17.999", 20), ("18", 15),
+                ("23.999", 15), ("24", 10), ("29.999", 10), ("30", 0))):
             with self.subTest(loss=loss):
                 loss = D(loss)
                 if loss != previous:
@@ -350,11 +366,11 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(runner._loss_cap_blocks_new_entry(live.NOW))
                 await runner._send_summary(live.NOW)
                 _, model = prepare_summary(notifier.payloads[-1][0])
-                self.assertEqual(model["hard_stop_meter"], float(loss / D(25) * 100))
+                self.assertEqual(model["hard_stop_meter"], float(loss / D(30) * 100))
                 self.assertIn(("Entries / cap", f"30 / {cap}"), model["risk"])
-                self.assertEqual(runner._hard_stop_active(), loss >= 25)
+                self.assertEqual(runner._hard_stop_active(), loss >= 30)
         # A later gain changes the displayed net loss, not a latched HARD/cap.
-        self.settle_loss(runner, D(-24), suffix="recovery-gain")
+        self.settle_loss(runner, D("-28.8"), suffix="recovery-gain")
         await runner._refresh_balance(live.NOW)
         await runner._send_summary(live.NOW)
         _, model = prepare_summary(notifier.payloads[-1][0])
@@ -389,10 +405,10 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
             received_at=live.NOW)
         await runner._refresh_balance(live.NOW)
         self.assertEqual(runner.risk_guard.current_equity, D(-5))
-        self.assertEqual(runner._loss_entry_order_cap, 25)
+        self.assertEqual(runner._loss_entry_order_cap, 30)
         await runner._refresh_balance(live.NOW)
         self.assertEqual(runner.risk_guard.current_equity, D(-5))
-        self.assertEqual(runner._loss_entry_order_cap, 25)
+        self.assertEqual(runner._loss_entry_order_cap, 30)
 
     async def test_net_flat_cash_retention_cannot_create_false_window_loss(self):
         runner, client, _ = await self.runner()
@@ -417,13 +433,13 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_summary_separates_daily_and_window_loss_and_pause(self):
         runner, client, notifier = await self.runner()
-        self.settle_loss(runner, D(5), suffix="summary")
+        self.settle_loss(runner, D(6), suffix="summary")
         await runner._refresh_balance(live.NOW)
         runner._day_opening_equity = D(199)
         await runner._send_summary(live.NOW)
         rendered = json.dumps(notifier.payloads[-1][0])
-        self.assertIn("$5.00 / $25.00", rendered)
-        self.assertIn("$20.00 (80%)", rendered)
+        self.assertIn("$6.00 / $30.00", rendered)
+        self.assertIn("$24.00 (80%)", rendered)
         self.assertIn("0 / 25", rendered)
         self.assertIn("confirmed", rendered)
         runner.clock = lambda: live.NOW + timedelta(seconds=16)
@@ -431,7 +447,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         stale = json.dumps(notifier.payloads[-1][0])
         self.assertIn("HARD     UNAVAILABLE", stale)
         self.assertIn("Awaiting fresh window proof", stale)
-        self.assertNotIn("$104.00 / $25.00", stale)
+        self.assertNotIn("$104.00 / $30.00", stale)
 
     async def test_cross_boundary_and_stale_samples_cannot_ratchet_budget(self):
         runner, client, _ = await self.runner()

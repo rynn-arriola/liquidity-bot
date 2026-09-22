@@ -213,11 +213,12 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
         from liquidity_bot.risk_windows import load_risk_window_policy
         runner, client, _ = await self.build(risk_window_policy=load_risk_window_policy())
         meter = runner._window_risk
-        # A complete matched pair realizes a $5 loss. Cash by itself is not a
+        # A complete matched pair realizes a $6 loss, reaching the first
+        # scaled reducer tier. Cash by itself is not a
         # window-loss input, regardless of the selected account transport.
         for name, intent, price in (
                 ("open", "ORDER_INTENT_BUY_LONG", Decimal("0.5")),
-                ("close", "ORDER_INTENT_BUY_SHORT", Decimal("0.45"))):
+                ("close", "ORDER_INTENT_BUY_SHORT", Decimal("0.44"))):
             runner.ledger.apply_execution(Execution(
                 execution_id=f"handoff-{name}", market_slug="handoff-market",
                 side="BUY", price=price, qty=Decimal("100"), fee=Decimal("0"),

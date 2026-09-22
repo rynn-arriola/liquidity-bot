@@ -39,7 +39,7 @@ def _aware(value: datetime) -> datetime:
 
 @dataclass(frozen=True)
 class RiskWindowPolicy:
-    stop_loss_usd: Decimal = Decimal("25")
+    stop_loss_usd: Decimal = Decimal("30")
     max_pending_entry_orders: int = 30
     remaining_budget_tiers: tuple[tuple[Decimal, int], ...] = (
         (Decimal("0.8"), 25), (Decimal("0.6"), 20),

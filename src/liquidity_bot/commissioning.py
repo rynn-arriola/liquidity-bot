@@ -69,7 +69,7 @@ class CommissioningConfig:
     """Bounded experimental authorization derived from one quote quantity.
 
     ``hard_stop_loss_usd`` is the sole money-loss stop: a fixed configured
-    $25 per six-hour ET window, based on confirmed closed-result accounting.
+    $30 per six-hour ET window, based on confirmed closed-result accounting.
     Passing ``risk_window_policy=None`` retains the historical daily policy
     for replay; production always loads the validated window policy.
     The stressed-exit entry cap is an economic eligibility check, not a stop.
@@ -96,7 +96,7 @@ class CommissioningConfig:
     # and unwind BOTH scaling linearly (25x size -> 24.4x reward, gate_ratio
     # 0.0310 -> 0.0305), so doubling pays more reward when a quote qualifies
     # but also doubles what a bad fill costs without improving the ratio. The
-    # persisted operator setting is currently 10; 5 remains the safe fallback
+    # next authorized operator setting is 15; 5 remains the safe fallback
     # when no runtime setting file exists.
     #
     # Everything derived from contract count moves with it or the config stops

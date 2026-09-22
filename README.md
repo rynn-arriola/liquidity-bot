@@ -8,7 +8,7 @@
 This is a multi-agent project, primarily operated with Codex.
 The September15 risk replacement is configured in
 [`config/risk_window_policy.json`](config/risk_window_policy.json): four fixed
-$25 six-hour ET windows, confirmed closing losses only, with pending-entry
+$30 six-hour ET windows, confirmed closing losses only, with pending-entry
 caps30/25/20/15/10 and positions/reducers excluded. This is separate from daily
 P&L reporting. See the [policy and rollout constraints](docs/history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md)
 and STATUS for whether the new code is loaded; older $90 references describe
@@ -73,8 +73,8 @@ hard-locked by `CommissioningConfig`:
 | concurrently bound markets | 20 by default; 20-32 only as an explicitly authorized canary |
 | portfolio exposure | `(configured slots + 10) × size`; $300 at size 10 / 20 slots |
 | stressed-exit entry cap | $40 at size 10 (`4 × size`); economic eligibility, not a loss stop |
-| emergency HARD stop | fixed $25 of matched, closed-trade net loss in each 00–06/06–12/12–18/18–00 ET window; open orders, open inventory and paper marks do not count |
-| loss-scaled flat-entry orders | each window starts at 30; $5/$10/$15/$20 matched net loss → 25/20/15/10; $25 evacuates and pauses; never counts position-market orders or reducers |
+| emergency HARD stop | fixed $30 of matched, closed-trade net loss in each 00–06/06–12/12–18/18–00 ET window; open orders, open inventory and paper marks do not count |
+| loss-scaled flat-entry orders | each window starts at 30; $6/$12/$18/$24 matched net loss → 25/20/15/10; $30 evacuates and pauses; never counts position-market orders or reducers |
 | time-scaled flat-entry orders | every six-hour ET window starts at maximum 30 pending entries and combines with the loss tier, source ceiling and physical capacity by taking the smallest |
 | inventory age before a forced exit | 900s |
 | pre-kickoff flatten deadline | 300s |
@@ -335,7 +335,7 @@ unattributable rewards are visible but never included in accounted net.
 
 LIVE summaries also include a read-only capital card. It derives one
 worst-case quote notional per configured slot, preserves the existing
-portfolio-exposure cushion and adds seven days of four fixed $25 windows so
+portfolio-exposure cushion and adds seven days of four fixed $30 windows so
 the bot has a week of operating runway when reward cash arrives later. The displayed
 free-withdraw ceiling is the smaller of current buying power and settled cash
 above that comfortable balance; it rounds down and becomes `UNAVAILABLE` on

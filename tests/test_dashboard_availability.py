@@ -29,7 +29,7 @@ class DashboardVenueAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.quote_size, Decimal("10"))
         self.assertEqual(config.max_markets, 24)
-        self.assertEqual(dashboard._hard_stop_cap(config), 25)
+        self.assertEqual(dashboard._hard_stop_cap(config), 30)
 
     def test_window_meter_reads_only_fresh_matching_checkpoint(self):
         from liquidity_bot.execution_ledger import ExecutionLedger

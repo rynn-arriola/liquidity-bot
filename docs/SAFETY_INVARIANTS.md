@@ -36,8 +36,8 @@ These are implementation requirements, not suggestions.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
     maker-lab stopped. Size and breadth are restart-scoped operator inputs.
-    Quote size is a whole value bounded to 5-30; the persisted live setting is
-    10 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
+    Quote size is a whole value bounded to 5-30; the next authorized setting is
+    15 and 5 is only the missing-file fallback. Breadth defaults to 20 and may
     be explicitly set only from 20 through the authorized canary ceiling of 32;
     32 remains a measured canary, not a durable default or proof that the
     whole slate can fall back to REST. A bare restart must return to 20. The
@@ -90,7 +90,7 @@ These are implementation requirements, not suggestions.
     reconnect budget. Quoting resumes only after cancel/reconnect/reconcile succeeds. Process exit
     may occur later only after it cancels, flattens, and proves exact flat
     state, or through the bounded non-flat exit in invariant 32.
-25. The September15 authorized replacement is one fixed **$25 settled-trade
+25. The current authorized policy is one fixed **$30 settled-trade
     HARD per six-hour ET window**, not an additional $90 daily stop. Its
     accounting coordinate is durable matched-inventory P&L, net of actual fill
     fees. Older fills are replayed only to establish basis; a window counts the
@@ -876,8 +876,8 @@ These are implementation requirements, not suggestions.
     quantity, reward period, economics, ranking, ownership, risk or exit
     authority.
 96. Window loss-scaled capacity uses the same confirmed-loss evidence as HARD.
-    Initially allow 30 pending entries; at $5/$10/$15/$20 confirmed net loss,
-    cap them at 25/20/15/10. At $25 HARD permits no new entries. These are
+    Initially allow 30 pending entries; at $6/$12/$18/$24 confirmed net loss,
+    cap them at 25/20/15/10. At $30 HARD permits no new entries. These are
     80/60/40/20/0 percent budget-remaining thresholds. The tightest tier is
     durable for that ET window and cannot loosen after recovery or restart;
     only a new window restores its ceiling, subject to outstanding holds and
@@ -890,7 +890,7 @@ These are implementation requirements, not suggestions.
     cancelled or counted by this ceiling. It adds no venue read or stream and
     does not replace exposure, stressed-exit, buying-power or HARD enforcement;
     HARD at 100% remains the sole loss stop.
-97. `config/risk_window_policy.json` defines the restart-scoped $25 stop and
+97. `config/risk_window_policy.json` defines the restart-scoped $30 stop and
     30/25/20/15/10 pending-entry schedule. It replaces the old 00:00–09:00
     30/otherwise40 clock band and daily percentage tiers in production.
     Effective capacity is the smallest of this policy, its durable loss cap,

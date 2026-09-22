@@ -62,3 +62,28 @@ Windows/GitHub/WSL/marker parity passes. It remains stopped until the next
 $25 fingerprint. At or after the boundary, repeat the authenticated flat gate,
 start explicit REST size15/32, and verify the new hard30/cap30 row plus5–7
 minutes of live behavior. Any failed gate leaves the bot stopped.
+
+## Operator-authorized immediate compatibility restart
+
+The operator then requested an immediate restart before the fresh boundary.
+At00:55:07Z a new authenticated gate again proved zero venue orders,
+positions, unresolved intents, unknown orders, working ledger orders and ledger
+positions. The exact prior release `580dcc9f4` differs from `ab26a2182` in
+executable content only by the $25/$30 risk-policy constants and one comment;
+there is no schema, API, strategy or recovery rollback. WSL therefore detached
+to and marked that compatible release, preserving the already fingerprinted
+$25 active window while using the newly authorized size15/32.
+
+Supervisor104653/runner104667 started at00:55:40Z in explicit REST account mode.
+Startup proved public-WebSocket books, `loss=0 hard=25 cap=30`, and normal
+maintenance state. Natural fills exercised reducer handling: building-order
+remainders were canceled, exact reducers were placed, and earlier positions
+were observed flat. At01:01:08Z authenticated proof found20 flat-entry orders
+plus one exact BUY15 reducer covering the sole -15 position, zero unresolved or
+unknown state, and exact ledger agreement. The latest completed API window was
+clean at2.412rps; isolated earlier cash-history/balance429s were handled without
+stopping the runner.
+
+The scheduled00:01ET handoff now explicitly stops this temporary run, requires
+fresh flat/clear proof, restores reviewed `ab26a2182`, and starts the $30 policy
+only in the new durable window. A failed safety gate leaves production stopped.

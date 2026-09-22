@@ -87,3 +87,46 @@ stopping the runner.
 The scheduled00:01ET handoff now explicitly stops this temporary run, requires
 fresh flat/clear proof, restores reviewed `ab26a2182`, and starts the $30 policy
 only in the new durable window. A failed safety gate leaves production stopped.
+
+## September 22 scheduled activation blocked
+
+The scheduled task began at 04:01:30Z (00:01:30 ET). The supervisor was
+stopped and the runner received SIGTERM through the normal stop script.
+The runner ended at 04:02:12.566135Z with `operator_sigterm` and `flat=false`.
+Its shutdown path canceled flat entries but parked two pregame positions on
+their existing reducing orders: +15 in `aec-setkameua-marole-sydvik-2026-09-22`
+and -1 in `aec-setkameua-nebdmy-shcden-2026-09-22`. This was the existing
+passive-exit shutdown behavior, not proof that the account was flat.
+
+Authenticated release proof at 04:02:31Z found two orders, two positions,
+two ledger working orders, two ledger positions and zero unresolved/unknown
+state. The required flat gate failed. A follow-up at 04:03:14Z found one
+venue position (+15, Marole/Sydvik) and one matching OPEN SELL15. The other
+position cleared at the venue after shutdown; the stopped ledger still held
+both rows and must be reconciled before a future start. These are timestamped
+observations, not an assertion that an unattended resting order will fill.
+
+The old process also crossed the midnight boundary before the stop. Read-only
+inspection of `execution_settled_risk_windows` at 04:03:09Z found the new
+04:00–10:00Z row already persisted with the $25 policy, cap 30, settled P&L
+0.0000 and no trip. `SettledWindowRisk.observe` refuses a policy fingerprint
+change within an existing window. Therefore the $30 release cannot start in
+this window even if exposure subsequently clears. Do not delete the row,
+rewrite its policy or reset loss. The original 00:01 schedule was too late;
+a future boundary handoff must stop the old runner before the boundary.
+
+No deployment, marker update, restart, manual venue mutation or ledger repair
+was performed. WSL HEAD/marker remain `580dcc9f4`; Windows/GitHub have reviewed
+`5bbfa5550`. Its executable/test difference from `ab26a2182` is only
+`rest_fallback.py` and `test_rest_bulk_polling.py`, the reviewed create-proof
+optimization. Earlier 1,999-test/reversal evidence remains valid, but exact
+deployed tests and live acceptance were not reached. The previous description
+of deployment as "staged" meant a scheduled handoff; source was not installed.
+
+Parity confirms the expected deployment gap and created an integrity/hash
+verified private recovery copy at 04:02:55.911267Z, 966,148,096 bytes,
+SHA-256 prefix `6709238d3a27`. The offline PC was skipped. The activation
+heartbeat was paused after the failed attempt, preventing automatic retries.
+Both bot processes are stopped and the normal stop disarmed host recovery.
+Remaining work is account/ledger clearance plus a reviewed policy transition,
+then deployment/hash/native-suite/start gates and 5–7 minute live acceptance.

@@ -407,3 +407,27 @@ change caps, activate300 coverage, or restart. Local comparison helper is ignore
 no production source/config change. Current changelog was re-opened (latest
 September21 crypto documentation); live status page retrieval failed, so no
 fresh status/outage claim follows.
+
+### Stop investigation prioritized over the deferred REST comparison
+
+Clarification of the operator steer: investigate the stopped bot now; return
+to REST performance later. Read-only root system journal establishes the WSL
+distro shutdown at17:47:52Z (`System is powering down`, session1217 stopped),
+followed by distro service startup17:48:04Z. This explains disappearance of both
+trader and supervisor; the original normal runner had no terminal result.
+The shared VM kernel uptime staying seven days does not disprove a distro restart.
+No reviewed kernel OOM event or bot traceback identifies a429-caused death.
+
+Persisted host-recovery state reports one attempt and status=recovered, matching
+Windows watchdog status. Existing code only launches recovery after both normal
+processes disappear, and intentionally remains paused after positive flatness.
+Recovery17:48:07–17:49:14Z canceled exposure and flattened three positions.
+Three local unsent shutdown deferrals retried via positive proof; final account
+and ledger flatness were independently verified17:51:49Z. No action in this
+diagnostic stopped, started or modified the trader or watchdog.
+
+Windows System events record a Codex Store update17:47:22–25Z, before the distro
+shutdown. This is timing correlation, not proof the app update initiated WSL
+termination. The precise initiating actor remains unknown. Further host
+lifecycle investigation is the recommendation before another normal restart;
+no launcher/service/power policy change or restart was authorized/performed.

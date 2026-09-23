@@ -330,3 +330,24 @@ order reads; two changed rows correctly fell back to exact proof. This is direct
 evidence of reduced redundant per-order reads, not a promise of lower aggregate
 traffic or immunity from venue endpoint-specific limits. No pricing, selection,
 position size, pending cap, exit timer or risk rule changed.
+
+## Operator-directed REST rollback
+
+The live hybrid trial later showed synchronized15-minute entry expiry/refill
+pressure and four Cloudflare HTTP429 responses across execution history,
+balance, cash history and positions while aggregate request windows remained
+below the local4/s ceiling. This evidence does not establish that hybrid caused
+the venue limits, but it also did not deliver the stable operational result the
+operator wanted.
+
+The operator stopped the trial, manually flattened the remaining exposure and
+directed an exact rollback to the version running around September22 20:00ET.
+Its deployed executable marker was `5bbfa5550`; the later documentation and
+local-measurement commits through pre-hybrid parent `b9ac0981e` have identical
+runtime files. Hybrid source/history is preserved in pushed tag
+`saved-hybrid-2026-09-23`. Authenticated04:56:26Z venue and normally reconciled
+ledger state were both zero orders, zero positions, zero unresolved intents and
+zero unknown orders. The rollback restores production runtime files to
+the exact `5bbfa5550` tree: REST account authority and the existing
+public-WebSocket market books. Size15/32, four$30 settled-loss windows, pending
+caps, market selection, pricing and exit behavior remain unchanged.

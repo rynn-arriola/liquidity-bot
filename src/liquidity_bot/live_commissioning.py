@@ -7631,7 +7631,8 @@ class CommissioningRunner:
             integrity_problems=problems,
             report_database=str(self.ledger.path.resolve()),
             rewards_observed_at=self._earnings_observed_at,
-            account_source=getattr(self, "account_state_mode", "websocket"),
+            account_source=("rest" if getattr(self, "_using_rest_source", lambda: False)()
+                            else "websocket"),
             inventory_limit_seconds=self.config.max_inventory_age_seconds,
         ))
         # Expose actual create count only in the description, never imply that
@@ -11318,7 +11319,7 @@ def main() -> int:
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
     parser.add_argument(
-        "--account-state-mode", choices=("websocket", "rest", "rest-fallback", "hybrid"),
+        "--account-state-mode", choices=("websocket", "rest", "rest-fallback"),
         default=None,
         help="explicit account source; otherwise use the last verified selection",
     )

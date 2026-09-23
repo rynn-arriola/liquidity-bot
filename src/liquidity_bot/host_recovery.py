@@ -72,7 +72,7 @@ def arm(root: Path, target: str, size: str, slots: str, source: str) -> dict:
     if (not target or any(c.isspace() for c in target)
             or target.startswith("-")):
         raise ValueError("invalid recovery target")
-    if source not in {"saved", "rest", "rest-fallback", "websocket"}:
+    if source not in {"saved", "rest", "rest-fallback", "websocket", "hybrid"}:
         raise ValueError("invalid recovery account source")
     state = {
         "version": 1, "status": "armed", "token": uuid.uuid4().hex,
@@ -139,7 +139,7 @@ def tick(root: Path, *, present=process_present, popen=subprocess.Popen,
     target, source = state["target"], state["source"]
     if (not isinstance(target, str) or not target or target.startswith("-")
             or any(c.isspace() for c in target)
-            or source not in {"saved", "rest", "rest-fallback", "websocket"}):
+            or source not in {"saved", "rest", "rest-fallback", "websocket", "hybrid"}):
         raise ValueError("invalid saved recovery settings")
     # A successfully completed operator source switch outlives its process.
     # Pending requests never update this file and cannot select a source here.

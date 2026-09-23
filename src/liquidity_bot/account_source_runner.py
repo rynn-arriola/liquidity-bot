@@ -23,6 +23,7 @@ from .venue_state import normalize_order, normalize_position
 from .live_commissioning import CommissioningRunner
 from .live_session import PrivateStateGate
 from .private_stream import PrivateEventKind
+from .hybrid_stream import HybridDelivery, HybridGap, HybridPrivateStream
 from .rest_fallback import (DisabledPrivateStream, RestFallbackRunner, RestStateGate,
                             RestProofTradingGateway)
 
@@ -49,6 +50,13 @@ class SourceTradingGateway(RestProofTradingGateway):
                     or scope != tuple(owner.active_slugs)):
                 raise ApiAdmissionDeferred("account source changed; request not sent",
                     error_code="LOCAL_ACCOUNT_SOURCE_CHANGED", retry_after_seconds=1)
+            if (operation == "POST /v1/orders"
+                    and isinstance(owner.private_stream, HybridPrivateStream)
+                    and (owner.private_stream.pending or owner._hybrid_requires_reconcile)):
+                # Includes a task-held earlier event. No create/reducer uses
+                # quantity captured before an unapplied fill or position hint.
+                raise ApiAdmissionDeferred("private observation pending; request not sent",
+                    error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
             if admission_check:
                 admission_check()
         try:
@@ -233,6 +241,76 @@ class AccountSourceRunner(RestFallbackRunner):
         self.executor.gateway = SourceTradingGateway(self)
         self._snapshot_reader = AccountSnapshotReader()
         self._collected_history = None
+        self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0}
+        self._hybrid_requires_reconcile = False
+        self._hybrid_last_report = None
+
+    async def _observe_private(self, event, now):
+        if not isinstance(event, HybridDelivery):
+            return await super()._observe_private(event, now)
+        stream = event.stream
+        if stream.already_applied(event):
+            return
+        observation = event.event
+        # No private observation renews the REST authority/quantity clock.
+        # A normal notification schedules proof and bars POST admission. Keep
+        # the preceding valid REST certificate only as eligibility for the
+        # existing two-list unchanged-flat-order optimization; destroying it
+        # on every event would force 30 exact reads per notification. Failed
+        # transport/schema/REST proof still revokes the certificate entirely.
+        self._hybrid_requires_reconcile = True
+        self._rest_poll_completed_at = None
+        self._position_confirmation_proofs.clear()
+        self._hard_exit_terminal_proofs.clear()
+        self._hard_exit_retry_authorizations.clear()
+        try:
+            if isinstance(observation, HybridGap):
+                self.gate.on_reconciliation_conflict()
+                self._hybrid_counts["gaps"] += 1
+            elif observation.kind == PrivateEventKind.ORDER_UPDATE:
+                # Reuse the exact existing order/fill identity, ownership and
+                # idempotence rules. Its private gate is scratch only; balances
+                # and complete account proof still belong to REST.
+                active_gate = self.gate
+                self.gate = PrivateStateGate()
+                try:
+                    await CommissioningRunner._observe_private(self, observation, now)
+                finally:
+                    self.gate = active_gate
+                self._hybrid_counts["orders"] += 1
+            else:
+                # Initial snapshots can be delayed/partial. Global position
+                # updates may omit market identity. Both trigger full REST
+                # proof; neither can clear orders or overwrite exact quantity.
+                self._hybrid_counts["hints"] += 1
+                for slug in self.active_slugs:
+                    self._mark_market_dirty(slug, now)
+        except (LedgerConflict, RuntimeInvariantViolation):
+            self.gate.on_reconciliation_conflict()
+            raise
+        except AdapterError:
+            # Wire/schema failure removes this optional shortcut. Integrity
+            # failures above retain the existing terminal handling.
+            stream.request_reconnect()
+            self.gate.on_reconciliation_conflict()
+            self._hybrid_counts["gaps"] += 1
+        finally:
+            stream.applied(event)
+
+    async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+            now = self._now()
+        result = await super()._rest_reconcile(
+            now, tag=tag, strict_order_markets=strict_order_markets)
+        if self.account_state_mode == "hybrid":
+            self._hybrid_requires_reconcile = False
+        return result
+
+    async def _reconcile_position_state(self, slug, *, tag):
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+        return await super()._reconcile_position_state(slug, tag=tag)
 
     def _catalog_positions(self):
         return {str(row["market_slug"]): Decimal(row["net_qty"])
@@ -257,6 +335,11 @@ class AccountSourceRunner(RestFallbackRunner):
                     or scope != tuple(self.active_slugs)):
                 raise ApiAdmissionDeferred("catalog interrupted by owner state",
                     error_code="LOCAL_CATALOG_INTERRUPTED", retry_after_seconds=1)
+            if (self.account_state_mode == "hybrid"
+                    and self.private_stream.pending):
+                await self._drain_private_events()
+                raise ApiAdmissionDeferred("catalog yielded to private observation",
+                    error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
             if not self._using_rest_source():
                 try:
                     await self._drain_private_events()
@@ -323,6 +406,9 @@ class AccountSourceRunner(RestFallbackRunner):
         super()._set_source_descriptions()
         if self._using_rest_source():
             self.PENDING_ENTRY_ORDER_CEILING = self.source_policy.rest_pending_entry_ceiling
+        if self.account_state_mode == "hybrid":
+            self.ACCOUNT_STATE_DESCRIPTION = "REST account proof with private WebSocket assistance"
+            self.SOURCE_REBOUND_DESCRIPTION = "rebound market/hybrid account sources"
 
     async def _read_exact_order_states(self, exchange_ids, now):
         semaphore = asyncio.Semaphore(self.ORDER_READ_CONCURRENCY)
@@ -437,6 +523,15 @@ class AccountSourceRunner(RestFallbackRunner):
             # stale status; persisting an actual source choice remains strict.
             print("[account-source] status_write_failed; control may be unavailable", flush=True)
         self._source_last_publish = self._now()
+        if (isinstance(self.private_stream, HybridPrivateStream)
+                and (self._hybrid_last_report is None
+                     or (self._now() - self._hybrid_last_report).total_seconds() >= 60)):
+            self._hybrid_last_report = self._now()
+            print(f"[hybrid-account] state={self.private_stream.state} "
+                  f"pending={self.private_stream.pending} "
+                  f"orders={self._hybrid_counts['orders']} "
+                  f"hints={self._hybrid_counts['hints']} gaps={self._hybrid_counts['gaps']} "
+                  "authority=rest", flush=True)
 
     async def _source_notice(self, state, reason):
         control = self.source_control
@@ -700,6 +795,9 @@ class AccountSourceRunner(RestFallbackRunner):
         return await super()._consume_ready_stream_tasks(market_task, private_task)
 
     async def _refresh_execution_state_for_decision(self, now):
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+            now = self._now()
         await self._source_checkpoint(allow_commit=False)
         return await super()._refresh_execution_state_for_decision(now)
 

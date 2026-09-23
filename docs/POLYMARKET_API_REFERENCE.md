@@ -21,6 +21,14 @@ implemented.
 
 ## Interface actually used by this project
 
+September22 hybrid preparation rechecked the official private stream and
+changelog. The documented Retail endpoint and camelCase order/position
+envelopes still apply; the live status fetch failed, so no fresh outage or
+recovery claim follows. Optional explicit `hybrid` uses positive order updates
+and position wakeups alongside complete REST proof; it does not require the
+missing balance stream or use snapshot absence as cancellation. This is a bot
+architecture addition, not a new venue guarantee. [Design](ACCOUNT_SOURCE_ARCHITECTURE.md).
+
 ### September 18, 2026 documentation review
 
 The complete official [documentation index](https://docs.polymarket.us/llms.txt)

@@ -17,7 +17,7 @@ case "$HOST_MODE" in
     *) echo "[supervisor] refused invalid host mode"; exit 2 ;;
 esac
 case "$ACCOUNT_STATE_MODE" in
-    websocket|rest|rest-fallback|saved) ;;
+    websocket|rest|rest-fallback|hybrid|saved) ;;
     *) echo "[supervisor] refused invalid account-state mode"; exit 2 ;;
 esac
 PY=.venv/bin/python

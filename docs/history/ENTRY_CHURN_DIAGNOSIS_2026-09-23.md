@@ -178,10 +178,11 @@ which was corrected before the passing run.
 
 Authenticated16:50:57.846Z:19 flat entries plus three exact reducers, covering
 positions+6.9/-5/-2.89; zero unresolved/unknown state. The preceding16:50:22
-sequential read saw no reducer on+6.9 because its order read overlapped the
-cancel/replace interval. Logs show reducer acknowledgement16:50:18.072Z and
-the subsequent venue read confirms it. Never infer a persistent missing exit
-from that non-atomic first snapshot. Same supervisor/runner remain live.
+sequential read saw no reducer on+6.9. Logs show reducer acknowledgement
+16:50:18.072Z and the subsequent venue read confirms it. Read overlap and venue
+publication timing cannot be distinguished from this evidence. Never infer a
+persistent missing exit from that non-atomic first snapshot. Same
+supervisor/runner remain live.
 
 Repair priorities, still unimplemented:
 

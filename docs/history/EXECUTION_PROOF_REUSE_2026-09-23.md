@@ -114,3 +114,40 @@ venue check is19:26:58Z, not fresh flat/clear proof. Future activation requires
 separate authorization and normal release gates. Natural hit/miss/endpoint and
 reducer-latency acceptance is pending; synthetic savings do not establish live
 savings or eliminate429s.
+
+## Follow-up entry/exit timing review
+
+Operator requested an explicit trading-logic/timing review of `dfcc91ce6`.
+No source/test changes, deployment, restart or venue mutations were made.
+The same supervisor7592/runner7606 and deployed321728fc9 were observed running.
+Current venue exposure was not queried; this review does not certify exposure.
+
+No blocking regression was found in the reviewed change. AST comparison against
+the parent confirms ten existing methods remain identical: market decisions,
+position deadline calculation/priority, urgent-position service, REST polling
+deadline, hard-exit confirmation, position-confirmation validity, hybrid preplan,
+hybrid reducer-certificate checks and final reducing admission. Core scheduler,
+reconciler, order gateway, commissioning settings and polling policy files have
+no changes in this commit. Planning still reads current time after awaited proof;
+final submission still checks expiry, event eligibility and account admission.
+
+In a fresh isolated native WSL stage, all295 focused tests passed again. An
+additional on/off check ran188 timing/strategy/risk/reducer tests with the new
+receipt cycle disabled and188 with it enabled; both passed. It covers deadline
+crossings, tiny-residual/pregame precedence, partial-fill sizing, cancel-confirm-
+replace, urgent exits preceding flat entries, stop/backoff, no entry after
+flattening in a position-only pass, expiry at admission and six-hour risk rules.
+The first standalone harness invocation lacked the repository root in its
+PYTHONPATH and had one import error; correcting test-only PYTHONPATH resolved it.
+No bot code was changed to make the tests pass. Source/test hashes above remain
+identical, so the prior2,162-test full-suite evidence still applies.
+
+This proves the tested rules and deadlines, not identical wall-clock execution.
+Eligible reuse removes repeated network waiting; a permitted action can occur
+sooner, with potentially different live prices/fills. A receipt must have
+completed less than one second ago and retain the original at-most30-second
+proof age; an observed event, mutation, ambiguity or changed scope/state refuses
+reuse. As with all REST observations, an unobserved venue change is not excluded
+by a local revision check. No promise of identical P&L, exact timing, zero429s or
+zero additional latency is made. Natural reducer/entry/endpoint acceptance is
+still required after a separately authorized restart.

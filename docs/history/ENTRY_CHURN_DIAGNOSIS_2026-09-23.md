@@ -361,3 +361,49 @@ There was no corresponding cancellation wave; a later risk row refreshed.
 This confirms the diagnostics work and identifies that particular consistency
 failure, NOT the unlogged16:29 trigger. That original incident remains OPEN.
 No additional production code/policy change was made during acceptance.
+
+## REST comparison follow-up,17:51Z — investigation paused by operator
+
+Read-only process checks found supervisor326083/runner326105 absent. Log ends
+with a separate startup_recovery_only run17:48:07–17:49:14Z, flat=true.
+This diagnostic did not stop/start either process. The earlier run's termination
+cause and the recovery launch source were not established; do not attribute
+the stop to429. Authenticated17:51:49Z proves zero venue orders/positions,
+unresolved intents, unknown orders, working ledger orders and ledger positions.
+Operator then deferred investigation; leave stopped, no restart authorized.
+
+Only completed, wholly contained API windows were compared, with weighted
+counts/elapsed seconds (not an average of rounded window rates):
+
+| Sample UTC | Seconds | Attempts/s | Reads/s | HTTP429 |
+|---|---:|---:|---:|---:|
+| Stable REST14:30–15:30 |3550.9|2.9314|2.7785|15|
+| Prior hybrid first15min16:00:18–16:15:18 |861.4|2.9255|2.7235|1|
+| Prior hybrid17:08–17:23 |836.2|3.0352|2.8067|2|
+| Repaired hybrid first15min17:31:42–17:46:42 |848.9|3.0522|2.8248|2|
+
+No aggregate REST saving is demonstrated: current first15min reads/s is about
+3.7% above the earlier hybrid startup and0.6% above its final comparison slice.
+Different markets/fills/startup work prevent causal attribution to the repair.
+Whole repaired-run completed windows through17:46:52 cover909.3s:2,790 attempts,
+2,575 reads,215 mutation attempts, two execution_history429s and17 exact-order404s.
+Those429s were in windows ending17:34:26Z and17:36:46Z; later completed windows
+had none. Mutation attempts include unsent local refusals; these are runner-local
+counts, not exact host-wide wire traffic or proof of an endpoint quota.
+
+Current first15min read rates: exact order0.6785/s, execution history0.4229/s,
+open orders0.4088/s, positions0.4088/s, balances0.3805/s and cash history0.2521/s.
+Balance+cash+execution history together remain1.0555/s (~37% of reads).
+Public REST book reads were zero in all comparison samples. Private assists
+were active (last196 order observations, six position hints,107 ACK-only,
+13 urgent,82 cadence and two scoped admissions); this is not a silent-feed
+fallback diagnosis. Both cash and execution categories map to the same
+GET /v1/portfolio/activities endpoint, which is useful for the next load review.
+
+Next: verify run boundaries/stop provenance, compare workload-matched useful
+resting coverage and reducer timing, then trace duplicate account/history proof
+consumers before proposing a safe reduction. Do not weaken exit or risk proof,
+change caps, activate300 coverage, or restart. Local comparison helper is ignored;
+no production source/config change. Current changelog was re-opened (latest
+September21 crypto documentation); live status page retrieval failed, so no
+fresh status/outage claim follows.

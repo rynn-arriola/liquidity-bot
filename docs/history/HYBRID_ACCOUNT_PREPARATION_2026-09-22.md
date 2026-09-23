@@ -300,3 +300,33 @@ positions remain only in the stopped stale ledger, which was not modified.
 This repair is prepared/pushed only. Production still has `a46f5f995` executable
 content; no deploy/restart or resumed WS measurement. A later authorized rollout
 must resolve stale ledger state through normal proof and repeat every start gate.
+
+## September 23 live activation
+
+The reviewed release was subsequently deployed as `85f29c83b`. Normal stopped
+reconciliation and a fresh authenticated release gate proved zero venue orders,
+positions, unresolved intents, unknown orders and ledger exposure before start.
+The laptop WSL supervisor/runner started at 04:31Z in hybrid mode with size15 and
+32 slots. The 00:00–06:00 ET risk row retained settled loss $0.7554, hard $30,
+cap30 and no hold; open orders and positions remain excluded.
+
+The first selection consumed 54 public-WebSocket books with zero REST book
+fallback and found 38 viable markets. At 04:41:12Z authenticated evidence showed
+31 venue orders across23 markets and three positions. Each position had exactly
+one correctly directed reducer for its exact remaining quantity; unresolved
+intents and unknown orders were zero. Private hybrid events supplied order and
+position observations, while REST remained the final authority.
+
+One `portfolio/activities` execution-history read received Cloudflare HTTP429 at
+04:33:54Z. Its enclosing API window averaged3.476 requests/s, below the unchanged
+4/s host governor. The bot recovered and continued; the following observed API
+windows reported zero429s. An earlier attempted start stopped safely on a public
+metadata HTTP403. Bounded read-only probes later returned HTTP200, the release
+gate was repeated, and the successful restart has not repeated that403.
+
+The redundant order-proof optimization is active. In the latest reported minute
+it proved471 unchanged orders from complete bulk snapshots and required48 exact
+order reads; two changed rows correctly fell back to exact proof. This is direct
+evidence of reduced redundant per-order reads, not a promise of lower aggregate
+traffic or immunity from venue endpoint-specific limits. No pricing, selection,
+position size, pending cap, exit timer or risk rule changed.

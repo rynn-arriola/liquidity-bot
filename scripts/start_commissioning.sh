@@ -12,11 +12,11 @@ QUOTE_SIZE=${2:-}
 SLOT_CAPACITY=${3:-20}
 ACCOUNT_STATE_MODE=${4:-saved}
 if [ "$#" -gt 4 ]; then
-    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE] [SLOT-CAPACITY] [websocket|rest|rest-fallback]"
+    echo "usage: ./scripts/start_commissioning.sh [MARKET-SLUG|auto] [QUOTE-SIZE] [SLOT-CAPACITY] [websocket|rest|rest-fallback|hybrid]"
     exit 2
 fi
 case "$ACCOUNT_STATE_MODE" in
-    websocket|rest|rest-fallback|saved) ;;
+    websocket|rest|rest-fallback|hybrid|saved) ;;
     *) echo "REFUSED: invalid account-state mode"; exit 2 ;;
 esac
 

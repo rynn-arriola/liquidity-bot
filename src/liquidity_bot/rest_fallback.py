@@ -141,7 +141,7 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_order_proof_last_report = None
         self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
         if self._using_rest_source():
-            kwargs["private_stream_factory"] = DisabledPrivateStream
+            kwargs["private_stream_factory"] = self._rest_private_factory
         super().__init__(*args, **kwargs)
         if self._using_rest_source():
             self.gate = RestStateGate(max_silence_seconds=30)
@@ -161,7 +161,13 @@ class RestFallbackRunner(CommissioningRunner):
         self._set_source_descriptions()
 
     def _using_rest_source(self):
-        return self.account_state_mode == "rest"
+        return self.account_state_mode in {"rest", "hybrid"}
+
+    def _rest_private_factory(self, client):
+        if self.account_state_mode == "hybrid":
+            from .hybrid_stream import HybridPrivateStream
+            return HybridPrivateStream(client, factory=self._websocket_factory)
+        return DisabledPrivateStream(client)
 
     def _set_source_descriptions(self):
         rest = self._using_rest_source()
@@ -1031,7 +1037,8 @@ class RestFallbackRunner(CommissioningRunner):
             return result
         if result == "RECOVERY_ONLY":
             await self._wait_for_initial_private_state()
-        print("[account-state] mode=rest private_socket=disabled "
+        print(f"[account-state] mode={self.account_state_mode} "
+              f"private_socket={'assisting' if self.account_state_mode == 'hybrid' else 'disabled'} "
               f"bulk_order_proof={str(self.rest_polling_policy.enabled).lower()} "
               f"decision_poll_seconds={self.rest_polling_policy.normal_poll_seconds if self.rest_polling_policy.enabled else 5} "
               f"active_poll_seconds={self.rest_polling_policy.active_poll_seconds if self.rest_polling_policy.enabled else 5} "

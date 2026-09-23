@@ -512,7 +512,7 @@ class RewardMarketSelector:
         gateway: AsyncReadOnlyGateway,
         policy: RewardSelectionPolicy | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
-        *, clock: Callable[[], datetime] | None = None,
+        *, clock: Callable[[], datetime] | None = None, quality_sink=None,
     ):
         self.gateway = gateway
         self.policy = policy or RewardSelectionPolicy()
@@ -520,6 +520,7 @@ class RewardMarketSelector:
         self._book_cursor = 0
         self._last_selected_slug: str | None = None
         self.clock = clock
+        self.quality_sink = quality_sink
 
     async def select(self, *, now: datetime) -> RewardMarketSelection:
         scope = getattr(self.gateway, "traffic_class", None)
@@ -573,6 +574,7 @@ class RewardMarketSelector:
         failures: list[str] = []
         unsupported = 0
         catalog_spread_filtered = 0
+        quality_reasons = {}
         for slug in sorted(rewarded_executable):
             incentive = rewarded_executable[slug]
             if not any(
@@ -584,18 +586,22 @@ class RewardMarketSelector:
                 # ``tournament_with_cutoff``. They remain visible in universe
                 # counts but cannot authorize REST fan-out or risk.
                 unsupported += 1
+                quality_reasons[slug] = "unsupported_program"
                 continue
             try:
                 market = executable_catalog[slug]
                 period = self._applicable_period(market, incentive, now)
                 if period is None:
+                    quality_reasons[slug] = "no_applicable_period"
                     continue
                 if not self._catalog_spread_can_enter(market):
                     catalog_spread_filtered += 1
+                    quality_reasons[slug] = "catalog_spread_below_threshold"
                     continue
                 candidates.append((market, incentive, period))
             except (KeyError, AmbiguousIncentiveError, ValueError) as exc:
                 failures.append(f"{slug}:{type(exc).__name__}")
+                quality_reasons[slug] = type(exc).__name__
 
         ranked = sorted(candidates, key=_candidate_key)
         detailed, deferred = self._detailed_candidates(ranked)
@@ -643,6 +649,10 @@ class RewardMarketSelector:
         )
         if result.selected is not None:
             self._last_selected_slug = result.selected.market.slug
+        from .market_quality_measurement import emit_discovery
+        emit_discovery(self.quality_sink, catalog,
+             executable_catalog, incentives, ranked, detailed, deferred,
+             result, now, reasons=quality_reasons, policy=self.policy)
         return result
 
     async def revalidate_viable(

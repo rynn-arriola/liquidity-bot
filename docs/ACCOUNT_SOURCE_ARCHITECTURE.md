@@ -1,5 +1,82 @@
 # Permanent account-source architecture
 
+## September 22 addition: optional hybrid mode
+
+The operator authorized private WebSocket assistance with permanent REST
+fallback. `hybrid` is an explicit restart-scoped mode; the existing `rest`
+and strict `websocket` modes retain their contracts. The earlier prohibition
+on a permanent inactive listener does not apply inside this opted-in mode.
+Nothing automatically changes or persists a different selected mode.
+
+One global private subscription set feeds the same serial ledger projector.
+Order updates use the existing exact order/fill identities and deduplication.
+Snapshots and position notifications only schedule complete REST proof: they
+cannot infer absent orders, flatten inventory, or guess a missing market ID.
+Balance messages are not required and cannot grant account readiness.
+REST still seeds startup, proves positions and balance, backfills executions,
+audits the whole account, and supplies exact order state when no private proof
+arrives. Public books and every trading/risk/exit rule are unchanged.
+
+The optional listener owns no REST call or ledger writer. Connect/close waits
+are bounded; failure reconnects in the background with capped exponential
+backoff while the existing REST runner continues. A healthy quiet socket does
+not certify subscription delivery. The notification queue is bounded and
+backpressures; upstream overflow becomes an explicit gap requiring REST.
+Task-held observations precede queued observations even when REST service
+drains them before the outer loop consumes its task result.
+
+September23 follow-up keeps the REST cancel-confirm-replace contract:
+a completed exact-owner proof (complete account orders/positions/history included)
+can discharge the applied-hint veto once for its exact reducing intent. It cannot
+renew global entry authority, bypass the usual REST/driver gates, survive another
+relevant observation/proof or pending frame, or authorize a different
+quantity/direction.
+Proof age, source generation, scope and account ambiguity are rechecked at final
+admission. Entries still require global proof. Positively owned NEW/no-fill ACKs
+need no added proof. Recognized terminal/no-fill events project immediately but
+coalesce behind ordinary REST cadence; fills, changed identity/economic fields,
+incomplete fields, unknown event types and position updates wake REST immediately.
+Snapshots are non-authoritative cadence hints. Old fully-private mode did not
+globally restart REST proof for every order notification; this restores that
+distinction without treating the incomplete stream as position authority.
+
+An unapplied observation or a projected hint without subsequent REST proof blocks
+order-create admission, including reducers whose exact size could have changed.
+The narrow scoped reducer proof above does not clear the global hint requirement.
+Cancels remain available. Routine evidence invalidates only its affected market's
+scoped caches. Listener disconnect/gap removes the optional accelerator but does
+not make an otherwise-fresh REST certificate less valid than explicit REST mode.
+Malformed/schema/identity/ledger or REST-read failures remain fail-closed and
+revoke authority. This avoids turning every expiry/cancel wave or reconnect into
+full-slate proof. Mandatory REST freshness and the configured 5/1-second targets
+are not relaxed.
+
+Read-only market discovery classifies pending hybrid observations before deciding
+to interrupt. Exact unchanged ACKs and listener gaps do not discard a scan; any
+unproved substantive observation still yields, including one already drained.
+The existing REST position watcher remains active because private delivery can
+be incomplete. Long discovery does not renew account authority: new risk still
+needs ordinary fresh account proof after collection. Offline comparative evidence
+and limitations are recorded in the
+[September23 scoped review](history/HYBRID_REST_PERFORMANCE_REVIEW_2026-09-23.md).
+
+Use `./scripts/start_commissioning.sh auto 15 32 hybrid` only after an
+authorized reviewed deployment and ordinary flat/clear startup gates. Disabling
+uses the same workflow with `rest`. Live in-process switches involving hybrid
+are refused in this release; the existing REST/WebSocket handoff is unchanged.
+Configuration defaults and the persisted live selection are not changed by
+implementation. `[hybrid-account]` telemetry distinguishes listening, receiving
+and REST fallback and separates `urgent` REST wakeups from cadence-coalesced
+notifications without new API calls.
+
+Offline acceptance covers exact REST fallback, a saved lookup from positive
+terminal evidence, duplicate/partial fills, task-held ordering, snapshot
+non-authority, admission races, backpressure, reconnect and stop. Actual REST
+savings and latency need comparable live evidence; the previously suggested
+2.5–2.9 requests/second is not a measured or guaranteed result.
+
+The original architecture and historical release descriptions follow.
+
 Design prepared September 12, 2026 against `c44d3aef1`. The operator authorized
 permanent configurable fallback, requested architecture first, then rejected
 automatic switching in either direction. This is the

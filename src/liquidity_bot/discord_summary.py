@@ -152,6 +152,8 @@ class LiquiditySummary:
     # Optional reporting context, consumed only by the notification worker.
     report_database: str | None = None
     rewards_observed_at: datetime | None = None
+    rewards_refresh_failed: bool = False
+    reward_cache_scope: str | None = None
     account_source: str | None = None
     inventory_limit_seconds: float | None = None
 

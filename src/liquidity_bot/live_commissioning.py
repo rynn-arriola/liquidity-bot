@@ -16,6 +16,7 @@ from . import read_backoff
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import signal
@@ -447,10 +448,19 @@ class CommissioningRunner:
         maintenance_schedule_probe: Callable[..., MaintenanceScheduleProbe]
         | None = None,
         maintenance_cache_path: Path = MAINTENANCE_CACHE_PATH,
+        quality_sink: Any = None,
+        reward_cache_scope: str | None = None,
     ):
         self.client = client
         self.config = config
         self.ledger = ledger
+        self.quality_sink = quality_sink
+        self._reward_cache_scope = reward_cache_scope
+        self._report_rewards_observed_at = None
+        self._reward_refresh_failed = False
+        if quality_sink is not None:
+            from .market_quality_measurement import OrderWitness
+            self.ledger.quality_observer = OrderWitness(quality_sink)
         self.notifier = notifier
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep
@@ -496,6 +506,7 @@ class CommissioningRunner:
                 config.reward_selection_policy(),
                 fill_hazard_model=self.fill_hazard_model,
                 clock=lambda: self._now(),
+                quality_sink=quality_sink,
             )
         self.account = AsyncAccountSnapshotGateway(
             self.gateway, resolve_client_id=ledger.resolve_client_order_id)
@@ -907,6 +918,8 @@ class CommissioningRunner:
         self._active_market_slugs = clean
         # Optional evidence must never veto a valid scope change.
         self._remember_selection_binding(clean)
+        from .market_quality_measurement import emit, binding_snapshot
+        emit(self.quality_sink, "binding", binding_snapshot, self)
         self._markets = {
             slug: self._markets.get(slug) or MarketState(slug)
             for slug in clean}
@@ -1185,6 +1198,11 @@ class CommissioningRunner:
 
     def _log_selection_scan(self, selection: RewardMarketSelection) -> None:
         """Expose discovery headroom once for every successful full scan."""
+
+        from .market_quality_measurement import emit
+        from .selection_measurement import selection_measurement
+        emit(self.quality_sink, "scan", lambda: json.loads(selection_measurement(
+            selection, self.config, self._now())))
 
         elapsed = (
             f"{self._selection_scan_seconds_last:.1f}"
@@ -2335,6 +2353,8 @@ class CommissioningRunner:
         rows_all = tuple(
             row for row in fetched
             if row.program_type == "liquidityProgram")
+        from .market_quality_measurement import emit, reward_snapshot
+        emit(self.quality_sink, "rewards", lambda: reward_snapshot(rows_all, self._now()))
 
         # Scoped view, unchanged semantics: only markets in the authorized set
         # may be persisted or reported as THIS SESSION'S earnings. A venue
@@ -2358,6 +2378,8 @@ class CommissioningRunner:
         # by about 2x, which has happened twice. See `bot_era.py`.
         self._bot_era_rewards = bot_era_rewards_by_status(rows_all)
         self._earnings_observed_at = now
+        self._report_rewards_observed_at = now
+        self._reward_refresh_failed = False
 
     async def _retry_uncertain_cancels(
         self, now: datetime, *, markets: frozenset[str] | None = None,
@@ -3490,6 +3512,7 @@ class CommissioningRunner:
             # the process exited 2, a code the supervisor never restarts, with
             # a flat account and nothing wrong with it.
             self._earnings_observed_at = None
+            self._reward_refresh_failed = True
             await self._report_runtime_error("reward_earnings_refresh", exc)
         accepted = ReadinessVerdict(
             "COMMISSIONING_REWARD_ECONOMICS_ENFORCED", True, False, (),
@@ -4358,6 +4381,17 @@ class CommissioningRunner:
             <= self.reconciler.policy.max_book_age_seconds
             and len(working) + reservations <= self._effective_entry_order_cap(now)
         )
+        from .market_quality_measurement import emit
+        emit(getattr(self, "quality_sink", None), "entry_admission", lambda: {
+            "at": now.isoformat(), "market": slug, "allowed": allowed,
+            "client_order_id": payload.get("clientOrderId"),
+            "side": payload.get("side"), "intent": payload.get("intent"),
+            "flat_entry_orders": len(working), "reservations": reservations,
+            "position": str(position), "ownership_known": ownership_known,
+            "seconds_to_event": seconds_to_event, "daily_clock_allowed": daily_clock_allowed,
+            "book_observed_at": state.book_observed_at.isoformat(),
+            "stop_requested": self._stop_requested,
+            "basis": "existing_final_send_gate_not_new_authority"})
         if not allowed:
             raise ApiAdmissionDeferred(
                 "entry safety evidence expired or changed; request not sent",
@@ -7630,9 +7664,10 @@ class CommissioningRunner:
             ledger_bytes=self._ledger_bytes_on_disk(),
             integrity_problems=problems,
             report_database=str(self.ledger.path.resolve()),
-            rewards_observed_at=self._earnings_observed_at,
-            account_source=("rest" if getattr(self, "_using_rest_source", lambda: False)()
-                            else "websocket"),
+            rewards_observed_at=getattr(self, "_report_rewards_observed_at", None),
+            rewards_refresh_failed=getattr(self, "_reward_refresh_failed", False),
+            reward_cache_scope=getattr(self, "_reward_cache_scope", None),
+            account_source=getattr(self, "account_state_mode", "websocket"),
             inventory_limit_seconds=self.config.max_inventory_age_seconds,
         ))
         # Expose actual create count only in the description, never imply that
@@ -10789,6 +10824,7 @@ class CommissioningRunner:
                         # Earnings are delayed and never authorize an exit, but
                         # every live run must preserve an auditable venue view.
                         self._earnings_observed_at = None
+                        self._reward_refresh_failed = True
                         await self._report_runtime_error(
                             "reward_earnings_refresh", exc)
                     next_earnings = now + timedelta(
@@ -11256,9 +11292,22 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         key_id=secrets.key_id, secret_key=secrets.secret_key,
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     ledger = ExecutionLedger(args.database)
+    quality_sink = None
+    if getattr(args, "market_quality_directory", None) is not None:
+        try:
+            from .market_quality_store import QualityStore
+            quality_sink = QualityStore(Path(args.market_quality_directory))
+            from .market_quality_measurement import emit, plain
+            emit(quality_sink, "run", lambda: {
+                "config": plain(config), "account_source": account_state_mode,
+                "at": datetime.now(timezone.utc).isoformat()})
+        except Exception:
+            print("[market-quality] unavailable; trading unchanged", flush=True)
     runner = runner_type(
         client, config, ledger, DiscordNotifier(secrets),
         limiter=shared_api_limiter(float(config.rest_requests_per_second)),
+        quality_sink=quality_sink,
+        reward_cache_scope=hashlib.sha256(secrets.key_id.encode()).hexdigest(),
         **runner_options)
     from .selection_books import SelectionBookSource
 
@@ -11286,6 +11335,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         for sig in installed_signals:
             loop.remove_signal_handler(sig)
         ledger.close()
+        if quality_sink is not None:
+            quality_sink.close()
         await client.close()
         lease.release()
 
@@ -11319,7 +11370,7 @@ def main() -> int:
     parser.add_argument("--exclusive-api-key", action="store_true")
     parser.add_argument("--maker-lab-stopped", action="store_true")
     parser.add_argument(
-        "--account-state-mode", choices=("websocket", "rest", "rest-fallback"),
+        "--account-state-mode", choices=("websocket", "rest", "rest-fallback", "hybrid"),
         default=None,
         help="explicit account source; otherwise use the last verified selection",
     )
@@ -11327,6 +11378,8 @@ def main() -> int:
         "--rest-polling-policy", type=Path, default=argparse.SUPPRESS,
         help="validated restart-scoped REST optimization JSON",
     )
+    parser.add_argument("--market-quality-directory", type=Path, default=None,
+                        help="opt-in local-only quality archive; no extra API requests")
     parser.add_argument("--account-source-policy", type=Path, default=argparse.SUPPRESS,
                         help="validated restart-scoped source/handoff configuration")
     parser.add_argument(

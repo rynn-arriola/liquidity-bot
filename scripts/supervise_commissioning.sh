@@ -17,7 +17,7 @@ case "$HOST_MODE" in
     *) echo "[supervisor] refused invalid host mode"; exit 2 ;;
 esac
 case "$ACCOUNT_STATE_MODE" in
-    websocket|rest|rest-fallback|saved) ;;
+    websocket|rest|rest-fallback|hybrid|saved) ;;
     *) echo "[supervisor] refused invalid account-state mode"; exit 2 ;;
 esac
 PY=.venv/bin/python
@@ -71,6 +71,13 @@ while true; do
         "$PY" -B -m liquidity_bot.host_recovery check "$HOST_TOKEN" || exit 0
     fi
     SOURCE_ARGS=()
+    QUALITY_ARGS=()
+    # Optional local diagnostics, never an API consumer or trading gate.
+    # Set LIQUIDITY_MARKET_QUALITY_DIRECTORY=off before launch to disable.
+    QUALITY_DIRECTORY=${LIQUIDITY_MARKET_QUALITY_DIRECTORY:-data/market-quality}
+    if [ "$QUALITY_DIRECTORY" != "off" ]; then
+        QUALITY_ARGS=(--market-quality-directory "$QUALITY_DIRECTORY")
+    fi
     RECOVERY_ARGS=()
     if [ "$HOST_MODE" = "recovery-only" ]; then
         RECOVERY_ARGS=(--recovery-only)
@@ -101,6 +108,7 @@ while true; do
         --quote-size "$QUOTE_SIZE" \
         "${RECOVERY_ARGS[@]}" \
         "${SOURCE_ARGS[@]}" \
+        "${QUALITY_ARGS[@]}" \
         --max-markets "$SLOT_CAPACITY" >> logs/commissioning.log 2>&1 9>&- &
     RUNNER_PID=$!
     flock -u 9

@@ -47,6 +47,8 @@ def selection_measurement(selection: Any, config: Any, now: datetime) -> str:
                 "viable": side.viable, "blocker": side.blocker,
                 "reward_eligible": side.projection.eligible,
                 "share": side.projection.snapshot_share,
+                "order_score": getattr(side.projection, "order_score", None),
+                "total_score": getattr(side.projection, "total_score", None),
                 "projected_reward": side.projection.projected_reward,
                 "remaining_reward": side.projection.maximum_remaining_reward,
                 "remaining_entry_reward": side.projection.remaining_entry_reward,

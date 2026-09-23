@@ -32,7 +32,7 @@ These are implementation requirements, not suggestions.
 8. Each side is independently eligible only when full-book cumulative depth reaches `targetSize` and the order is inside the resulting cutoff.
 9. Published pools and pending earnings are never treated as cash or guaranteed revenue.
 10. Unknown order, fill, position, book, or incentive state fails closed for new risk.
-11. The private WebSocket is the default primary live state feed; REST snapshots reconcile it after startup and reconnect. Only the explicitly selected experimental REST account-source mode may replace private snapshots, under invariant 103; an outage never silently switches modes.
+11. The private WebSocket is the default primary live state feed; REST snapshots reconcile it after startup and reconnect. Explicit REST mode uses invariant 103. Explicit hybrid mode adds invariant 110's private notifications to REST proof; an outage never silently switches selected modes.
 12. State-changing requests require a durable pre-submit intent and idempotent fill booking.
 13. Commissioning is pregame only and uses one exclusively held API key with
     maker-lab stopped. Size and breadth are restart-scoped operator inputs.
@@ -1056,7 +1056,8 @@ These are implementation requirements, not suggestions.
     every pricing, sizing, entry-cap, risk and lifecycle rule are unchanged.
 106. Account sources change only on explicit startup selection or a fresh
     operator request bound to the current process/source generation. No silent
-    failover/failback or permanent inactive-source probe is permitted. One serial
+    failover/failback or permanent inactive-source probe is permitted outside
+    the explicitly selected hybrid exception in invariant110. One serial
     ledger projector and mutation executor remain authoritative. Independent
     read workers cannot submit orders or write the ledger; cancellation joins
     them before proof returns. Promotion requires bounded complete account proof,
@@ -1104,3 +1105,44 @@ These are implementation requirements, not suggestions.
     cannot walk away from a parked exit. Existing bounded price-capped shutdown
     controls mutations. Unknown/nonflat/refused state remains attention, not
     success; proven flat remains paused for explicit operator review.
+110. Explicit restart-scoped hybrid mode may use positive private order/fill
+    updates through the existing serial projector with mandatory REST account
+    proofs and fallback. It never requires balance delivery, promotes silence
+    or Pong to account readiness, applies snapshot absence, or infers quantity
+    from an unscoped position notification. Unknown/partial positions trigger
+    complete REST proof. A bounded reader cannot write the ledger or mutate;
+    held events precede queued events and fills remain exactly-once. Pending
+    observations veto every create at final admission without blocking cancellation.
+    Applied hints require subsequent REST proof. A successful complete scoped
+    position proof may discharge that hint veto once for only its exact reducer:
+    unchanged source generation/scope/quantity, original proof age at most30s,
+    no later invalidating observation/proof, no queued message, no working owner order or
+    account ambiguity, and only the matching unsent reducing intent. The normal
+    REST gate/driver checks still apply; entry authority and poll time never renew.
+    A positively owned, exact unchanged-cumulative no-fill OPEN/NEW acknowledgement
+    may retain normal polling cadence, never clear an earlier hint or extend
+    freshness. Terminal cancel messages, unknown types/fields, new fills and
+    changed quantities still force proof because the incomplete private feed
+    cannot exclude a missing fill/position race. A scoped certificate permits
+    only the runner's canonical BUY_LONG/BUY_SHORT reducing intent and is consumed
+    only after every final local admission callback passes. A private event during
+    scoped proof invalidates both hybrid and base REST scoped caches. Routine
+    market-local terminal evidence invalidates its owner's scoped caches; urgent
+    or unscoped uncertainty clears every hybrid reducer certificate. A transport
+    gap preserves current REST authority and reconnects with bounded backoff;
+    schema failure revokes proof, while ledger/ownership conflicts remain critical.
+    Uncertain notifications may retain the prior valid REST certificate only
+    for existing two-list flat-order optimization, never as permission to skip
+    the required post-notification proof. Existing REST cadence, expiry, caps,
+    balance/history and every risk/exit rule remain. Mode choice is explicit;
+    missing private messages use REST without changing the selected mode or
+    canceling healthy quotes solely because the optional listener failed.
+    Read-only catalog work classifies queued events before yielding: an exact
+    unchanged ACK or optional transport gap cannot alone discard discovery.
+    Previously applied uncertainty must yield even with an empty event queue.
+    The REST position watch, stop/scope/generation/deadline checks, and final
+    authenticated account proof before new risk remain mandatory. Completing a
+    scan never renews an expired account gate.
+    A cadence-skipped periodic refresh cannot clear the applied-hint veto; only
+    a successful full proof may do so. A scoped proof retains its reducer-only
+    exception and cannot discharge global uncertainty.

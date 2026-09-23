@@ -9,6 +9,7 @@ from __future__ import annotations
 from . import read_backoff
 
 import asyncio
+import json
 from collections import deque
 from dataclasses import replace
 from datetime import timedelta
@@ -23,6 +24,7 @@ from .venue_state import normalize_order, normalize_position
 from .live_commissioning import CommissioningRunner
 from .live_session import PrivateStateGate
 from .private_stream import PrivateEventKind
+from .hybrid_stream import HybridDelivery, HybridGap, HybridPrivateStream
 from .rest_fallback import (DisabledPrivateStream, RestFallbackRunner, RestStateGate,
                             RestProofTradingGateway)
 
@@ -45,12 +47,35 @@ class SourceTradingGateway(RestProofTradingGateway):
         owner._source_mutations_in_flight += 1
 
         def check():
+            scoped_hybrid_reducer = False
             if (owner._source_switching or generation != owner.source_control.generation
                     or scope != tuple(owner.active_slugs)):
                 raise ApiAdmissionDeferred("account source changed; request not sent",
                     error_code="LOCAL_ACCOUNT_SOURCE_CHANGED", retry_after_seconds=1)
+            if (operation == "POST /v1/orders"
+                    and isinstance(owner.private_stream, HybridPrivateStream)):
+                if owner.private_stream.pending:
+                    # Includes a task-held earlier event. No create/reducer uses
+                    # quantity captured before an unapplied fill or position hint.
+                    raise ApiAdmissionDeferred("private observation pending; request not sent",
+                        error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
+                if owner._hybrid_requires_reconcile:
+                    scoped_hybrid_reducer = owner._hybrid_reduction_proved(
+                        self._reducing_market.get())
+                    if not scoped_hybrid_reducer:
+                        raise ApiAdmissionDeferred(
+                            "private observation pending; request not sent",
+                            error_code="LOCAL_HYBRID_OBSERVATION_PENDING",
+                            retry_after_seconds=1)
             if admission_check:
                 admission_check()
+            # Consume only after every downstream admission callback passes.
+            # A locally rejected request must not burn the one-use certificate.
+            if (scoped_hybrid_reducer
+                    and not owner._hybrid_reduction_proved(
+                        self._reducing_market.get(), consume=True)):
+                raise ApiAdmissionDeferred("scoped reducer proof changed; request not sent",
+                    error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
         try:
             return await super()._mutation(operation, call, traffic_class=traffic_class,
                                           admission_check=check)
@@ -233,6 +258,262 @@ class AccountSourceRunner(RestFallbackRunner):
         self.executor.gateway = SourceTradingGateway(self)
         self._snapshot_reader = AccountSnapshotReader()
         self._collected_history = None
+        self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0,
+                               "ack_only": 0, "urgent": 0, "cadence": 0,
+                               "scoped_admissions": 0}
+        self._hybrid_requires_reconcile = False
+        self._hybrid_reducer_proofs = {}
+        self._hybrid_last_report = None
+
+    def _hybrid_order_ack_only(self, observation, now):
+        """Recognize a known order's no-fill acknowledgement, never new exposure.
+
+        This is only a refresh scheduling optimization. The normal projector
+        still validates/applies the event; unknown fields/types retain full proof.
+        """
+        raw = (observation.payload.get("execution", {})
+               if isinstance(observation.payload, dict) else {})
+        if not isinstance(raw, dict):
+            return False
+        # Only an exact OPEN/NEW acknowledgement is harmless in hybrid mode.
+        # A terminal cancel may race a private fill/position message that this
+        # incomplete stream never delivers, so it always schedules REST proof.
+        if raw.get("type") != "EXECUTION_TYPE_NEW":
+            return False
+        wire = raw.get("order", {})
+        if not isinstance(wire, dict) or not any(
+                key in wire for key in ("cumQuantity", "cum_quantity")):
+            return False
+        order = normalize_order(wire, observed_at=now,
+            resolve_client_id=lambda exchange_id: self.ledger.resolve_client_order_id(exchange_id))
+        client_id = self.ledger.resolve_client_order_id(order.exchange_order_id)
+        if not client_id or client_id.startswith("venue:"):
+            return False
+        if order.status != "OPEN":
+            return False
+        rows = self.ledger.query(
+            "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+            (order.exchange_order_id,))
+        if not rows:
+            return any(self._pending_place_matches_order(order, intent)
+                       for intent in self.ledger.unresolved_intents())
+        if len(rows) != 1:
+            return False
+        row = rows[0]
+        return (row["status"] in {"OPEN", "PENDING", "PARTIAL"}
+                and not row["unknown_reason"]
+                and self._order_matches_row(replace(order, status=row["status"]), row))
+
+    def _hybrid_order_needs_immediate_proof(self, observation, now):
+        """Wake REST for fills, malformed data or changed order facts.
+
+        Terminal/no-fill notifications still bar new POSTs until the ordinary
+        REST cadence proves the account, but do not each restart a whole-account
+        proof. A synchronized expiry wave can therefore coalesce into the same
+        proof REST mode would have performed. Malformed data remains urgent.
+        """
+        raw = (observation.payload.get("execution", {})
+               if isinstance(observation.payload, dict) else {})
+        if not isinstance(raw, dict):
+            return True
+        execution_type = str(raw.get("type") or "").upper()
+        if execution_type in {
+                "EXECUTION_TYPE_FILL", "EXECUTION_TYPE_PARTIAL_FILL"}:
+            return True
+        if execution_type not in {
+                "EXECUTION_TYPE_NEW", "EXECUTION_TYPE_CANCEL",
+                "EXECUTION_TYPE_CANCELED", "EXECUTION_TYPE_EXPIRED",
+                "EXECUTION_TYPE_REJECTED"}:
+            return True
+        wire = raw.get("order", {})
+        if not isinstance(wire, dict):
+            return True
+        if not any(key in wire for key in ("cumQuantity", "cum_quantity")):
+            return True
+        try:
+            order = normalize_order(wire, observed_at=now,
+                resolve_client_id=lambda exchange_id:
+                    self.ledger.resolve_client_order_id(exchange_id))
+        except AdapterError:
+            return True
+        rows = self.ledger.query(
+            "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+            (order.exchange_order_id,))
+        if len(rows) != 1:
+            return True
+        row = rows[0]
+        # Ignore only the expected state transition itself. Any changed
+        # identity/economic field or cumulative quantity is anomalous enough to
+        # demand immediate authoritative proof.
+        return not self._order_matches_row(replace(order, status=row["status"]), row)
+
+    def _hybrid_reduction_proved(self, slug, *, consume=False):
+        """A completed scoped REST proof clears only this reducer's hint veto.
+
+        It does not renew the global gate or polling clock. Pending stream data,
+        another observation/proof, changed scope/quantity, ambiguity or age still
+        refuse. The usual REST gateway and driver checks remain mandatory.
+        """
+        proof = self._hybrid_reducer_proofs.get(slug)
+        if proof is None:
+            return False
+        scope, generation, quantity, started = proof
+        pending = self.ledger.unresolved_intents()
+        if not (scope == tuple(self.active_slugs)
+                and generation == self.source_control.generation
+                and self.account_state_mode == "hybrid"
+                and 0 <= (self._now() - started).total_seconds() <= 30
+                and quantity != 0 and quantity == self.ledger.position(slug)
+                and not self.private_stream.pending
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders()
+                and len(pending) == 1):
+            return False
+        intent = pending[0]
+        if not (intent["market_slug"] == slug and intent["operation"] == "PLACE"
+                and intent["state"] == "SUBMITTING" and not intent["exchange_order_id"]):
+            return False
+        try:
+            payload = json.loads(intent["payload_json"])
+            valid = (Decimal(str(payload.get("quantity"))) == abs(quantity)
+                    and payload.get("marketSlug") == slug
+                    and payload.get("intent") == (
+                        "ORDER_INTENT_BUY_SHORT" if quantity > 0
+                        else "ORDER_INTENT_BUY_LONG"))
+        except (ValueError, ArithmeticError, AttributeError, TypeError):
+            return False
+        if valid and consume:
+            self._hybrid_reducer_proofs.pop(slug, None)
+            self._hybrid_counts["scoped_admissions"] += 1
+        return valid
+
+    async def _observe_private(self, event, now):
+        if not isinstance(event, HybridDelivery):
+            return await super()._observe_private(event, now)
+        stream = event.stream
+        if stream.already_applied(event):
+            return
+        observation = event.event
+        # No private observation renews the REST authority/quantity clock.
+        # An uncertain notification schedules proof and bars POST admission. Keep
+        # the preceding valid REST certificate only as eligibility for the
+        # existing two-list unchanged-flat-order optimization; destroying it
+        # on every event would force 30 exact reads per notification. Failed
+        # schema/integrity/REST proof still revokes the certificate entirely.
+        # Routine terminal notifications wait for the already-bounded REST
+        # cadence so an expiry wave produces one proof rather than one proof per
+        # frame. Fill evidence and malformed data still wake REST immediately.
+        # A transport gap only removes an optional accelerator: current REST
+        # authority remains exactly as valid as it is in explicit REST mode.
+        needs_proof = False
+        immediate_proof = False
+        affected_slug = None
+        try:
+            if isinstance(observation, HybridGap):
+                self._hybrid_counts["gaps"] += 1
+            elif observation.kind == PrivateEventKind.ORDER_UPDATE:
+                needs_proof = not self._hybrid_order_ack_only(observation, now)
+                if needs_proof:
+                    immediate_proof = self._hybrid_order_needs_immediate_proof(
+                        observation, now)
+                # Reuse the exact existing order/fill identity, ownership and
+                # idempotence rules. Its private gate is scratch only; balances
+                # and complete account proof still belong to REST.
+                active_gate = self.gate
+                self.gate = PrivateStateGate()
+                try:
+                    await CommissioningRunner._observe_private(self, observation, now)
+                finally:
+                    self.gate = active_gate
+                self._hybrid_counts["orders"] += 1
+                raw = (observation.payload.get("execution", {})
+                       if isinstance(observation.payload, dict) else {})
+                wire = raw.get("order", {}) if isinstance(raw, dict) else {}
+                affected_slug = (str(wire.get("marketSlug")
+                                     or wire.get("market_slug") or "").strip()
+                                 if isinstance(wire, dict) else None)
+                if not needs_proof:
+                    self._hybrid_counts["ack_only"] += 1
+            else:
+                # Initial snapshots can be delayed/partial. Global position
+                # updates may omit market identity. Both trigger full REST
+                # proof; neither can clear orders or overwrite exact quantity.
+                self._hybrid_counts["hints"] += 1
+                needs_proof = True
+                immediate_proof = observation.kind == PrivateEventKind.POSITION_UPDATE
+                for slug in self.active_slugs:
+                    self._mark_market_dirty(slug, now)
+        except (LedgerConflict, RuntimeInvariantViolation):
+            self.gate.on_reconciliation_conflict()
+            raise
+        except AdapterError:
+            # Wire/schema failure removes this optional shortcut. Integrity
+            # failures above retain the existing terminal handling.
+            stream.request_reconnect()
+            self.gate.on_reconciliation_conflict()
+            self._hybrid_counts["gaps"] += 1
+            needs_proof = True
+            immediate_proof = True
+        finally:
+            if needs_proof:
+                if immediate_proof or not affected_slug:
+                    self._hybrid_reducer_proofs.clear()
+                else:
+                    self._hybrid_reducer_proofs.pop(affected_slug, None)
+                self._hybrid_requires_reconcile = True
+                self._hybrid_counts[
+                    "urgent" if immediate_proof else "cadence"] += 1
+                if immediate_proof:
+                    self._rest_poll_completed_at = None
+                if affected_slug:
+                    self._position_confirmation_proofs.pop(affected_slug, None)
+                    self._hard_exit_terminal_proofs.pop(affected_slug, None)
+                    self._hard_exit_retry_authorizations.pop(affected_slug, None)
+                else:
+                    self._position_confirmation_proofs.clear()
+                    self._hard_exit_terminal_proofs.clear()
+                    self._hard_exit_retry_authorizations.clear()
+            stream.applied(event)
+
+    async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
+        self._hybrid_reducer_proofs.clear()
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+            now = self._now()
+            # The base periodic path can return without collecting anything.
+            # Preserve an applied hint until an actual full proof, rather than
+            # treating that cadence no-op as reconciliation completion.
+            if (self.rest_polling_policy.enabled and tag == "periodic"
+                    and self.gate.session_ready(self.ledger, now=now)
+                    and not self._rest_poll_due(now)):
+                return
+        result = await super()._rest_reconcile(
+            now, tag=tag, strict_order_markets=strict_order_markets)
+        if self.account_state_mode == "hybrid":
+            self._hybrid_requires_reconcile = False
+        return result
+
+    async def _reconcile_position_state(self, slug, *, tag):
+        self._hybrid_reducer_proofs.clear()
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+        started = self._now()
+        result = await super()._reconcile_position_state(slug, tag=tag)
+        if (self.account_state_mode == "hybrid"
+                and not self.private_stream.pending
+                and self.ledger.position(slug) != 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.unresolved_intents()
+                and not self.ledger.absent_orders()):
+            self._hybrid_reducer_proofs[slug] = (
+                tuple(self.active_slugs), self.source_control.generation,
+                self.ledger.position(slug), started)
+        elif self.account_state_mode == "hybrid":
+            # The base REST helper may have cached its own scoped certificate.
+            # If a private event arrived during the read, neither layer may
+            # reuse that now-stale proof on the next priority pass.
+            self._position_confirmation_proofs.pop(slug, None)
+        return result
 
     def _catalog_positions(self):
         return {str(row["market_slug"]): Decimal(row["net_qty"])
@@ -257,6 +538,18 @@ class AccountSourceRunner(RestFallbackRunner):
                     or scope != tuple(self.active_slugs)):
                 raise ApiAdmissionDeferred("catalog interrupted by owner state",
                     error_code="LOCAL_CATALOG_INTERRUPTED", retry_after_seconds=1)
+            if self.account_state_mode == "hybrid":
+                if self.private_stream.pending:
+                    await self._drain_private_events()
+                # Classify before interrupting optional work. Exact no-fill
+                # ACKs and listener gaps leave REST authority intact; aborting
+                # on queue presence alone repeatedly discarded healthy scans.
+                # Earlier applied uncertainty must still interrupt even when
+                # the queue is now empty. The REST position watch below stays
+                # active because optional private delivery can be incomplete.
+                if self._hybrid_requires_reconcile:
+                    raise ApiAdmissionDeferred("catalog yielded to private observation",
+                        error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
             if not self._using_rest_source():
                 try:
                     await self._drain_private_events()
@@ -323,6 +616,9 @@ class AccountSourceRunner(RestFallbackRunner):
         super()._set_source_descriptions()
         if self._using_rest_source():
             self.PENDING_ENTRY_ORDER_CEILING = self.source_policy.rest_pending_entry_ceiling
+        if self.account_state_mode == "hybrid":
+            self.ACCOUNT_STATE_DESCRIPTION = "REST account proof with private WebSocket assistance"
+            self.SOURCE_REBOUND_DESCRIPTION = "rebound market/hybrid account sources"
 
     async def _read_exact_order_states(self, exchange_ids, now):
         semaphore = asyncio.Semaphore(self.ORDER_READ_CONCURRENCY)
@@ -437,6 +733,19 @@ class AccountSourceRunner(RestFallbackRunner):
             # stale status; persisting an actual source choice remains strict.
             print("[account-source] status_write_failed; control may be unavailable", flush=True)
         self._source_last_publish = self._now()
+        if (isinstance(self.private_stream, HybridPrivateStream)
+                and (self._hybrid_last_report is None
+                     or (self._now() - self._hybrid_last_report).total_seconds() >= 60)):
+            self._hybrid_last_report = self._now()
+            print(f"[hybrid-account] state={self.private_stream.state} "
+                  f"pending={self.private_stream.pending} "
+                  f"orders={self._hybrid_counts['orders']} "
+                  f"hints={self._hybrid_counts['hints']} gaps={self._hybrid_counts['gaps']} "
+                  f"ack_only={self._hybrid_counts['ack_only']} "
+                  f"urgent={self._hybrid_counts['urgent']} "
+                  f"cadence={self._hybrid_counts['cadence']} "
+                  f"scoped_admissions={self._hybrid_counts['scoped_admissions']} "
+                  "authority=rest", flush=True)
 
     async def _source_notice(self, state, reason):
         control = self.source_control
@@ -700,6 +1009,9 @@ class AccountSourceRunner(RestFallbackRunner):
         return await super()._consume_ready_stream_tasks(market_task, private_task)
 
     async def _refresh_execution_state_for_decision(self, now):
+        if self.account_state_mode == "hybrid":
+            await self._drain_private_events()
+            now = self._now()
         await self._source_checkpoint(allow_commit=False)
         return await super()._refresh_execution_state_for_decision(now)
 

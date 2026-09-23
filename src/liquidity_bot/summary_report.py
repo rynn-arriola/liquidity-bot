@@ -91,12 +91,14 @@ def prepare_summary(payload):
                   for key in ('today', 'lifetime')}
         coverage = 'Trading history unavailable'
     t, life = totals['today'], totals['lifetime']
-    reward_at = s.get('rewards_observed_at')
+    from .summary_rewards import report_rewards
+    reward_snapshot, cached = report_rewards(s, now)
+    reward_at = reward_snapshot['at'] if reward_snapshot else None
     reward_age = (now - stamp(reward_at)).total_seconds() if reward_at else None
     # Freshness labeling uses existing cached evidence, not another API call.
     valid_rewards = reward_age is not None and reward_age >= 0
-    paid = number(s['attributable_paid_rewards_usd']) if valid_rewards else None
-    pending = number(s['pending_rewards_usd']) if valid_rewards else None
+    paid = number(reward_snapshot['paid']) if valid_rewards else None
+    pending = number(reward_snapshot['pending']) if valid_rewards else None
     net = life['net'] + paid if life['net'] is not None and paid is not None else None
     net_label = 'Overall net' if net is None else ('Net profit' if net >= 0 else 'Net loss')
     # Preserve the original operational warning/state, never marked P&L.
@@ -120,8 +122,12 @@ def prepare_summary(payload):
     ]
     reward_field['value'] = '```text\n' + '\n'.join(f'{k}: {v}' for k,v in lifetime_rows) + '\n```'
     reward_field['value'] += '\nPending excluded from net. ' + coverage + '.'
+    reward_stale = cached or s.get('rewards_refresh_failed', False) or (reward_age or 0) > 1800
     reward_note = ('Rewards unavailable' if not valid_rewards else
-                   f'Rewards age {reward_age / 60:.0f}m' + (' · stale' if reward_age > 1800 else ''))
+                   'Rewards as of ' + stamp(reward_at).astimezone(NEW_YORK).strftime('%m/%d %H:%M ET')
+                   + (' · stale' if reward_stale else ''))
+    if valid_rewards and reward_stale:
+        reward_field['value'] += '\nNet uses last-known paid rewards, not a fresh reward total.'
     reward_field['value'] += '\n' + reward_note + ' · paid is date-scoped, not exact attribution.'
     embed['footer']['text'] = f'Settled fills · ET · {coverage} · {reward_note}'
     rows = lambda values: [(a, str(b)) for a,b in values]

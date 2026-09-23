@@ -9,6 +9,8 @@ credentials.py
 *.db
 *.db-*
 *.sqlite
+*.sqlite3
+*.sqlite3-*
 *.log
 logs/
 data/

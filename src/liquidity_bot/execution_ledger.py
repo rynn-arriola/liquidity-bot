@@ -1617,7 +1617,17 @@ class ExecutionLedger:
             applied = self._upsert_order(order, received)
             self._finish_event(source, event_id, applied,
                                None if applied else "stale_order_event")
+        if applied:
+            self._notify_quality_orders((order,), received_at)
         return applied
+
+    def _notify_quality_orders(self, orders, observed_at, *, absent=()):
+        observer = getattr(self, "quality_observer", None)
+        if observer is not None:
+            try:
+                observer(orders, observed_at, absent=absent)
+            except Exception:
+                pass  # Optional diagnostics never affect committed projection.
 
     def apply_order_snapshot(
         self,
@@ -1631,6 +1641,8 @@ class ExecutionLedger:
     ) -> bool:
         rows = tuple(orders)
         received = _time(observed_at, "observed_at")
+        quality_applied = []
+        quality_absent = []
         snapshot_at = _time(as_of, "as_of")
         scope = (None if complete_market_scope is None
                  else frozenset(str(slug) for slug in complete_market_scope))
@@ -1647,7 +1659,10 @@ class ExecutionLedger:
             applied_any = False
             for order in rows:
                 seen.add(order.client_order_id)
-                applied_any = self._upsert_order(order, received) or applied_any
+                applied = self._upsert_order(order, received)
+                if applied:
+                    quality_applied.append(order)
+                applied_any = applied or applied_any
             if complete:
                 active = self.connection.execute(
                     "SELECT client_order_id,market_slug,event_at "
@@ -1666,9 +1681,11 @@ class ExecutionLedger:
                         "unknown_reason='missing_from_complete_snapshot',"
                         "received_at=? WHERE client_order_id=?",
                         (received, item["client_order_id"]))
+                    quality_absent.append(item["client_order_id"])
                     applied_any = True
             self._finish_event("order_snapshot", snapshot_id, True,
                                "snapshot_applied" if applied_any else "snapshot_no_change")
+        self._notify_quality_orders(quality_applied, observed_at, absent=quality_absent)
         return True
 
     @staticmethod

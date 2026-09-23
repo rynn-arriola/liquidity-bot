@@ -12,8 +12,8 @@ from pathlib import Path
 def normalize_mode(value: str) -> str:
     if value == "rest-fallback":
         return "rest"
-    if value not in {"rest", "websocket"}:
-        raise ValueError("account source must be rest or websocket")
+    if value not in {"rest", "websocket", "hybrid"}:
+        raise ValueError("account source must be rest, websocket or hybrid")
     return value
 
 
@@ -82,7 +82,8 @@ class SwitchRequest:
                    created, expires)
 
     def valid_for(self, control, now: datetime) -> bool:
-        return (self.run_id == control.run_id
+        return ("hybrid" not in {self.source, self.target}
+                and self.run_id == control.run_id
                 and self.generation == control.generation
                 and self.source == control.selected
                 and self.target != self.source
@@ -181,7 +182,7 @@ def main():
     import argparse
     from datetime import timedelta
     parser = argparse.ArgumentParser(description="Request a verified account-source switch")
-    parser.add_argument("action", choices=("status", "rest", "websocket", "relaunch-ready"))
+    parser.add_argument("action", choices=("status", "rest", "websocket", "hybrid", "relaunch-ready"))
     parser.add_argument("--directory", type=Path, default=Path("data"))
     args = parser.parse_args()
     now = datetime.now(timezone.utc)
@@ -204,6 +205,8 @@ def main():
         parser.error("runner status is stale or a switch is already pending")
     if args.action == status["selected"]:
         parser.error("that source is already selected")
+    if "hybrid" in {args.action, status["selected"]}:
+        parser.error("hybrid selection is restart-scoped; use reviewed stop/start gates")
     raw = {
         "request_id": str(uuid.uuid4()), "run_id": status["run_id"],
         "generation": status["generation"], "source": status["selected"],

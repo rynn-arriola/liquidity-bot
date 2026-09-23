@@ -289,6 +289,10 @@ The restored shipping source passed the complete2,054-test production-virtualenv
 suite in333.135seconds after the four reversal checks. Diff whitespace and the
 100/100/80/120-line root-document budgets pass. No live credentials, venue
 mutation, deployment, process start or risk migration was part of verification.
+Reviewed source commit `c10b6dfc3` is pushed on `main`. Post-push parity proves
+the workstation clean and identical to GitHub. The WSL checkout/executable remain
+intentionally behind at `6d8cc336`/`a46f5f995`; peer PC is unavailable/pending.
+This is prepared source, not a deployed or loaded runtime claim.
 
 Authenticated03:35:25.925085Z again proves zero venue orders and positions; the
 former runner/supervisor are absent. One unresolved intent/23 working rows/three

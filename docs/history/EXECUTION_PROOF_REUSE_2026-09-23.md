@@ -151,3 +151,34 @@ reuse. As with all REST observations, an unobserved venue change is not excluded
 by a local revision check. No promise of identical P&L, exact timing, zero429s or
 zero additional latency is made. Natural reducer/entry/endpoint acceptance is
 still required after a separately authorized restart.
+
+## Command 1 deployment and live acceptance
+
+Command 1 was completed on September 23. The prior supervisor7592/runner7606
+was stopped gracefully. Its final shutdown encountered the pre-existing
+`working order has no owned place intent` stream-teardown invariant, then
+completed with `flat=true`. Authenticated release gates at20:18:07Z and again
+at20:25:35Z each proved zero venue orders, venue positions, unresolved intents,
+unknown orders, ledger working orders and ledger positions.
+
+WSL was fast-forwarded to reviewed commit `ab3f7f352`, which contains code
+commit `dfcc91ce6` plus the timing-review documentation. The installed production
+environment passed all2,162 tests in220.255s and all237 normalized
+source/test/config/script hashes matched the reviewed workstation commit before
+`DEPLOYED_COMMIT` was advanced. The bot started in `auto 15 32 hybrid` as
+supervisor21730/runner21744 at20:25:35Z.
+
+At20:35:18Z, authenticated acceptance showed29 venue orders matching29 ledger
+working orders, one+3 position protected by one exact SELL3 reducer, and zero
+unresolved intents or unknown orders. Seven completed API windows ran at
+1.916–3.491 requests/second. Two account-read429s and two ordinary order-read404s
+recovered without stopping the process. Public market selection used32 stream
+book hits with zero REST book fallback in the observed startup pass.
+
+No successful execution-proof reuse occurred during this acceptance window.
+Telemetry refused seven candidate uses conservatively: three `miss.missing` and
+four `miss.state`, while active fill/private-event transitions changed the
+eligible proof context. The runner performed normal fresh REST proof instead.
+This verifies safe refusal and fallback, but establishes zero observed live REST
+savings so far. No entry, exit, pricing, sizing, market-selection, reducer,
+settled-loss or hard-stop business rule changed in this release.

@@ -126,3 +126,34 @@ summary containing overall net and pending. Do not claim guaranteed savings,
 no429s, fresh reward data or profitable grade ordering before that evidence.
 If a safety gate fails, leave stopped. Rollback retains the stable tag and all
 archives; it also requires normal stop/flat/source gates, never ledger repair.
+
+## Activation and live acceptance
+
+The operator authorized restart on September23. The old REST runner stopped
+gracefully with terminal `flat=true`; two stopped authenticated proofs showed
+zero venue orders, positions, unresolved intents, unknown orders and ledger
+exposure. Main merge `20c44a9d7babd223ee16765391b8e2a2a9e622c9` was pushed,
+fast-forwarded into the stopped WSL checkout, and passed all2,127 tests in the
+exact production virtual environment. The deployed marker was written only
+after tests and a fresh16:00:00Z flat/clear start gate. The saved risk policy
+still has four$30 ET six-hour windows and caps30/25/20/15/10.
+
+Supervisor277537/runner277553 started12:00:18ET with explicit `auto 15 32
+hybrid`. At16:07:15Z the authenticated acceptance proof found17 venue orders
+across11 markets, one -15 position and exactly one OPEN BUY15 reducer on that
+market. Unresolved intents and unknown orders were zero; the ledger agreed.
+Private notifications supplied position/cancel observations while REST remained
+the complete proof authority. The first six reported API windows ran
+2.265–3.174 requests/s with zero429s. The next window recorded one
+`positions@429` and recovered, so the release does not promise zero throttles.
+Normal publication-lag order404s were reconciled.
+
+The new optional archive was actively growing. Its first read-only audit showed
+109 records, zero writer errors and no disablement. One overlapping discovery
+snapshot was explicitly dropped rather than blocking the trader, so that run is
+correctly marked sequence-incomplete; reports must not treat it as complete
+coverage. The tracker made no API request and had no selection/order/risk
+authority. A startup earnings refresh timed out once without crashing. No
+summary cache existed yet, so preservation of a prior successful reward value
+and the next scheduled image remain natural acceptance items. The accepted
+layout, HARD meter and all business/risk rules were unchanged.

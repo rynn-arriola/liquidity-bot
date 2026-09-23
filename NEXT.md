@@ -78,8 +78,7 @@ only when they occur naturally; do not induce a live failure:
 - no unmanaged order, unresolved intent, `UNKNOWN_ABSENT` row or position is
   hidden by operator reporting.
 
-Private-only silence has natural acceptance with unchanged PID and `cancels=0`.
-Simultaneous silence still uses global quarantine; investigate only a proven local defect.
+Private-only silence has natural acceptance with unchanged PID and `cancels=0`. Simultaneous silence still uses global quarantine; investigate only a proven local defect.
 
 ## 3. Accept the deployed post-flat mandatory refill
 Commit `2ece3c3` is active after authenticated flat/order-free proof, a graceful stop, parity, 766 server tests and a clean size-10 restart. Natural acceptance
@@ -118,3 +117,4 @@ Naturally require one real 5xx/no-id PLACE to show the three-proof/ten-second wa
 
 ## 7. Graceful stop success is not proof of flatness
 `stop_commissioning.sh` primarily proves process termination; the runner can end with `flat=false`. Decide whether the script should fail when the final record lacks flat proof. Until then, every stop requires final-record plus an authenticated venue snapshot. The script now reports every 30 seconds during its unchanged 300-second grace, but progress output is not flat proof.
+**September23 scanner measurement:** review the isolated `work/broad-scan-measurement` diagnostic before widening live selection. Modeled100 versus up-to300 public books; unknown coverage is not bad economics. Persistent production monitoring needs later load/freshness/exit-latency acceptance. No restart/hybrid activation. [Scope](docs/SCAN_COVERAGE_MEASUREMENT.md).

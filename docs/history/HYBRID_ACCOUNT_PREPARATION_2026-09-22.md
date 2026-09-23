@@ -351,3 +351,32 @@ zero unknown orders. The rollback restores production runtime files to
 the exact `5bbfa5550` tree: REST account authority and the existing
 public-WebSocket market books. Size15/32, four$30 settled-loss windows, pending
 caps, market selection, pricing and exit behavior remain unchanged.
+
+## September23 REST gains explanation corrected
+
+At10:53:51Z the restored REST runner23326 remained live under supervisor23308,
+marker6deb707c6. Authenticated proof returned30 flat entries, one working exact
+4-contract reducer for the sole4-contract position, and zero unresolved or
+unknown orders; ledger counts agreed. This review made no trading-code,
+configuration or restart change.
+
+The earlier conversational claim that REST's slower reaction explains recovered
+losses, while private WebSocket normally closes for small losses, was unsupported.
+The shared reconciler and exit-pricing code have no differences between the saved
+hybrid tag and rollback. Both work passive reducing prices and can capture spread
+or favorable movement. Profitable price opportunities exist before any additional
+delay: REST logged positive inventory with entry0.66 and reducer0.79 at05:13:48Z;
+hybrid logged negative inventory with entry0.31 and reducer0.24 at04:33:59Z.
+These are accepted quote prices, not proof of realized fills or net profit.
+
+REST polling uses5 seconds normally and1 second with known positions or unresolved
+intents, measured from completion of proof. Network/proof/scheduler work adds time.
+A bounded log analysis compared the04:31–04:53Z hybrid trial with the rollback
+from05:11Z through approximately10:53Z. Initial position observations followed by
+a first new passive placement ACK numbered8/82, with median observation age
+13.441/6.398 seconds respectively. The samples differ in duration, markets and
+activity; partial-quantity changes reset observation age, and an existing reducer
+can already protect inventory before a new placement. These numbers are neither
+fill-to-protection latency nor causal profitability evidence. Large tails require
+episode-level interpretation. No transport advantage or artificial delay is
+recommended from these observations.

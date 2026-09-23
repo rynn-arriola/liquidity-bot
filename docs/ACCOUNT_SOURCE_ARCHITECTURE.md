@@ -1,5 +1,16 @@
 # Permanent account-source architecture
 
+## September 23 prepared follow-up: bounded execution-proof receipts
+
+The authorized first coordination phase reuses a completed execution proof once
+inside the same serial decision sweep, only for compatible scoped consumers.
+It requires unchanged ledger/source/scope/gate/observation state, no ambiguity
+or pending event, original age at most30s and completion age below1s. It cannot
+renew global proof or replace financial checks, hard-exit recovery or polling.
+Reason telemetry adds no API calls. No generic shared cache or automatic source
+promotion is introduced. See [implementation and acceptance](history/EXECUTION_PROOF_REUSE_2026-09-23.md);
+activation is recorded only in STATUS.md.
+
 ## September 22 addition: optional hybrid mode
 
 The operator authorized private WebSocket assistance with permanent REST

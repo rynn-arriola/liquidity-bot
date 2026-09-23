@@ -20,6 +20,7 @@ from decimal import Decimal
 from .adapters import AdapterError, ApiAdmissionDeferred
 from .errors import RuntimeInvariantViolation, MarketStreamUnavailable
 from .execution_ledger import LedgerConflict
+from .execution_proof import ExecutionProofCycle, ExecutionProofReceipt
 from .commissioning import CommissioningUnavailable
 from .live_commissioning import CommissioningRunner
 from .live_orders import AsyncTradingGateway
@@ -139,6 +140,10 @@ class RestFallbackRunner(CommissioningRunner):
         self._strategy_recovery_owner = None
         self._rest_order_proof_counts = Counter()
         self._rest_order_proof_last_report = None
+        self._execution_proof_cycle = None
+        self._execution_proof_counts = Counter()
+        self._execution_proof_last_report = None
+        self._execution_proof_event_revision = 0
         self._websocket_factory = kwargs.get("private_stream_factory", PrivateStreamPool)
         if self._using_rest_source():
             kwargs["private_stream_factory"] = self._rest_private_factory
@@ -162,6 +167,94 @@ class RestFallbackRunner(CommissioningRunner):
 
     def _using_rest_source(self):
         return self.account_state_mode in {"rest", "hybrid"}
+
+    async def _decision_sweep(self, *args, **kwargs):
+        previous = self._execution_proof_cycle
+        self._execution_proof_cycle = (
+            ExecutionProofCycle() if self._using_rest_source()
+            and self.rest_polling_policy.enabled else None)
+        try:
+            return await super()._decision_sweep(*args, **kwargs)
+        finally:
+            # Nested recovery may have changed the account. Never restore a
+            # parent's pre-nesting receipt, even if the nested sweep failed.
+            if previous is not None:
+                previous.invalidate()
+            self._execution_proof_cycle = previous
+            self._report_execution_proofs()
+
+    def _invalidate_execution_proof(self):
+        if self._execution_proof_cycle is not None:
+            self._execution_proof_cycle.invalidate()
+
+    def _execution_proof_version(self):
+        return (self._position_confirmation_version(),
+                self._execution_proof_event_revision,
+                self.gate.connected, self.gate.rest_reconciled,
+                self.gate.last_reconcile_at)
+
+    def _execution_proof_context(self):
+        return (tuple(self.active_slugs), self.account_state_mode,
+                getattr(getattr(self, "source_control", None), "generation", None),
+                self._execution_proof_event_revision)
+
+    def _execution_proof_ready(self):
+        return (self._using_rest_source() and self.rest_polling_policy.enabled
+                and not self._stop_requested and not self._streams_need_rebind
+                and not getattr(self, "_source_switching", False)
+                and not getattr(self, "_source_mutations_in_flight", 0)
+                and not getattr(self.private_stream, "pending", 0)
+                and self.gate.session_ready(self.ledger, now=self._now())
+                and not self.ledger.unresolved_intents()
+                and not self.ledger.absent_orders())
+
+    def _complete_execution_proof(self, started, *, markets, context):
+        receipt = ExecutionProofReceipt(self._execution_proof_version(), markets,
+                                        started, self._now())
+        if (context == self._execution_proof_context()
+                and self._execution_proof_cycle is not None
+                and self._execution_proof_ready()):
+            self._execution_proof_cycle.receipt = receipt
+        return receipt
+
+    def _take_execution_proof(self, slug):
+        cycle = self._execution_proof_cycle
+        if cycle is None:
+            self._execution_proof_counts["miss.no_cycle"] += 1
+            return None
+        if (slug not in self.active_slugs or not self._execution_proof_ready()
+                or not self.ledger.risk_state_known(slug)):
+            cycle.invalidate()
+            self._execution_proof_counts["miss.state"] += 1
+            return None
+        receipt, reason = cycle.take(
+            slug, version=self._execution_proof_version(), now=self._now())
+        self._execution_proof_counts[reason if receipt else f"miss.{reason}"] += 1
+        return receipt
+
+    def _note_execution_proof(self, scope, tag):
+        # Fixed cardinality; never print raw order IDs, payloads or arbitrary tags.
+        reason = str(tag).split(":", 1)[0]
+        if reason not in {"rest-source-decision", "periodic", "position-transition",
+                          "hybrid-preplan", "hard-exit", "rest-source-bind",
+                          "strategy-recovery-start", "strategy-recovery-terminal"}:
+            reason = "other"
+        self._execution_proof_counts[f"{scope}.{reason}"] += 1
+
+    def _report_execution_proofs(self):
+        now = self._now()
+        last = self._execution_proof_last_report
+        if last is not None and 0 <= (now - last).total_seconds() < 60:
+            return
+        if self._execution_proof_counts:
+            fields = " ".join(f"{key}={value}" for key, value
+                              in sorted(self._execution_proof_counts.items()))
+            try:
+                print(f"[execution-proof] at={now.isoformat()} {fields}", flush=True)
+            except OSError:
+                pass  # Diagnostic output cannot change execution authority.
+            self._execution_proof_counts.clear()
+        self._execution_proof_last_report = now
 
     def _rest_private_factory(self, client):
         if self.account_state_mode == "hybrid":
@@ -227,7 +320,18 @@ class RestFallbackRunner(CommissioningRunner):
                         "bulk_create" if positive_create else "bulk_unchanged"] += 1
                 else:
                     read_ids.append(exchange_id)
+                    reason = ("positioned" if row is not None
+                              and self.ledger.position(str(row["market_slug"])) != 0
+                              else "ambiguous" if pending_places
+                              or (order is not None and (
+                                  order.market_slug in unresolved_by_market
+                                  or order.market_slug in absent_markets))
+                              else "missing" if order is None or row is None
+                              else "changed_or_older")
+                    self._execution_proof_counts[f"exact.{reason}"] += 1
             exchange_ids = read_ids
+        else:
+            self._execution_proof_counts["exact.strict"] += len(exchange_ids)
         self._rest_order_proof_counts["exact"] += len(exchange_ids)
         return await self._read_exact_order_states(exchange_ids, now)
 
@@ -330,6 +434,7 @@ class RestFallbackRunner(CommissioningRunner):
                 changed.append(exchange_id)
         failures = await self._read_exact_order_states(changed, now)
         self._rest_order_proof_counts["second_snapshot_changed"] += len(changed)
+        self._execution_proof_counts["exact.second_list_changed"] += len(changed)
         if failures:
             raise AdapterError("changed/missing order lacks exact REST proof: "
                                + "; ".join(f"{key}: {detail}" for key, detail in failures))
@@ -426,6 +531,9 @@ class RestFallbackRunner(CommissioningRunner):
             return
         if self._bulk_order_proof:
             raise RuntimeInvariantViolation("rest_proof_overlap", "overlapping account proofs")
+        self._invalidate_execution_proof()
+        self._note_execution_proof("global", tag)
+        proof_context = self._execution_proof_context()
         # Startup, rebind, recovery, shutdown and a failed/expired prior proof
         # retain every exact read. A scoped caller never selects this shortcut.
         self._bulk_order_proof = bool(
@@ -458,6 +566,8 @@ class RestFallbackRunner(CommissioningRunner):
         # quantity change or terminal order. Re-evaluate the bounded slate.
         for slug in self.active_slugs:
             self._mark_market_dirty(slug, self._now())
+        if tag in {"rest-source-decision", "periodic"}:
+            self._complete_execution_proof(started, markets=None, context=proof_context)
 
     async def _wait_for_initial_private_state(self, timeout_seconds=15):
         if not self._using_rest_source():
@@ -755,15 +865,21 @@ class RestFallbackRunner(CommissioningRunner):
 
     async def _reconcile_position_state(self, slug, *, tag):
         self._position_confirmation_proofs.clear()
-        observed_at = self._now()
+        reusable = tag in {"position-transition", "hybrid-preplan"}
+        receipt = self._take_execution_proof(slug) if reusable else None
+        observed_at = receipt.started_at if receipt is not None else self._now()
+        proof_context = self._execution_proof_context()
         try:
-            await CommissioningRunner._rest_reconcile(
-                self,
-                observed_at,
-                tag=f"{tag}:{slug}",
-                strict_order_markets=frozenset({str(slug)}),
-                advance_gate=False,
-            )
+            if receipt is None:
+                self._invalidate_execution_proof()
+                self._note_execution_proof("scoped", tag)
+                await CommissioningRunner._rest_reconcile(
+                    self,
+                    observed_at,
+                    tag=f"{tag}:{slug}",
+                    strict_order_markets=frozenset({str(slug)}),
+                    advance_gate=False,
+                )
         except BaseException:
             # An incomplete safety proof is account uncertainty. Revoke entry
             # authority immediately; only the next complete proof may restore
@@ -775,12 +891,18 @@ class RestFallbackRunner(CommissioningRunner):
         self._rest_history_seen = (
             (self._rest_history_seen or frozenset())
             | self._rest_history_pending)
+        if receipt is None:
+            receipt = self._complete_execution_proof(
+                observed_at, markets=frozenset({str(slug)}), context=proof_context)
+            if not reusable:
+                self._invalidate_execution_proof()
         if (tag == "position-transition" and self.ledger.position(slug) != 0
                 and not self.ledger.working_orders(slug)
                 and not self.ledger.unresolved_intents()
                 and not self.ledger.absent_orders()):
             self._position_confirmation_proofs[slug] = (
-                self._position_confirmation_version(), observed_at, self._now())
+                self._position_confirmation_version(), observed_at, receipt.completed_at)
+        return receipt
 
     async def _decide_for_market(self, slug, now, *, replanned=False):
         if not self._using_rest_source():

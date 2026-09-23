@@ -1153,3 +1153,14 @@ These are implementation requirements, not suggestions.
     Stop/source/scope/flat transitions cannot turn that exit pass into entry.
     This scheduling checkpoint never replaces final admission checks, blocks
     required cancels, relaxes unknown-state handling or changes REST cadence.
+111. Same-sweep execution-proof reuse is scoped and single-use, never new
+    account authority. Only a completed full or exact-owner execution proof
+    with unchanged ledger/source/scope/gate/private-observation revision may
+    satisfy a compatible scoped position-transition/preplan consumer. Original
+    proof age must be at most30s, completion age below1s, and all clocks ordered.
+    No queued observation, ambiguity, stop, rebind, source switch or mutation
+    in flight may reuse it. Failed collection, private observations and nested
+    or completed decision sweeps discard receipts. Reuse cannot certify another
+    scoped owner, replace a full audit, renew timestamps/cadence, omit financial
+    checks or modify hard-exit proof/admission rules. No second writer or extra
+    polling process is allowed. Diagnostic failure cannot change authority.

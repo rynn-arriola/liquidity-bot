@@ -428,6 +428,10 @@ class AccountSourceRunner(RestFallbackRunner):
         return valid
 
     async def _observe_private(self, event, now):
+        # Even a no-op/private gap ends same-cycle execution-proof reuse. It
+        # does not invalidate the independent REST gate or change poll cadence.
+        self._execution_proof_event_revision += 1
+        self._invalidate_execution_proof()
         if not isinstance(event, HybridDelivery):
             return await super()._observe_private(event, now)
         stream = event.stream
@@ -540,6 +544,8 @@ class AccountSourceRunner(RestFallbackRunner):
         started = self._now()
         scope, generation = tuple(self.active_slugs), self.source_control.generation
         result = await super()._reconcile_position_state(slug, tag=tag)
+        if result is not None:
+            started = result.started_at  # Reuse never manufactures fresh proof.
         if (self.account_state_mode == "hybrid"
                 and scope == tuple(self.active_slugs)
                 and generation == self.source_control.generation

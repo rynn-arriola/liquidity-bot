@@ -22,6 +22,17 @@ class AdapterError(RuntimeError):
         super().__init__(message)
 
 
+class AccountSnapshotConsistencyError(AdapterError):
+    """A complete account snapshot crossed a real cash-state transition.
+
+    This is not malformed venue data or transport backpressure.  A fill,
+    settlement, deposit, or withdrawal can legitimately change settled cash
+    between the reads used to bracket positions and cash activity.  Callers
+    may retry the *whole* snapshot once; they must still fail closed if the
+    fresh bracket is inconsistent.
+    """
+
+
 class MarketStreamUnavailable(AdapterError):
     """The shared public stream failed, not an individual market's book."""
 

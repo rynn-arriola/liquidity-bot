@@ -6,7 +6,8 @@ from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
-from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
+from liquidity_bot.errors import (
+    AccountSnapshotConsistencyError, AdapterError, ApiAdmissionDeferred)
 from liquidity_bot.cash_activity import CashActivityUnavailable
 from liquidity_bot.risk_diagnostics import RiskDiagnostics
 from liquidity_bot.risk_windows import RiskWindowPolicy
@@ -86,6 +87,41 @@ class RiskDiagnosticsRunnerTests(IsolatedAsyncioTestCase):
         self.assertIn("stage=equity_snapshot", output.getvalue())
         self.assertIn("equity_unknown", output.getvalue())
         self.assertNotIn("secret", output.getvalue())
+
+    async def test_one_cash_consistency_race_retries_whole_snapshot(self):
+        runner = await self.build()
+        previous = runner.risk_guard.equity_observed_at
+        candidate = AsyncMock(side_effect=[
+            AccountSnapshotConsistencyError(
+                "settled cash changed during account equity snapshot"),
+            None,
+        ])
+
+        with patch.object(runner, "_refresh_balance_candidate", candidate), \
+                redirect_stdout(StringIO()) as output:
+            await runner._refresh_balance(fixtures.NOW)
+
+        self.assertEqual(candidate.await_count, 2)
+        self.assertEqual(runner.risk_guard.equity_observed_at, previous)
+        self.assertNotIn("[risk-diagnostic]", output.getvalue())
+
+    async def test_second_cash_consistency_race_still_blocks_entries(self):
+        runner = await self.build()
+        candidate = AsyncMock(side_effect=[
+            AccountSnapshotConsistencyError(
+                "settled cash changed during account equity snapshot"),
+            AccountSnapshotConsistencyError(
+                "settled cash changed during non-trading activity snapshot"),
+        ])
+
+        with patch.object(runner, "_refresh_balance_candidate", candidate), \
+                redirect_stdout(StringIO()) as output:
+            with self.assertRaises(AccountSnapshotConsistencyError):
+                await runner._refresh_balance(fixtures.NOW)
+
+        self.assertEqual(candidate.await_count, 2)
+        self.assertIsNone(runner.risk_guard.equity_observed_at)
+        self.assertIn("stage=equity_snapshot_retry", output.getvalue())
 
     async def test_diagnostic_failure_cannot_mask_exception_or_change_boolean(self):
         runner = await self.build()

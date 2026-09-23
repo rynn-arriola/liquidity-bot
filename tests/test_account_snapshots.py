@@ -8,7 +8,7 @@ from decimal import Decimal
 from liquidity_bot.account_snapshots import (
     AsyncAccountSnapshotGateway, account_equity_snapshot)
 from liquidity_bot.adapters import AsyncReadOnlyGateway
-from liquidity_bot.errors import AdapterError
+from liquidity_bot.errors import AccountSnapshotConsistencyError, AdapterError
 from liquidity_bot.execution_ledger import PositionState
 from liquidity_bot.models import AccountBalance
 
@@ -185,7 +185,8 @@ class SnapshotGatewayTests(unittest.TestCase):
             [balance("100"), balance("99")])
         account = AsyncAccountSnapshotGateway(AsyncReadOnlyGateway(client))
 
-        with self.assertRaisesRegex(AdapterError, "settled cash changed"):
+        with self.assertRaisesRegex(
+                AccountSnapshotConsistencyError, "settled cash changed"):
             self.run_async(account.fetch_equity_snapshot(observed_at=NOW))
 
     def test_open_position_without_cash_value_fails_closed(self):

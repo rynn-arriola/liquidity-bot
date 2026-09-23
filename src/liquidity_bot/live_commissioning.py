@@ -51,8 +51,8 @@ from .commissioning import (
 from .discord_summary import (
     LiquiditySummary, build_liquidity_summary, build_runtime_alert)
 from .errors import (
-    AdapterError, ApiAdmissionDeferred, EmptyBookError, MarketStreamUnavailable,
-    RuntimeInvariantViolation)
+    AccountSnapshotConsistencyError, AdapterError, ApiAdmissionDeferred,
+    EmptyBookError, MarketStreamUnavailable, RuntimeInvariantViolation)
 from .execution_ledger import (
     ACTIVE_ORDER_STATES,
     UNRESOLVED_INTENTS,
@@ -4666,6 +4666,27 @@ class CommissioningRunner:
         self._risk_refresh_stage = "equity_snapshot"
         try:
             await self._refresh_balance_candidate(now)
+        except AccountSnapshotConsistencyError:
+            # A normal fill/settlement can land between the balance and
+            # position/history reads.  Throwing away the last proven risk mark
+            # immediately caused every entry to cancel even though no read or
+            # schema had failed.  Retry the complete bracket exactly once with
+            # a fresh timestamp.  Nothing from the rejected candidate is
+            # published, and a second race still reaches the fail-closed path
+            # below.
+            try:
+                self._risk_refresh_stage = "equity_snapshot_retry"
+                await self._refresh_balance_candidate(self._now())
+            except Exception as exc:
+                if self._window_risk is not None and self.risk_guard is not None:
+                    self.risk_guard.equity_observed_at = None
+                try:
+                    self._risk_diagnostics.refresh_failed(
+                        self._now(), stage=self._risk_refresh_stage,
+                        error=exc, previous_observed_at=previous)
+                except Exception:
+                    pass
+                raise
         except Exception as exc:
             # A failed settlement proof is unknown, not another fresh reading
             # of the previous confirmed window loss. Preserve the dollar
@@ -4734,7 +4755,7 @@ class CommissioningRunner:
         self._risk_refresh_stage = "final_balance"
         second = await self.account.fetch_balance(observed_at=self._now())
         if snapshot.balance.current_balance != second.current_balance:
-            raise AdapterError(
+            raise AccountSnapshotConsistencyError(
                 "settled cash changed during non-trading activity snapshot")
         if date.fromisoformat(risk_day(self._now())) != today:
             raise AdapterError(
@@ -10181,7 +10202,17 @@ class CommissioningRunner:
             # creation; otherwise every market pass would create another exact
             # FAILED row during one shared cooldown. Reporting or quarantining
             # here would turn harmless backpressure into order churn.
-            if exc.error_code != "LOCAL_API_INTERRUPTED":
+            # A private observation that arrives in the narrow interval
+            # between planning and the final no-I/O create fence is local
+            # state synchronization, not shared API backpressure.  The final
+            # fence still rejects that create, but it must not freeze every
+            # other market for one second.  The next owner pass drains and
+            # classifies the event before planning again.
+            local_only = {
+                "LOCAL_API_INTERRUPTED",
+                "LOCAL_HYBRID_OBSERVATION_PENDING",
+            }
+            if exc.error_code not in local_only:
                 delay = self._api_admission_delay(exc)
                 deferred_until = self._now() + timedelta(
                     seconds=delay)

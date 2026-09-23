@@ -10786,6 +10786,26 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._report_runtime_error.assert_not_awaited()
         runner._quarantine_working_orders.assert_not_awaited()
 
+    async def test_hybrid_observation_race_does_not_open_shared_entry_circuit(self):
+        runner, _, _ = self.build_runner()
+        runner._report_runtime_error = AsyncMock()
+        runner._quarantine_working_orders = AsyncMock()
+
+        stop = await runner._handle_action_failure(
+            ApiAdmissionDeferred(
+                "private observation arrived before final create admission",
+                operation="POST /v1/orders",
+                error_code="LOCAL_HYBRID_OBSERVATION_PENDING",
+                retry_after_seconds=1.0,
+            ),
+            runner.market_slug,
+        )
+
+        self.assertIsNone(stop)
+        self.assertIsNone(runner._entry_mutation_blocked_until)
+        runner._report_runtime_error.assert_not_awaited()
+        runner._quarantine_working_orders.assert_not_awaited()
+
     async def test_permission_rejection_blocks_entry_but_not_risk_reduction(self):
         runner, _, notifier = self.build_runner()
         await runner.preflight()

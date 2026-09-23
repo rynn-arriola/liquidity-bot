@@ -580,3 +580,34 @@ not retained. This identifies THIS wave, not the still-uninstrumented original
 Recommendation: investigate bounded consistent-snapshot recovery and serial
 entry/refill scheduling first, then exact-read attribution. Any implementation
 needs authority, focused race/failure tests and unchanged fail-closed gates.
+
+## Reviewed repair awaiting deployment
+
+The operator authorized the scoped fix and a gated restart. The implementation
+does not change selection, pricing, quote size, slot count, five-minute GTD,
+settled-fill risk, loss tiers, reducers, exits or the four $30 windows.
+
+- Cash movement between the account bracket's balance/position/history reads is
+  now a typed consistency race. The runner retries the *entire* bracket once
+  with a fresh timestamp. No rejected candidate is published. A second race,
+  HTTP/backpressure error, malformed response, stale mark, ET boundary or any
+  other failure still withdraws entry authority exactly as before.
+- A private observation arriving after planning still fails the final no-I/O
+  POST fence. That local failure no longer opens the account-wide one-second
+  entry cooldown; only its market takes the existing recovery delay while the
+  next pass drains/classifies the event. Real fill/quantity uncertainty still
+  requires REST proof before any new POST.
+- Existing complete two-list bulk proof remains unchanged. Exact reads for
+  positioned, absent, changed, ambiguous or recovery owners were not removed;
+  current evidence cannot prove them redundant. The cash retry can add one
+  bounded full bracket only during a real consistency race, while avoiding the
+  measured broad cancel/refill fanout.
+
+Focused tests cover typed bracket rejection, one-successful retry, second-race
+fail-closed behavior, ordinary429 failure behavior, normal API cooldowns,
+operator interruption and hybrid local-only deferral. Deliberately removing
+each behavior made its regression fail; restoration passed. The exact WSL
+production environment then passed all2,145 tests in378.696 seconds. Final diff
+review found no business-policy drift, ownership relaxation, mutation retry,
+credential exposure or rollback dependency. Deployment/live acceptance remains
+subject to the normal authenticated flat/clear gates.

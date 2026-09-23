@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Iterator
 
 from .adapters import AsyncReadOnlyGateway
-from .errors import AdapterError
+from .errors import AccountSnapshotConsistencyError, AdapterError
 from .execution_ledger import OrderState, PositionState, TradeStateObservation
 from .models import AccountBalance
 from .execution_ledger import Execution, LedgerConflict
@@ -439,7 +439,7 @@ class AsyncAccountSnapshotGateway:
         positions = await self.fetch_positions(observed_at=observed_at)
         second = await self.fetch_balance(observed_at=observed_at)
         if first.current_balance != second.current_balance:
-            raise AdapterError(
+            raise AccountSnapshotConsistencyError(
                 "settled cash changed during account equity snapshot")
 
         return account_equity_snapshot(

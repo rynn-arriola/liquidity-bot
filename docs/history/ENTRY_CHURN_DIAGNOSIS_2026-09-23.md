@@ -626,3 +626,48 @@ positions3. The repair remains undeployed and loaded source remains038408240.
 No reducer was cancelled and no loss-making close was authorized. Deployment
 and restart require natural/manual flatness or explicit authority for the
 existing price-capped close procedure, followed by a new flat/clear gate.
+
+## Deployment and live acceptance
+
+The operator manually flattened the three parked positions and requested that
+the reviewed release be completed and left running. At18:56:46Z a fresh venue
+read proved zero orders and positions, but the stopped ledger still contained
+the three old owners. The existing stopped reconciliation made zero venue
+mutations, obtained exact terminal confirmation for all three, and cleared the
+ledger. The mandatory18:57:15Z gate then passed with zero venue orders,
+positions, unresolved intents, unknown orders, working ledger orders and ledger
+positions.
+
+WSL fast-forwarded to `321728fc9`, which contains repair `220976c3f` plus its
+documentation. The exact installed environment passed all2,145 tests in
+211.744 seconds. All235 deployed source/test/config/script hashes matched;
+workstation/GitHub/WSL/loaded-marker parity and the private stopped-ledger
+recovery copy passed. A second authenticated gate at19:06:28Z was flat and
+clear. Auto size15/32 hybrid started as supervisor7592/runner7606. The loaded
+12–18ET row proved loss0, hard30, cap30, held=false and
+`basis=matched_fills`; open orders and positions remain excluded.
+
+Five complete API windows during the first7 minutes recorded1,213 admitted
+attempts at2.431–3.624/s. Four genuine account-read429s occurred: one positions,
+one balance and two cash-history. They correctly expired equity authority,
+cancelled18 flat entries fail-closed and then refilled. The next two complete
+windows had zero failures/429s; a later window had only one ordinary
+order-retrieve404. This release does not claim that Polymarket's low-rate429s
+are eliminated.
+
+The targeted hybrid behavior did improve: from the startup marker through the
+acceptance cutoff there were zero `mutation-access-backoff` lines and no logged
+`LOCAL_HYBRID_OBSERVATION_PENDING` fanout. A natural+0.47 position obtained its
+exact reducer after cancel-confirm-replace and later flattened. A natural-13
+position obtained an exact BUY13 reducer. Another transient-1 position was
+observed while its builder and wrong-size reducer were being cancelled; the
+exact BUY1 reducer was acknowledged13.43 seconds after the position observation
+and the position subsequently flattened. No reducer or fill was induced.
+
+Authenticated19:13:48Z acceptance showed32 venue orders across22 markets:31
+flat-market entries plus one OPEN BUY13 reducer for the sole-13 position. There
+were zero unresolved intents and zero unknown orders; ledger working/position
+state agreed. The bot remained running. Natural repeat observation remains
+required for cash-consistency retry, endpoint429 frequency and reducer timing;
+the original16:29 trigger and the WSL shutdown initiator remain open watchlist
+items. The separate300-candidate scanner measurement remains paused.

@@ -431,3 +431,34 @@ shutdown. This is timing correlation, not proof the app update initiated WSL
 termination. The precise initiating actor remains unknown. Further host
 lifecycle investigation is the recommendation before another normal restart;
 no launcher/service/power policy change or restart was authorized/performed.
+
+## Operator-authorized unchanged restart17:58:30Z
+
+The operator subsequently explicitly requested restart. No production code,
+launcher, host settings or business policy was changed. Revalidated all235
+runtime/workstation source/test/config/script hashes against038408240; reused
+the same release's already completed2,142-test installed suite rather than
+repeating it. The temporary test log did not survive the distro shutdown; its
+completed result remains in the prior verified tool evidence and release record.
+Parity passed at b8cd031e3 with loaded038408240; stopped-ledger backup17:57:39Z
+was verified,1,087,430,656 bytes/SHA prefix4902c66bfa25. Peer not contacted.
+
+No old supervisor/trader remained. Fresh authenticated17:58:23.823Z gate proved
+zero venue orders/positions, unresolved/unknown intents/orders, working ledger
+orders and ledger positions. Launched unchanged auto15/32/hybrid at17:58:30Z,
+supervisor768/runner782, independent local dashboard808. The12–18ET hard30/cap30
+row retained settled P&L+0.93910000 after recovery, not a baseline reset.
+Public book collections used17/17 then12/12 stream hits, zero REST fallback.
+First entry plan17:59:24.792Z. Authenticated17:59:43.127Z shows six flat entries,
+zero positions/unknown orders and one in-flight intent; sequential live ledger
+read had seven working orders, not an atomic venue/ledger equality proof.
+Initial placement acceptance is not sustained performance/zero429 acceptance.
+REST performance review remains deferred; host shutdown initiator remains open.
+
+First completed90.8s API window at18:00:02Z:219 attempts/201 reads/18 mutation
+attempts,2.412/s, one execution_history429, no active cooldown at window end.
+The18:00:21Z risk row remained+0.93910000/cap30/untripped. Local intent review
+showed15 reconciled creates/four reconciled cancels/four unsent entry deferrals,
+no reducer failure, risk-cancellation wave or runtime recovery. The previously
+sampled in-flight create was no longer unresolved; no position had occurred.
+This restart does not resolve or eliminate the deferred history429 issue.

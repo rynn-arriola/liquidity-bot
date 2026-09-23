@@ -505,3 +505,78 @@ Prior single-list optimization failed race tests; keep two-list proof bracket.
 Recommendation: prioritize expiry/refill event-drain/admission scheduling,
 then measured duplicate proof work, preserving business rules and final safety
 fences. User requested diagnosis; implementation remains a separate decision.
+
+## Extended REST comparison through18:20Z and new risk-wave evidence
+
+Operator requested more investigation using the new logs. Same process/source,
+no changes to runtime, strategy, expiry, risk or restart. Pre-work parity76e2da6ee
+passed; private backup18:17:21.711Z,1,088,598,016 bytes/SHA prefix4e87c3a5a76d.
+Offline comparisons retain only wholly contained completed API windows and use
+sum(reads)/sum(seconds), not average of rounded per-window rates.
+
+| Sample UTC September23 | Completed seconds | Reads/s | Attempts/s | HTTP429 |
+|---|---:|---:|---:|---:|
+| Stable REST14:30–15:30 | 3550.9 | 2.7785 | 2.9314 | 15 |
+| Earlier hybrid16:00:18–16:15:18 | 861.4 | 2.7235 | 2.9255 | 1 |
+| Repaired hybrid17:31:42–17:46:42 | 848.9 | 2.8248 | 3.0522 | 2 |
+| Same release restarted17:58:30–18:20:00 | 1272.9 | 2.7897 | 2.9735 | 8 |
+| Latest subinterval18:10–18:20 | 563.5 | 2.9849 | 3.1819 | 1 |
+
+The full restarted sample contains3,551 reads/234 mutation attempts; aggregate
+read rate is effectively unchanged versus stable, not a proven reduction. The
+latest subinterval is about7.4% higher, descriptive only: markets, fills,
+positions, scan/recovery load and entry count differ. Full requested interval
+workloads (not exactly the cropped API-window duration): stable352 reconciled
+creates/195 cancels/31 fill rows in60min; restarted130 creates/39 cancels/17 fills
+in21.5min plus70 locally unsent entry deferrals. This is not a controlled A/B.
+Attempt telemetry includes local no-send mutations and excludes separate
+processes; these are runner-local read/attempt rates, not exact IP-wide wire RPS.
+
+Latest10-minute exact-order reads0.8696/s versus stable0.6097/s (about43% higher),
+the largest upward category. Latest balances0.3727,cash history0.2431,trade
+history0.3833,open orders0.3709,positions0.4277/s. Public book reads remain zero.
+Other market/reward metadata reads still exist despite WS books. Repeated
+`rest-order-proof` bulk skips prove the shortcut executes, not that hybrid alone
+created its savings: stable REST also includes that optimization. No per-call
+reason counter currently separates bulk disabled, positioned owner, absent row,
+changed timestamp/economics and exact-repair callers, so attribution remains
+incomplete. Do not infer every exact read is redundant or remove proof guards.
+
+Current eight429s:execution_history4,cash_history2,balance1,positions1. Thus the
+earlier user-facing history/balance summary was incomplete: positions also
+throttled. Cash/trade history share the same activities endpoint/cooldown.
+Last eight completed windows through18:19:44Z had zero429s. This does not prove
+the venue's trigger or an absent future throttle. Official changelog re-opened:
+latest relevant published entry remains September21 crypto documentation, not
+a new account rate policy. Live status fetch failed; no operational-status claim.
+
+At18:19:24Z two report-lane reads proved26 entries plus three exactly covered
+positions. The first eligibility diagnostic omitted the production client-ID
+resolver and falsely reported field mismatch for every owned row; discard that
+eligibility result. Corrected read-only identity lookup, no adoption/writes:
+18:20:21Z venue12 entries plus two SELL15 reducers covering both+15 positions,
+zero unknown/unresolved. Nine of14 snapshot rows met ordinary bulk conditions;
+two positioned owners and three no-longer-working local rows account for the
+remaining non-overlapping reasons in this sequential sample. No timestamp lag.
+It cannot establish historical fallback causes or atomic venue/ledger equality.
+Only these four report-lane requests were added; no stress/probe loop.
+
+New diagnostics capture a distinct later cancellation mechanism:
+-18:19:50.929578Z a0.01 BUY fill; recorded18:19:50.996976Z.
+-18:19:50.997928Z risk refresh fails at equity_snapshot with
+ `cash_changed_positions`, previous mark age5.780s (not an HTTP error).
+-18:19:53.634Z another14.99 BUY and18:19:56.622Z SELL15 complete the episode.
+-18:19:57.144Z entry gate reports equity_unknown.
+-18:19:59.518–18:20:17.687Z entry-cancellation plans spread across15 markets.
+-The18:20:44 API window records no failures/429s. Fresh local risk18:20:47Z
+ remains settled+1.32510000, cap30, untripped; later entry plans resume.
+
+The rejected cash bracket is a valid protection against inconsistent snapshots;
+the opportunity is recovery/scheduling before repeated cancellation/refill, not
+accepting inconsistent cash or changing settled-loss rules. Timing strongly
+supports concurrent trading as this bracket's cause; raw balance values were
+not retained. This identifies THIS wave, not the still-uninstrumented original
+16:29 exception. Preserve that original watchlist uncertainty separately.
+Recommendation: investigate bounded consistent-snapshot recovery and serial
+entry/refill scheduling first, then exact-read attribution. Any implementation
+needs authority, focused race/failure tests and unchanged fail-closed gates.

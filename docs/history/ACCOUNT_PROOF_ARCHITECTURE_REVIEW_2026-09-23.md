@@ -141,3 +141,98 @@ CreateDropCopySubscription/resume-token guidance concerns Institutional gRPC,
 not this Retail transport. Public20/s per IP and authenticated20/s per key
 documentation does not explain the observed429 threshold. Live status-page
 fetch failed during this review, so no new operational venue-health claim.
+
+## Follow-up: narrower best first option
+
+The operator requested deeper comparison before implementation. Prefer a
+**serial, decision-cycle proof coordinator with bounded proof receipts** as the
+first implementation, not a generic shared TTL cache or an independent account
+service. This refines rather than replaces the eventual shared-proof boundary.
+
+Most current callers execute sequentially in the one owner loop. A conventional
+single-flight utility that only merges simultaneous requests cannot remove much
+of that sequential repetition. Existing read concurrency and cached execution
+history already help inside one reconcile. The missing integration is across
+compatible consumers, while preserving what each completed proof actually
+certifies. A scoped proof must never be relabeled as full entry authority.
+
+### New offline evidence
+
+Ignored diagnostic `.local-tools/probe_account_proof_overlap.py` reuses the
+existing fake client/temporary-ledger fixtures. It seeds30 flat entry orders and
+one separate15-contract position, advances six fake seconds, invokes a scoped
+position proof, the following due global decision proof and a financial refresh.
+No venue credentials, production database or real network are used; assertions
+confirm unchanged position quantity and zero create/cancel calls.
+
+| Explicitly invoked consumer | Reads in REST | Reads in hybrid |
+|---|---:|---:|
+| Scoped position proof | orders1 + positions1 + trade history1 | same |
+| Following global proof | orders2 + positions1 + trade history1 | same |
+| Financial bracket | balances3 + positions1 + cash history1 | same |
+| Total | 12 | 12 |
+
+This demonstrates repeat collection across these real methods on a constructed
+unchanged scenario. It does not establish live sequence frequency, safe removable
+count, optimized speed or overall saving. Fixture pagination/risk configuration
+is not the full live cash-history workload. Trade and cash histories use distinct
+requirements even when the client method is shared; they cannot be deduplicated
+by endpoint name alone. Likewise, three balances and two order lists have
+intentional ordering/race functions, not automatically redundant reads.
+
+Re-ran `test_hybrid_rest_comparison`, `test_hybrid_preplan`,
+`test_rest_throttle_exit_scheduling`, `test_account_source` in the installed WSL
+environment:156 tests passed in30.081s. These validate the existing baseline and
+its safeguards, NOT an implemented new coordinator. Expected fake-error logs
+and temporary-directory ResourceWarnings were emitted. The separate overlap
+probe passed one test covering both modes in2.080s.
+
+### Chosen boundaries
+
+- One serial owner schedules proof requirements and remains the only ledger
+  projector/mutation owner. No extra background poller or decision writer.
+- Start with no-behavior-change reason/coverage telemetry and bounded receipts
+  from already completed execution proofs. Reuse only an explicitly permitted
+  result with unchanged relevant revision, scope, generation and freshness.
+  Complete global proof may cover a narrower consumer only after its exact
+  evidence requirements are checked; scoped proof cannot renew global readiness.
+- Urgent reducers/cancels/exits must not wait for a larger combined batch,
+  financial reporting or peer-order proofs merely to save calls. If the broader
+  consumer cannot share the urgent proof safely, perform the necessary extra
+  reads. No intentional batching delay and no longer polling/freshness limit.
+- Keep financial brackets separate in Phase1. Later fusion must place position
+  reads within their required balance bracket and retain transfer/history,
+  midnight/window-boundary and oldest-observation rules. Do not drop capital
+  safety because loss arithmetic itself is settled-fill based.
+- Invalidate receipts on relevant fills, mutation intents, ambiguous identity,
+  pending private observations, source/scope change, expiry and failed proof.
+  Recheck after rate admission immediately before POST. Reuse cannot extend
+  timestamps, certify an absent order as canceled or retry an unknown create.
+- Keep full startup/recovery/shutdown audits, periodic completeness checks and
+  REST fallback unchanged initially. Reducing their frequency is not this plan.
+- Roll out one independently reversible consumer at a time. Preserve the
+  current source modes, no new durable schema, and all market/risk rules.
+
+### Alternative comparison and estimate correction
+
+Generic endpoint cache: rejected first step; age alone misses fills and
+cross-read ordering, and sequential callers do not benefit from single-flight
+alone. Longer REST intervals: rejected; could slow missing-event detection.
+WebSocket-only promotion: rejected without demonstrated complete live source
+authority and recovery evidence. More concurrency: already bounded/implemented;
+it changes wait distribution rather than removing reads. Whole-engine rewrite:
+unnecessary expansion before smaller measured improvements.
+
+The previously communicated10–20% range is an **engineering target only**, not
+an evidence-backed forecast. None of the new measurements establishes that
+percentage. Phase1 may save less; mutation-heavy periods legitimately invalidate
+receipts. Quantify actual savings from instrumented reasons and matched replay,
+then require non-worse reducer/exit tails, unknown-state recovery and resting
+coverage before deployment. No guarantee against venue429s.
+
+Bot process7592/7606 remained running during review; no new venue exposure query
+was needed for the fake-only comparison, so19:26:58Z remains the last exposure
+check cited here. No source/configuration change, deployment of trading code,
+restart, new collector or implementation authorization. Official Retail private
+WebSocket/rate-limit pages were rechecked; no new contract justifies relaxing
+account authority. Documentation-only handoff records the refined proposal.

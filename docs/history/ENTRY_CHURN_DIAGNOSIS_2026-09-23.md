@@ -81,3 +81,35 @@ exists in REST mode; it is not established as a hybrid-only defect.
 
 No production code fix, policy change, deploy or restart occurred in this
 diagnostic continuation. The300-coverage task remains paused.
+
+## Follow-up: operator-requested fully-private stable comparison
+
+Read the immutable `v1.2.0` tag (`a3defc014`, executable equivalent to3625927fb),
+not the newer REST rollback tag. It is the last designated pre-REST checkpoint
+and passed1,228 tests; by the September10 tagging time the private outage already
+existed. The earlier `v1.1.0` is the separate healthy24-slot canary reference:
+26 API windows/2,774 attempts/zero429s. Neither tag proves today's feed complete.
+No checkout/rollback, historical database activation or live source switch made.
+
+Direct `git show` and diff review found:
+
+| Concern | v1.2.0 private source | Current hybrid source |
+|---|---|---|
+| Ordinary private updates | Projected into ledger; valid private evidence refreshed session freshness | Projected with REST gate retained; neutral ACKs keep cadence, other hints latch POST proof |
+| Cancel-confirmed owner | Exact owner gets priority replan | Same base priority remains, plus scoped REST reducing proof and hybrid final admission |
+| New event awaiting application | No current hybrid pending-queue fence | Any pending event bars POST; safety fence cannot simply be removed |
+| Risk refresh failure | Previous mark retained until freshness expired; refresh could retry at subsequent markets | Settled-window failure immediately clears risk observation; subsequent markets in same sweep do not repeat failed bracket |
+| REST use | Startup/recovery/reconciliation and periodic balance/history reads still existed | Complete account authority remains REST because private completeness is not proved |
+
+The risk-failure change is from971f7812f (September15 six-hour-window work), not
+the September22/23 hybrid change. The per-sweep failed-refresh coalescing is
+froma8888b5e (September12), avoiding per-market API amplification. The old planner
+already cancelled flat entries for `account_new_risk_paused`; that policy was
+not introduced by hybrid. These facts narrow the investigation but do not
+identify the missing exception behind the16:29 live cancellation wave.
+
+Safe reuse: preserve exact-owner wakeups, ordered projection and harmless-ACK
+handling. Do not copy old readiness assumptions, remove the pending-fill fence,
+retry account reads for every market, restore$90 HARD or silently reintroduce
+cash-based trading-loss calculation. Validate the candidate scheduling repair
+against both the current REST baseline and the older event-driven behavior.

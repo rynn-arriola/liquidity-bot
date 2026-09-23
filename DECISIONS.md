@@ -19,7 +19,7 @@
 - Explain proposed changes in plain language, including expected benefit,
   downside, effect on rewards/orders/losses and whether a restart is required.
 - A measurement or watchlist idea is not permission to alter live trading.
-September22: operator authorized building explicit restart-scoped `hybrid` WebSocket assistance with permanent REST fallback, then stopping the separate local availability collector while preserving its data. The inactive-listener prohibition is superseded only inside hybrid; existing modes, engine, risk and strategy remain. No deployment, mode switch or restart requested. [Design](docs/ACCOUNT_SOURCE_ARCHITECTURE.md).
+September22: hybrid Command1 restarted22:54ET on `a46f5f995`; operator then required REST-baseline behavior, explicitly force-stopped at23:08ET and manually closed exposure. Keep stopped; no restart authorization after this stop. Preserve engine/strategy, size15/32 and four$30 settled-loss windows. Performance/reducer repair remains pending. Independent collector remains stopped/data retained. [Design](docs/ACCOUNT_SOURCE_ARCHITECTURE.md) · [Release/incident](docs/history/HYBRID_ACCOUNT_PREPARATION_2026-09-22.md).
 ## Live strategy and risk choices
 | Choice | Decision in force |
 |---|---|

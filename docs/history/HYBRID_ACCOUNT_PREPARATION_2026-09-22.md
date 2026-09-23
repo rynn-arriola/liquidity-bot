@@ -97,3 +97,75 @@ reducer coverage, unresolved/unknown state, fallbacks and API telemetry. Compare
 representative busy/flat windows: exact terminal-read reductions alone do not
 establish aggregate savings. The earlier projected2.5–2.9rps was unverified, not
 an acceptance target or measured result. Do not restart the separate measurement.
+
+## Command1 activation and subsequent reducer investigation
+
+Later Command1 authorized deployment/restart. Authenticated stopped gates at
+02:38:19Z and02:53:09Z on September23 proved zero venue orders/positions,
+unresolved/unknown orders and working ledger exposure. Installed release
+`a46f5f995136f6ec5e79afbf53141f1a0b11029c` passed all2,018 production-environment
+tests in201.012s and225 normalized workstation/runtime artifact hashes. A stopped
+ledger backup was captured02:38:42Z. Source marker was updated after these gates.
+Supervisor407/runner421 started02:54:01Z (September22 22:54ET), explicit
+`auto 15 32 hybrid`; size, slots, four$30 settled-loss windows and caps unchanged.
+The WSL origin fetch stalled; deployment used the already-verified local Git
+checkout as the fetch source. This delay was not test execution time.
+
+Initial observation exceeded six minutes, but sustained acceptance did not pass:
+
+- First three API intervals:928 calls/298.9seconds, about3.105rps. This is not a
+  controlled before/after comparison; the prior claimed2–3% improvement and
+  projected2.5–2.9rps are not demonstrated savings.
+- Later intervals at03:01:37/03:02:56/03:04:21Z reported3.376/3.537/3.473rps.
+  The first contained one balance429; the third two exact-order404s. Earlier
+  zero429 windows do not establish an error-free run.
+- By03:04Z the optional listener reported131 order events,17 hints and zero
+  gaps. REST remained authority. This is not evidence of repeated transport
+  fallback: normal notifications themselves clear the poll timestamp, revoke
+  position confirmation caches and set the global create-admission latch.
+- The latch bars every POST, including reducers, until full reconciliation;
+  successful scoped position proof does not clear it. Logs show reducer
+  ApiAdmissionDeferred attempts, including after terminal cancellation.
+  Individual admission errors lack specific error-code telemetry, so the latch
+  is a supported code-level mechanism, not proof of every observed delay.
+- Pry dmy/Syk ole market `aec-setkameua-prydmy-sykole-2026-09-23` first observed
+  inventory03:00:16Z and reducer acknowledgement03:01:44.828668Z,88.574754s
+  later. This is an observed delay, not WebSocket-equivalent performance.
+  Zavmyk/Pohmyk replacement was positively canceled03:03:21.317128Z,
+  deferred03:03:24.960553Z and acknowledged03:03:30.429427Z (9.112299s gap).
+- Authenticated03:04:13Z found25 orders:22 flat-market entries and three exact
+  reducers covering positions+15,+2,+2; unresolved/unknown counts zero.
+  Ledger26 working vs venue25 is a non-atomic live read, not certified parity.
+
+The operator requires REST-baseline behavior. Before further rollout, reproduce
+notification-driven proof amplification and cancel-confirm-replace admission
+races, then compare coalesced/scoped alternatives without removing fresh exact
+position/ownership proof or changing business rules. No repair is yet implemented.
+Do not infer fill-to-exit latency from fast HTTP acknowledgement timings.
+
+## Operator force stop
+
+The operator explicitly requested force stop during the investigation. At about
+03:08Z the supervisor was stopped, host recovery disarmed and runner421 force
+killed through the approved stop script with zero grace. No restart performed.
+Authenticated03:08:07.798394Z showed22 orders (20 flat-market entries), three
+positions, one unresolved ledger intent and zero unknown orders:
+
+| Market suffix | Position | Venue reducer |
+|---|---:|---|
+| lukpok-marzie | +15 | SELL15 OPEN |
+| xirhan-alikac | -7.54 | None |
+| zavmyk-pohmyk | +2 | SELL2 OPEN |
+
+The operator was immediately warned that orders/positions remain and the stopped
+bot cannot manage the uncovered position. Force stop is not flat proof; the
+unresolved intent needs normal positive reconciliation before any restart.
+No order cancellation, liquidation, ledger repair or risk reset was performed
+by the diagnostic. The separate WS measurement remains stopped.
+
+Operator subsequently reported manual closure. Authenticated03:10:01.130087Z
+proves zero venue orders and zero positions; both former process IDs are absent.
+The stopped ledger still has23 working rows, three position rows and one
+unresolved intent (zero unknown orders). These are stale local records, not
+current venue exposure; normal positive reconciliation must resolve them before
+any later restart. No repair, ledger change or restart performed in this check.

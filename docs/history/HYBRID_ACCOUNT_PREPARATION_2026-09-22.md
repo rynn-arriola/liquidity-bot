@@ -330,3 +330,54 @@ order reads; two changed rows correctly fell back to exact proof. This is direct
 evidence of reduced redundant per-order reads, not a promise of lower aggregate
 traffic or immunity from venue endpoint-specific limits. No pricing, selection,
 position size, pending cap, exit timer or risk rule changed.
+
+## September 23 rollback comparison and prepared follow-up
+
+The operator rolled production back to explicit REST and saved the hybrid source
+for offline repair. Production remains on the REST rollback; none of the work in
+this section was deployed or restarted.
+
+Comparable live log intervals do not support the claim that hybrid alone caused
+HTTP429. The04:31–04:53Z hybrid interval covered1,291.0 seconds:4,419 attempts,
+3,971 reads,448 mutations,29 failures and four429s (3.423 attempts/s). The
+05:11–05:33Z REST interval covered1,297.2 seconds:4,321 attempts,4,040 reads,
+281 mutations,32 failures and four429s (3.331 attempts/s). Conditions were not
+controlled, so this cannot prove equal endpoint risk. It does prove that rollback
+did not eliminate429s. The material hybrid difference was mutation volume, not a
+large aggregate request-rate change.
+
+Review found amplification in event classification. The live hybrid sample had
+369 order frames and18 hints;194 were exact no-fill ACKs, leaving about175 order
+events plus the hints able to restart immediate broad REST proof. Routine terminal
+waves and optional disconnects therefore competed with normal REST cadence even
+though REST remained authoritative.
+
+The prepared follow-up narrows private WebSocket assistance to acceleration:
+
+- fills/partial fills, position updates, malformed data, unknown event types,
+  changed cumulative quantity, or changed order identity/economics wake complete
+  REST proof immediately;
+- exact NEW/no-fill ACKs retain the existing zero-extra-proof path;
+- recognized terminal/no-fill order events project through the durable ledger,
+  block new creates, and coalesce into the ordinary bounded REST proof cadence;
+- snapshots are non-authoritative cadence hints;
+- a listener gap falls back to normal REST timing without revoking a still-fresh
+  REST certificate, while malformed/schema/integrity/REST failures remain strict;
+- routine market-local evidence invalidates only that market's scoped reducer and
+  exit caches, so unrelated evidence cannot strand a separately proved reducer.
+
+The unchanged authority model remains: REST seeds startup, balance, positions,
+history, absence and complete account proof. Private events never prove flatness
+or balance and never release global entry authority. Pending/unproved nontrivial
+events bar POST creates; cancellation remains available. Reducer exceptions remain
+single-use, exact direction/quantity/owner/scope/generation/age certificates.
+
+Focused hybrid coverage now has59 passing tests. The broader hybrid/REST account
+regression set passed235 tests. New cases prove terminal-wave coalescing, immediate
+fill wakeup, changed-price fail-closed handling and unrelated reducer-proof
+isolation. A deliberate reversal that made every terminal event reset the REST
+clock failed the cadence assertion exactly, then the repaired source was restored.
+The final unchanged source passed the complete2,058-test production-virtualenv
+suite in319.863 seconds. Documentation audit and diff whitespace checks pass.
+This remains an isolated prepared branch, not live-performance acceptance or
+deployment authority. No business/risk/selection/price/size/cap rule changed.

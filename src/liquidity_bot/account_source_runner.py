@@ -259,7 +259,8 @@ class AccountSourceRunner(RestFallbackRunner):
         self._snapshot_reader = AccountSnapshotReader()
         self._collected_history = None
         self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0,
-                               "ack_only": 0, "scoped_admissions": 0}
+                               "ack_only": 0, "urgent": 0, "cadence": 0,
+                               "scoped_admissions": 0}
         self._hybrid_requires_reconcile = False
         self._hybrid_reducer_proofs = {}
         self._hybrid_last_report = None
@@ -302,6 +303,49 @@ class AccountSourceRunner(RestFallbackRunner):
         return (row["status"] in {"OPEN", "PENDING", "PARTIAL"}
                 and not row["unknown_reason"]
                 and self._order_matches_row(replace(order, status=row["status"]), row))
+
+    def _hybrid_order_needs_immediate_proof(self, observation, now):
+        """Wake REST for fills, malformed data or changed order facts.
+
+        Terminal/no-fill notifications still bar new POSTs until the ordinary
+        REST cadence proves the account, but do not each restart a whole-account
+        proof. A synchronized expiry wave can therefore coalesce into the same
+        proof REST mode would have performed. Malformed data remains urgent.
+        """
+        raw = (observation.payload.get("execution", {})
+               if isinstance(observation.payload, dict) else {})
+        if not isinstance(raw, dict):
+            return True
+        execution_type = str(raw.get("type") or "").upper()
+        if execution_type in {
+                "EXECUTION_TYPE_FILL", "EXECUTION_TYPE_PARTIAL_FILL"}:
+            return True
+        if execution_type not in {
+                "EXECUTION_TYPE_NEW", "EXECUTION_TYPE_CANCEL",
+                "EXECUTION_TYPE_CANCELED", "EXECUTION_TYPE_EXPIRED",
+                "EXECUTION_TYPE_REJECTED"}:
+            return True
+        wire = raw.get("order", {})
+        if not isinstance(wire, dict):
+            return True
+        if not any(key in wire for key in ("cumQuantity", "cum_quantity")):
+            return True
+        try:
+            order = normalize_order(wire, observed_at=now,
+                resolve_client_id=lambda exchange_id:
+                    self.ledger.resolve_client_order_id(exchange_id))
+        except AdapterError:
+            return True
+        rows = self.ledger.query(
+            "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+            (order.exchange_order_id,))
+        if len(rows) != 1:
+            return True
+        row = rows[0]
+        # Ignore only the expected state transition itself. Any changed
+        # identity/economic field or cumulative quantity is anomalous enough to
+        # demand immediate authoritative proof.
+        return not self._order_matches_row(replace(order, status=row["status"]), row)
 
     def _hybrid_reduction_proved(self, slug, *, consume=False):
         """A completed scoped REST proof clears only this reducer's hint veto.
@@ -355,18 +399,23 @@ class AccountSourceRunner(RestFallbackRunner):
         # the preceding valid REST certificate only as eligibility for the
         # existing two-list unchanged-flat-order optimization; destroying it
         # on every event would force 30 exact reads per notification. Failed
-        # transport/schema/REST proof still revokes the certificate entirely.
-        # Invalidate scoped reuse before any new evidence is projected. An
-        # unchanged no-fill ACK may preserve the normal poll cadence, but can
-        # never clear an earlier fill/hint/gap's pending proof requirement.
-        self._hybrid_reducer_proofs.clear()
-        needs_proof = True
+        # schema/integrity/REST proof still revokes the certificate entirely.
+        # Routine terminal notifications wait for the already-bounded REST
+        # cadence so an expiry wave produces one proof rather than one proof per
+        # frame. Fill evidence and malformed data still wake REST immediately.
+        # A transport gap only removes an optional accelerator: current REST
+        # authority remains exactly as valid as it is in explicit REST mode.
+        needs_proof = False
+        immediate_proof = False
+        affected_slug = None
         try:
             if isinstance(observation, HybridGap):
-                self.gate.on_reconciliation_conflict()
                 self._hybrid_counts["gaps"] += 1
             elif observation.kind == PrivateEventKind.ORDER_UPDATE:
                 needs_proof = not self._hybrid_order_ack_only(observation, now)
+                if needs_proof:
+                    immediate_proof = self._hybrid_order_needs_immediate_proof(
+                        observation, now)
                 # Reuse the exact existing order/fill identity, ownership and
                 # idempotence rules. Its private gate is scratch only; balances
                 # and complete account proof still belong to REST.
@@ -377,6 +426,12 @@ class AccountSourceRunner(RestFallbackRunner):
                 finally:
                     self.gate = active_gate
                 self._hybrid_counts["orders"] += 1
+                raw = (observation.payload.get("execution", {})
+                       if isinstance(observation.payload, dict) else {})
+                wire = raw.get("order", {}) if isinstance(raw, dict) else {}
+                affected_slug = (str(wire.get("marketSlug")
+                                     or wire.get("market_slug") or "").strip()
+                                 if isinstance(wire, dict) else None)
                 if not needs_proof:
                     self._hybrid_counts["ack_only"] += 1
             else:
@@ -384,6 +439,8 @@ class AccountSourceRunner(RestFallbackRunner):
                 # updates may omit market identity. Both trigger full REST
                 # proof; neither can clear orders or overwrite exact quantity.
                 self._hybrid_counts["hints"] += 1
+                needs_proof = True
+                immediate_proof = observation.kind == PrivateEventKind.POSITION_UPDATE
                 for slug in self.active_slugs:
                     self._mark_market_dirty(slug, now)
         except (LedgerConflict, RuntimeInvariantViolation):
@@ -396,13 +453,26 @@ class AccountSourceRunner(RestFallbackRunner):
             self.gate.on_reconciliation_conflict()
             self._hybrid_counts["gaps"] += 1
             needs_proof = True
+            immediate_proof = True
         finally:
             if needs_proof:
+                if immediate_proof or not affected_slug:
+                    self._hybrid_reducer_proofs.clear()
+                else:
+                    self._hybrid_reducer_proofs.pop(affected_slug, None)
                 self._hybrid_requires_reconcile = True
-                self._rest_poll_completed_at = None
-                self._position_confirmation_proofs.clear()
-                self._hard_exit_terminal_proofs.clear()
-                self._hard_exit_retry_authorizations.clear()
+                self._hybrid_counts[
+                    "urgent" if immediate_proof else "cadence"] += 1
+                if immediate_proof:
+                    self._rest_poll_completed_at = None
+                if affected_slug:
+                    self._position_confirmation_proofs.pop(affected_slug, None)
+                    self._hard_exit_terminal_proofs.pop(affected_slug, None)
+                    self._hard_exit_retry_authorizations.pop(affected_slug, None)
+                else:
+                    self._position_confirmation_proofs.clear()
+                    self._hard_exit_terminal_proofs.clear()
+                    self._hard_exit_retry_authorizations.clear()
             stream.applied(event)
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
@@ -658,6 +728,8 @@ class AccountSourceRunner(RestFallbackRunner):
                   f"orders={self._hybrid_counts['orders']} "
                   f"hints={self._hybrid_counts['hints']} gaps={self._hybrid_counts['gaps']} "
                   f"ack_only={self._hybrid_counts['ack_only']} "
+                  f"urgent={self._hybrid_counts['urgent']} "
+                  f"cadence={self._hybrid_counts['cadence']} "
                   f"scoped_admissions={self._hybrid_counts['scoped_admissions']} "
                   "authority=rest", flush=True)
 

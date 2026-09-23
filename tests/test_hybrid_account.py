@@ -286,10 +286,15 @@ class HybridRunnerTests(IsolatedAsyncioTestCase):
 
     async def test_gap_keeps_rest_recovery_and_does_not_mutate_orders(self):
         runner, client = await self.build()
+        completed = runner._rest_poll_completed_at
         await self.deliver(runner, HybridGap("disconnected"))
-        self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
+        self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
+        self.assertEqual(runner._rest_poll_completed_at, completed)
+        self.assertFalse(runner._hybrid_requires_reconcile)
         self.now += timedelta(seconds=1)
-        await runner._refresh_execution_state_for_decision(self.now)
+        with patch.object(runner, "_rest_reconcile", AsyncMock()) as proof:
+            await runner._refresh_execution_state_for_decision(self.now)
+        proof.assert_not_awaited()
         self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
         self.assertEqual(runner.account_state_mode, "hybrid")
         self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
@@ -329,10 +334,48 @@ class HybridRunnerTests(IsolatedAsyncioTestCase):
     async def test_terminal_cancel_always_requires_rest_proof(self):
         runner, _ = await self.build()
         self.fixture.seed_working_order(runner, slug="market-one", side="bid", suffix="one")
+        completed = runner._rest_poll_completed_at
         await self.deliver(runner, self.order_event())
         self.assertTrue(runner._hybrid_requires_reconcile)
-        self.assertIsNone(runner._rest_poll_completed_at)
+        self.assertEqual(runner._rest_poll_completed_at, completed)
+        self.assertEqual(runner._hybrid_counts["cadence"], 1)
         self.assertEqual(runner._hybrid_counts["ack_only"], 0)
+
+    async def test_terminal_wave_coalesces_into_normal_rest_cadence(self):
+        runner, _ = await self.build()
+        self.fixture.seed_working_order(
+            runner, slug="market-one", side="bid", suffix="one")
+        self.fixture.seed_working_order(
+            runner, slug="market-two", side="bid", suffix="two")
+        second = self.order_event(execution_id="cancel-two")
+        second.payload["execution"]["order"]["id"] = "exchange-two"
+        second.payload["execution"]["order"]["marketSlug"] = "market-two"
+        completed = runner._rest_poll_completed_at
+
+        await self.deliver(runner, self.order_event(execution_id="cancel-one"))
+        await self.deliver(runner, second)
+
+        self.assertTrue(runner._hybrid_requires_reconcile)
+        self.assertEqual(runner._rest_poll_completed_at, completed)
+        self.assertEqual(runner._hybrid_counts["cadence"], 2)
+        with patch.object(runner, "_rest_reconcile", AsyncMock()) as proof:
+            self.now = completed + timedelta(seconds=4)
+            await runner._refresh_execution_state_for_decision(self.now)
+            proof.assert_not_awaited()
+            self.now = completed + timedelta(seconds=6)
+            await runner._refresh_execution_state_for_decision(self.now)
+            proof.assert_awaited_once()
+
+    async def test_fill_evidence_wakes_rest_immediately(self):
+        runner, _ = await self.build()
+        self.fixture.seed_working_order(runner, slug="market-one", side="bid", suffix="one")
+        fill = self.order_event(status="ORDER_STATE_PARTIALLY_FILLED",
+                                filled="0.75", execution_id="fill-wakeup")
+        fill.payload["execution"]["type"] = "EXECUTION_TYPE_PARTIAL_FILL"
+        await self.deliver(runner, fill)
+        self.assertTrue(runner._hybrid_requires_reconcile)
+        self.assertIsNone(runner._rest_poll_completed_at)
+        self.assertEqual(runner._hybrid_counts["urgent"], 1)
 
     async def test_new_no_fill_ack_of_exact_pending_create_avoids_extra_poll(self):
         runner, _ = await self.build()
@@ -352,8 +395,8 @@ class HybridRunnerTests(IsolatedAsyncioTestCase):
         self.assertFalse(runner._hybrid_requires_reconcile)
         self.assertEqual(runner._rest_poll_completed_at, completed)
 
-    async def test_changed_cumulative_unknown_type_or_missing_cumulative_requires_proof(self):
-        for change in ("fill", "type", "missing", "foreign"):
+    async def test_changed_order_unknown_type_or_missing_cumulative_requires_proof(self):
+        for change in ("fill", "price", "type", "missing", "foreign"):
             with self.subTest(change=change):
                 runner, _ = await self.build()
                 self.fixture.seed_working_order(runner, slug="market-one", side="bid", suffix="one")
@@ -362,6 +405,8 @@ class HybridRunnerTests(IsolatedAsyncioTestCase):
                 raw["type"] = "EXECUTION_TYPE_NEW"
                 if change == "fill":
                     raw["order"]["cumQuantity"] = "0.75"
+                elif change == "price":
+                    raw["order"]["price"]["value"] = "0.48"
                 elif change == "type":
                     raw["type"] = "EXECUTION_TYPE_FUTURE"
                 elif change == "missing":
@@ -508,6 +553,47 @@ class HybridReducerContinuityTests(continuity.RestReducerContinuityTests):
         self.assertEqual(runner.gate.last_reconcile_at, before)
         with self.assertRaises(ApiAdmissionDeferred):
             await runner.executor.gateway.create(payload, reducing=True)
+
+    async def test_unrelated_terminal_notice_preserves_scoped_reducer_proof(self):
+        runner, client, held = await self.build()
+        runner._bind_markets((held, "flat"))
+        self.fixture.seed_working_order(
+            runner, slug="flat", side="bid", suffix="flat")
+        client.orders.rows["exchange-flat"] = raw_order(
+            id="exchange-flat", marketSlug="flat", side="BUY", quantity="10",
+            cumQuantity="0", state="ORDER_STATE_NEW",
+            createTime=self.now.isoformat(),
+            price={"value": "0.49", "currency": "USD"})
+        payload = await self.proof_then_intent(runner, client, held)
+        terminal = raw_order(
+            id="exchange-flat", marketSlug="flat", side="BUY", quantity="10",
+            cumQuantity="0", state="ORDER_STATE_CANCELED",
+            createTime=self.now.isoformat(), lastTransactTime=self.now.isoformat(),
+            price={"value": "0.49", "currency": "USD"})
+        await runner.private_stream._put(PrivateEvent(
+            Kind.ORDER_UPDATE,
+            {"execution": raw_execution(
+                id="flat-cancel", order=terminal,
+                type="EXECUTION_TYPE_CANCELED",
+                transactTime=self.now.isoformat())},
+            "flat-cancel"))
+        await runner._drain_private_events()
+
+        self.assertIn(held, runner._hybrid_reducer_proofs)
+        self.assertNotIn("flat", runner._hybrid_reducer_proofs)
+        await runner.executor.gateway.create(payload, reducing=True)
+        self.assertEqual(len(client.orders.create_calls), 1)
+
+    async def test_optional_stream_gap_preserves_scoped_rest_reducer_proof(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        await runner.private_stream._put(HybridGap("disconnected"))
+        await runner._drain_private_events()
+
+        self.assertIn(held, runner._hybrid_reducer_proofs)
+        self.assertTrue(runner.gate.session_ready(runner.ledger, now=self.now))
+        await runner.executor.gateway.create(payload, reducing=True)
+        self.assertEqual(len(client.orders.create_calls), 1)
 
     async def test_failed_final_admission_does_not_consume_scoped_certificate(self):
         runner, client, held = await self.build()

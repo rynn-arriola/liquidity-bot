@@ -25,27 +25,31 @@ backpressures; upstream overflow becomes an explicit gap requiring REST.
 Task-held observations precede queued observations even when REST service
 drains them before the outer loop consumes its task result.
 
-September22 reducer repair preserves the REST cancel-confirm-replace contract:
+September23 follow-up keeps the REST cancel-confirm-replace contract:
 a completed exact-owner proof (complete account orders/positions/history included)
 can discharge the applied-hint veto once for its exact reducing intent. It cannot
 renew global entry authority, bypass the usual REST/driver gates, survive another
-observation/proof or pending frame, or authorize a different quantity/direction.
+relevant observation/proof or pending frame, or authorize a different
+quantity/direction.
 Proof age, source generation, scope and account ambiguity are rechecked at final
-admission. Entries still require global proof. Positively owned, unchanged-cumulative
-NEW/CANCEL acknowledgements retain normal polling cadence; fills, incomplete fields,
-unknown event types and position/snapshot hints do not. Old fully-private mode did
-not globally revoke readiness for every order ACK; this restores that distinction
-without treating the incomplete current stream as authoritative position coverage.
+admission. Entries still require global proof. Positively owned NEW/no-fill ACKs
+need no added proof. Recognized terminal/no-fill events project immediately but
+coalesce behind ordinary REST cadence; fills, changed identity/economic fields,
+incomplete fields, unknown event types and position updates wake REST immediately.
+Snapshots are non-authoritative cadence hints. Old fully-private mode did not
+globally restart REST proof for every order notification; this restores that
+distinction without treating the incomplete stream as position authority.
 
 An unapplied observation or a projected hint without subsequent REST proof blocks
 order-create admission, including reducers whose exact size could have changed.
 The narrow scoped reducer proof above does not clear the global hint requirement.
-Cancels remain available. Normal hints retain the prior
-valid REST certificate only for the existing unchanged-flat-order bulk proof;
-transport/schema/integrity/read failures revoke it. This avoids turning every
-notification into a full-slate exact-order scan. Mandatory REST freshness and
-the configured 5/1-second targets are not relaxed. Invalid wire messages fall
-back; identity/ledger conflicts retain critical handling.
+Cancels remain available. Routine evidence invalidates only its affected market's
+scoped caches. Listener disconnect/gap removes the optional accelerator but does
+not make an otherwise-fresh REST certificate less valid than explicit REST mode.
+Malformed/schema/identity/ledger or REST-read failures remain fail-closed and
+revoke authority. This avoids turning every expiry/cancel wave or reconnect into
+full-slate proof. Mandatory REST freshness and the configured 5/1-second targets
+are not relaxed.
 
 Use `./scripts/start_commissioning.sh auto 15 32 hybrid` only after an
 authorized reviewed deployment and ordinary flat/clear startup gates. Disabling
@@ -53,7 +57,8 @@ uses the same workflow with `rest`. Live in-process switches involving hybrid
 are refused in this release; the existing REST/WebSocket handoff is unchanged.
 Configuration defaults and the persisted live selection are not changed by
 implementation. `[hybrid-account]` telemetry distinguishes listening, receiving
-and REST fallback and counts notifications/gaps without new API calls.
+and REST fallback and separates `urgent` REST wakeups from cadence-coalesced
+notifications without new API calls.
 
 Offline acceptance covers exact REST fallback, a saved lookup from positive
 terminal evidence, duplicate/partial fills, task-held ordering, snapshot

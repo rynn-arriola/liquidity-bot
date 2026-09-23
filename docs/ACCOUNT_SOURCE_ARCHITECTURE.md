@@ -51,6 +51,15 @@ revoke authority. This avoids turning every expiry/cancel wave or reconnect into
 full-slate proof. Mandatory REST freshness and the configured 5/1-second targets
 are not relaxed.
 
+Read-only market discovery classifies pending hybrid observations before deciding
+to interrupt. Exact unchanged ACKs and listener gaps do not discard a scan; any
+unproved substantive observation still yields, including one already drained.
+The existing REST position watcher remains active because private delivery can
+be incomplete. Long discovery does not renew account authority: new risk still
+needs ordinary fresh account proof after collection. Offline comparative evidence
+and limitations are recorded in the
+[September23 scoped review](history/HYBRID_REST_PERFORMANCE_REVIEW_2026-09-23.md).
+
 Use `./scripts/start_commissioning.sh auto 15 32 hybrid` only after an
 authorized reviewed deployment and ordinary flat/clear startup gates. Disabling
 uses the same workflow with `rest`. Live in-process switches involving hybrid

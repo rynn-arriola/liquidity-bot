@@ -480,6 +480,13 @@ class AccountSourceRunner(RestFallbackRunner):
         if self.account_state_mode == "hybrid":
             await self._drain_private_events()
             now = self._now()
+            # The base periodic path can return without collecting anything.
+            # Preserve an applied hint until an actual full proof, rather than
+            # treating that cadence no-op as reconciliation completion.
+            if (self.rest_polling_policy.enabled and tag == "periodic"
+                    and self.gate.session_ready(self.ledger, now=now)
+                    and not self._rest_poll_due(now)):
+                return
         result = await super()._rest_reconcile(
             now, tag=tag, strict_order_markets=strict_order_markets)
         if self.account_state_mode == "hybrid":
@@ -531,11 +538,18 @@ class AccountSourceRunner(RestFallbackRunner):
                     or scope != tuple(self.active_slugs)):
                 raise ApiAdmissionDeferred("catalog interrupted by owner state",
                     error_code="LOCAL_CATALOG_INTERRUPTED", retry_after_seconds=1)
-            if (self.account_state_mode == "hybrid"
-                    and self.private_stream.pending):
-                await self._drain_private_events()
-                raise ApiAdmissionDeferred("catalog yielded to private observation",
-                    error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
+            if self.account_state_mode == "hybrid":
+                if self.private_stream.pending:
+                    await self._drain_private_events()
+                # Classify before interrupting optional work. Exact no-fill
+                # ACKs and listener gaps leave REST authority intact; aborting
+                # on queue presence alone repeatedly discarded healthy scans.
+                # Earlier applied uncertainty must still interrupt even when
+                # the queue is now empty. The REST position watch below stays
+                # active because optional private delivery can be incomplete.
+                if self._hybrid_requires_reconcile:
+                    raise ApiAdmissionDeferred("catalog yielded to private observation",
+                        error_code="LOCAL_CATALOG_ACCOUNT_CHANGED", retry_after_seconds=1)
             if not self._using_rest_source():
                 try:
                     await self._drain_private_events()

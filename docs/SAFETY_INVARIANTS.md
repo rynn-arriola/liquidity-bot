@@ -1116,7 +1116,7 @@ These are implementation requirements, not suggestions.
     Applied hints require subsequent REST proof. A successful complete scoped
     position proof may discharge that hint veto once for only its exact reducer:
     unchanged source generation/scope/quantity, original proof age at most30s,
-    no later observation/proof, no queued message, no working owner order or
+    no later invalidating observation/proof, no queued message, no working owner order or
     account ambiguity, and only the matching unsent reducing intent. The normal
     REST gate/driver checks still apply; entry authority and poll time never renew.
     A positively owned, exact unchanged-cumulative no-fill OPEN/NEW acknowledgement
@@ -1126,12 +1126,23 @@ These are implementation requirements, not suggestions.
     cannot exclude a missing fill/position race. A scoped certificate permits
     only the runner's canonical BUY_LONG/BUY_SHORT reducing intent and is consumed
     only after every final local admission callback passes. A private event during
-    scoped proof invalidates both hybrid and base REST scoped caches. Transport/
-    schema failure revokes proof and
-    reconnects with bounded backoff; ledger/ownership conflicts remain critical.
+    scoped proof invalidates both hybrid and base REST scoped caches. Routine
+    market-local terminal evidence invalidates its owner's scoped caches; urgent
+    or unscoped uncertainty clears every hybrid reducer certificate. A transport
+    gap preserves current REST authority and reconnects with bounded backoff;
+    schema failure revokes proof, while ledger/ownership conflicts remain critical.
     Uncertain notifications may retain the prior valid REST certificate only
     for existing two-list flat-order optimization, never as permission to skip
     the required post-notification proof. Existing REST cadence, expiry, caps,
     balance/history and every risk/exit rule remain. Mode choice is explicit;
     missing private messages use REST without changing the selected mode or
     canceling healthy quotes solely because the optional listener failed.
+    Read-only catalog work classifies queued events before yielding: an exact
+    unchanged ACK or optional transport gap cannot alone discard discovery.
+    Previously applied uncertainty must yield even with an empty event queue.
+    The REST position watch, stop/scope/generation/deadline checks, and final
+    authenticated account proof before new risk remain mandatory. Completing a
+    scan never renews an expired account gate.
+    A cadence-skipped periodic refresh cannot clear the applied-hint veto; only
+    a successful full proof may do so. A scoped proof retains its reducer-only
+    exception and cannot discharge global uncertainty.

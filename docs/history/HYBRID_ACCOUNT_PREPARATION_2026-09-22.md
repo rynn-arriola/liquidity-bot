@@ -381,3 +381,7 @@ The final unchanged source passed the complete2,058-test production-virtualenv
 suite in319.863 seconds. Documentation audit and diff whitespace checks pass.
 This remains an isolated prepared branch, not live-performance acceptance or
 deployment authority. No business/risk/selection/price/size/cap rule changed.
+
+The subsequent [scoped performance review](HYBRID_REST_PERFORMANCE_REVIEW_2026-09-23.md)
+adds a catalog-checkpoint repair and controlled REST/hybrid workload comparisons.
+It does not attribute the earlier mutation difference to proof amplification.

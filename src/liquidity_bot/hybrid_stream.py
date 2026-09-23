@@ -1,8 +1,8 @@
 """Optional private notifications over the continuously available REST source.
 
 This reader has no ledger, REST client or trading authority. It never reports
-private readiness from a Pong. A transport gap is a typed reconciliation hint,
-not a synthetic private event or a reason to cancel healthy orders.
+private readiness from a Pong. A transport gap is a typed availability notice,
+not a synthetic private event, revoked REST proof or a reason to cancel orders.
 """
 from __future__ import annotations
 

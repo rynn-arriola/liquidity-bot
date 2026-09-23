@@ -1,6 +1,17 @@
 # Stable release and rollback anchor
 
-## Current stable baseline
+## Current REST rollback anchor
+
+`stable-rest-2026-09-23` preserves the operator-selected running REST version
+at `6deb707c6a5d9e6a56cdf983840b60f202e64dc2`. Its executable content restores
+the September22 20:00 ET version, before private hybrid work. The operating
+envelope is size15/32, four$30 settled-loss windows, and unchanged pending-entry
+tiers excluding positions/reducers/exits. It is a rollback reference, not a
+claim of profitability or immunity from429s. Runtime exposure/data are not tagged.
+The saved hybrid trial is `saved-hybrid-2026-09-23` at `1401d4533`; reviewed
+follow-up work remains separate and requires new deployment/start authorization.
+
+## Earlier pre-REST stable baseline
 
 `v1.2.0` is the immutable reviewed **pre-REST-fallback** checkpoint requested
 on September 10, 2026. It points to
@@ -12,8 +23,9 @@ repairs. This checkpoint intentionally retains the fail-closed private-feed
 requirement: it is **not currently tradable proof** during the silent-feed
 incident. No runtime data, credentials or venue exposure is included.
 
-The separately opt-in temporary REST source is experimental, not a replacement
-stable tag. See [REST fallback](history/REST_ACCOUNT_FALLBACK_2026-09-10.md).
+At that September10 checkpoint, the separately opt-in REST source was
+experimental. See [REST fallback](history/REST_ACCOUNT_FALLBACK_2026-09-10.md);
+the later operator-selected REST anchor above supersedes it for current rollback.
 
 ## Saved experimental alternative
 
@@ -67,7 +79,7 @@ has completed acceptance, or live exchange/account state can be rolled back.
 ## What the tag can restore
 
 - tracked source, scripts, tests and documentation;
-- the exact startup validation and size-10 operating envelope;
+- the selected tag's exact startup validation and operating envelope;
 - a known comparison point for reviewing every later change.
 
 It cannot restore or undo venue orders, positions, rewards, credentials,
@@ -78,7 +90,7 @@ server-local databases, logs, runtime setting files or schema migrations.
 Never use a destructive reset of `main` and never equate a code rollback with
 a flat account. When the operator requests a rollback:
 
-1. Select the intended immutable stable tag (normally `v1.2.0`), preserve all
+1. Select the intended immutable stable tag (currently `stable-rest-2026-09-23`), preserve all
    dirty workstation/runtime files and identify the suspect commits with
    `git diff <stable-tag>..HEAD`.
 2. Verify live process, orders, positions and unresolved ownership. Stop or

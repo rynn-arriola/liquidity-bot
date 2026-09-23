@@ -7,6 +7,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
 import test_live_commissioning as fixtures
+import test_rest_reducer_continuity as continuity
 from test_venue_state import raw_order, raw_execution
 from liquidity_bot.account_source import startup_mode
 from liquidity_bot.account_source_runner import AccountSourceRunner
@@ -309,3 +310,242 @@ class HybridRunnerTests(IsolatedAsyncioTestCase):
             with self.assertRaises(AdapterError):
                 await runner._rest_reconcile(self.now)
         self.assertFalse(runner.gate.session_ready(runner.ledger, now=self.now))
+
+    async def test_no_fill_ack_preserves_rest_cadence_but_not_prior_hint(self):
+        runner, _ = await self.build()
+        self.fixture.seed_working_order(runner, slug="market-one", side="bid", suffix="one")
+        completed = runner._rest_poll_completed_at
+        await self.deliver(runner, self.order_event())
+        self.assertEqual(runner._rest_poll_completed_at, completed)
+        self.assertFalse(runner._hybrid_requires_reconcile)
+        self.assertEqual(runner._hybrid_counts["ack_only"], 1)
+        await self.deliver(runner, PrivateEvent(Kind.POSITION_UPDATE, {}, "hint"))
+        await self.deliver(runner, self.order_event())
+        self.assertTrue(runner._hybrid_requires_reconcile)
+        self.assertIsNone(runner._rest_poll_completed_at)
+
+    async def test_new_no_fill_ack_of_exact_pending_create_avoids_extra_poll(self):
+        runner, _ = await self.build()
+        runner.ledger.prepare_intent("new", "PLACE", "market-one", "client-one", {
+            "marketSlug": "market-one", "intent": "ORDER_INTENT_BUY_LONG",
+            "price": {"value": "0.49", "currency": "USD"}, "quantity": "10",
+        }, created_at=self.now)
+        runner.ledger.transition_intent("new", "SUBMITTING", updated_at=self.now)
+        runner.ledger.transition_intent("new", "ACKNOWLEDGED", updated_at=self.now,
+                                        exchange_order_id="exchange-one")
+        event = self.order_event(status="ORDER_STATE_NEW", execution_id="new")
+        event.payload["execution"]["type"] = "EXECUTION_TYPE_NEW"
+        event.payload["execution"]["order"]["side"] = "ORDER_SIDE_BUY"
+        completed = runner._rest_poll_completed_at
+        await self.deliver(runner, event)
+        self.assertFalse(runner.ledger.unresolved_intents())
+        self.assertFalse(runner._hybrid_requires_reconcile)
+        self.assertEqual(runner._rest_poll_completed_at, completed)
+
+    async def test_changed_cumulative_unknown_type_or_missing_cumulative_requires_proof(self):
+        for change in ("fill", "type", "missing", "foreign"):
+            with self.subTest(change=change):
+                runner, _ = await self.build()
+                self.fixture.seed_working_order(runner, slug="market-one", side="bid", suffix="one")
+                event = self.order_event()
+                raw = event.payload["execution"]
+                if change == "fill":
+                    raw["order"]["cumQuantity"] = "0.75"
+                elif change == "type":
+                    raw["type"] = "EXECUTION_TYPE_FUTURE"
+                elif change == "missing":
+                    del raw["order"]["cumQuantity"]
+                else:
+                    raw["order"]["id"] = "unowned-order"
+                await self.deliver(runner, event)
+                self.assertTrue(runner._hybrid_requires_reconcile)
+                self.assertIsNone(runner._rest_poll_completed_at)
+
+
+class HybridReducerContinuityTests(continuity.RestReducerContinuityTests):
+    """Run the existing REST cancel/replace contract unchanged in hybrid too."""
+
+    async def build(self):
+        original = self.fixture.build_runner
+        def build_runner(**kwargs):
+            runner, client, notifier = original(**kwargs)
+            runner._websocket_factory = SilentStream
+            return runner, client, notifier
+        with patch.object(continuity, "RestFallbackRunner", partial(
+                AccountSourceRunner, account_state_mode="hybrid")), \
+                patch.object(self.fixture, "build_runner", build_runner):
+            return await super().build()
+
+    async def hint(self, runner):
+        await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "hint"))
+        await runner._drain_private_events()
+
+    async def test_hint_during_cancel_uses_scoped_proof_before_next_flat_owner(self):
+        runner, client, held = await self.build()
+        runner._bind_markets((held, "flat"))
+        old_gate = runner.gate.last_reconcile_at
+        cancel = client.orders.cancel
+        async def cancel_with_hint(*args):
+            result = await cancel(*args)
+            await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "cancel-race"))
+            return result
+        original = runner._decide_for_market
+        visited = []
+        async def decide(slug, now):
+            visited.append(slug)
+            if slug == "flat":
+                self.assertEqual(len(client.orders.create_calls), 1)
+                return None, 0
+            runner.state_for(held).book_observed_at = self.now
+            return await original(slug, now)
+        with patch.object(client.orders, "cancel", cancel_with_hint), \
+                patch.object(runner, "_decide_for_market", decide), \
+                patch.object(runner, "_refresh_equity_for_decision", AsyncMock()), \
+                patch.object(runner, "_rest_reconcile", AsyncMock(
+                    side_effect=AssertionError("unnecessary global proof"))):
+            await runner._decision_sweep((held, "flat"))
+        self.assertEqual(visited[:2], [held, held])
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertEqual(Decimal(client.orders.create_calls[0]["quantity"]), 10)
+        self.assertTrue(runner._hybrid_requires_reconcile)  # Entries still need global proof.
+        self.assertEqual(runner.gate.last_reconcile_at, old_gate)
+
+    async def proof_then_intent(self, runner, client, held, *, quantity="10", direction=None):
+        client.orders.rows["exchange-reducer"]["state"] = "ORDER_STATE_CANCELED"
+        self.now += timedelta(seconds=.1)
+        await self.hint(runner)
+        await runner._reconcile_position_state(held, tag="position-transition")
+        payload = {"marketSlug": held, "quantity": quantity,
+                   "intent": direction or "ORDER_INTENT_BUY_SHORT",
+                   "price": {"value": "0.50", "currency": "USD"}}
+        runner.ledger.prepare_intent("replacement", "PLACE", held, "replacement-client",
+                                     payload, created_at=self.now)
+        runner.ledger.transition_intent("replacement", "SUBMITTING", updated_at=self.now)
+        return payload
+
+    async def test_scoped_certificate_refuses_bad_quantity_direction_age_scope_and_entry(self):
+        for change in ("quantity", "direction", "age", "future", "scope", "generation", "entry", "position", "gate"):
+            with self.subTest(change=change):
+                runner, client, held = await self.build()
+                payload = await self.proof_then_intent(runner, client, held,
+                    quantity="11" if change == "quantity" else "10",
+                    direction="ORDER_INTENT_BUY_LONG" if change == "direction" else None)
+                if change == "age":
+                    self.now += timedelta(seconds=31)
+                elif change == "future":
+                    self.now -= timedelta(seconds=1)
+                elif change == "scope":
+                    runner._bind_markets((held, "other"))
+                elif change == "generation":
+                    runner.source_control.generation += 1
+                elif change == "position":
+                    from liquidity_bot.execution_ledger import PositionState
+                    runner.ledger.apply_position_event("test", "changed", PositionState(
+                        held, Decimal(9), self.now + timedelta(seconds=1)), received_at=self.now)
+                elif change == "gate":
+                    runner.gate.on_reconciliation_conflict()
+                with self.assertRaises(ApiAdmissionDeferred):
+                    await runner.executor.gateway.create(payload, reducing=change != "entry")
+                self.assertFalse(client.orders.create_calls)
+
+    async def test_new_message_after_scoped_proof_still_blocks_reducer(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "late"))
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+        await runner._drain_private_events()
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+        self.assertFalse(client.orders.create_calls)
+
+    async def test_notification_during_scoped_proof_cannot_certify_reducer(self):
+        runner, client, held = await self.build()
+        original = runner.account.fetch_positions
+        async def positions(**kwargs):
+            await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "during"))
+            return await original(**kwargs)
+        with patch.object(runner.account, "fetch_positions", positions):
+            payload = await self.proof_then_intent(runner, client, held)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+        self.assertFalse(client.orders.create_calls)
+
+    async def test_failed_scoped_proof_revokes_existing_certificate(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        with patch.object(runner.account, "fetch_positions", AsyncMock(side_effect=AdapterError("503"))):
+            with self.assertRaises(AdapterError):
+                await runner._reconcile_position_state(held, tag="failed")
+        self.assertFalse(runner._hybrid_reducer_proofs)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+
+    async def test_fresh_scoped_reducer_proof_is_one_use_and_does_not_release_entries(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        before = runner.gate.last_reconcile_at
+        await runner.executor.gateway.create(payload, reducing=True)
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertTrue(runner._hybrid_requires_reconcile)
+        self.assertEqual(runner._hybrid_counts["scoped_admissions"], 1)
+        self.assertEqual(runner.gate.last_reconcile_at, before)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+
+    async def test_fill_racing_cancel_uses_residual_not_previous_quantity(self):
+        runner, client, held = await self.build()
+        cancel = client.orders.cancel
+        async def cancel_with_fill(*args):
+            result = await cancel(*args)
+            client.orders.rows[args[0]]["cumQuantity"] = "8"
+            client.portfolio.rows[held]["netPositionDecimal"] = "2"
+            client.portfolio.rows[held]["cost"]["value"] = "0.98"
+            await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "partial"))
+            return result
+        original = runner._decide_for_market
+        async def decide(slug, now):
+            runner.state_for(held).book_observed_at = self.now
+            return await original(slug, now)
+        with patch.object(client.orders, "cancel", cancel_with_fill), \
+                patch.object(runner, "_decide_for_market", decide), \
+                patch.object(runner, "_refresh_equity_for_decision", AsyncMock()):
+            await runner._decision_sweep((held,))
+        self.assertEqual(len(client.orders.create_calls), 1)
+        self.assertEqual(Decimal(client.orders.create_calls[0]["quantity"]), 2)
+
+    async def test_pending_message_during_admission_wait_vetoes_prepared_reducer(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        original = runner.gateway.limiter.wait
+        async def delayed(*args, **kwargs):
+            await runner.private_stream._put(PrivateEvent(Kind.POSITION_UPDATE, {}, "admission-race"))
+            return await original(*args, **kwargs)
+        with patch.object(runner.gateway.limiter, "wait", delayed):
+            with self.assertRaises(ApiAdmissionDeferred):
+                await runner.executor.gateway.create(payload, reducing=True)
+        self.assertFalse(client.orders.create_calls)
+
+    async def test_scoped_reducers_preserve_size15_and_fractional_long_short_positions(self):
+        for quantity in ("15", "-15", "0.04", "-7.54"):
+            with self.subTest(quantity=quantity):
+                runner, client, held = await self.build()
+                exact = Decimal(quantity)
+                client.portfolio.rows[held] = {
+                    "netPositionDecimal": quantity,
+                    "cost": {"value": str(abs(exact) * Decimal("0.49")), "currency": "USD"}}
+                payload = await self.proof_then_intent(runner, client, held,
+                    quantity=str(abs(exact)), direction=("ORDER_INTENT_BUY_SHORT"
+                        if exact > 0 else "ORDER_INTENT_BUY_LONG"))
+                await runner.executor.gateway.create(payload, reducing=True)
+                self.assertEqual(Decimal(client.orders.create_calls[0]["quantity"]), abs(exact))
+
+    async def test_other_unresolved_intent_prevents_scoped_admission(self):
+        runner, client, held = await self.build()
+        payload = await self.proof_then_intent(runner, client, held)
+        runner.ledger.prepare_intent("other", "PLACE", "other-market", "other-client",
+                                     {**payload, "marketSlug": "other-market"}, created_at=self.now)
+        runner.ledger.transition_intent("other", "SUBMITTING", updated_at=self.now)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner.executor.gateway.create(payload, reducing=True)
+        self.assertFalse(client.orders.create_calls)

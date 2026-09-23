@@ -9,6 +9,7 @@ from __future__ import annotations
 from . import read_backoff
 
 import asyncio
+import json
 from collections import deque
 from dataclasses import replace
 from datetime import timedelta
@@ -52,7 +53,10 @@ class SourceTradingGateway(RestProofTradingGateway):
                     error_code="LOCAL_ACCOUNT_SOURCE_CHANGED", retry_after_seconds=1)
             if (operation == "POST /v1/orders"
                     and isinstance(owner.private_stream, HybridPrivateStream)
-                    and (owner.private_stream.pending or owner._hybrid_requires_reconcile)):
+                    and (owner.private_stream.pending
+                         or (owner._hybrid_requires_reconcile
+                             and not owner._hybrid_reduction_proved(
+                                 self._reducing_market.get())))):
                 # Includes a task-held earlier event. No create/reducer uses
                 # quantity captured before an unapplied fill or position hint.
                 raise ApiAdmissionDeferred("private observation pending; request not sent",
@@ -241,9 +245,89 @@ class AccountSourceRunner(RestFallbackRunner):
         self.executor.gateway = SourceTradingGateway(self)
         self._snapshot_reader = AccountSnapshotReader()
         self._collected_history = None
-        self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0}
+        self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0,
+                               "ack_only": 0, "scoped_admissions": 0}
         self._hybrid_requires_reconcile = False
+        self._hybrid_reducer_proofs = {}
         self._hybrid_last_report = None
+
+    def _hybrid_order_ack_only(self, observation, now):
+        """Recognize a known order's no-fill acknowledgement, never new exposure.
+
+        This is only a refresh scheduling optimization. The normal projector
+        still validates/applies the event; unknown fields/types retain full proof.
+        """
+        raw = (observation.payload.get("execution", {})
+               if isinstance(observation.payload, dict) else {})
+        if not isinstance(raw, dict):
+            return False
+        if raw.get("type") not in {
+                "EXECUTION_TYPE_NEW", "EXECUTION_TYPE_CANCEL", "EXECUTION_TYPE_CANCELED"}:
+            return False
+        wire = raw.get("order", {})
+        if not isinstance(wire, dict) or not any(
+                key in wire for key in ("cumQuantity", "cum_quantity")):
+            return False
+        order = normalize_order(wire, observed_at=now,
+            resolve_client_id=lambda exchange_id: self.ledger.resolve_client_order_id(exchange_id))
+        client_id = self.ledger.resolve_client_order_id(order.exchange_order_id)
+        if not client_id or client_id.startswith("venue:"):
+            return False
+        if ((raw["type"] == "EXECUTION_TYPE_NEW") != (order.status == "OPEN")):
+            return False
+        rows = self.ledger.query(
+            "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+            (order.exchange_order_id,))
+        if not rows:
+            return any(self._pending_place_matches_order(order, intent)
+                       for intent in self.ledger.unresolved_intents())
+        if len(rows) != 1:
+            return False
+        row = rows[0]
+        return (order.status in {"OPEN", "CANCELED"}
+                and row["status"] in {"OPEN", "PENDING", "PARTIAL", "CANCELED"}
+                and not row["unknown_reason"]
+                and self._order_matches_row(replace(order, status=row["status"]), row))
+
+    def _hybrid_reduction_proved(self, slug):
+        """A completed scoped REST proof clears only this reducer's hint veto.
+
+        It does not renew the global gate or polling clock. Pending stream data,
+        another observation/proof, changed scope/quantity, ambiguity or age still
+        refuse. The usual REST gateway and driver checks remain mandatory.
+        """
+        proof = self._hybrid_reducer_proofs.get(slug)
+        if proof is None:
+            return False
+        scope, generation, quantity, started = proof
+        pending = self.ledger.unresolved_intents()
+        if not (scope == tuple(self.active_slugs)
+                and generation == self.source_control.generation
+                and self.account_state_mode == "hybrid"
+                and 0 <= (self._now() - started).total_seconds() <= 30
+                and quantity != 0 and quantity == self.ledger.position(slug)
+                and not self.private_stream.pending
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders()
+                and len(pending) == 1):
+            return False
+        intent = pending[0]
+        if not (intent["market_slug"] == slug and intent["operation"] == "PLACE"
+                and intent["state"] == "SUBMITTING" and not intent["exchange_order_id"]):
+            return False
+        try:
+            payload = json.loads(intent["payload_json"])
+            valid = (Decimal(str(payload.get("quantity"))) == abs(quantity)
+                    and payload.get("marketSlug") == slug
+                    and payload.get("intent") in (
+                        {"ORDER_INTENT_SELL_LONG", "ORDER_INTENT_BUY_SHORT"} if quantity > 0
+                        else {"ORDER_INTENT_BUY_LONG", "ORDER_INTENT_SELL_SHORT"}))
+        except (ValueError, ArithmeticError, AttributeError, TypeError):
+            return False
+        if valid:
+            self._hybrid_reducer_proofs.pop(slug, None)
+            self._hybrid_counts["scoped_admissions"] += 1
+        return valid
 
     async def _observe_private(self, event, now):
         if not isinstance(event, HybridDelivery):
@@ -253,21 +337,22 @@ class AccountSourceRunner(RestFallbackRunner):
             return
         observation = event.event
         # No private observation renews the REST authority/quantity clock.
-        # A normal notification schedules proof and bars POST admission. Keep
+        # An uncertain notification schedules proof and bars POST admission. Keep
         # the preceding valid REST certificate only as eligibility for the
         # existing two-list unchanged-flat-order optimization; destroying it
         # on every event would force 30 exact reads per notification. Failed
         # transport/schema/REST proof still revokes the certificate entirely.
-        self._hybrid_requires_reconcile = True
-        self._rest_poll_completed_at = None
-        self._position_confirmation_proofs.clear()
-        self._hard_exit_terminal_proofs.clear()
-        self._hard_exit_retry_authorizations.clear()
+        # Invalidate scoped reuse before any new evidence is projected. An
+        # unchanged no-fill ACK may preserve the normal poll cadence, but can
+        # never clear an earlier fill/hint/gap's pending proof requirement.
+        self._hybrid_reducer_proofs.clear()
+        needs_proof = True
         try:
             if isinstance(observation, HybridGap):
                 self.gate.on_reconciliation_conflict()
                 self._hybrid_counts["gaps"] += 1
             elif observation.kind == PrivateEventKind.ORDER_UPDATE:
+                needs_proof = not self._hybrid_order_ack_only(observation, now)
                 # Reuse the exact existing order/fill identity, ownership and
                 # idempotence rules. Its private gate is scratch only; balances
                 # and complete account proof still belong to REST.
@@ -278,6 +363,8 @@ class AccountSourceRunner(RestFallbackRunner):
                 finally:
                     self.gate = active_gate
                 self._hybrid_counts["orders"] += 1
+                if not needs_proof:
+                    self._hybrid_counts["ack_only"] += 1
             else:
                 # Initial snapshots can be delayed/partial. Global position
                 # updates may omit market identity. Both trigger full REST
@@ -294,10 +381,18 @@ class AccountSourceRunner(RestFallbackRunner):
             stream.request_reconnect()
             self.gate.on_reconciliation_conflict()
             self._hybrid_counts["gaps"] += 1
+            needs_proof = True
         finally:
+            if needs_proof:
+                self._hybrid_requires_reconcile = True
+                self._rest_poll_completed_at = None
+                self._position_confirmation_proofs.clear()
+                self._hard_exit_terminal_proofs.clear()
+                self._hard_exit_retry_authorizations.clear()
             stream.applied(event)
 
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
+        self._hybrid_reducer_proofs.clear()
         if self.account_state_mode == "hybrid":
             await self._drain_private_events()
             now = self._now()
@@ -308,9 +403,21 @@ class AccountSourceRunner(RestFallbackRunner):
         return result
 
     async def _reconcile_position_state(self, slug, *, tag):
+        self._hybrid_reducer_proofs.clear()
         if self.account_state_mode == "hybrid":
             await self._drain_private_events()
-        return await super()._reconcile_position_state(slug, tag=tag)
+        started = self._now()
+        result = await super()._reconcile_position_state(slug, tag=tag)
+        if (self.account_state_mode == "hybrid"
+                and not self.private_stream.pending
+                and self.ledger.position(slug) != 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.unresolved_intents()
+                and not self.ledger.absent_orders()):
+            self._hybrid_reducer_proofs[slug] = (
+                tuple(self.active_slugs), self.source_control.generation,
+                self.ledger.position(slug), started)
+        return result
 
     def _catalog_positions(self):
         return {str(row["market_slug"]): Decimal(row["net_qty"])
@@ -531,6 +638,8 @@ class AccountSourceRunner(RestFallbackRunner):
                   f"pending={self.private_stream.pending} "
                   f"orders={self._hybrid_counts['orders']} "
                   f"hints={self._hybrid_counts['hints']} gaps={self._hybrid_counts['gaps']} "
+                  f"ack_only={self._hybrid_counts['ack_only']} "
+                  f"scoped_admissions={self._hybrid_counts['scoped_admissions']} "
                   "authority=rest", flush=True)
 
     async def _source_notice(self, state, reason):

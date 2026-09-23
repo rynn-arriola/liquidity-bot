@@ -1112,10 +1112,19 @@ These are implementation requirements, not suggestions.
     from an unscoped position notification. Unknown/partial positions trigger
     complete REST proof. A bounded reader cannot write the ledger or mutate;
     held events precede queued events and fills remain exactly-once. Pending
-    observations and unreconciled hints veto every create at final admission,
-    without blocking cancellation. Transport/schema failure revokes proof and
+    observations veto every create at final admission without blocking cancellation.
+    Applied hints require subsequent REST proof. A successful complete scoped
+    position proof may discharge that hint veto once for only its exact reducer:
+    unchanged source generation/scope/quantity, original proof age at most30s,
+    no later observation/proof, no queued message, no working owner order or
+    account ambiguity, and only the matching unsent reducing intent. The normal
+    REST gate/driver checks still apply; entry authority and poll time never renew.
+    A positively owned, exact unchanged-cumulative no-fill NEW/CANCEL acknowledgement
+    may retain normal polling cadence, never clear an earlier hint or extend
+    freshness; unknown types/fields, new fills and changed quantities still force
+    proof. Transport/schema failure revokes proof and
     reconnects with bounded backoff; ledger/ownership conflicts remain critical.
-    Ordinary notifications may retain the prior valid REST certificate only
+    Uncertain notifications may retain the prior valid REST certificate only
     for existing two-list flat-order optimization, never as permission to skip
     the required post-notification proof. Existing REST cadence, expiry, caps,
     balance/history and every risk/exit rule remain. Mode choice is explicit;

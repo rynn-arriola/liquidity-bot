@@ -25,9 +25,22 @@ backpressures; upstream overflow becomes an explicit gap requiring REST.
 Task-held observations precede queued observations even when REST service
 drains them before the outer loop consumes its task result.
 
-An unapplied observation or a projected hint without a subsequent complete
-REST proof blocks order-create admission, including reducers whose exact size
-could have changed. Cancels remain available. Normal hints retain the prior
+September22 reducer repair preserves the REST cancel-confirm-replace contract:
+a completed exact-owner proof (complete account orders/positions/history included)
+can discharge the applied-hint veto once for its exact reducing intent. It cannot
+renew global entry authority, bypass the usual REST/driver gates, survive another
+observation/proof or pending frame, or authorize a different quantity/direction.
+Proof age, source generation, scope and account ambiguity are rechecked at final
+admission. Entries still require global proof. Positively owned, unchanged-cumulative
+NEW/CANCEL acknowledgements retain normal polling cadence; fills, incomplete fields,
+unknown event types and position/snapshot hints do not. Old fully-private mode did
+not globally revoke readiness for every order ACK; this restores that distinction
+without treating the incomplete current stream as authoritative position coverage.
+
+An unapplied observation or a projected hint without subsequent REST proof blocks
+order-create admission, including reducers whose exact size could have changed.
+The narrow scoped reducer proof above does not clear the global hint requirement.
+Cancels remain available. Normal hints retain the prior
 valid REST certificate only for the existing unchanged-flat-order bulk proof;
 transport/schema/integrity/read failures revoke it. This avoids turning every
 notification into a full-slate exact-order scan. Mandatory REST freshness and

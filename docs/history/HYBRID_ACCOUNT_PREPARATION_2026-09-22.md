@@ -169,3 +169,96 @@ The stopped ledger still has23 working rows, three position rows and one
 unresolved intent (zero unknown orders). These are stale local records, not
 current venue exposure; normal positive reconciliation must resolve them before
 any later restart. No repair, ledger change or restart performed in this check.
+
+## September22 stopped repair and historical behavior comparison
+
+Operator authorized fixing/verifying the regression, keeping the bot stopped,
+and requested comparison with the earlier fully-private implementation. Reviewed
+`v1.2.0` / `a3defc014` private event projection, session gate, state refresh and
+terminal-cancel priority. Normal order updates did not invalidate account-wide
+readiness; valid messages refreshed private evidence, and confirmed cancellations
+woke their exact owner. That relied on a fully established private source. We
+must not copy its readiness assumptions onto the current incomplete stream or
+restore its historical size/$90 risk policy. No rollback was performed.
+
+Chosen bounded repair, rather than bypassing final pending-message protection or
+making this incomplete stream the sole position authority:
+
+1. An exact known no-fill NEW/CANCEL acknowledgement is projected normally but
+   retains normal REST polling cadence. Identity, quantity, price and cumulative
+   fill amount must match an owned order or exact pending create. Missing fields,
+   unknown event type, new/changed fill quantities or unknown ownership retain
+   full proof. It cannot clear an earlier pending fill/hint or renew gate age.
+2. Successful existing scoped position reconciliation records a single-use
+   reducer-only certificate after exact owner reads plus complete orders,
+   positions and mandatory execution history. Final submission rechecks original
+   proof age<=30s, source generation/scope, identical nonzero position, exact
+   reducing direction/size, no working owner order, no absent order or other
+   unresolved intent, and no pending private frame. Only the matching unsent
+   PLACE may remain. The existing REST gate/driver must independently pass.
+3. A new observation, another reconciliation, failed proof, changed quantity,
+   source/scope, pending event or expiry removes/refuses that certificate.
+   It never renews entry authority/global poll time and is consumed once.
+4. Existing hybrid telemetry adds `ack_only` and `scoped_admissions`; these count
+   scheduling/proof reuse, not guaranteed avoided requests or executed orders.
+   No additional venue call or independent measurement process is introduced.
+
+The old global hint latch remains for entries; cancel, strategy, pricing,
+inventory/tiny/kickoff deadlines, settled-loss rules, size/caps and ordinary
+REST/WebSocket modes remain unchanged. Disconnect/schema failures retain strict
+REST recovery. Pure REST still supplies every needed observation if private
+messages are absent; there is no automatic selected-mode change.
+
+Verification uses fake venues/temporary ledgers in isolated native WSL snapshots,
+the production virtualenv interpreter, and no live credentials or order mutation.
+The focused run passed248 tests. Every existing REST reducer-continuity test also
+runs in hybrid, covering retained-touch quotes, partial/flat transitions, cancel
+failure, throttle, scheduling and shutdown boundaries. New tests cover hint-racing
+cancel replacement before flat work, exact residual quantity, stale/future proof,
+wrong size/direction/market/source generation, expired gate, entry refusal,
+one-use admission, failed scoped proof, events during proof and during admission,
+and no-fill acknowledgements that cannot clear older uncertainty. Both deliberate
+reversals produced assertion failures, not harness errors. Full-suite result is
+recorded below when complete.
+
+Dedicated edge review: one serial owner/projector remains; identity pre-check
+does not adopt unbound orders; durable intent precedes mutation; positive
+terminal proof and idempotence are unchanged. Pending frames still veto after
+limiter waits; no await separates the final checks from submission. Wrong or
+malformed reducer payloads fail closed. Partial/empty snapshots cannot erase
+exposure. No unknown create retry, ledger deletion, live risk migration, API
+budget increase or restart is authorized by this repair. Startup/shutdown retain
+their existing proof. Restart requires reconciliation of manually closed stale
+ledger records and a fresh flat/clear gate. Live latency and aggregate REST
+savings remain unproved until a separately authorized restart and observation.
+
+Authenticated03:17:16Z again proved zero venue orders/positions with no trader
+running. The stopped ledger still has23 working rows, three positions and one
+unresolved intent; it was not edited or reconciled by the test suite.
+
+### Final verification and review
+
+Final unchanged shipping source/tests passed the complete2,051-test suite in
+211.384s using the production virtualenv in isolated WSL. A prior run's sole
+failure was the100-line BUGFIXES context budget (101 lines); the index was
+compacted, the documentation checks passed, and the complete suite was rerun
+successfully. Earlier2,049-test runs passed before the two additional boundary
+tests; the final209-test focused run also passed. Both deliberate reversals
+failed their assertions as expected. Source/test directory comparison between
+the final stage and workstation is exact (excluding generated cache/egg-info).
+
+The final diff/edge review found no remaining issue within this repair: unrelated
+REST/WebSocket source paths and strategy/config files are unchanged; long/short
+size15 and fractional0.04/-7.54 cases retain exact reducing quantity; another
+unresolved intent, a new frame during limiter admission, failed/stale proof and
+entry requests remain refused. No polling or budget increase, parallel mutation,
+new credential path, loss reset or historical policy restoration. Documentation
+audit and diff whitespace checks pass. Tests establish offline behavior, not a
+guarantee of live latency, REST savings or absence of future429s.
+
+Authenticated03:35:25.925085Z again proves zero venue orders and positions; the
+former runner/supervisor are absent. One unresolved intent/23 working rows/three
+positions remain only in the stopped stale ledger, which was not modified.
+This repair is prepared/pushed only. Production still has `a46f5f995` executable
+content; no deploy/restart or resumed WS measurement. A later authorized rollout
+must resolve stale ledger state through normal proof and repeat every start gate.

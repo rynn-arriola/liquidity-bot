@@ -13,8 +13,8 @@ exception was not logged; earlier REST runs also contain similar waves.
 Reproducing the cancellation mechanism or adding diagnostics does **not**
 establish the live root cause. Capture the failing refresh stage, safe error
 category/status, snapshot age and active pause blockers on a natural recurrence
-after separately authorized activation. No extra API polling, induced fault,
-relaxed risk gate or restart. Close only with evidence identifying the trigger
+on loaded038408240 after Command1.17:36:56Z cash/history movement was logged
+without a wave; it does not prove the old trigger. No extra polling or relaxed gate. Close only with evidence identifying the trigger
 and verification of the corresponding remedy. This remains separate from the
 known hybrid order-admission scheduling fix. [Evidence and open work](docs/history/ENTRY_CHURN_DIAGNOSIS_2026-09-23.md).
 

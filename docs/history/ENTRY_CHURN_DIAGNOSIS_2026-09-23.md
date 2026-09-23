@@ -289,3 +289,75 @@ Only positive cause evidence and verification of its remedy can close this item.
 Do not relax risk checks, force a fault, start extra polling, or mark it resolved
 merely because telemetry was added. Natural reducer-gap/API acceptance also remains
 pending; the running bot still uses20c44a9d7.
+
+## Command1 activation — September23
+
+The operator authorized the complete reviewed stop/deploy/restart workflow.
+Supervisor277537 was stopped first; runner277553 received SIGTERM and completed
+ordinary cancel/flatten shutdown17:24:47.190Z with `flat=true`. Independent
+authenticated gate17:25:08.212Z proved zero venue orders/positions, unresolved
+intents, unknown orders, working ledger orders and ledger positions.
+
+Pre-deploy parity matched Windows/GitHub038408240; the expected WSL source lag
+was the sole mismatch. A stopped-ledger online recovery copy captured17:25:21Z
+passed native integrity and destination hash/size verification:1,086,062,592 bytes,
+SHA-256 prefix`e78299639381`. The offline/unconfigured peer was not contacted.
+
+The redundant WSL HTTPS fetch stalled; only its known read-only fetch processes
+were terminated. Deployment instead fetched the already-pushed verified commit
+from the local Windows checkout, then fast-forwarded clean WSL main to
+`038408240d7a3b77aaf123fed02facafd39b2265`. All235 source/test/config/script
+artifacts match that commit and Windows after line-ending normalization.
+The saved settings remain auto15/32/hybrid, and the current12–18 ET risk row
+retains hard30/cap30, no trip and settled P&L+2.05910000 at17:24:42Z; no baseline
+or ratchet was reset.
+
+The actual installed checkout passed all2,142 tests in216.336s. Only afterward
+was DEPLOYED_COMMIT set to038408240. Fresh authenticated17:31:41.589Z gate
+again proved all six exposure/ownership counts zero. Startup used the preserved
+`./scripts/start_commissioning.sh auto 15 32 hybrid`; supervisor326083 and
+runner326105 started17:31:42Z. Initial13 public books used zero REST fallbacks.
+First entry action occurred17:32:32.885Z. Current12–18ET hard30/cap30 and
+untripped settled-P&L row were retained, not reset.
+
+### Initial live acceptance and lower-order question
+
+Authenticated17:36:08Z proved19 flat entries plus one exactSELL15 reducer.
+Authenticated17:39:09Z proved15 flat entries plus three exact reducers: BUY4
+against -4 Orlpet/Bridav, SELL15 against +15 Iskchr/Otgand, and SELL15 against
++15 Konrom/Voryar. All three were OPEN for the exact remaining quantities;
+zero unresolved intents/unknown orders, ledger18 working/three positions agreed.
+The bot remained live. This is timestamped exposure, not a permanent guarantee.
+
+The user observed about20 orders versus about30 earlier. Cap30 remains unchanged;
+the17:38:58Z durable row showed settled P&L+2.15910000 and no trip. Initial scope
+was13 markets;17:35:43Z lifecycle replacement released one expired market and
+added three, giving15 active owners. The17:37:32Z fresh selection reported14
+ranked books/eight viable candidates. Not every selected owner permits both
+sides under unchanged economic/quality gates, and fills replace building orders
+with reducers. Final-fence local admission delays also affect refill, so this is
+not proof that market supply alone explains every missing order. No20-order
+configuration or filter change was made.
+
+First six completed API windows through17:38:58Z recorded1,278 attempts over
+429.3s (~2.977/s), two execution_history429s and remaining order-retrieve404s;
+following windows recovered with no active endpoint cooldown. Attempts include
+local no-send admission refusals and are not exact wire-request counts. Local
+forensics found35 unsent entry intents, all private-observation-pending, and no
+reducer failure. Twenty-seven cancel plans comprised22 touch reprices, two
+expected-net refusals, two reducer reprices and one post-fill builder cancel.
+No account-risk-pause cancellation wave or runtime recovery fault was observed.
+Thus rate-limit elimination and sustained performance parity are NOT accepted.
+
+Konrom/Voryar's first position observation17:33:59.635Z already had an opposite
+working order; do not count the whole interval to replacement as uncovered.
+Reducer cancel terminal confirmation17:34:20.209Z to new acknowledgement
+17:34:21.692Z was1.482792s. Three covered natural positions accept initial
+reducer handling, not hard-timeout/final-flat behavior or long-run profitability.
+
+The new risk diagnostic recorded17:36:56.890Z refresh_failed at final_balance,
+reason=cash_changed_history, category=adapter, previous snapshot age9.367s.
+There was no corresponding cancellation wave; a later risk row refreshed.
+This confirms the diagnostics work and identifies that particular consistency
+failure, NOT the unlogged16:29 trigger. That original incident remains OPEN.
+No additional production code/policy change was made during acceptance.

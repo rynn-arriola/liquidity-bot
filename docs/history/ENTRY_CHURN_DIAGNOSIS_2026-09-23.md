@@ -113,3 +113,91 @@ handling. Do not copy old readiness assumptions, remove the pending-fill fence,
 retry account reads for every market, restore$90 HARD or silently reintroduce
 cash-based trading-loss calculation. Validate the candidate scheduling repair
 against both the current REST baseline and the older event-driven behavior.
+
+## Expanded investigation —16:52Z
+
+No trading source, configuration or live process changed. Local-only streaming
+log analysis and read-only SQLite queries compare bounded intervals, not matched
+market cohorts or causal performance experiments.
+
+### Wider evidence
+
+Hybrid interval16:00:18–16:47Z:
+
+- 114 CANCEL plans:43 price-left-touch,30 expected-net/quality removals,
+  13 account-risk-pause,10 reducer replacements,9 building-side cancellations,
+  7 hard-timeout cancellations,1 other-side removal and1 reward-ineligible.
+  Plans are not all submissions; shutdown/recovery can also submit outside this
+  action logger. There was one13-market account-risk cancellation wave.
+- 257 durable local FAILED PLACE intents:245 entry intents and12 reducing/IOC
+  intents. All have `private observation pending; request not sent`. Reducer
+  diagnostic records identify9 passive-reducer failures and3 hard-timeout IOC
+  failures. These are not venue rejects or additional HTTP429 responses.
+- Salvea/Turrom had five consecutive reducer deferrals16:42:09–24Z. Replacement
+  acknowledgement16:42:28.621Z was20.969762 seconds after positive cancellation
+  confirmation. This is a concrete replacement gap, not the position's entire
+ 175-second age (which includes earlier working reducers).
+- Closed API windows:8,496 admitted attempts/2,756s,7,839 reads,657 mutation
+  attempts,7 real429 responses. The limiter increments attempts after admission
+  but before final POST checks. Local hybrid refusals therefore consume local
+  admission and enter the attempt/rps metric without sending a venue request.
+  Do not call this an exact wire-request rate or subtract mismatched endpoints
+  and interval boundaries to manufacture one. A diagnostic field initially
+  queried nonexistent payload `timeInForce` and returned null; classification
+  uses the executor's durable `quote_observation_required` flag and matched
+  reducer logs instead.
+
+Earlier REST interval05:11–15:45Z:
+
+- 1,997 CANCEL plans, including485 account-risk-pause plans in35 time clusters
+  (20-second separation rule; several clusters contain only one market).
+- 10 local failed creates, all expired pregame evidence; no hybrid deferrals.
+- Closed API windows recorded161 real429s. The sampled runtimes, durations,
+  markets and inventory differ: none of this proves hybrid improved/worsened
+  profitability, total API capacity or overall cancellation rate.
+
+Thus account-risk-pause churn is demonstrated in the earlier REST run, not just
+the current hybrid run. A rollback alone would not remove that mechanism.
+Five-minute GTD expiry remains intentional host-outage protection; it and normal
+touch/eligibility changes must not be mistaken for a new rotation policy.
+
+### Additional controlled reproduction
+
+The ignored fake-client diagnostic now passes4 tests, including one repeated
+under both REST and hybrid with the production$30 settled-window policy.
+It starts with fresh risk authority, injects one failed cash-consistency bracket
+and walks13 flat owners. Exactly one refresh is attempted; the real wrapper
+clears risk freshness, and the real planner produces13 account-pause cancels,
+while loss cap remains30. This demonstrates the fanout mechanism in both modes.
+It does NOT prove cash mismatch caused the actual16:29 wave: the live exception
+was swallowed and there is no recorded blocker subtype to recover offline.
+No live failure was induced; the first harness run lacked cloned market metadata,
+which was corrected before the passing run.
+
+### Current position check and priorities
+
+Authenticated16:50:57.846Z:19 flat entries plus three exact reducers, covering
+positions+6.9/-5/-2.89; zero unresolved/unknown state. The preceding16:50:22
+sequential read saw no reducer on+6.9 because its order read overlapped the
+cancel/replace interval. Logs show reducer acknowledgement16:50:18.072Z and
+the subsequent venue read confirms it. Never infer a persistent missing exit
+from that non-atomic first snapshot. Same supervisor/runner remain live.
+
+Repair priorities, still unimplemented:
+
+1. Reducer/timed-exit continuity through hybrid notifications and proof waits.
+   Process ordered observations before planning, distinguish neutral ACKs from
+   quantity-changing evidence, and avoid repeatedly spending intents/admission
+   on already-known proof waits. Replan quantities and retain final admission
+   fences, exact REST proof and unknown-create nonretry.
+2. Add bounded local risk-refresh failure and pause-blocker telemetry. Keep
+   current fail-closed cancellation policy; do not keep entries live on unknown
+   risk merely to improve resting time. The exact production trigger requires
+   a naturally occurring event after reviewed instrumentation is activated.
+3. Compare scheduling/read counts and reducer gaps against current REST and
+   historical private behavior; expose admitted-versus-sent distinction if
+   reporting rate improvements. No filter, stop-loss, expiry or pricing change.
+
+Enough evidence exists to target hybrid continuity and missing diagnostics.
+It is not yet an end-to-end verified fix or a complete attribution of the live
+risk-bracket failure. Deployment/restart remains separately authorized.

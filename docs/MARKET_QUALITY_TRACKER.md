@@ -1,8 +1,10 @@
 # Market-quality grade tracker — design and implementation handoff
 
-September 23, 2026. Design only; not implemented or collecting new fields.
-Existing rank/quote/fill measurements continue. No selection, risk, account
-source, scan breadth, deployment or restart change is authorized by this design.
+September 23, 2026. First collector/offline-report implementation is prepared
+on `work/market-quality-tracker`, disabled and not deployed. Existing live
+measurements continue unchanged. [Implementation, evidence and remaining
+validation](history/MARKET_QUALITY_TRACKER_IMPLEMENTATION_2026-09-23.md).
+The sections below describe the broader research design, not completed live acceptance.
 
 ## Objective and acceptance question
 
@@ -235,8 +237,10 @@ wait for existing scheduled responses rather than silently adding traffic.
 
 ## Current handoff
 
-Only this design and routing are changed. Source, tests, filters, $30 windows,
-size15/32 and REST account mode remain unchanged. September23 process check
-confirmed supervisor23308/runner23326 and deployed marker6deb707c6; no fresh
-venue exposure query was required for this design. Implementation and all new
-collector acceptance remain pending, not delivered by creating this document.
+Source/tests for the opt-in collector and offline report are prepared separately;
+live source, filters, $30 windows, size15/32 and REST account mode are unchanged.
+September23 process checks confirmed supervisor23308/runner23326 and marker
+6deb707c6; no fresh venue exposure query was needed. Deployment, supervised
+activation, natural shadow acceptance, complete paid cohorts and frozen
+later-period filter validation remain pending. See the implementation record
+above for delivered fields versus further research; no automatic promotion.

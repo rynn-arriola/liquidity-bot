@@ -85,8 +85,13 @@ remains opt-in. No separate private-WS measurement process is restarted.
   Python worker scheduling still shares CPU/GIL; live acceptance is required.
 - Local image preview visually verified the net bar, pending value, meter and
   timestamp/stale note, without layout redesign. No preview webhook was sent.
-- Final full-suite, documentation audit and pushed commit references are recorded
-  in the completion update below; deployment acceptance is deliberately pending.
+- The initial full combined suite passed2,126 tests in371.054s. After the final
+  reserve safeguard/test, frozen executable commit `1fb120701` passed all2,127
+  tests in366.540s using `/home/polybot/liquidity-bot/.venv/bin/python` against
+  the isolated candidate worktree. No source changed during that final run.
+  Documentation/whitespace audits and shell syntax checks pass. The integration
+  branch is the reviewed artifact; main receives only this documentation handoff.
+  Deployment/hash/runtime gates and live acceptance remain deliberately pending.
 
 ## Dedicated final review and edge cases
 

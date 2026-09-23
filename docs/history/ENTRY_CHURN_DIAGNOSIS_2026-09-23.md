@@ -462,3 +462,46 @@ showed15 reconciled creates/four reconciled cancels/four unsent entry deferrals,
 no reducer failure, risk-cancellation wave or runtime recovery. The previously
 sampled in-flight create was no longer unresolved; no position had occurred.
 This restart does not resolve or eliminate the deferred history429 issue.
+
+## Resumed REST diagnosis and reported order drop18:07Z
+
+No source/config/strategy change, deployment or restart. Pre-work parity passed
+503299f36/loaded038408240 with verified private backup18:03:08Z; peer not contacted.
+Same supervisor768/runner782 remained running. Authenticated18:07:06.598Z:
+eight orders = seven flat-market entries plus one BUY4.8 OPEN reducer covering
+the sole-4.8000 Steyar/Pitser position; zero unresolved/unknown ledger state.
+Local18:07:17Z risk row: settled+1.04910000, cap30, untripped. No account-risk
+cancellation wave or reducer failure in this run through that cutoff.
+
+Read-only order/intent join at18:08:05Z found18 EXPIRED,18 CANCELED,2 FILLED,
+19 OPEN for this run's creates (local evidence, not a second venue snapshot).
+Each expired order lasted300.001–300.003s. First startup cohort expired from
+18:04:24 through18:04:47Z; another cohort18:06:27–18:06:40Z. Thus the drop is
+not a new20-order cap or a risk-loss reduction: five-minute GTD expiry is
+removing entries while refill is delayed. Recorded20 failed entry intents by
+18:07:17Z were all `ApiAdmissionDeferred: private observation pending; request
+not sent`; later deferrals continued through18:07:59Z. These are local safety
+refusals, not venue create429s. The account-wide one-second entry cooldown
+following one refusal also skips later plans without creating more intents.
+The final POST guard can see either unapplied private queue data or a pending
+REST reconciliation latch; current generic error does not distinguish them.
+Do not remove the final guard or assume every event was a harmless ACK.
+
+Completed telemetry519.1s:1,369 attempts/1,286 reads/83 mutation attempts/four
+read429s, approximately2.64 attempts/s and2.48 reads/s. Includes locally unsent
+mutation attempts, excludes other processes, and is not a controlled comparison.
+The18:07:10Z window had zero failures/cooldowns. Local one-second entry deferrals
+are not themselves evidence of new429s. Existing cancels were ten price-touch
+changes, five reducer reprices, two economic changes and one builder after fill.
+Sole reducer replacement18:06:14.218Z terminal proof to18:06:15.704Z ACK took
+1.485s; broader position/exit performance remains observational.
+
+REST trace confirms complete order lists, position watch, exact owner repairs,
+execution history and risk cash/balance brackets remain consumers. Cash and
+trade history share `/v1/portfolio/activities` and its existing shared cooldown.
+Flat history overlap optimization, duplicate periodic-balance coalescing and
+bulk order proof already exist; proposing them again would not be a new saving.
+Prior single-list optimization failed race tests; keep two-list proof bracket.
+Recommendation: prioritize expiry/refill event-drain/admission scheduling,
+then measured duplicate proof work, preserving business rules and final safety
+fences. User requested diagnosis; implementation remains a separate decision.

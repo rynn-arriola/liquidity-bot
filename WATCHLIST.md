@@ -7,6 +7,12 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
+**September23 broad scan coverage:** operator approved an isolated, bounded
+comparison of the existing modeled100-candidate shortlist with up to300 public
+book candidates. Prepared diagnostic only; no live selection wiring, recurring
+collector, REST-book fallback or trading effect. See
+[design, command and limits](docs/SCAN_COVERAGE_MEASUREMENT.md).
+
 The complete [measurement and diagnostic checklist](docs/MEASUREMENT_CHECKLIST.md)
 includes live reward/entry/selection measurements, execution diagnostics,
 prepared-not-loaded hooks, retired collectors and the prioritized next-day review.

@@ -93,8 +93,7 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
   peer. Clean behind-only checkouts may fast-forward; all other work is preserved.
 - It also checks WSL/loaded source and places a hash/integrity-verified online
   ledger backup on reachable PCs; ignored copies are never writable authority.
-- WSL may live-fast-forward only docs, tests and parity tooling. Runner/config/
-  launcher changes require reviewed deployment. Parity never waits for Drive.
+- WSL may live-fast-forward only docs, tests and parity tooling. Runner/config/launcher changes require reviewed deployment. Parity never waits for Drive.
 - Parity cannot overwrite dirty/diverged work, expose secrets, deploy trading
   code, activate a recovery ledger, hand off ownership or control the bot.
 - “Run weekly task” manually creates and verifies one new client-encrypted
@@ -118,3 +117,4 @@ Twenty-four passed 30 continuous minutes of startup and selection bursts with ze
 - No residential proxy, disguised IP or other attempt to evade Polymarket's location/access controls; obtain support confirmation before changing hosts.
 - No unattended or automatic desktop/laptop failover. A handoff requires the old runner to be absent, known account state, a verified stopped-runtime ledger snapshot and explicit start authorization on the new owner.
 When the operator changes one of these choices, update this file and [STATUS.md](STATUS.md) in the same task and record the evidence or implementation handoff in the appropriate history file.
+**September23 scanner measurement:** operator approved isolated read-only100-versus-up-to300 public-book comparison under the shared report lane. Keep live selection, REST account mode, saved hybrid work, size15/32, risk and exits unchanged. No deployment/restart/recurring collector. [Design](docs/SCAN_COVERAGE_MEASUREMENT.md).

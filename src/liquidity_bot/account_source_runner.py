@@ -347,6 +347,55 @@ class AccountSourceRunner(RestFallbackRunner):
         # demand immediate authoritative proof.
         return not self._order_matches_row(replace(order, status=row["status"]), row)
 
+    def _hybrid_reducer_certificate_current(self, slug):
+        """Common certificate checks, before planning and at final admission."""
+        proof = self._hybrid_reducer_proofs.get(slug)
+        if proof is None:
+            return False
+        scope, generation, quantity, started = proof
+        return (scope == tuple(self.active_slugs)
+                and generation == self.source_control.generation
+                and self.account_state_mode == "hybrid"
+                and 0 <= (self._now() - started).total_seconds() <= 30
+                and quantity != 0 and quantity == self.ledger.position(slug)
+                and not self.private_stream.pending
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.absent_orders())
+
+    async def _prepare_market_decision(self, slug):
+        if self.account_state_mode != "hybrid":
+            return await super()._prepare_market_decision(slug)
+        scope, generation = tuple(self.active_slugs), self.source_control.generation
+        held = self.ledger.position(slug) != 0
+        await self._drain_private_events()
+        if (self._stop_requested or scope != tuple(self.active_slugs)
+                or generation != self.source_control.generation
+                or self.account_state_mode != "hybrid"):
+            return False
+        if held and self.ledger.position(slug) == 0:
+            return False  # An exit pass cannot become an extra entry pass.
+        if (self._hybrid_requires_reconcile and self.ledger.position(slug) != 0
+                and not self.ledger.working_orders(slug)
+                and not self.ledger.unresolved_intents()
+                and not self.ledger.absent_orders()):
+            if not self._hybrid_reducer_certificate_current(slug):
+                try:
+                    # One bounded proof, not a retry loop or global gate renewal.
+                    await self._reconcile_position_state(slug, tag="hybrid-preplan")
+                except (LedgerConflict, RuntimeInvariantViolation):
+                    raise
+                except AdapterError as exc:
+                    await self._report_runtime_error("hybrid_preplan_proof", exc)
+                    return False
+            # Do not reserve a hard-exit attempt for a known-unsendable action.
+            return (not self._stop_requested
+                    and self._hybrid_reducer_certificate_current(slug))
+        return True
+
+    def _entry_observation_pending(self):
+        return (self.account_state_mode == "hybrid"
+                and (self.private_stream.pending or self._hybrid_requires_reconcile))
+
     def _hybrid_reduction_proved(self, slug, *, consume=False):
         """A completed scoped REST proof clears only this reducer's hint veto.
 
@@ -354,20 +403,11 @@ class AccountSourceRunner(RestFallbackRunner):
         another observation/proof, changed scope/quantity, ambiguity or age still
         refuse. The usual REST gateway and driver checks remain mandatory.
         """
-        proof = self._hybrid_reducer_proofs.get(slug)
-        if proof is None:
+        if not self._hybrid_reducer_certificate_current(slug):
             return False
-        scope, generation, quantity, started = proof
+        quantity = self._hybrid_reducer_proofs[slug][2]
         pending = self.ledger.unresolved_intents()
-        if not (scope == tuple(self.active_slugs)
-                and generation == self.source_control.generation
-                and self.account_state_mode == "hybrid"
-                and 0 <= (self._now() - started).total_seconds() <= 30
-                and quantity != 0 and quantity == self.ledger.position(slug)
-                and not self.private_stream.pending
-                and not self.ledger.working_orders(slug)
-                and not self.ledger.absent_orders()
-                and len(pending) == 1):
+        if len(pending) != 1:
             return False
         intent = pending[0]
         if not (intent["market_slug"] == slug and intent["operation"] == "PLACE"
@@ -498,8 +538,11 @@ class AccountSourceRunner(RestFallbackRunner):
         if self.account_state_mode == "hybrid":
             await self._drain_private_events()
         started = self._now()
+        scope, generation = tuple(self.active_slugs), self.source_control.generation
         result = await super()._reconcile_position_state(slug, tag=tag)
         if (self.account_state_mode == "hybrid"
+                and scope == tuple(self.active_slugs)
+                and generation == self.source_control.generation
                 and not self.private_stream.pending
                 and self.ledger.position(slug) != 0
                 and not self.ledger.working_orders(slug)

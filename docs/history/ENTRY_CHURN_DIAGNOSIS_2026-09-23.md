@@ -5,8 +5,9 @@
 Operator paused300-coverage work to prioritize low orders/rotation. Its offline
 full-test process was terminated; no collector or recurring schedule was started.
 Uncommitted diagnostic improvements remain in the isolated scan-review worktree.
-Main trading source, live configuration and runner are unchanged. This is
-diagnosis, not a deployed fix or new restart authorization.
+At initial diagnosis main trading source, live configuration and runner were
+unchanged. The authorized prepared repair is documented below; deployment and
+restart remain unauthorized in this task.
 
 Live source20c44a9d7, supervisor277537/runner277553 started16:00:18Z;
 hybrid account state, size15/32, four$30 settled-fill windows. Public books and
@@ -202,3 +203,89 @@ Repair priorities, still unimplemented:
 Enough evidence exists to target hybrid continuity and missing diagnostics.
 It is not yet an end-to-end verified fix or a complete attribution of the live
 risk-bracket failure. Deployment/restart remains separately authorized.
+
+## Authorized repair — prepared, not activated
+
+The operator accepted the recommendation and explicitly requested that the
+unexplained issue remain remembered on the watchlist. [WATCHLIST.md](../../WATCHLIST.md)
+now carries the unresolved risk-snapshot trigger with evidence/closure criteria.
+The separate300-candidate work remains paused and its worktree is untouched.
+
+### Implementation and tradeoff
+
+- Drain ordered private observations after awaited lifecycle service, immediately
+  before constructing the decision frame. Neutral owned no-fill ACKs use the
+  existing projector/classifier and add no REST call or new authority.
+- Applied uncertainty defers a flat PLACE before a durable intent or mutation
+  admission. Required cancels still reach the normal driver. This removes known
+  unsendable attempts, not legitimate reprice/expiry/reward cancellations.
+- An uncovered, unambiguous held owner with an applied hint obtains one complete
+  exact-owner scoped REST proof before planning, unless its existing certificate
+  is still current. It never loops proof within the decision, renews entry
+  authority, changes polling cadence or reserves a hard-exit attempt while the
+  proof is known unusable. A fill/event arriving during that proof still yields;
+  source/scope/stop/flat transitions cannot become a new entry pass.
+- Retain final POST pending-message and applied-hint fences. A notification that
+  arrives during limiter wait can still produce a local unsent failure; this fix
+  is not a promise of zero deferrals or zero429s. Never drain and silently reuse
+  an already-sized mutation after that race.
+- Shared certificate validation preserves exact quantity, canonical direction,
+  scope/generation, original age, one-use intent and ambiguity requirements.
+  Capture scope/generation before scoped reads as well as checking afterward.
+  Ordinary stop yields before planning; shutdown's existing reducing authority
+  is not disabled by the new scheduling helper.
+- Bounded local risk diagnostics record refresh stage, safe reason/category,
+  numeric HTTP status when available, previous snapshot age and pause blockers.
+  No raw exception/server body, transfer description, credential or API call is
+  added. Repeated signatures coalesce for60s; storage is bounded to32 keys.
+  Diagnostic failures cannot change booleans or mask the original exception.
+  Cash consistency, settled-window arithmetic and fail-closed entry cancellation
+  remain unchanged. Transport, local deferral and HTTP429 stay distinct.
+
+The scoped proof moves necessary reducer work ahead of the flat slate, and may
+add a bounded read when genuinely new uncertainty arrives after prior proof.
+Neutral ACK handling itself adds none. Controlled read-parity tests are evidence,
+not a measured promise of lower total production REST load or better profit.
+
+### Verification and dedicated edge review
+
+First affected slice:137 tests passed in83.630s. Four in-memory reversals each
+produced the intended assertion failure: late-ACK preparation, known-hint entry
+deferral, preplan reducer proof and risk-failure logging. All patches restored.
+The first late-ACK test assertion was incorrectly inside a production exception
+handler; the reversal exposed that weak assertion. It now captures planner input
+and asserts outside the callback, so the reversed fix fails decisively.
+
+Reviewed success/failure, empty and full32-owner scope, quiet feeds/neutral ACKs,
+task-held order, partial fills, stop/source generation, event-during-proof and
+limiter races, unknown/absent ownership, one-use certificates and age boundaries,
+position flattening, cancellation/reducer continuity, hard-exit attempt state,
+API/read amplification, unchanged REST/private modes, logging redaction/failure,
+restart and rollback. Existing end-to-end REST/hybrid comparison and continuity
+tests retain their original read-count and safety assertions. No schema/config,
+strategy/price/size/filter/cap/expiry or stop-loss policy change is included.
+
+The first complete suite passed2,141 tests in223.932s. Final review expanded
+redacted cash/transport classification and narrowed routine preplan proof-error
+handling to AdapterError; unexpected programming errors retain escalation.
+The final exact source passed all2,142 tests in222.090s using the production
+virtual environment against an isolated native temporary checkout. The five
+changed/new source/test files match the Windows working copy byte-for-byte:
+account_source_runner `0d98ebc2a72c`, live_commissioning `8f3a030b3b05`,
+risk_diagnostics `21f1b54bbebd`, test_hybrid_preplan `fc68f50ead66`, and
+test_risk_diagnostics `e0cef8e45935` (SHA-256 prefixes). Documentation audit and
+diff whitespace checks pass. No production files, runtime marker, exposure or
+process ownership were changed. At17:19Z the same supervisor/runner retain
+their16:00:18Z start. No new authenticated exposure read was added by this work;
+the16:50:57Z snapshot above is historical, not a current account claim.
+
+### Still OPEN — not solved by this repair
+
+The exact exception that triggered the16:29 account-risk-pause cancellation wave
+remains unknown. The earlier reproduction shows the mechanism in REST and hybrid,
+not its production cause. After a separately reviewed/authorized activation,
+correlate a natural recurrence with `[risk-diagnostic]` and cancellation timestamps.
+Only positive cause evidence and verification of its remedy can close this item.
+Do not relax risk checks, force a fault, start extra polling, or mark it resolved
+merely because telemetry was added. Natural reducer-gap/API acceptance also remains
+pending; the running bot still uses20c44a9d7.

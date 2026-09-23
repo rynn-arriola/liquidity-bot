@@ -7,7 +7,18 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
-**September23 broad scan coverage:** operator approved an isolated, bounded
+**September23 OPEN — unexplained risk-snapshot failure:** the16:29:19–27Z
+account-risk pause cancelled entries across13 markets. The exact triggering
+exception was not logged; earlier REST runs also contain similar waves.
+Reproducing the cancellation mechanism or adding diagnostics does **not**
+establish the live root cause. Capture the failing refresh stage, safe error
+category/status, snapshot age and active pause blockers on a natural recurrence
+after separately authorized activation. No extra API polling, induced fault,
+relaxed risk gate or restart. Close only with evidence identifying the trigger
+and verification of the corresponding remedy. This remains separate from the
+known hybrid order-admission scheduling fix. [Evidence and open work](docs/history/ENTRY_CHURN_DIAGNOSIS_2026-09-23.md).
+
+**September23 broad scan coverage — PAUSED:** operator approved an isolated, bounded
 comparison of the existing modeled100-candidate shortlist with up to300 public
 book candidates. Prepared diagnostic only; no live selection wiring, recurring
 collector, REST-book fallback or trading effect. See

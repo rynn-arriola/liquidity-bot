@@ -65,6 +65,7 @@ from .reducer_diagnostics import capture_reducer_decision, completed_reducer_dec
 from .entry_quality import (
     DEFAULT_ENTRY_QUALITY_POLICY_PATH, load_entry_quality_policy)
 from .risk_windows import WindowRiskMeter, load_risk_window_policy
+from .risk_diagnostics import RiskDiagnostics
 from .entry_order_policy import (
     DEFAULT_ENTRY_ORDER_POLICY_PATH,
     EntryOrderPolicyError,
@@ -832,6 +833,8 @@ class CommissioningRunner:
         self._bot_era_rewards: dict[str, Decimal] = {}
         self._orders_before = 0
         self._runtime_error_counts: dict[str, int] = {}
+        self._risk_diagnostics = RiskDiagnostics()
+        self._risk_refresh_stage = "not_started"
         # First scheduled-summary instant whose otherwise-fresh capital proof
         # was blocked only by current order ambiguity. Shutdown and critical
         # summaries bypass this reporting-only delay.
@@ -4309,7 +4312,7 @@ class CommissioningRunner:
     def _entry_risk_allowed(self, now: datetime, market: MarketMetadata) -> bool:
         """Shared clock-sensitive entry policy; no ledger or network reads."""
         today = date.fromisoformat(risk_day(now))
-        return (
+        allowed = (
             self.risk_guard is not None
             and self._window_entry_ready(now)
             and self.risk_guard.can_add_new_risk(now=now)
@@ -4320,6 +4323,12 @@ class CommissioningRunner:
             and not self._entry_pause_active()
             and market.event_allows_entry(now)
         )
+        if not allowed:
+            try:
+                self._risk_diagnostics.entry_blocked(self, now, market)
+            except Exception:
+                pass  # Diagnostics cannot alter entry, cancellation or exit policy.
+        return allowed
 
     def _check_entry_admission(self, payload: Mapping[str, Any]) -> None:
         """Recheck entry authority after governor wait, without network I/O.
@@ -4653,20 +4662,29 @@ class CommissioningRunner:
         )
 
     async def _refresh_balance(self, now: datetime) -> None:
+        previous = self.risk_guard.equity_observed_at if self.risk_guard else None
+        self._risk_refresh_stage = "equity_snapshot"
         try:
             await self._refresh_balance_candidate(now)
-        except Exception:
+        except Exception as exc:
             # A failed settlement proof is unknown, not another fresh reading
             # of the previous confirmed window loss. Preserve the dollar
             # checkpoint, but immediately withdraw entry authority.
             if self._window_risk is not None and self.risk_guard is not None:
                 self.risk_guard.equity_observed_at = None
+            try:
+                self._risk_diagnostics.refresh_failed(
+                    self._now(), stage=self._risk_refresh_stage,
+                    error=exc, previous_observed_at=previous)
+            except Exception:
+                pass  # Never mask the original safety failure with logging failure.
             raise
 
     async def _refresh_balance_candidate(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
         snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
+        self._risk_refresh_stage = "day_baseline"
 
         observed_at = self._now()
         today = date.fromisoformat(risk_day(observed_at))
@@ -4694,6 +4712,7 @@ class CommissioningRunner:
         # Every published mark needs cash activity from the same bracket.
         # A timer-cached adjustment can misclassify a newly completed transfer
         # (even if an offsetting fill leaves the raw cash balance unchanged).
+        self._risk_refresh_stage = "cash_history"
         if self._cash_activity_boundary is None:
             raise RuntimeError("cash-activity boundary is unavailable")
         cash_through = observed_at
@@ -4712,6 +4731,7 @@ class CommissioningRunner:
         # snapshot already bracketed positions with equal cash reads; one
         # final equal cash read proves the activity adjustment belongs to
         # that same account state.
+        self._risk_refresh_stage = "final_balance"
         second = await self.account.fetch_balance(observed_at=self._now())
         if snapshot.balance.current_balance != second.current_balance:
             raise AdapterError(
@@ -4719,6 +4739,7 @@ class CommissioningRunner:
         if date.fromisoformat(risk_day(self._now())) != today:
             raise AdapterError(
                 "ET risk day changed during non-trading activity snapshot")
+        self._risk_refresh_stage = "snapshot_validation"
         if self._window_risk is not None:
             if snapshot.position_basis is None:
                 raise AdapterError(
@@ -4730,6 +4751,7 @@ class CommissioningRunner:
         # publish any part of the candidate snapshot until all reads have
         # succeeded; a failed activity bracket must leave the previous
         # proven mark intact and merely let its freshness expire.
+        self._risk_refresh_stage = "publication"
         snapshot = account_equity_snapshot(
             second, snapshot.positions, observed_at=snapshot.observed_at)
         self._nontrading_cash = nontrading
@@ -6260,6 +6282,13 @@ class CommissioningRunner:
                 print(f"[event-started] at={self._now().isoformat()} "
                       f"market={owner.slug} action=cancel_entries_and_exit", flush=True)
 
+    async def _prepare_market_decision(self, slug: str) -> bool:
+        """Source-specific scheduling checkpoint, never mutation authority."""
+        return True
+
+    def _entry_observation_pending(self) -> bool:
+        return False
+
     async def _decide_for_market(
         self, slug: str, now: datetime, *, replanned: bool = False,
     ) -> tuple[str | None, float]:
@@ -6298,6 +6327,10 @@ class CommissioningRunner:
             await self._refresh_event_guard()
             if self._stop_requested:
                 return None, 0.0
+            if not await self._prepare_market_decision(slug):
+                return None, 1.0
+            if self._stop_requested:
+                return None, 0.0
             now = self._now()
             frame = self._frame(now, slug)
             overflow_cancel = self._loss_cap_cancel_action(frame)
@@ -6313,6 +6346,13 @@ class CommissioningRunner:
                 # suppressed. The next ledger/private input dirties the owner
                 # and retries after real capacity exists.
                 actions = []
+            if (actions and actions[0].kind == ActionKind.PLACE_POST_ONLY
+                    and frame.position == 0 and self._entry_observation_pending()):
+                # Known proof waits are scheduling, not failed durable creates.
+                # Keep every cancellation and the final admission fence intact.
+                return None, 1.0
+        except LedgerConflict:
+            raise
         except RuntimeInvariantViolation as invariant:
             # A violated runtime invariant is about the process, not this
             # market. It stays terminal.

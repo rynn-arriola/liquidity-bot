@@ -1146,3 +1146,10 @@ These are implementation requirements, not suggestions.
     A cadence-skipped periodic refresh cannot clear the applied-hint veto; only
     a successful full proof may do so. A scoped proof retains its reducer-only
     exception and cannot discharge global uncertainty.
+    Before planning, drain queued observations in order after awaited lifecycle
+    service. Known entry-proof waits must not manufacture failed create intents.
+    An uncovered unambiguous reducer may obtain one bounded scoped proof before
+    planning; an event during proof yields without reserving a hard-exit attempt.
+    Stop/source/scope/flat transitions cannot turn that exit pass into entry.
+    This scheduling checkpoint never replaces final admission checks, blocks
+    required cancels, relaxes unknown-state handling or changes REST cadence.

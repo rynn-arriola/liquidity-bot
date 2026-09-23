@@ -184,7 +184,7 @@ restore its historical size/$90 risk policy. No rollback was performed.
 Chosen bounded repair, rather than bypassing final pending-message protection or
 making this incomplete stream the sole position authority:
 
-1. An exact known no-fill NEW/CANCEL acknowledgement is projected normally but
+1. An exact known no-fill OPEN/NEW acknowledgement is projected normally but
    retains normal REST polling cadence. Identity, quantity, price and cumulative
    fill amount must match an owned order or exact pending create. Missing fields,
    unknown event type, new/changed fill quantities or unknown ownership retain
@@ -255,6 +255,40 @@ entry requests remain refused. No polling or budget increase, parallel mutation,
 new credential path, loss reset or historical policy restoration. Documentation
 audit and diff whitespace checks pass. Tests establish offline behavior, not a
 guarantee of live latency, REST savings or absence of future429s.
+
+### Second edge-case review
+
+A subsequent independent pass found and corrected four boundary weaknesses in
+the prepared-only implementation. Terminal cancel frames no longer share the
+OPEN/NEW cadence exception: a cancel can race a fill or position update that the
+currently incomplete private feed omits, so it always schedules REST proof. The
+existing local cancel-confirm-replace path still performs one scoped exact-owner,
+orders, positions and history proof before replacement, preserving the intended
+latency improvement without trusting the terminal frame alone. An actual private
+terminal-cancel race is covered by the continuity test.
+
+If a notification arrives while scoped REST position proof is running, both the
+hybrid certificate and the base REST position-confirmation cache are now refused;
+the next priority pass cannot reuse a proof that straddled new evidence. Reducer
+direction admission now accepts only the canonical BUY_SHORT for positive
+inventory and BUY_LONG for negative inventory used by the existing order model;
+legacy SELL encodings cannot use the exception. Finally, the one-use certificate
+is consumed only after every later local admission callback passes, so a local
+TIF/source/strategy refusal cannot strand an uncovered position by burning proof
+before any request is sent. There is no await between the recheck/consume and the
+network mutation.
+
+Focused hybrid coverage increased to55 tests and passed. Four deliberate
+reversals independently reproduced terminal-cancel cadence reuse, stale base
+cache retention, legacy SELL admission and early certificate consumption as
+assertion failures. Business policy is unchanged: size15,32 slots, four$30
+settled-loss windows, pending-entry caps, market selection, pricing and exit
+timers are untouched. Full-suite evidence follows the final unchanged-source run.
+
+The restored shipping source passed the complete2,054-test production-virtualenv
+suite in333.135seconds after the four reversal checks. Diff whitespace and the
+100/100/80/120-line root-document budgets pass. No live credentials, venue
+mutation, deployment, process start or risk migration was part of verification.
 
 Authenticated03:35:25.925085Z again proves zero venue orders and positions; the
 former runner/supervisor are absent. One unresolved intent/23 working rows/three

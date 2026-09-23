@@ -47,22 +47,35 @@ class SourceTradingGateway(RestProofTradingGateway):
         owner._source_mutations_in_flight += 1
 
         def check():
+            scoped_hybrid_reducer = False
             if (owner._source_switching or generation != owner.source_control.generation
                     or scope != tuple(owner.active_slugs)):
                 raise ApiAdmissionDeferred("account source changed; request not sent",
                     error_code="LOCAL_ACCOUNT_SOURCE_CHANGED", retry_after_seconds=1)
             if (operation == "POST /v1/orders"
-                    and isinstance(owner.private_stream, HybridPrivateStream)
-                    and (owner.private_stream.pending
-                         or (owner._hybrid_requires_reconcile
-                             and not owner._hybrid_reduction_proved(
-                                 self._reducing_market.get())))):
-                # Includes a task-held earlier event. No create/reducer uses
-                # quantity captured before an unapplied fill or position hint.
-                raise ApiAdmissionDeferred("private observation pending; request not sent",
-                    error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
+                    and isinstance(owner.private_stream, HybridPrivateStream)):
+                if owner.private_stream.pending:
+                    # Includes a task-held earlier event. No create/reducer uses
+                    # quantity captured before an unapplied fill or position hint.
+                    raise ApiAdmissionDeferred("private observation pending; request not sent",
+                        error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
+                if owner._hybrid_requires_reconcile:
+                    scoped_hybrid_reducer = owner._hybrid_reduction_proved(
+                        self._reducing_market.get())
+                    if not scoped_hybrid_reducer:
+                        raise ApiAdmissionDeferred(
+                            "private observation pending; request not sent",
+                            error_code="LOCAL_HYBRID_OBSERVATION_PENDING",
+                            retry_after_seconds=1)
             if admission_check:
                 admission_check()
+            # Consume only after every downstream admission callback passes.
+            # A locally rejected request must not burn the one-use certificate.
+            if (scoped_hybrid_reducer
+                    and not owner._hybrid_reduction_proved(
+                        self._reducing_market.get(), consume=True)):
+                raise ApiAdmissionDeferred("scoped reducer proof changed; request not sent",
+                    error_code="LOCAL_HYBRID_OBSERVATION_PENDING", retry_after_seconds=1)
         try:
             return await super()._mutation(operation, call, traffic_class=traffic_class,
                                           admission_check=check)
@@ -261,8 +274,10 @@ class AccountSourceRunner(RestFallbackRunner):
                if isinstance(observation.payload, dict) else {})
         if not isinstance(raw, dict):
             return False
-        if raw.get("type") not in {
-                "EXECUTION_TYPE_NEW", "EXECUTION_TYPE_CANCEL", "EXECUTION_TYPE_CANCELED"}:
+        # Only an exact OPEN/NEW acknowledgement is harmless in hybrid mode.
+        # A terminal cancel may race a private fill/position message that this
+        # incomplete stream never delivers, so it always schedules REST proof.
+        if raw.get("type") != "EXECUTION_TYPE_NEW":
             return False
         wire = raw.get("order", {})
         if not isinstance(wire, dict) or not any(
@@ -273,7 +288,7 @@ class AccountSourceRunner(RestFallbackRunner):
         client_id = self.ledger.resolve_client_order_id(order.exchange_order_id)
         if not client_id or client_id.startswith("venue:"):
             return False
-        if ((raw["type"] == "EXECUTION_TYPE_NEW") != (order.status == "OPEN")):
+        if order.status != "OPEN":
             return False
         rows = self.ledger.query(
             "SELECT * FROM execution_orders WHERE exchange_order_id=?",
@@ -284,12 +299,11 @@ class AccountSourceRunner(RestFallbackRunner):
         if len(rows) != 1:
             return False
         row = rows[0]
-        return (order.status in {"OPEN", "CANCELED"}
-                and row["status"] in {"OPEN", "PENDING", "PARTIAL", "CANCELED"}
+        return (row["status"] in {"OPEN", "PENDING", "PARTIAL"}
                 and not row["unknown_reason"]
                 and self._order_matches_row(replace(order, status=row["status"]), row))
 
-    def _hybrid_reduction_proved(self, slug):
+    def _hybrid_reduction_proved(self, slug, *, consume=False):
         """A completed scoped REST proof clears only this reducer's hint veto.
 
         It does not renew the global gate or polling clock. Pending stream data,
@@ -319,12 +333,12 @@ class AccountSourceRunner(RestFallbackRunner):
             payload = json.loads(intent["payload_json"])
             valid = (Decimal(str(payload.get("quantity"))) == abs(quantity)
                     and payload.get("marketSlug") == slug
-                    and payload.get("intent") in (
-                        {"ORDER_INTENT_SELL_LONG", "ORDER_INTENT_BUY_SHORT"} if quantity > 0
-                        else {"ORDER_INTENT_BUY_LONG", "ORDER_INTENT_SELL_SHORT"}))
+                    and payload.get("intent") == (
+                        "ORDER_INTENT_BUY_SHORT" if quantity > 0
+                        else "ORDER_INTENT_BUY_LONG"))
         except (ValueError, ArithmeticError, AttributeError, TypeError):
             return False
-        if valid:
+        if valid and consume:
             self._hybrid_reducer_proofs.pop(slug, None)
             self._hybrid_counts["scoped_admissions"] += 1
         return valid
@@ -417,6 +431,11 @@ class AccountSourceRunner(RestFallbackRunner):
             self._hybrid_reducer_proofs[slug] = (
                 tuple(self.active_slugs), self.source_control.generation,
                 self.ledger.position(slug), started)
+        elif self.account_state_mode == "hybrid":
+            # The base REST helper may have cached its own scoped certificate.
+            # If a private event arrived during the read, neither layer may
+            # reuse that now-stale proof on the next priority pass.
+            self._position_confirmation_proofs.pop(slug, None)
         return result
 
     def _catalog_positions(self):

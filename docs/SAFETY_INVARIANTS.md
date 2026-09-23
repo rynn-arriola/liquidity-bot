@@ -1119,10 +1119,15 @@ These are implementation requirements, not suggestions.
     no later observation/proof, no queued message, no working owner order or
     account ambiguity, and only the matching unsent reducing intent. The normal
     REST gate/driver checks still apply; entry authority and poll time never renew.
-    A positively owned, exact unchanged-cumulative no-fill NEW/CANCEL acknowledgement
+    A positively owned, exact unchanged-cumulative no-fill OPEN/NEW acknowledgement
     may retain normal polling cadence, never clear an earlier hint or extend
-    freshness; unknown types/fields, new fills and changed quantities still force
-    proof. Transport/schema failure revokes proof and
+    freshness. Terminal cancel messages, unknown types/fields, new fills and
+    changed quantities still force proof because the incomplete private feed
+    cannot exclude a missing fill/position race. A scoped certificate permits
+    only the runner's canonical BUY_LONG/BUY_SHORT reducing intent and is consumed
+    only after every final local admission callback passes. A private event during
+    scoped proof invalidates both hybrid and base REST scoped caches. Transport/
+    schema failure revokes proof and
     reconnects with bounded backoff; ledger/ownership conflicts remain critical.
     Uncertain notifications may retain the prior valid REST certificate only
     for existing two-list flat-order optimization, never as permission to skip

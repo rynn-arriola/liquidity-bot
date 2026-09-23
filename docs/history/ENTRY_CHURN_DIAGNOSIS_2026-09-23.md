@@ -611,3 +611,18 @@ production environment then passed all2,145 tests in378.696 seconds. Final diff
 review found no business-policy drift, ownership relaxation, mutation retry,
 credential exposure or rollback dependency. Deployment/live acceptance remains
 subject to the normal authenticated flat/clear gates.
+
+## Restart gate blocked by live exposure
+
+The reviewed repair was committed and pushed as `220976c3f`. At18:50Z the old
+runner reproduced the shared hybrid cooldown across several markets, then the
+authorized workflow gracefully stopped supervisor768/runner782. Shutdown
+cancelled flat entries but correctly parked three pregame positions behind
+reducers instead of crossing them. The18:51:23Z mandatory gate refused restart.
+A fresh18:52:34Z authenticated read still showed positions+11,+15 and-4, each
+with exactly one opposite-side OPEN reducer for11,15 and4 respectively; venue
+orders3, unresolved intents0, unknown orders0, ledger working3 and ledger
+positions3. The repair remains undeployed and loaded source remains038408240.
+No reducer was cancelled and no loss-making close was authorized. Deployment
+and restart require natural/manual flatness or explicit authority for the
+existing price-capped close procedure, followed by a new flat/clear gate.

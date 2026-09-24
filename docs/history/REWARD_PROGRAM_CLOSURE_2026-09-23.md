@@ -1,5 +1,42 @@
 # Reward-program closure investigation — September 23, 2026
 
+## Follow-up: replacement programs available by22:42 ET
+
+This supersedes the low-supply counts below, not their timestamped validity.
+At02:42:13Z the same runner's normal complete discovery found879 executable
+markets,803 reward-linked,214 applicable periods,55 passing the catalog spread
+gate and42 viable after book evaluation.588 were outside six hours, one live-only,
+and76 had no reward record. No closed pregame rows or daily_event memberships
+remained in this scan. No diagnostic full rescan or restart was triggered.
+
+At02:45:06Z one six-symbol authenticated report-lane read confirmed replacement
+active day-of/live programs for ITF, table tennis and doubles, with program IDs
+ending `20260924`, start02:00Z and no end. UTR retained its active September23
+program. This establishes replacement availability, not its exact publication
+time or the reason for the earlier gap.
+
+The public [rewards page](https://polymarket.us/rewards), inspected in the browser
+around02:44Z, still listed the old ITF day-of program ($30,256 market memberships),
+old table-tennis day-of ($35,374), and Politics MID daily_event ($100,108), including
+both exact affected daily-event symbols. The page has no status/end column.
+Its all-category counter showed151 programs/75,841 market memberships; those are
+not deduplicated, active, supported or currently eligible bot markets. Website
+listings and exact-market API responses were not synchronized in this observation;
+the UI alone cannot prove current earning eligibility.
+
+The [changelog](https://docs.polymarket.us/changelog) gave no matching explanation.
+The [status page](https://status.polymarketexchange.com) was operational with no
+September23 incident, and September24 maintenance scheduled06:00–08:00 ET.
+The documented six-hour day-of and ET daily windows were unchanged.
+
+At02:46:02Z the same supervisor21730/runner21744 were alive. Authenticated reads
+showed16 orders and four positions, each with an exact-sized reducing order
+(BUY15/BUY15/SELL8.72/SELL15). Positions and orders are sequential snapshots,
+not an atomic ledger/ambiguity audit. This task changed only documentation;
+no trading code, rules, deployment marker or restart. Remaining support question:
+why old programs closed before replacements were visible and why the website
+still exposed old IDs. Exact rejection diagnostics remain a proposal.
+
 ## Conclusion and scope
 
 The sudden low order count is explained by venue-published reward-program

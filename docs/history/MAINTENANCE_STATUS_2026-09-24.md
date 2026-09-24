@@ -1,5 +1,17 @@
 # September24 maintenance status check
 
+## 08:41 ET follow-up
+
+Fresh official summary: All Systems Operational, no incidents or maintenance.
+Same supervisor21730/runner21744 remain alive. Authenticated12:41:42Z reads
+prove zero orders and positions. Runner12:30:52Z schedule recorded completed
+maintenance and RESUME_HOLD until12:45:07.375Z (08:45:07 ET). This is earliest
+admission after the buffer, not proof that trading has resumed; normal health,
+ownership, public-stream and UI gates still apply. Latest12:40:54Z API window:
+1.909rps,115 reads, zero mutations/failures/429. An08:31 earnings timeout and
+08:37 per-market pregame-unavailable refusals remain visible, so this is not
+an error-free-all-endpoints claim. No code/config/restart change.
+
 ## 08:22 ET follow-up
 
 The same supervisor/runner remain alive. Authenticated12:22:54Z reads now prove

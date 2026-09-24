@@ -82,3 +82,66 @@ No restart or runtime-source deployment. After separate authorization, verify
 manifest/environment and saved settings, normal stop/flat/ownership/start gates,
 then live acceptance using existing logs. Do not add measurements or repeat
 valid complete-suite evidence solely because deployment copies the same files.
+
+## Authorized deployment and restart
+
+Operator subsequently authorized "Ok u can restart." The existing supervisor
+was stopped and runner352901 received SIGTERM; normal shutdown completed at
+20:19:13Z with `flat=true`. No force kill or ownership teardown failure occurred.
+Two queued shutdown notifications were undelivered; that does not negate venue
+proof. Authenticated20:19:40Z showed zero venue orders/positions, unresolved
+intents, unknown orders, ledger working orders and ledger positions.
+
+The stopped-runtime recovery copy captured20:19:54Z passed integrity and copy
+verification (1,191,120,896 bytes, SHA256 prefix `e871926f7c90`). WSL then
+fast-forwarded cleanly to the pushed `ebb2f480de1d5682cc799db5703a2ddb393c56e0`.
+All241 manifest inputs matched the tested stage, Windows and commit after
+normalizing expected Windows CRLF/Linux LF differences. The initial verifier
+compared normalized runtime data against raw test hashes and flagged
+`pyproject.toml`; correcting the verifier to validate raw tested bytes first,
+then compare normalized contents, proved no source/config drift. No test or
+trading source was changed to bypass verification.
+
+The production interpreter, all recorded installed package versions, imports,
+saved15/32 settings and fixed$30 risk tiers matched. The installed scheduling
+module passed18 tests; complete2,192-test evidence was reused rather than
+repeated. Only then was `DEPLOYED_COMMIT` advanced to `ebb2f480d`.
+
+The second authenticated flat/clear gate passed20:21:53Z. The launcher started
+supervisor420964/runner420980 at approximately20:21:55Z using
+`./scripts/start_commissioning.sh auto 15 32 hybrid`. Existing quality tracking
+remains enabled; no new measurement or source switch was introduced. Startup
+preserved the12:00–18:00ET durable window loss$20.5162/$30 and cap15, with no
+HARD/provisional hold. Restart did not reset settled loss or loosen its tier.
+
+First natural position observation at20:23:03.546Z was+15; its normal passive
+SELL reducer acknowledgment followed at20:23:05.331Z (1.784s). This is one
+observed episode, not comparative latency proof. An unresolved cancel read
+briefly returned404 and positive terminal stream evidence followed; acceptance
+was followed by authenticated zero unresolved/unknown state in the live checks.
+
+### Initial live acceptance
+
+At20:24:01Z authenticated reads showed nine venue orders and one+15 position,
+covered by one SELL15 order; unresolved/unknown state was zero. Ledger13 versus
+venue9 was sampled during fresh creates; sequential reads are not an atomic
+venue/ledger parity proof. The first position was observed flat20:25:40Z.
+Another+15 position received a normal reducer replacement and was observed
+flat20:26:22Z. A new partial-fill episode changed+1.77 to+3.54, then-11.46
+while the original opposite quote filled. The building-order cancel was
+acknowledged20:26:20Z, terminal evidence arrived20:26:23Z, and an exact BUY11.46
+reducer was acknowledged20:26:25.637Z (1.888s after reversal observation).
+Flat was observed20:26:26.349Z. This does not establish every future race/deadline.
+
+The20:26:25Z sequential authenticated sample spanned that reversal:16 orders,
+one-11.46 position,14 flat-market orders and two earlier positioned-market
+orders; zero unresolved/unknown state. It must not be interpreted as simultaneous
+post-replacement exposure or exact ledger parity. Subsequent runner records
+confirm the old order completed and the new exact reducer/flat transition.
+
+The first API window recorded2.135rps and zero429s; the20:25:40Z window recorded
+3.253rps and one `cash_history@429`, with zero shared cooldown at reporting time
+and1.9s remaining endpoint backoff. Normal trading and reducers continued.
+Transient order-retrieve404s also occurred and recovered. No lower-rate or
+zero429 guarantee is claimed. Long-duration/deadline acceptance remains normal
+live follow-up using existing logs, not a new collector or startup blocker.

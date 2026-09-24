@@ -1,7 +1,9 @@
 """Read coalescing and early exit scheduling; no real venue access."""
 import asyncio
+from contextlib import ExitStack
 from datetime import timedelta
 from decimal import Decimal
+from functools import partial
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
@@ -19,11 +21,17 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
         self.now = fixtures.NOW
         self.sequence = 0
 
-    async def build(self, *, rest=True):
+    async def build(self, *, rest=True, mode=None):
         cls = RestFallbackRunner if rest else fixtures.CommissioningRunner
+        if mode is not None:
+            from liquidity_bot.account_source_runner import AccountSourceRunner
+            cls = partial(AccountSourceRunner, account_state_mode=mode)
         with patch.object(fixtures, "CommissioningRunner", cls):
             runner, client, _ = self.fixture.build_runner(
                 clock=lambda: self.now, max_markets=32)
+        if mode == 'hybrid':
+            from test_hybrid_account import SilentStream
+            runner._websocket_factory = SilentStream
         await runner.preflight()
         self.addAsyncCleanup(runner.market_stream.close)
         self.addAsyncCleanup(runner.private_stream.close)
@@ -237,3 +245,176 @@ class RestThrottleExitSchedulingTests(IsolatedAsyncioTestCase):
             await asyncio.wait_for(runner.run(), timeout=3)
             raw.assert_not_awaited()
         self.assertEqual(events[:2], ["urgent", "equity"])
+
+    async def _periodic_gap_scenario(self, *, stage, kind, mode='rest', failure=False):
+        runner, client = await self.build(mode=mode)
+        runner.preflight_until_ready = AsyncMock(return_value='TRADE')
+        runner._shutdown = AsyncMock()
+        start = self.now
+        deadline = start + timedelta(seconds=12)
+        events = []
+        if kind == 'deadline':
+            self.position(runner)
+
+        async def consume(market_task, private_task):
+            self.now = max(self.now, start + timedelta(seconds=11))
+            events.append('streams')
+            return market_task, private_task, None
+
+        def become_urgent():
+            self.now += timedelta(seconds=2)
+            if kind == 'fill':
+                self.position(runner)
+            events.append('urgent_now')
+
+        async def equity(now):
+            events.append('financial')
+            if stage == 'financial':
+                become_urgent()
+                if failure:
+                    raise AdapterError('failed financial proof')
+            return now + timedelta(seconds=5)
+
+        async def reconcile(now, **kwargs):
+            self.assertEqual(kwargs['tag'], 'periodic')
+            self.assertEqual(kwargs['strict_order_markets'], frozenset())
+            events.append('execution')
+            if stage == 'execution':
+                become_urgent()
+                if failure:
+                    raise AdapterError('failed execution proof')
+
+        async def service(*args, **kwargs):
+            events.append('position_service')
+            return None
+
+        async def sweep(slugs, *, position_only):
+            self.assertTrue(position_only)
+            self.assertEqual(slugs, ('market-one',))
+            # A successful reducer makes further checkpoints a local no-op.
+            self.position(runner, '0')
+
+        async def reporting(now, due):
+            events.append('reporting')
+            runner.request_stop('test_done')
+            return due
+
+        with ExitStack() as stack:
+            for name, fn in (
+                ('_consume_ready_stream_tasks', consume),
+                ('_refresh_periodic_balance', equity),
+                ('_rest_reconcile', reconcile),
+                ('_service_bound_markets', service),
+                ('_decision_sweep', sweep),
+                ('_refresh_due_earnings', reporting),
+            ):
+                stack.enter_context(patch.object(runner, name, fn))
+            stack.enter_context(patch.object(runner, '_position_exit_deadline', return_value=deadline))
+            stack.enter_context(patch.object(runner, '_position_has_exact_reducer', return_value=kind == 'deadline'))
+            await asyncio.wait_for(runner.run(), timeout=3)
+        urgent_at = events.index('urgent_now')
+        service_at = events.index('position_service', urgent_at)
+        next_stage = 'execution' if stage == 'financial' else 'reporting'
+        self.assertLess(service_at, events.index(next_stage))
+        self.assertIn('streams', events[urgent_at + 1:service_at])
+        self.assertEqual(events.count('financial'), 1)
+        self.assertEqual(events.count('execution'), 1)
+        self.assertFalse(client.orders.create_calls or client.orders.cancel_calls)
+
+    async def test_new_urgent_position_preempts_next_periodic_stage(self):
+        for mode in ('rest', 'hybrid'):
+            for stage in ('financial', 'execution'):
+                for kind in ('fill', 'deadline'):
+                    with self.subTest(mode=mode, stage=stage, kind=kind):
+                        await self._periodic_gap_scenario(stage=stage, kind=kind, mode=mode)
+
+    async def test_failed_periodic_stage_still_rechecks_position(self):
+        for stage in ('financial', 'execution'):
+            with self.subTest(stage=stage):
+                await self._periodic_gap_scenario(stage=stage, kind='fill', failure=True)
+
+    async def test_periodic_checkpoint_respects_stop_rebind_and_stream_failure(self):
+        for when in ('before', 'during'):
+            for condition in ('stop', 'rebind', 'stream_stop', 'error'):
+                if when == 'before' and condition in ('stream_stop', 'error'):
+                    continue
+                with self.subTest(when=when, condition=condition):
+                    runner, _ = await self.build()
+                    pair = (object(), object())
+                    def change():
+                        if condition == 'stop':
+                            runner.request_stop('operator_stop')
+                        elif condition == 'rebind':
+                            runner._streams_need_rebind = True
+                    async def consume(*args):
+                        change()
+                        if condition == 'error':
+                            raise AdapterError('stream checkpoint failed')
+                        return *pair, 'stream_stop' if condition == 'stream_stop' else None
+                    if when == 'before':
+                        change()
+                    with patch.object(runner, '_consume_ready_stream_tasks', AsyncMock(side_effect=consume)) as drain, \
+                            patch.object(runner, '_service_urgent_positions', AsyncMock()) as urgent:
+                        if condition == 'error':
+                            with self.assertRaisesRegex(AdapterError, 'stream checkpoint failed'):
+                                await runner._periodic_position_checkpoint(*pair)
+                        else:
+                            result = await runner._periodic_position_checkpoint(*pair)
+                            expected = {'stop':'operator_stop', 'stream_stop':'stream_stop'}.get(condition)
+                            self.assertEqual(result, (*pair, expected))
+                        urgent.assert_not_awaited()
+                        self.assertEqual(drain.await_count, int(when == 'during'))
+
+    async def test_periodic_checkpoint_preserves_replacement_tasks_and_stop_from_service(self):
+        runner, _ = await self.build()
+        old, new = (object(), object()), (object(), object())
+        with patch.object(runner, '_consume_ready_stream_tasks', AsyncMock(return_value=(*new, None))) as drain, \
+                patch.object(runner, '_service_urgent_positions', AsyncMock(return_value='exit_stop')) as urgent:
+            self.assertEqual(await runner._periodic_position_checkpoint(*old), (*new, 'exit_stop'))
+            drain.assert_awaited_once_with(*old)
+            urgent.assert_awaited_once()
+
+    async def test_periodic_checkpoint_websocket_mode_remains_noop(self):
+        runner, _ = await self.build(mode='websocket')
+        pair = (object(), object())
+        with patch.object(runner, '_consume_ready_stream_tasks', AsyncMock()) as drain, \
+                patch.object(runner, '_service_urgent_positions', AsyncMock()) as urgent:
+            self.assertEqual(await runner._periodic_position_checkpoint(*pair), (*pair, None))
+            drain.assert_not_awaited()
+            urgent.assert_not_awaited()
+
+    async def test_periodic_checkpoint_applies_held_private_event_before_queue_and_service(self):
+        for mode in ('rest', 'hybrid'):
+            runner, _ = await self.build(mode=mode)
+            events = []
+            market_task = asyncio.get_running_loop().create_future()
+            private_task = asyncio.get_running_loop().create_future()
+            private_task.set_result('held_event')
+            async def observe(event, now):
+                self.assertEqual(event, 'held_event')
+                events.append('held')
+            async def drain():
+                events.append('queued')
+            async def service():
+                events.append('service')
+            with patch.object(runner, '_observe_private', observe), \
+                    patch.object(runner, '_drain_private_events', drain), \
+                    patch.object(runner, '_service_urgent_positions', service):
+                new_market, new_private, stop = await runner._periodic_position_checkpoint(market_task, private_task)
+            self.assertIsNone(stop)
+            self.assertEqual(events, ['held', 'queued', 'service'])
+            self.assertIs(new_market, market_task)
+            self.assertIsNot(new_private, private_task)
+            new_market.cancel()
+            new_private.cancel()
+            await asyncio.gather(new_market, new_private, return_exceptions=True)
+
+    async def test_flat_checkpoint_does_not_start_account_or_market_service(self):
+        runner, _ = await self.build()
+        pair = (object(), object())
+        with patch.object(runner, '_consume_ready_stream_tasks', AsyncMock(return_value=(*pair, None))), \
+                patch.object(runner, '_service_bound_markets', AsyncMock()) as service, \
+                patch.object(runner, '_rest_reconcile', AsyncMock()) as proof:
+            self.assertEqual(await runner._periodic_position_checkpoint(*pair), (*pair, None))
+            service.assert_not_awaited()
+            proof.assert_not_awaited()

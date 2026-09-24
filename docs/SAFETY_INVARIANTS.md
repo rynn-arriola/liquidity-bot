@@ -1027,6 +1027,8 @@ These are implementation requirements, not suggestions.
     protection. This same coverage test governs pre-periodic urgent service and
     discovery deferral. Equal-urgency owners retain stable order; a preempted
     priority owner remains exit-only if it flattens before resumption.
+    REST/hybrid periodic account stage also yields to the same bounded urgent
+    service after ordered stream consumption; no partial proof or timer reset.
     Snapshot timestamps cannot cause repeated
     interruptions. Extra visits are bounded per owner/sweep; unknown intents,
     isolation, backoff, stop and complete proof/admission checks remain binding.

@@ -1017,6 +1017,24 @@ class RestFallbackRunner(CommissioningRunner):
 
         return self._position_has_exact_reducer(slug)
 
+    async def _periodic_position_checkpoint(self, market_task, private_task):
+        if not self._using_rest_source():
+            return await super()._periodic_position_checkpoint(
+                market_task, private_task)
+        if self._stop_requested or self._streams_need_rebind:
+            return market_task, private_task, self._stop_requested or None
+        # A read may cross an exit deadline or allow a private fill to queue.
+        # The outer task's held event must precede the adapter backlog. Reuse
+        # its existing consumer/recovery owner, never a second private reader.
+        market_task, private_task, stop = await self._consume_ready_stream_tasks(
+            market_task, private_task)
+        if stop or self._stop_requested or self._streams_need_rebind:
+            return market_task, private_task, stop or self._stop_requested or None
+        # This is bounded, exit-only scheduling. It does not publish a proof,
+        # alter polling due times, or authorize bypassing a failed account read.
+        stop = await self._service_urgent_positions()
+        return market_task, private_task, stop or self._stop_requested or None
+
     def _position_has_exact_reducer(self, slug):
         """Builders, duplicates and uncertain orders are not exit coverage."""
 

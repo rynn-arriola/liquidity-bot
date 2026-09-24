@@ -6727,6 +6727,10 @@ class CommissioningRunner:
         """Optional source-specific exit pass before unrelated periodic work."""
         return None
 
+    async def _periodic_position_checkpoint(self, market_task, private_task):
+        """Source-specific serial handoff after a periodic account stage."""
+        return market_task, private_task, self._stop_requested or None
+
     def _preserve_position_orders_during_bound_recovery(
         self, slug: str,
     ) -> bool:
@@ -10903,6 +10907,14 @@ class CommissioningRunner:
                         # Freshness expires in 15 seconds and then triggers the
                         # normal risk stop. Never substitute buying power.
                         next_balance = now + timedelta(seconds=5)
+                    market_task, private_task, stop_reason = (
+                        await self._periodic_position_checkpoint(
+                            market_task, private_task))
+                    if stop_reason:
+                        break
+                    if self._streams_need_rebind:
+                        continue
+                now = self._now()
                 if now >= next_state_reconcile:
                     try:
                         # Fresh complete snapshots renew account visibility.
@@ -10918,6 +10930,13 @@ class CommissioningRunner:
                         # freshness gate expires and shuts down new risk.
                         pass
                     next_state_reconcile = now + timedelta(seconds=10)
+                    market_task, private_task, stop_reason = (
+                        await self._periodic_position_checkpoint(
+                            market_task, private_task))
+                    if stop_reason:
+                        break
+                    if self._streams_need_rebind:
+                        continue
                 # Periodic account reads may have crossed an exit boundary;
                 # use the current clock before optional reporting starts.
                 next_earnings = await self._refresh_due_earnings(

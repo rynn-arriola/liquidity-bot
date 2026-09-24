@@ -97,3 +97,45 @@ can still delay proof/exits; no safe local optimization guarantees venue access.
 The intermittent status-feed timeout recovered in the reviewed log and has no
 proven local defect here. Prior teardown invariant and unexplained risk-wave
 cause remain separate open work; 300-coverage stays paused.
+
+## Command 1 deployment and live acceptance
+
+The operator subsequently issued Command 1. Supervisor21730 was stopped first;
+runner21744 completed its cancel/flatten reconciliation at17:20:33Z with
+`flat=true`. Its already-open shutdown stream-teardown invariant reproduced and
+extended the graceful stop, but no force kill or safety bypass occurred. Fresh
+authenticated gates at17:21:39Z and17:26:38Z independently proved zero venue
+orders, positions, unresolved intents, unknown orders, ledger working orders and
+ledger positions.
+
+The stopped-runtime recovery copy captured17:25:35Z passed verification:
+1,180,839,936 bytes, SHA256 prefix `baf3871bd1b2`. WSL fast-forwarded cleanly to
+the pushed commit `f4f2bdb24e70e0e5c2dd7eeefb5f74fe63519b31`. The complete
+2,185-test candidate evidence remained valid against the recorded manifest and
+environment; the exact installed tree additionally passed all49 account-read,
+backoff and reducer-continuity tests. Runtime imports resolve from the installed
+checkout. The saved policy still showed four ET six-hour windows, $30 HARD and
+pending-entry tiers30/25/20/15/10. Only then was `DEPLOYED_COMMIT` advanced.
+
+Supervisor352883/runner352901 started17:27:04Z with explicit auto, size15,
+32 slots and hybrid account mode. Startup selection used19/19 public-WebSocket
+books with zero REST book fallback. Risk proof showed12:00–18:00ET settled loss
+$12.728/$30, cap20, no hold; open orders and positions remain excluded.
+
+Six-minute live acceptance completed. Five API windows ran2.185–3.326 requests/s.
+Four had zero rate limits; one cash-history429 occurred and the next window
+recovered with zero cooldown. This does not prove sustained REST savings or
+eliminate venue throttling. The private stream moved from listening to receiving
+with zero gaps. Two natural fills exercised the affected path: reducer action
+acknowledgments followed in3.15s and the cancel/replace sequence remained active.
+An intermediate sequential venue snapshot caught one replacement during its
+publication gap; a follow-up authenticated17:34:09Z snapshot proved20 venue and
+20 ledger working orders, two positions, and one exact reducing order for each:
+SELL6.62 for+6.62 and SELL0.01 for+0.01. Unresolved intents and unknown orders
+were zero. No runtime failure or critical alert occurred in the new run.
+
+Initial release acceptance therefore passes. Continue natural observation for
+endpoint precheck deferrals,429 recurrence and actual timed-exit latency. The
+pre-existing shutdown stream-teardown invariant remains separate work because
+it reproduced before this release loaded; the final flat gates prove shutdown
+safety but not that teardown defect's mechanism is resolved.

@@ -180,3 +180,52 @@ gaps also occurred. This explains temporary dips below the cap but does not
 establish that the new checkpoint caused the increased churn or that each
 economic refusal was incorrect. Follow the existing proof/economics diagnostics
 before changing guards; no new collector, code change, stop or restart here.
+
+## Hybrid savings audit,21:34Z
+
+Operator redirected the diagnosis to whether adding private WebSocket actually
+replaces REST. Same runner420980/source verified; no new venue requests or
+exposure claims. Earlier before/after checkpoint periods BOTH used hybrid:
+they do not measure pure REST versus hybrid or prove WebSocket caused an increase.
+
+Code tracing confirms five-second normal/one-second active REST decision polling
+remains in both modes. Exact harmless ACKs retain cadence; no-fill terminal
+events coalesce at normal polling, but fills/changed facts may clear completion
+time and bring full proof forward. Optional stream observations do not renew
+complete REST authority. Scoped urgent reducer proof remains scoped; it cannot
+satisfy global entry proof. Every private event also invalidates same-sweep
+execution receipt reuse, including no-op ACKs/gaps. This is conservative scope,
+not proof that weakening invalidation is safe or a measured cause of extra calls.
+
+WebSocket-positive terminal evidence can remove exact order lookups, but does
+not replace routine orders/positions/history or financial checks. The latter
+normally brackets positions with two balances, reads cash history, then takes
+a third balance; no WebSocket event substitutes for that bracket. Same-REST
+polling and compound financial cost remain even without useful stream savings.
+
+First-hour summary endpoints20:22–21:22Z:10,348 attempts,9,656 reads,692 mutations.
+Account/order reads total8,558 (88.6% of reads):balance1,233,cash history822,
+execution history1,452,open orders1,430,exact orders2,134,positions1,487.
+Execution telemetry:1,096 decision/143 periodic/15 bind global proof starts,
+19 position-transition/one hybrid-preplan scoped start;19 state misses/one
+missing-receipt miss and no reuse hit. These are attempts/reasons, not unique
+completed proofs or demonstrably redundant calls. At21:29:58Z a60.2s window
+had181 reads and zero mutations, so create/cancel volume is not the whole load.
+Latest sampled hybrid cumulative counters:853 orders,58 hints,421 ACK-only,
+122 urgent,368 cadence,zero gaps,one scoped admission. These are event counters,
+not HTTP request counts; the single scoped admission is not total stream savings.
+
+Re-ran all nine existing `test_hybrid_rest_comparison` tests with the installed
+production interpreter and fake clients/temp ledgers:passed8.077s, no venue IO.
+They still prove equal quiet read counts, savings on30 terminal exact lookups,
+one-read reducer replacement saving and earlier hint discovery. IMPORTANT:
+the quiet test exercises execution polling, not the full financial loop; the
+reducer comparison mocks equity refresh. Therefore these narrow tests never
+proved aggregate production REST savings across financial checks/recovery.
+
+Next diagnosis should compare identical full-loop REST/hybrid event schedules
+including financial work, delayed/duplicate frames, fills during proof, polling,
+recovery and cancellation waves. Use existing fake clients/logging; no new live
+collector, source switch or weakened freshness/loss/exit rules. Target verified
+redundant proof consumers only, not removing genuine fill-triggered exit reads.
+No executable or configuration changes and no restart in this audit.

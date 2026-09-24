@@ -110,7 +110,7 @@ Isolated stage `/tmp/cash-report-review.qeLHq6`, no credentials/live database:
 production Python3.12.3, Ubuntu24.04/WSL, installed production dependencies.
 Full suite: `nice -n 10 /home/polybot/liquidity-bot/.venv/bin/python -B scripts/run_tests.py -j 4`:
 **2231 tests /96 files PASS in109.51s**. Focused dependency run81 passed
-(included24 imported duplicate cases, subsequently removed from discovery).
+(included12 imported duplicate cases, subsequently removed from discovery).
 Final dedicated test file: **22 tests PASS in3.038s**. After the full suite,
 only this test file was expanded by two configuration/source-mode tests and its
 fixture routing; production source was unchanged. The final file was rerun in

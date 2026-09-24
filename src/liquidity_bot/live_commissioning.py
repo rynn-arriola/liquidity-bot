@@ -36,6 +36,7 @@ from .active_scope_cache import write_active_scope_snapshot
 from .account_snapshots import (
     AccountEquitySnapshot, AsyncAccountSnapshotGateway,
     account_equity_snapshot)
+from .account_reporting import AccountReportSnapshot
 from .bot_era import bot_era_rewards_by_status
 from .adapters import (
     AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS,
@@ -657,6 +658,11 @@ class CommissioningRunner:
         # safety or reporting consumer may rebuild marked equity from the
         # balance row alone.
         self._equity_snapshot: AccountEquitySnapshot | None = None
+        self._account_report: AccountReportSnapshot | None = None
+        self._account_report_invalid = False
+        self._cash_report_blocked = False
+        self._cash_report_attempted_at: datetime | None = None
+        self._defer_cash_reporting = False
         self._live_pnl_cache_error = False
         self._active_scope_cache_error = False
         self.started_at: datetime | None = None
@@ -1791,6 +1797,7 @@ class CommissioningRunner:
             self._baseline_day == today,
             self._nontrading_cash is not None,
             self._nontrading_cash_day == today,
+            not self._cash_report_blocked,
             session_ready,
             not self._entry_pause_active(),
             self._effective_entry_order_cap(now),
@@ -4350,6 +4357,7 @@ class CommissioningRunner:
             and self._baseline_day == today
             and self._nontrading_cash is not None
             and self._nontrading_cash_day == today
+            and not self._cash_report_blocked
             and not self._entry_pause_active()
             and market.event_allows_entry(now)
         )
@@ -4691,6 +4699,134 @@ class CommissioningRunner:
             False,
         )
 
+    async def _refresh_trading_balance(self, now: datetime) -> None:
+        """Only routine decision/periodic callers may defer report-only work.
+
+        Startup, recovery, shutdown, source handoff and direct refresh callers
+        retain the complete synchronous proof. One serial owner, no new task.
+        """
+        previous = self._defer_cash_reporting
+        self._defer_cash_reporting = True
+        try:
+            await self._refresh_balance(now)
+        finally:
+            self._defer_cash_reporting = previous
+
+    def _can_defer_cash_report(self, now: datetime) -> bool:
+        meter = self._window_risk
+        report = self._account_report
+        today = date.fromisoformat(risk_day(now))
+        return bool(
+            self._defer_cash_reporting and self.config.cash_history_refresh_seconds
+            and meter is not None and meter.current is not None
+            and meter.current.start == meter.policy.bounds(now)[0]
+            and not meter.held and not meter.provisional
+            and not self._cash_report_blocked and not self._stop_requested
+            and not self._streams_need_rebind
+            and self._transport_recovery_component is None
+            and self._baseline_day == today and self._nontrading_cash_day == today
+            and self._nontrading_cash is not None and report is not None
+            and report.equity.observed_at <= now
+            and report.matches(day=today, opening_equity=self._day_opening_equity,
+                               opening_cash=self._cash_baseline,
+                               cash_boundary=self._cash_activity_boundary))
+
+    def _remember_account_report(
+        self, snapshot: AccountEquitySnapshot, nontrading: Decimal,
+    ) -> None:
+        if self._baseline_day is None or self._day_opening_equity is None:
+            return
+        if self._cash_activity_boundary is None:
+            return
+        self._account_report = AccountReportSnapshot(
+            snapshot, nontrading, self._baseline_day, self._day_opening_equity,
+            self._cash_baseline, self._cash_activity_boundary)
+        self._account_report_invalid = False
+        self._cash_report_blocked = False
+        self._cash_report_attempted_at = snapshot.observed_at
+
+    def _reporting_equity(self, now: datetime) -> AccountEquitySnapshot | None:
+        if self._window_risk is None:
+            return self._equity_snapshot
+        report = self._account_report
+        if report is None or self._account_report_invalid:
+            return None
+        if (not report.matches(day=date.fromisoformat(risk_day(now)),
+                               opening_equity=self._day_opening_equity,
+                               opening_cash=self._cash_baseline,
+                               cash_boundary=self._cash_activity_boundary)
+                or report.nontrading_cash != self._nontrading_cash):
+            return None
+        # Age belongs to reporting only, never buying power or the HARD meter.
+        limit = max(15, self.config.cash_history_refresh_seconds + 15)
+        if not 0 <= (now - report.equity.observed_at).total_seconds() <= limit:
+            return None
+        return report.equity
+
+    async def _refresh_window_safety(self, now: datetime) -> None:
+        """Publish fresh trading proof independently of an optional cash walk."""
+        await self.gateway.ensure_account_reads_available("balance", "positions")
+        snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
+        observed_at = self._now()
+        if (not self._can_defer_cash_report(observed_at)
+                or risk_day(snapshot.observed_at) != risk_day(observed_at)):
+            raise AdapterError("financial boundary changed during safety snapshot")
+        if snapshot.position_basis is None:
+            raise AdapterError("open-position basis is unavailable for account safety")
+        if not 0 <= (observed_at - snapshot.observed_at).total_seconds() <= self.risk_guard.max_equity_age_seconds:
+            raise AdapterError("settled window account snapshot is stale")
+        self._equity_snapshot = snapshot
+        self.balance = snapshot.balance
+        self._observe_risk_window(snapshot, observed_at)
+        self.risk_guard.observe_equity(
+            self._window_risk.realized_equity, observed_at=snapshot.observed_at)
+        self._refresh_overnight_entry_order_cap(observed_at)
+
+        attempted = self._cash_report_attempted_at
+        if (attempted is not None and 0 <= (observed_at - attempted).total_seconds()
+                < self.config.cash_history_refresh_seconds):
+            return
+        if (self._stop_requested or self._hard_stop_active()
+                or self._entry_observation_pending()
+                or any(self._position_priority_rank(slug) < 2
+                       for slug in self._position_priority_tokens())
+                or self._position_near_its_flatten_deadline(observed_at)):
+            return  # Preserve overdue work; no catch-up burst or exit delay.
+        self._cash_report_attempted_at = observed_at
+        self._risk_refresh_stage = "cash_report"
+        try:
+            await self.gateway.ensure_account_reads_available("activities", "balance")
+            changes = await fetch_nontrading_cash_changes(
+                self.gateway, boundary=self._cash_activity_boundary,
+                through=observed_at, max_pages=NONTRADING_CASH_MAX_PAGES)
+            nontrading = sum((change.amount for change in changes
+                             if change.completed_at > self._cash_activity_boundary), Decimal("0"))
+            second = await self.account.fetch_balance(observed_at=self._now())
+            if snapshot.balance.current_balance != second.current_balance:
+                raise AccountSnapshotConsistencyError("cash changed during account report")
+            if (risk_day(self._now()) != risk_day(snapshot.observed_at)
+                    or self._window_risk.policy.bounds(self._now())[0]
+                    != self._window_risk.current.start):
+                raise AccountSnapshotConsistencyError("account report crossed a financial boundary")
+            report = account_equity_snapshot(
+                second, snapshot.positions, observed_at=snapshot.observed_at)
+            self._nontrading_cash = nontrading
+            self._nontrading_cash_observed_at = self._now()
+            self._nontrading_cash_day = self._baseline_day
+            self._remember_account_report(report, nontrading)
+            # Cash agrees; retain the newest buying-power response without
+            # renewing the older safety or position observation clock.
+            self.balance = second
+            self._publish_live_pnl_snapshot()
+            self._runtime_error_counts.pop("account_cash_report", None)
+        except AdapterError as exc:
+            self._account_report_invalid = True
+            if not (isinstance(exc, AccountSnapshotConsistencyError)
+                    or read_backoff.is_backpressure(exc)):
+                self._cash_report_blocked = True
+                raise  # Malformed/unknown transfers remain conservative.
+            await self._report_runtime_error("account_cash_report", exc)
+
     async def _refresh_balance(self, now: datetime) -> None:
         previous = self.risk_guard.equity_observed_at if self.risk_guard else None
         self._risk_refresh_stage = "equity_snapshot"
@@ -4710,6 +4846,8 @@ class CommissioningRunner:
             except Exception as exc:
                 if self._window_risk is not None and self.risk_guard is not None:
                     self.risk_guard.equity_observed_at = None
+                    self._account_report_invalid = True
+                    self._cash_report_blocked = True
                 try:
                     self._risk_diagnostics.refresh_failed(
                         self._now(), stage=self._risk_refresh_stage,
@@ -4723,6 +4861,8 @@ class CommissioningRunner:
             # checkpoint, but immediately withdraw entry authority.
             if self._window_risk is not None and self.risk_guard is not None:
                 self.risk_guard.equity_observed_at = None
+                self._account_report_invalid = True
+                self._cash_report_blocked = True
             try:
                 self._risk_diagnostics.refresh_failed(
                     self._now(), stage=self._risk_refresh_stage,
@@ -4734,6 +4874,9 @@ class CommissioningRunner:
     async def _refresh_balance_candidate(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
+        if self._can_defer_cash_report(now):
+            await self._refresh_window_safety(now)
+            return
         await self.gateway.ensure_account_reads_available(
             "balance", "positions", "activities")
         snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
@@ -4841,6 +4984,7 @@ class CommissioningRunner:
             adjusted_equity, observed_at=snapshot.observed_at)
         self._refresh_loss_entry_order_cap(observed_at)
         self._refresh_overnight_entry_order_cap(observed_at)
+        self._remember_account_report(snapshot, nontrading)
         self._publish_live_pnl_snapshot()
 
     def _observe_risk_window(
@@ -4926,7 +5070,7 @@ class CommissioningRunner:
     def _publish_live_pnl_snapshot(self) -> None:
         """Refresh the dashboard mark without giving it venue access."""
 
-        snapshot = self._equity_snapshot
+        snapshot = self._reporting_equity(self._now())
         if (snapshot is None or self._baseline_day is None
                 or self._day_opening_equity is None
                 or self._nontrading_cash is None):
@@ -4982,7 +5126,7 @@ class CommissioningRunner:
                 self._window_risk.current is None
                 or self._window_risk.current.start
                 != self._window_risk.policy.bounds(now)[0])):
-            await self._refresh_balance(now)
+            await self._refresh_trading_balance(now)
             return
         age = (now - observed_at).total_seconds()
         refresh_at = max(
@@ -4991,7 +5135,7 @@ class CommissioningRunner:
             - DECISION_EQUITY_REFRESH_MARGIN_SECONDS,
         )
         if age < 0 or age >= refresh_at:
-            await self._refresh_balance(now)
+            await self._refresh_trading_balance(now)
 
     async def _refresh_periodic_balance(self, now: datetime) -> datetime:
         """Coalesce a just-completed bracket without changing the 5s cadence."""
@@ -5007,7 +5151,7 @@ class CommissioningRunner:
             # Keep the original due time: skipping a duplicate at age four
             # seconds must not postpone the next periodic check by five more.
             return observed_at + timedelta(seconds=5)
-        await self._refresh_balance(now)
+        await self._refresh_trading_balance(now)
         return now + timedelta(seconds=5)
 
     def _refresh_loss_entry_order_cap(self, observed_at: datetime) -> None:
@@ -5286,14 +5430,15 @@ class CommissioningRunner:
             if self._cash_activity_boundary is not None
             else self.ledger.realized_pnl() - self._realized_baseline
         )
+        snapshot = self._reporting_equity(self._now())
         if (self.balance is None or self._cash_baseline is None
-                or self._equity_snapshot is None):
+                or snapshot is None):
             return ledger_value
         if (self._nontrading_cash is None
                 or self._nontrading_cash_day != self._baseline_day):
             raise RuntimeError("non-trading cash adjustment is unavailable")
         try:
-            realised = self._equity_snapshot.realized_trading_pnl(
+            realised = snapshot.realized_trading_pnl(
                 opening_cash=self._cash_baseline,
                 nontrading_cash=self._nontrading_cash)
             # Cannot value what we hold at basis, so cash alone would read the
@@ -7594,6 +7739,7 @@ class CommissioningRunner:
                 and self.gate.ready(self.ledger, now=now)):
             flat_orders, reservations = self._flat_entry_orders_and_reservations()
             pending_entries = len(flat_orders) + reservations
+        report_snapshot = self._reporting_equity(now)
         payload = build_liquidity_summary(LiquiditySummary(
             mode="LIVE",
             readiness_status="COMMISSIONING_REWARD_ECONOMICS_ENFORCED",
@@ -7690,19 +7836,19 @@ class CommissioningRunner:
             # deposits and other non-trading cash are removed from this
             # operator-facing headline just as they are from the hard guard.
             today_pnl_usd=(
-                self._equity_snapshot.marked_trading_pnl(
+                report_snapshot.marked_trading_pnl(
                     opening_equity=self._day_opening_equity,
                     nontrading_cash=self._nontrading_cash)
-                if self._equity_snapshot is not None
+                if report_snapshot is not None
                 and self._day_opening_equity is not None
                 and self._nontrading_cash is not None
                 and self._baseline_day == today
                 and self._nontrading_cash_day == today else None),
             today_realized_pnl_usd=(
-                self._equity_snapshot.realized_trading_pnl(
+                report_snapshot.realized_trading_pnl(
                     opening_cash=self._cash_baseline,
                     nontrading_cash=self._nontrading_cash)
-                if self._equity_snapshot is not None
+                if report_snapshot is not None
                 and self._cash_baseline is not None
                 and self._nontrading_cash is not None
                 and self._baseline_day == today
@@ -7713,16 +7859,16 @@ class CommissioningRunner:
                 and self._day_opening_equity == self._cash_baseline
                 else None),
             today_unrealized_pnl_usd=(
-                self._equity_snapshot.open_unrealized_pnl()
-                if self._equity_snapshot is not None
+                report_snapshot.open_unrealized_pnl()
+                if report_snapshot is not None
                 and self._day_opening_equity == self._cash_baseline
                 and self._baseline_day == today
                 and self._nontrading_cash_day == today
                 and self._nontrading_cash is not None
                 else None),
             today_pnl_as_of=(
-                self._equity_snapshot.observed_at
-                if self._equity_snapshot is not None else None),
+                report_snapshot.observed_at
+                if report_snapshot is not None else None),
             # Exact delta observed by `hard_stop_reached`. `_refresh_balance`
             # removes proven non-trading cash before updating the guard, so
             # the meter and marked-trading headline use the same accounting

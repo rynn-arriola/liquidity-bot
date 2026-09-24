@@ -257,6 +257,9 @@ class CommissioningConfig:
     # current support guidance is per market/period and is measured separately.
     aggregate_reward_payout_floor_usd: Decimal = Decimal("1")
     earnings_refresh_seconds: int = 900
+    # Account P&L only. Zero restores synchronous cash proof on every refresh.
+    # Trading balance/position/risk freshness and execution polling never use it.
+    cash_history_refresh_seconds: int = 30
     auto_select_reward_markets: bool = False
     market_selection_refresh_seconds: int = 900
     # A bound pregame owner can temporarily fail current reward economics even
@@ -504,6 +507,9 @@ class CommissioningConfig:
         if self.earnings_refresh_seconds != 900:
             problems.append(
                 "commissioning earnings must refresh every 900 seconds")
+        if (type(self.cash_history_refresh_seconds) is not int
+                or self.cash_history_refresh_seconds not in (0, *range(5, 61))):
+            problems.append("cash history refresh must be 0 or 5-60 seconds")
         if (self.max_inventory_age_seconds != 900
                 or self.force_exit_before_start_seconds != 300
                 or self.small_residual_min_qty != Decimal("0.01")

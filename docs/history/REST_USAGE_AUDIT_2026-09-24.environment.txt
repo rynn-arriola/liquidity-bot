@@ -1,0 +1,30 @@
+Environment: Ubuntu 24.04 / WSL2, Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+Interpreter: /home/polybot/liquidity-bot/.venv/bin/python, Python 3.12.3
+Stage: /tmp/cash-report-review.qeLHq6 (git archive aa9ae15dd + reviewed source/tests)
+Imports: stage src and tests precede installed editable package via PYTHONPATH
+Full suite: scripts/run_tests.py -j 4, 2231 tests / 96 files, 109.51s, PASS
+Full suite log completed: 2026-09-24 22:57:33 UTC
+Full suite log SHA256: 37749a24e701ffed4a63acc8a0da30da89e478261fcfe2434d0bee9ee991ccc9
+Final test-file expansion: 22 dedicated tests, 3.038s, PASS (two additions after full suite)
+Final focused log completed: 2026-09-24 22:57:54 UTC
+Final focused log SHA256: e6abe966a4335b2d1b950b8c71970ccc548dbe06bb755f8895c27e26e74f1536
+Artifacts: 244 final source/test/fixture/config/script/dependency files in sibling .artifacts.sha256
+Final Windows contents match all 244 staged hashes after CRLF normalization.
+No production source, running process, credentials or live database changed.
+
+Installed dependencies (editable project replaced by staged PYTHONPATH for testing):
+PyNaCl==1.6.2
+anyio==4.14.2
+certifi==2026.7.22
+cffi==2.1.1
+cryptography==50.0.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.19
+pillow==12.3.0
+polymarket-us==0.1.2
+pycparser==3.0
+setuptools==84.0.0
+typing_extensions==4.16.0
+websockets==17.1

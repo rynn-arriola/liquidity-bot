@@ -1174,3 +1174,17 @@ These are implementation requirements, not suggestions.
     scoped owner, replace a full audit, renew timestamps/cadence, omit financial
     checks or modify hard-exit proof/admission rules. No second writer or extra
     polling process is allowed. Diagnostic failure cannot change authority.
+112. Settled-window routine financial proof may omit report-only cash history
+    between bounded complete reports, never balance/position bracketing or
+    required execution/ownership proof. Original safety clocks and durable
+    matched-fill loss/tier/HARD semantics remain unchanged. Startup, financial
+    boundaries, missing proof, held release, recovery and legacy non-window
+    risk retain full synchronous accounting. Report balance, positions, cash
+    adjustment, baseline and time travel together; a new trading balance cannot
+    be combined with an old adjustment or reported with a renewed timestamp.
+    Transient report-only failure invalidates reporting, not independent fresh
+    settled-window proof; malformed/unclassified cash and failed required reads
+    still bar entry. Activities backoff still governs execution history. Due
+    reports yield to pending observations and urgent exits without retry bursts.
+    This is the routine-report exception to74/88/110, not a boundary, transfer,
+    ownership, risk-freshness or source-readiness bypass.

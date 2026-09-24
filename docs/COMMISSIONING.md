@@ -15,6 +15,13 @@ overnight/daytime cap descriptions below once loaded. Configuration is
 loss tiers and outstanding holds survive restart.
 See [scope, accounting, tests and migration gates](history/SIX_HOUR_RISK_WINDOWS_2026-09-15.md).
 
+Settled-window routine financial checks retain their fast balance/position
+bracket. `CommissioningConfig.cash_history_refresh_seconds` separately targets
+complete account reporting every30 seconds (0 disables; integer5–60 supported).
+Startup, boundaries, recovery and legacy risk retain full accounting proof.
+Cash reporting never renews trading freshness or changes loss tiers; see
+[REST audit and report/safety boundary](history/REST_USAGE_AUDIT_2026-09-24.md).
+
 One permanent runner supports explicit `websocket` and `rest` sources, with
 `rest-fallback` retained as an alias. The fourth launcher argument overrides the
 last successfully verified selection; without either, the validated policy defaults

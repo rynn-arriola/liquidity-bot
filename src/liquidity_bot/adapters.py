@@ -1174,6 +1174,39 @@ class AsyncIntervalLimiter:
         self._wait_samples.append(waited)
         return book_token or read_token
 
+    async def ensure_account_reads_available(self, *endpoints: str) -> None:
+        """Reject a doomed compound read before spending unrelated API slots.
+
+        Advisory only: no lease, pacing slot or freshness is granted here.
+        Every actual request still performs normal atomic admission. In
+        particular, another caller can claim a probe after this check.
+        """
+        endpoints = tuple(dict.fromkeys(endpoints))
+        if any(endpoint not in read_backoff.ENDPOINTS for endpoint in endpoints):
+            raise ValueError("unknown account-read endpoint")
+        if self.shared_state_path is not None:
+            await asyncio.to_thread(self._check_shared_account_reads, endpoints)
+        else:
+            async with self._lock:
+                now = time.monotonic()
+                for endpoint in endpoints:
+                    read_backoff.admit(self._account_read_backoff, endpoint,
+                                       now, None, claim=False)
+
+    def _check_shared_account_reads(self, endpoints: tuple[str, ...]) -> None:
+        path = self.shared_state_path
+        assert path is not None and fcntl is not None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._open_shared_state(path) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            try:
+                state = self._read_shared_state(handle)
+                now = time.time()
+                for endpoint in endpoints:
+                    read_backoff.admit(state, endpoint, now, None, claim=False)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def interrupt_waits(self) -> None:
         """Wake waits that began before an operator stop boundary.
 
@@ -1605,6 +1638,11 @@ class AsyncReadOnlyGateway:
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    async def ensure_account_reads_available(self, *endpoints: str) -> None:
+        # Match _call's supported lightweight test/custom limiter protocol.
+        if isinstance(self.limiter, AsyncIntervalLimiter):
+            await self.limiter.ensure_account_reads_available(*endpoints)
 
     async def _call(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         for attempt in range(self.retry_attempts):

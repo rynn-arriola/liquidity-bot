@@ -519,6 +519,11 @@ class RestFallbackRunner(CommissioningRunner):
             item.execution_id for item in batch if hasattr(item, "execution_id"))
         return batch
 
+    def _reconciliation_read_endpoints(self):
+        if not self._using_rest_source():
+            return super()._reconciliation_read_endpoints()
+        return ("open_orders", "positions", "activities")
+
     async def _rest_reconcile(self, now, *, tag="", strict_order_markets=None):
         self._position_confirmation_proofs.clear()
         if not self._using_rest_source():

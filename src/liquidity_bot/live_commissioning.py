@@ -2341,6 +2341,24 @@ class CommissioningRunner:
         self._scheduler_decision_latencies.clear()
         self._scheduler_action_latencies.clear()
 
+    async def _refresh_due_earnings(self, now: datetime, due: datetime) -> datetime:
+        """Reporting must not start an HTTP wait ahead of an imminent exit.
+
+        Keep the overdue report due, rather than postponing it a full interval.
+        No account/risk check, quote or position deadline is changed.
+        """
+        if (now < due or self._stop_requested
+                or self._position_near_its_flatten_deadline(now)):
+            return due
+        try:
+            await self._refresh_earnings(now)
+            self._runtime_error_counts.pop("reward_earnings_refresh", None)
+        except Exception as exc:
+            self._earnings_observed_at = None
+            self._reward_refresh_failed = True
+            await self._report_runtime_error("reward_earnings_refresh", exc)
+        return now + timedelta(seconds=self.config.earnings_refresh_seconds)
+
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
 
@@ -2490,6 +2508,9 @@ class CommissioningRunner:
         """Account-source hook; normal WebSocket reconciliation is unchanged."""
         return await self.account.fetch_open_orders(observed_at=now)
 
+    def _reconciliation_read_endpoints(self) -> tuple[str, ...]:
+        return ("open_orders", "positions")
+
     async def _collect_rest_snapshots(self, now: datetime):
         """Collection boundary; the reconciliation owner alone projects data."""
         orders = await self._fetch_rest_order_snapshot(now)
@@ -2524,7 +2545,16 @@ class CommissioningRunner:
         authority.
         """
 
+        # Do not walk every exact order before discovering that a required
+        # snapshot is already in endpoint recovery. This is not a proof or a
+        # reservation; each wire request still checks the shared circuit.
         unresolved_owners = self._unresolved_intent_owners()
+        if not unresolved_owners and not self.ledger.absent_orders():
+            await self.gateway.ensure_account_reads_available(
+                *self._reconciliation_read_endpoints())
+        # Ambiguous order repair is still useful while positions are down:
+        # positive terminal/open proof can resolve a cancel or permit its
+        # existing exact retry. Do not hide that work behind this optimization.
         execution_owners_before = self._execution_owner_slugs()
         # First ask for terminal state on every bot-owned working order. A
         # missing order in an open-order snapshot is not cancellation proof.
@@ -4704,6 +4734,8 @@ class CommissioningRunner:
     async def _refresh_balance_candidate(self, now: datetime) -> None:
         if self.risk_guard is None:
             raise RuntimeError("risk guard is not initialized")
+        await self.gateway.ensure_account_reads_available(
+            "balance", "positions", "activities")
         snapshot = await self.account.fetch_equity_snapshot(observed_at=now)
         self._risk_refresh_stage = "day_baseline"
 
@@ -10886,20 +10918,10 @@ class CommissioningRunner:
                         # freshness gate expires and shuts down new risk.
                         pass
                     next_state_reconcile = now + timedelta(seconds=10)
-                if now >= next_earnings:
-                    try:
-                        await self._refresh_earnings(now)
-                        self._runtime_error_counts.pop(
-                            "reward_earnings_refresh", None)
-                    except Exception as exc:
-                        # Earnings are delayed and never authorize an exit, but
-                        # every live run must preserve an auditable venue view.
-                        self._earnings_observed_at = None
-                        self._reward_refresh_failed = True
-                        await self._report_runtime_error(
-                            "reward_earnings_refresh", exc)
-                    next_earnings = now + timedelta(
-                        seconds=self.config.earnings_refresh_seconds)
+                # Periodic account reads may have crossed an exit boundary;
+                # use the current clock before optional reporting starts.
+                next_earnings = await self._refresh_due_earnings(
+                    self._now(), next_earnings)
                 # A terminal CANCEL is positive proof that this owner may be
                 # planned again. Re-service only those owners, then run the
                 # same freshness/equity/intent-gated decision path used by the

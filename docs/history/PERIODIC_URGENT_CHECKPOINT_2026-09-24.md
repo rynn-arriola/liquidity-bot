@@ -155,3 +155,28 @@ instant at that timestamp. The runner remained live and processing orders.
 Final parity passed on documentation commit `a2fc4c3df` and loaded source
 `ebb2f480d`; the20:28:07Z integrity-verified recovery copy was1,191,583,744 bytes,
 hash prefix `04231ce78f84`. The offline workstation was intentionally skipped.
+
+## Low-order follow-up,21:27Z
+
+Read-only check after the operator noticed fewer orders: same runner420980 and
+loaded marker; authenticated21:27:14Z showed15 orders:14 flat entries and one
+exact BUY9 covering the sole-9 position, zero unresolved/unknown state.
+The settled-risk row at21:27:56Z held P&L-$17.3512, cap15, no HARD trip.
+Logs establish cap15 was first reached18:27:01Z (14:27ET), loss$20.1472,
+before this20:21:55Z restart. The existing minimum-of-persisted/current-tier
+rule retains the reduced cap after gains; the next scheduled window is18ET.
+No risk or selection rule was modified in this release.
+
+Existing logs also prove higher cancellation activity. Selecting API summaries
+by end timestamps19:19–20:19Z versus20:22–21:22Z yields10,531 attempts over
+3,612.0s versus10,348 over3,569.8s (both about2.9rps),28 versus35 HTTP429s.
+These are complete summary intervals, not exact matched samples or IP-wide
+traffic. Account-new-risk-paused CANCEL decisions numbered29 versus66;
+expected-net-not-positive14 versus85; touch repricing11 versus48. Counts are
+logged decisions, not distinct orders or confirmed cancellation completions.
+At21:26:46Z a cash-history429 was followed by unavailable equity evidence,
+entry pause/cancellation, then fresh entry placements21:27:00Z. Pregame proof
+gaps also occurred. This explains temporary dips below the cap but does not
+establish that the new checkpoint caused the increased churn or that each
+economic refusal was incorrect. Follow the existing proof/economics diagnostics
+before changing guards; no new collector, code change, stop or restart here.

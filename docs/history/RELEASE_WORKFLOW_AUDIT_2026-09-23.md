@@ -47,3 +47,27 @@ ab3f7f352. Initial parity passed with a verified private recovery copy captured
 Next authorized release: record preparation time, stopped time and post-start
 acceptance separately. Faster release time is a target pending that measurement,
 not a claim of faster trading or lower live REST usage.
+
+## Parallel full-suite runner
+
+The follow-up implementation adds `scripts/run_tests.py`. It discovers every
+`test_*.py`, gives each file an isolated subprocess and runs up to four files at
+once. Failed files print their complete unittest output immediately; successful
+files stay compact, and the final report lists the slowest modules. A successful
+process that discovered zero tests is refused. `-j 1` retains a serial-isolation
+diagnostic path and filename globs provide focused runs.
+
+The first Windows-native full attempt was invalid because that unrelated Python
+3.14 installation lacks the bot's `httpx` and `tzdata` dependencies. This was
+environment evidence, not a code/test failure, and is excluded from acceptance.
+Using the installed production WSL Python3.12 environment, a four-file mixed
+sample passed55 tests in6.10s. The complete four-worker run then passed **2,166
+tests across93 files in150.39s**. The prior installed sequential result was
+2,162 tests in220.255s; the new runner adds four self-tests, so this is not an
+identical-count benchmark, but measured wall time fell69.865s (31.7%).
+
+The slowest remaining file is `test_live_commissioning.py`:488 tests in94.47s.
+Further class-level sharding could reduce the critical path, but would need its
+own isolation/order-dependence proof. It is not included in this conservative
+first release. The runner makes no venue request and changes no production
+source, configuration, launcher, business rule or runtime safeguard.

@@ -15,6 +15,10 @@ requirements to repeat. No existing test is deleted by this policy.
 | Isolated code repair | Failing-before/passing-after regression, affected module and integration tests, relevant edge-case/diff review. Escalate if isolation cannot be demonstrated. |
 | Execution, account state, risk, scheduling, selection, persistence, shared API admission, startup/shutdown, dependencies or uncertain scope | Focused regressions plus one complete suite in the production-compatible environment, affected end-to-end paths, race/failure/rollback review. |
 
+Use `python -B scripts/run_tests.py` for a complete suite. Its test-file
+processes are isolated and up to four run concurrently; `-j 1` is the serial
+fallback for diagnosing an order-dependent or resource-sensitive failure.
+
 Accounting/data changes are not presentation-only: changes to settled P&L,
 balances, reward attribution or shared report inputs require their complete
 accounting/consumer coverage; any trading/risk consumer uses the broad tier.

@@ -194,8 +194,13 @@ From PowerShell:
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -B -m unittest discover -s tests -v
+python -B scripts/run_tests.py
 ```
+
+The default runner isolates test files and executes up to four concurrently.
+It reports failures immediately and lists the slowest files. Use `-j 1` for a
+serial diagnostic run, or pass filename globs for a focused run, for example
+`python -B scripts/run_tests.py 'test_rest_*.py'`.
 
 ## Bounded read-only probe
 

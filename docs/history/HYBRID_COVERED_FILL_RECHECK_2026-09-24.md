@@ -176,3 +176,38 @@ source was overwritten during validation.
 
 Pending: explicit activation authorization, fresh shutdown/start gates and
 natural live acceptance. Prepared source is not evidence of deployed savings.
+
+## Deployment and initial live acceptance — September24,22:17–22:23Z
+
+The operator explicitly requested `Restart`, authorizing this reviewed release.
+The old supervisor/runner stopped gracefully. Its final record was `flat=true`;
+an independent authenticated stopped gate at22:16:37Z then proved zero venue
+orders, positions, unresolved intents, unknown orders and ledger exposure. The
+old run reported one shutdown stream-teardown ownership invariant before it
+proved flat; that pre-release incident is separate from this fix.
+
+The clean WSL checkout fast-forwarded from`379f8a29c` to pushed GitHub commit
+`dc8f62556b45ee1af55bf14d7e56643f99a92e50`. All245 reviewed stage, Windows,
+commit and deployed inputs matched after expected line-ending normalization;
+Python3.12.3/packages, size15,32 slots and the four-window$30 policy matched. A
+second authenticated gate at22:17:37Z again proved zero exposure/ambiguity before
+the marker advanced and normal `auto 15 32 hybrid` launch started supervisor
+481321/runner481337.
+
+Five-minute acceptance found no new runtime recovery, traceback, critical,
+source gap or switch. Risk evidence was settled loss$0.8885/$30, cap30, with
+open orders/positions excluded. Natural traffic exercised `covered_fill=1`
+while mandatory REST authority remained active. This proves reachability, not
+a whole-session savings percentage.
+
+At22:22:58Z an authenticated snapshot showed24 orders across16 markets and
+three positions. Each position had exactly one correctly opposite15-contract
+OPEN reducer; unresolved intents and unknown orders were zero. The moving ledger
+showed26 working rows versus the venue snapshot's24, so those concurrent raw
+counts are not claimed as an atomic match; reducer coverage was positive.
+
+API windows:2.533rps/zero429;3.113rps/one cash-history429;3.386rps/zero429;
+3.113rps/zero429. Existing recovery isolated the cash-history429 without
+blocking reducers. This narrow repair therefore does not eliminate every other
+REST source or guarantee no429s. Continue natural observation without inducing
+fills.

@@ -12,15 +12,16 @@ import asyncio
 import json
 from collections import deque
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import islice
 
 from .account_source import AccountSourceControl, AccountSourcePolicy
 from .account_observations import AccountSnapshotReader, PositionWatch, DeferredIdentityResolver
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
 from .execution_ledger import LedgerConflict, ACTIVE_ORDER_STATES
-from .venue_state import normalize_order, normalize_position
+from .venue_state import normalize_execution, normalize_order, normalize_position
 from .live_commissioning import CommissioningRunner
 from .live_session import PrivateStateGate
 from .private_stream import PrivateEventKind
@@ -260,7 +261,11 @@ class AccountSourceRunner(RestFallbackRunner):
         self._collected_history = None
         self._hybrid_counts = {"orders": 0, "hints": 0, "gaps": 0,
                                "ack_only": 0, "urgent": 0, "cadence": 0,
-                               "scoped_admissions": 0}
+                               "scoped_admissions": 0, "covered_fill": 0}
+        self._hybrid_fill_proof = None
+        self._hybrid_covered_fills = {}
+        self._hybrid_collecting_fill_coverage = False
+        self._hybrid_collected_fills = ()
         self._hybrid_requires_reconcile = False
         self._hybrid_reducer_proofs = {}
         self._hybrid_last_report = None
@@ -303,6 +308,72 @@ class AccountSourceRunner(RestFallbackRunner):
         return (row["status"] in {"OPEN", "PENDING", "PARTIAL"}
                 and not row["unknown_reason"]
                 and self._order_matches_row(replace(order, status=row["status"]), row))
+
+    def _hybrid_fill_already_covered(self, observation, now):
+        """Scheduling only: exact replay of positive history in the last full proof.
+
+        A durable fill ID alone is insufficient. No new read, quantity inference,
+        receipt reuse, timestamp renewal or bypass of the serial projector occurs.
+        Keep only a bounded batch; a cache miss takes the ordinary urgent path.
+        """
+        raw = (observation.payload.get("execution", {})
+               if isinstance(observation.payload, dict) else {})
+        if not isinstance(raw, dict) or raw.get("type") not in {
+                "EXECUTION_TYPE_FILL", "EXECUTION_TYPE_PARTIAL_FILL"}:
+            return False
+        proof = self._hybrid_fill_proof
+        if proof is None or self.account_state_mode != "hybrid":
+            return False
+        scope, generation, started, completed = proof
+        if (scope != tuple(self.active_slugs)
+                or generation != self.source_control.generation
+                or self._stop_requested or self._streams_need_rebind
+                or self._source_switching or self._source_mutations_in_flight
+                or self._hybrid_requires_reconcile
+                or self._rest_poll_completed_at != completed
+                or self.gate.last_reconcile_at != started
+                or not started <= completed <= now
+                or not self.gate.session_ready(self.ledger, now=now)
+                or self._rest_poll_due(now)
+                or self.ledger.unresolved_intents() or self.ledger.absent_orders()):
+            return False
+        wire = raw.get("order")
+        # Normalizers have defaults for other consumers. Unknown wire fields
+        # must not turn into evidence for this optional replay shortcut.
+        if (not isinstance(wire, dict)
+                or not any(wire.get(k) is not None for k in ("cumQuantity", "cum_quantity"))
+                or not any(wire.get(k) for k in (
+                    "lastTransactTime", "last_transact_time", "createTime", "create_time"))
+                or not any(raw.get(k) for k in ("transactTime", "transact_time"))
+                or not any(raw.get(k) is not None for k in (
+                    "commissionNotionalCollected", "commission_notional_collected"))):
+            return False
+        resolver = self.ledger.resolve_client_order_id
+        execution = normalize_execution(raw, observed_at=now, resolve_client_id=resolver)
+        covered = self._hybrid_covered_fills.get(execution.execution_id)
+        if (covered is None or execution.market_slug not in scope
+                or execution.event_at > started
+                or covered.trade_state == "TRADE_STATE_BUSTED"
+                # REST enriches trade lifecycle/taker metadata; neither is a
+                # private update here. Every identity and economic field matches.
+                or replace(covered, liquidity=execution.liquidity,
+                           trade_state=execution.trade_state) != execution):
+            return False
+        order = normalize_order(wire, observed_at=now, resolve_client_id=resolver)
+        rows = self.ledger.query(
+            "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+            (execution.exchange_order_id,))
+        fills = self.ledger.query(
+            "SELECT reversed,trade_id FROM execution_fills WHERE execution_id=?",
+            (execution.execution_id,))
+        return (len(rows) == 1 and len(fills) == 1
+                and not fills[0]["reversed"]
+                and fills[0]["trade_id"] == execution.trade_id
+                and not rows[0]["unknown_reason"]
+                and not order.client_order_id.startswith("venue:")
+                and order.event_at <= started
+                and order.event_at == datetime.fromisoformat(rows[0]["event_at"])
+                and self._order_matches_row(order, rows[0]))
 
     def _hybrid_order_needs_immediate_proof(self, observation, now):
         """Wake REST for fills, malformed data or changed order facts.
@@ -456,7 +527,9 @@ class AccountSourceRunner(RestFallbackRunner):
             if isinstance(observation, HybridGap):
                 self._hybrid_counts["gaps"] += 1
             elif observation.kind == PrivateEventKind.ORDER_UPDATE:
-                needs_proof = not self._hybrid_order_ack_only(observation, now)
+                covered_fill = self._hybrid_fill_already_covered(observation, now)
+                needs_proof = not (covered_fill
+                    or self._hybrid_order_ack_only(observation, now))
                 if needs_proof:
                     immediate_proof = self._hybrid_order_needs_immediate_proof(
                         observation, now)
@@ -477,7 +550,7 @@ class AccountSourceRunner(RestFallbackRunner):
                                      or wire.get("market_slug") or "").strip()
                                  if isinstance(wire, dict) else None)
                 if not needs_proof:
-                    self._hybrid_counts["ack_only"] += 1
+                    self._hybrid_counts["covered_fill" if covered_fill else "ack_only"] += 1
             else:
                 # Initial snapshots can be delayed/partial. Global position
                 # updates may omit market identity. Both trigger full REST
@@ -500,6 +573,8 @@ class AccountSourceRunner(RestFallbackRunner):
             immediate_proof = True
         finally:
             if needs_proof:
+                self._hybrid_fill_proof = None
+                self._hybrid_covered_fills.clear()
                 if immediate_proof or not affected_slug:
                     self._hybrid_reducer_proofs.clear()
                 else:
@@ -531,13 +606,31 @@ class AccountSourceRunner(RestFallbackRunner):
                     and self.gate.session_ready(self.ledger, now=now)
                     and not self._rest_poll_due(now)):
                 return
-        result = await super()._rest_reconcile(
-            now, tag=tag, strict_order_markets=strict_order_markets)
+        self._hybrid_fill_proof = None
+        self._hybrid_covered_fills.clear()
+        self._hybrid_collected_fills = ()
+        scope, generation = tuple(self.active_slugs), self.source_control.generation
+        self._hybrid_collecting_fill_coverage = self.account_state_mode == "hybrid"
+        try:
+            result = await super()._rest_reconcile(
+                now, tag=tag, strict_order_markets=strict_order_markets)
+        finally:
+            self._hybrid_collecting_fill_coverage = False
         if self.account_state_mode == "hybrid":
             self._hybrid_requires_reconcile = False
+            if (scope == tuple(self.active_slugs)
+                    and generation == self.source_control.generation
+                    and self.gate.session_ready(self.ledger, now=self._now())):
+                self._hybrid_fill_proof = (scope, generation,
+                    self.gate.last_reconcile_at, self._rest_poll_completed_at)
+                self._hybrid_covered_fills = {
+                    item.execution_id: item for item in self._hybrid_collected_fills}
+        self._hybrid_collected_fills = ()
         return result
 
     async def _reconcile_position_state(self, slug, *, tag):
+        self._hybrid_fill_proof = None
+        self._hybrid_covered_fills.clear()
         self._hybrid_reducer_proofs.clear()
         if self.account_state_mode == "hybrid":
             await self._drain_private_events()
@@ -755,6 +848,9 @@ class AccountSourceRunner(RestFallbackRunner):
         if self._using_rest_source() and self._collected_history is not None:
             batch, self._collected_history = self._collected_history, None
             self._rest_history_pending = frozenset(item.execution_id for item in batch)
+            if self._hybrid_collecting_fill_coverage:
+                self._hybrid_collected_fills = tuple(islice(
+                    (item for item in batch if item.market_slug in self.active_slugs), 512))
             return batch
         if self._source_switching:
             return await self.account.fetch_executions(
@@ -791,6 +887,7 @@ class AccountSourceRunner(RestFallbackRunner):
                   f"orders={self._hybrid_counts['orders']} "
                   f"hints={self._hybrid_counts['hints']} gaps={self._hybrid_counts['gaps']} "
                   f"ack_only={self._hybrid_counts['ack_only']} "
+                  f"covered_fill={self._hybrid_counts['covered_fill']} "
                   f"urgent={self._hybrid_counts['urgent']} "
                   f"cadence={self._hybrid_counts['cadence']} "
                   f"scoped_admissions={self._hybrid_counts['scoped_admissions']} "

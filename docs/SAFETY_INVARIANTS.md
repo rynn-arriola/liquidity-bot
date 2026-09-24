@@ -1123,7 +1123,15 @@ These are implementation requirements, not suggestions.
     REST gate/driver checks still apply; entry authority and poll time never renew.
     A positively owned, exact unchanged-cumulative no-fill OPEN/NEW acknowledgement
     may retain normal polling cadence, never clear an earlier hint or extend
-    freshness. Terminal cancel messages, unknown types/fields, new fills and
+    freshness. An exact fill replay may also retain cadence only when its full
+    identity/economics were present in the last successful full REST history
+    batch, the current owned order matches including its venue timestamp, the
+    fill is not reversed, and the same source/scope/original proof remains fresh
+    and not due. Prior uncertainty, ambiguity, stop/rebind/switch, failed or
+    scoped proof disallows the shortcut. Bounded cache misses require normal
+    proof. Serial projection/conflict checks and private-event invalidation of
+    same-sweep receipts still run; no clock or hint is cleared by a duplicate.
+    Terminal cancel messages, unknown types/fields, new fills and
     changed quantities still force proof because the incomplete private feed
     cannot exclude a missing fill/position race. A scoped certificate permits
     only the runner's canonical BUY_LONG/BUY_SHORT reducing intent and is consumed

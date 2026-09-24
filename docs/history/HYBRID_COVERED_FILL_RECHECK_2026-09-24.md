@@ -82,3 +82,97 @@ another market changing during proof and stop/source-generation boundaries.
 
 Implementation and any restart remain separately authorized. The recommendation
 targets a demonstrated redundant read path; it does not promise elimination of429s.
+
+## Authorized implementation (prepared, not deployed)
+
+Subsequent operator request "Okay lets fix this" authorizes this narrow repair,
+not deployment/restart or any trading-policy change. The live runner remains
+untouched. No new live collector, venue probe, credential use or injected event.
+
+Chosen design: a bounded, process-local positive-history cache from the last
+successful complete REST proof, used only to classify duplicate notifications.
+Rejecting all fill notifications or trusting a durable execution ID alone would
+hide new exposure; broader proof sharing would exceed this repair's scope.
+
+- Retain at most512 active-market executions already returned by mandatory
+  history, with original full-proof start/completion, source generation and scope.
+  No extra history/position/order request or durable schema is added.
+- For an incoming fill, require matching execution identity, client/exchange
+  order identity, direction/intent, price, quantity, fee, outcome, trade ID and
+  venue execution time. REST-only liquidity/trade-state enrichment does not make
+  a private replay new; an explicitly busted/reversed execution cannot qualify.
+- Require a positively owned, non-ambiguous current order matching status,
+  cumulative/original quantities, price, direction and exact venue order time.
+  A stale envelope carrying a genuinely new execution remains urgent.
+- Require same source/generation/scope, original fresh REST gate, unchanged
+  completion clock, polling not due, no earlier hint, absent/unknown order,
+  unresolved intent, stop, rebind, source switch or mutation in flight.
+- Always run the normal serial projector/conflict checks. Every private event
+  still invalidates same-sweep execution-proof reuse. A duplicate changes no
+  risk value, position quantity, receipt time, loss accounting or proof clock.
+- Failed/canceled full proof, any scoped position proof, and an uncertain
+  notification invalidate coverage. A periodic cadence no-op cannot renew it.
+  Cache misses/old partial order envelopes take the existing conservative path.
+- Reuse the existing minute telemetry with `covered_fill`; no new process or
+  additional polling. ACK/gap classification is unchanged.
+
+Business rules unchanged: quote size15, configured32 slots, four$30 windows,
+loss reducer tiers, public books/selection, entry/reducer prices, GTC/GTD/IOC,
+15-minute inventory and pre-kickoff deadlines, financial reads, history coverage,
+normal/active polling, REST fallback and global API governor.
+
+### Validation and review
+
+The two formal overlap regressions failed on the old source: each observed
+orders1+positions1+history1 instead of zero. Both pass after the patch, including
+notifications queued during REST collection and consumed afterward. A genuinely
+new fill still makes the same three required reads. Partial fills and repeated
+identical deliveries retain exactly-once quantities and original proof clocks.
+
+Regression coverage additionally includes changed fee/trade/quantity/timestamp,
+changed cumulative/status/order timestamp, malformed/missing/null fields,
+stale-order/new-execution, reversed trades, private-only IDs absent from the
+latest REST batch, stop/scope/source/generation/rebind/mutation/ambiguity guards,
+backward/expired clocks, failed/canceled collection, scoped-proof invalidation,
+prior/later position hints and normal active polling. Existing hybrid admission,
+REST comparison, preplan and same-sweep receipt tests remain required.
+
+Offline replay saving is three reads for the demonstrated overlap, not an
+aggregate live percentage or a guarantee against429. More conservative cache
+misses deliberately retain required REST work. Natural `covered_fill`, total
+REST/endpoint429 and reducer-latency acceptance must wait for an authorized
+deployment; no position is opened merely to test the repair.
+
+Rollback is source-only through the existing stopped/flat gated workflow;
+there is no configuration, database or policy migration. No running checkout
+source was overwritten during validation.
+
+### Final prepared-artifact evidence — September24,22:10Z
+
+- All2,211 tests in95 files pass in106.95s (19 new covered-fill regressions).
+  Command: `nice -n 10 /home/polybot/liquidity-bot/.venv/bin/python -B scripts/run_tests.py -j 4`
+  from isolated `/tmp/covered-fill-review.MrowFN`; log `full-suite-final.log`.
+- Native production Python3.12.3/WSL; exact installed package versions in the
+  [environment record](HYBRID_COVERED_FILL_2026-09-24.environment.txt).
+  No live credentials/database were copied into the stage. Test files use fake
+  venue clients/temporary ledgers; dashboard tests use a local test HTTP server.
+- [SHA-256 manifest](HYBRID_COVERED_FILL_2026-09-24.sha256) records245 identical
+  stage/workstation source, test, script, config, dependency and dashboard inputs.
+  Hashes are raw staged bytes; deployment comparison must account for CRLF/LF
+  normalization, then verify imports/environment. Markdown was also staged for
+  documentation tests; subsequent evidence-only edits receive a separate audit.
+- Initial staging omitted documentation/dashboard fixtures, and one new test
+  incorrectly added an11th fill to a10-contract fully-filled order. Restoring
+  those fixtures and making that test a5-contract partial+1 scenario fixed the
+  test setup; no runtime safety behavior was relaxed. The complete final suite
+  above supersedes those unsuccessful runs.
+- Final diff reviewed: runtime changes are confined to the account-source
+  coordinator; no mutation executor, risk, selector, finance, timing policy,
+  poll interval or schema changes. Two new indexed local reads occur only for
+  a candidate covered fill; non-fill ACKs do not take this new query path.
+- Process rechecked: same supervisor420964/runner420980, live size15/32 hybrid,
+  loaded marker`ebb2f480de1d5682cc799db5703a2ddb393c56e0`. Live checkout/source
+  untouched; exposure not freshly queried and must be treated as unknown here.
+
+Pending: explicit activation authorization, fresh shutdown/start gates and
+natural live acceptance. Prepared source is not evidence of deployed savings.

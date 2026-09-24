@@ -145,3 +145,13 @@ and1.9s remaining endpoint backoff. Normal trading and reducers continued.
 Transient order-retrieve404s also occurred and recovered. No lower-rate or
 zero429 guarantee is claimed. Long-duration/deadline acceptance remains normal
 live follow-up using existing logs, not a new collector or startup blocker.
+
+Later acceptance:20:27:03Z recorded one additional `balance@429` (2.827rps),
+then20:28:08Z recorded zero429s (2.580rps), no endpoint/shared cooldown.
+Thus two429s occurred in the observed API summaries, not zero. At20:28:34Z
+authenticated state had14 orders, zero positions, zero unknown orders and one
+unresolved intent sampled during live activity; do not claim an ambiguity-free
+instant at that timestamp. The runner remained live and processing orders.
+Final parity passed on documentation commit `a2fc4c3df` and loaded source
+`ebb2f480d`; the20:28:07Z integrity-verified recovery copy was1,191,583,744 bytes,
+hash prefix `04231ce78f84`. The offline workstation was intentionally skipped.

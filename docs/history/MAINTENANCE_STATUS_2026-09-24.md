@@ -1,5 +1,25 @@
 # September24 maintenance status check
 
+## 09:17 ET trading acceptance
+
+Same supervisor21730/runner21744 running. Scheduled phase became NORMAL at
+12:45:08Z, with health requirement cleared12:45:28Z. Do not equate that with
+uninterrupted quoting: account-read429s remained visible in09:09–09:14 windows
+(balance,positions,execution history), with no mutations in those windows.
+The13:15:59/13:17:04/13:18:06 windows had mutations and zero429, at3.180,
+3.668 and3.520rps respectively; individual order-retrieve404s still occurred.
+
+Authenticated13:17:26Z:29 pending entry orders, zero positions. A local
+13:17:37Z in-flight intent was followed by zero unresolved/unknown/absent
+orders at13:18:29Z. Latest hybrid telemetry receiving/pending0; gaps5 is
+cumulative and not proof of five current unresolved problems. Touch-based
+cancels/replacements are frequent; no new strategy/performance conclusion.
+
+Read-only status check; no restart or code/config change. Background parity
+SSH to the backup PC stalled for minutes; only the identified child SSH
+diagnostic was stopped, never the bot. Peer remains pending. Local/GitHub/WSL
+parity subsequently passed; final sync skips the unavailable peer.
+
 ## 08:41 ET follow-up
 
 Fresh official summary: All Systems Operational, no incidents or maintenance.

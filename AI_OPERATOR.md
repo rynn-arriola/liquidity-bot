@@ -121,7 +121,7 @@ The unqualified instruction **"run the bot"** always means the laptop; only expl
 
 After the UI-maintenance entry gate is loaded, **"pause entries"** runs `PYTHONPATH=src python -B scripts/entry_pause.py pause` on the live laptop and verifies `ENTRY_PAUSED`; it does not stop the process or disable cancels/reducers/exits. **"resume entries"** clears only that operator latch with `scripts/entry_pause.py resume`; it never overrides an automatic UI maintenance/recovery hold, and the runner/dashboard must be checked before claiming entry actually resumed.
 
-**"Command 1"** authorizes one complete stop-review-deploy-restart workflow on the current live owner: immediately perform the same graceful stop; prove post-stop zero venue orders/positions and zero unresolved/unknown ownership; inspect the tracked checkout, GitHub, WSL and `DEPLOYED_COMMIT`; finish only missing review, regression/reversal/full-suite, documentation, push, parity, reviewed deployment, hash and runtime-test steps for the already in-scope AI changes; reuse valid completed evidence instead of repeating work; then repeat the fresh start gate, restart with persisted settings and verify live acceptance. It never authorizes unrelated dirty-file changes, a force-kill, a risk-setting change or bypassing proof; any failed or uncertain gate leaves the bot stopped.
+**"Command 1"** authorizes one complete stop-review-deploy-restart workflow on the current live owner: immediately perform the same graceful stop; prove post-stop zero venue orders/positions and zero unresolved/unknown ownership; inspect the tracked checkout, GitHub, WSL and `DEPLOYED_COMMIT`; finish only missing review, risk-tier verification under [docs/RELEASE_WORKFLOW.md](docs/RELEASE_WORKFLOW.md), documentation, push, parity and reviewed deployment/hash checks for already in-scope changes; reuse valid completed evidence instead of repeating work; then repeat the fresh start gate, restart with persisted settings and verify live acceptance. It never authorizes unrelated dirty-file changes, a force-kill, a risk-setting change or bypassing proof; any failed or uncertain gate leaves the bot stopped.
 
 ## How to work with the operator
 
@@ -167,7 +167,7 @@ are evidence the operator asked to see.
    full affected flow, compare approaches and define end-to-end acceptance.
 4. Explain the diagnosis and recommendation clearly. Preserve the operator's
    decision point when the change affects business behavior or risk.
-5. For every fix, before push or deployment: add focused regressions, deliberately reverse the fix to prove a test fails, restore it, run the appropriate complete suite, perform the permanent dedicated edge-case audit in `AI_ENGINEERING.md`, and review the final diff. Tests passing or operational urgency never substitutes for this review.
+5. Before push/deployment, use the risk-based verification tiers and evidence-reuse rules in [docs/RELEASE_WORKFLOW.md](docs/RELEASE_WORKFLOW.md), add applicable regressions and review relevant edge cases and the final diff. Do not repeat full suites/reversals for unchanged artifacts or require them for documentation-only edits. Runtime safety gates remain mandatory.
 6. Push before deployment. Deploy only reviewed files, verify hashes and tests
    on the server, and restart only when authorized and safe.
 7. Verify the actual live outcome rather than equating a successful command

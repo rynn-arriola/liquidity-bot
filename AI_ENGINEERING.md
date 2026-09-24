@@ -82,14 +82,16 @@ market selection. At minimum, preserve these rules:
   symptom disappearing is not proof that the overall problem is solved.
   Keep this review proportional to the change, preserve business rules and
   existing authorized work, and seek authority for any material scope expansion.
-- Before every fix is pushed or deployed, perform a dedicated final review and edge-case audit across success, failure, empty/full and boundary values, timing/races, partial/unknown state, ownership, API/load effects, recovery, shutdown, restart, rollback and configured-capacity interaction. No passing test suite or urgency waives this review.
-- Add focused regression coverage for every fix.
-- Deliberately reverse the important repair and prove the test fails; restore
-  it before the final suite.
-- Run focused tests while iterating, then the complete local suite.
+- Use [proportionate release verification](docs/RELEASE_WORKFLOW.md): classify
+  the affected path, test its actual risks and reuse matching completed evidence.
+  Full suites and deliberate reversals are not blanket requirements for every
+  edit or unchanged restart. Do not delete tests or weaken runtime safeguards.
+- Every code repair needs focused regression coverage. Review relevant edge
+  cases before push/deployment; explicitly justify omitted categories instead
+  of repeating unrelated timing, ownership or shutdown tests for isolated copy.
 - Record or test the relevant edge cases, then review the final diff for business-policy drift, ownership weakening, unexpected API/load changes, credential exposure, rollback hazards and stale documentation before push and again before deployment if the deployed set differs.
-- Push before deployment. Deploy only reviewed files, verify local/server
-  hashes and run the complete suite in the server virtual environment.
+- Push before deployment. Deploy only reviewed files and verify local/server
+  hashes and production-environment evidence under the release workflow.
 - A successful deploy command is not live acceptance. Verify the process and
   behavior after an independently authorized restart.
 

@@ -112,7 +112,7 @@ pending. Validate reward/replacement net; saved labels remain non-authoritative.
 The queue-reset, daily selection-probe and fixed-GTC collectors are closed. Their databases and reports remain evidence; do not restart them merely to add sample volume.
 
 ## 6. Naturally accept no-ID PLACE self-recovery after deployment
-
+**Release efficiency:** [risk-tier workflow](docs/RELEASE_WORKFLOW.md) is documented; apply on the next authorized release and record preparation/downtime/acceptance separately. No restart needed for this documentation. Shutdown ownership invariant remains open; do not remove its guard or shorten grace to hide it. [Audit](docs/history/RELEASE_WORKFLOW_AUDIT_2026-09-23.md).
 Naturally require one real 5xx/no-id PLACE to show the three-proof/ten-second wait, zero duplicate mutations, same-PID recovery and no missed risk/stop. Do not induce it; the stopped-only resolver remains the contrary-evidence fallback.
 
 ## 7. Graceful stop success is not proof of flatness

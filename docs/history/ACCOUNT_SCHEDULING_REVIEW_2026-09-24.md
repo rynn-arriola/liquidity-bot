@@ -142,6 +142,41 @@ Preserve all entry/exit prices and deadlines, size15,32 slots, settled-loss
 accounting, four$30 windows and pending-entry tiers. Teardown ownership invariant,
 reward-period diagnostics and paused300-market coverage remain separate work.
 
+## Follow-up: narrow scope and offline reproduction
+
+The operator rejected additional measurements and requested investigation of
+the specific periodic-stage gap. This supersedes the proposed new timing work
+above: no new instrumentation, collector, broad cache or financial sharing is
+part of the narrowed recommendation. Implementation/restart is not inferred
+from "look into this."
+
+Two offline probes against the unchanged production source reproduce the
+control flow using the existing scheduling-test fixture and temporary ledger:
+an injected newly urgent position during the financial stage, and an existing
+covered position whose mocked deadline crosses during that stage. Both show:
+`urgent check -> financial stage -> position urgent -> periodic execution stage
+-> reporting boundary`, with no intervening urgent check. The first harness
+assertion incorrectly required no later service calls; narrowing it to the
+relevant trace prefix yields two passing reproduction checks. This is evidence
+of the existing gap, not a test of an implemented repair or a live latency
+measurement. The injected case does not claim financial reads normally project
+position changes; queued private evidence must also be handled correctly.
+
+The narrow proposed repair checks urgency after completed periodic stages,
+preserving original timer due times, failed-read handling and bounded existing
+exit-only service. Stream data held by an outer task must precede subsequent
+queued private events; do not drain a second reader independently or run a
+parallel executor. Stop/rebind, freshness, unresolved ownership and terminal
+cancel proof remain authoritative. Do not blindly invoke broad recovery or
+repeat full account proof merely to add a checkpoint. Mandatory reads may
+still be needed for an exit, so this is a scheduling improvement, not a proven
+REST-count reduction or a429 cure. Validate the future repair using existing
+logging and focused tests, without changing balances, risk or polling policy.
+
+At approximately19:18Z, runner352901 was still running on `f4f2bdb24`;
+parity passed19:19Z. No fresh venue exposure request, trading source change,
+deployment or restart. No full suite rerun for unchanged source was needed.
+
 ## Historical root handoff preservation
 
 The following accumulated index openings are preserved for their evidence links,

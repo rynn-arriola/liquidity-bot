@@ -229,3 +229,62 @@ recovery and cancellation waves. Use existing fake clients/logging; no new live
 collector, source switch or weakened freshness/loss/exit rules. Target verified
 redundant proof consumers only, not removing genuine fill-triggered exit reads.
 No executable or configuration changes and no restart in this audit.
+
+## Actual live-flow observation,21:39–21:44Z
+
+Operator requested following the running flow rather than another availability
+test. Bounded read-only local ledger/log queries only; no new venue requests,
+live collector, injected event, trading code/config change, stop or restart.
+Same runner420980 verified; current venue exposure was not independently queried.
+
+New natural episode,`aec-setkameua-romiva-shcden-2026-09-25`:
+
+| UTC time | Recorded fact |
+|---|---|
+|21:42:55.011332|Prior REST decision snapshot collection tag|
+|21:42:56.109684|Venue timestamp for BUY15 fill at0.49|
+|21:42:56.173008|Matching `private_ws order:<execution-id>` and execution ledger event/fill receipt: WebSocket delivered the fill|
+|21:42:56.501797|Runner logged initial+15 position|
+|21:42:56.505919|REST decision orders/positions snapshot collection tag|
+|21:42:57.927865|Another REST decision orders/positions collection tag|
+|21:42:59.285652|Normal SELL reducer PLACE intent|
+|21:42:59.363161|Reducer acknowledgment:2.861s after runner observation,3.190s after private receipt|
+|21:42:59.379786|Private order acknowledgment applied; intent RECONCILED|
+
+Snapshot event timestamps are collection/as-of tags, NOT HTTP completion
+timestamps. Adjacent collections are established, but existing aggregated
+telemetry does not distinguish the precise triggering condition of each call.
+Do not declare the second proof redundant without tracing intervening account
+changes, hint processing, gate validity and one-second active cadence.
+The private order/fill is proven useful in this episode; it does not establish
+complete independent position/balance stream delivery.
+
+Earlier exit,`aec-setkameua-nebdmy-hairus-2026-09-25`: reducer cancel acknowledged
+21:39:51.929948Z, private cancel receipt51.946646, scoped proof tagged51.930416,
+terminal observed53.614357, global proof tagged53.615559, IOC acknowledged
+55.238456, scoped proof tagged55.238828, REST history applied two BUY fills
+(8+1) at57.050285; runner flat57.300233 and next global proof tagged57.318131.
+Two private order updates received55.250 were later recorded `stale_order_event`;
+REST evidence was projected before their consumption. Code classifies hybrid
+urgency before projection and does not retract it for a stale-order outcome.
+This is a concrete candidate for unnecessary wakeups, not permission to ignore
+late fills: a stale order envelope can still carry a previously unseen execution.
+The original execution IDs, cumulative quantity and proven position/history
+coverage must be checked before treating the entire notification as redundant.
+IOC acknowledgment was5.158s past the recorded deadline; no claim of zero delay.
+
+Observed cancellation/rebuild: final-balance refresh429 at21:39:38.666561Z;
+after urgent exit handling,10 account-new-risk-paused cancellations21:40:01–07Z.
+For `aec-utr-kiskir-onokos-2026-09-25`, cancellation intent01.025456 reconciled,
+terminal observed02.973671; replacement PLACE17.325599 reconciled17.436494.
+This demonstrates lost resting time during account-proof pause and recovery;
+the original429 threshold/cause is not established by this observation.
+The21:40:29 API summary:185 attempts,157 reads,28 mutations,three429s.
+Next summaries21:41:31/21:42:31/21:43:39 showed2.078/1.991/2.411rps and zero429s.
+Safety-triggered cancellations and subsequent replacements are workload, not
+evidence that WebSocket disconnected (sampled gap counter stayed zero).
+
+Prioritize replaying these exact recorded sequences, including late already-
+covered executions and genuinely unseen fills. Preserve financial unknown-state
+guards, source authority and exits. No new availability test is needed to prove
+that order/fill messages can arrive: this live episode already does.

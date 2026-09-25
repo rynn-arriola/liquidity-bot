@@ -18,7 +18,8 @@ from typing import Any, Mapping
 
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
 from .api_diagnostics import response_ids
-from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
+from .errors import (
+    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation, is_not_found)
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
 from .venue_state import normalize_execution, normalize_order
@@ -347,7 +348,7 @@ class AsyncTradingGateway:
                     f"GET /v1/order/{exchange_order_id}",
                     lambda: self.client.orders.retrieve(exchange_order_id))
             except AdapterError as exc:
-                if "NotFound" not in str(exc) or attempt + 1 >= attempts:
+                if not is_not_found(exc) or attempt + 1 >= attempts:
                     raise
                 await asyncio.sleep(
                     self.RETRIEVE_NOT_FOUND_BASE_SECONDS * (2 ** attempt))

@@ -14,7 +14,7 @@ with no defects found. Every item below is pending operator review.
 |---|---|---|---|
 | 1 | Fix soon | Periodic 10s REST account proof (main proof in hybrid mode) discarded exceptions with no outer log | DONE `f7e6ed903`, pushed, NOT deployed, not in staged `9f0d7864a` |
 | 2 | Long-term | `live_commissioning.py` is 11,800 lines, mostly one class; 11 of the 20 longest functions (run 566, `__init__` 426, `_send_summary` 345, `_decide_for_market` 337, `_shutdown` 313); 236 of 319 `src` commits since Aug 1 touched it | DONE, slices 1-11 (operator authorized), pushed, NOT deployed; see log below |
-| 3 | Low | `AsyncTradingGateway.retrieve` detects 404 by `"NotFound" in str(exc)` while `9f0d7864a` uses `status_code == 404` | Open; align on status code |
+| 3 | Low | `AsyncTradingGateway.retrieve` detects 404 by `"NotFound" in str(exc)` while `9f0d7864a` uses `status_code == 404` | DONE, pushed, NOT deployed; see below |
 | 4 | Low | `risk.maximum_safe_order_size` unused; NaN `loss_budget` would return full `size_cap` (fail-open) if ever reused. `shadow_math.py` has an unused `split_reward_day_interval` import | Open; delete |
 | 5 | Housekeeping | Laptop Windows Python lacks `httpx`, `tzdata`, `cryptography`; 80 test files fail to import there. Use WSL `.venv` for tests | Open; workstation setup only |
 
@@ -209,3 +209,18 @@ all twelve `runner_*.py` modules (a partial install would fail at import, not
 trade differently). None of this is in the staged `9f0d7864a` package. Follow-
 up (not done, would change measurement code): `market_quality_store`
 provenance hashes still list only `live_commissioning.py` among runner files.
+
+## Item 3 — one "not found" classification
+
+`errors.is_not_found(exc)` is now the single rule used by
+`AsyncTradingGateway.retrieve` (bounded post-cancel 404 wait) and the hybrid
+order-read 404/terminal-proof path in `AccountSourceRunner`: HTTP status 404
+first, with the long-standing `"NotFound"` text match retained for errors built
+without a status. The SDK (`polymarket_us` client) raises `NotFoundError`
+for exactly status 404 and the gateway keeps both name and status, so for real
+venue responses both call sites classify exactly as before; retry count and
+delays (4 attempts, 0.5/1/2 s) are unchanged. Tests: new
+`test_not_found_classification.py` (real SDK errors through `_adapter_error`,
+other statuses, status-over-wording) and two `test_live_orders.py` cases
+(reworded 404 still waits; a 500 is not retried). Mutation: restoring the old
+text-only check fails the reworded-404 test. Full WSL suite: 2,295 pass.

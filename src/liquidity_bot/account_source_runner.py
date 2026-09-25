@@ -19,7 +19,8 @@ from itertools import islice
 from .account_source import AccountSourceControl, AccountSourcePolicy
 from .account_observations import AccountSnapshotReader, PositionWatch, DeferredIdentityResolver
 from .account_snapshots import AsyncAccountSnapshotGateway
-from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
+from .errors import (
+    AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation, is_not_found)
 from .execution_ledger import LedgerConflict, ACTIVE_ORDER_STATES, TERMINAL_ORDER_STATES
 from .venue_state import normalize_execution, normalize_order, normalize_position
 from .live_commissioning import CommissioningRunner
@@ -805,7 +806,7 @@ class AccountSourceRunner(RestFallbackRunner):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
-                if isinstance(result, AdapterError) and result.status_code == 404:
+                if isinstance(result, AdapterError) and is_not_found(result):
                     not_found.add(exchange_id)
                 if read_backoff.is_backpressure(result):
                     throttle = result

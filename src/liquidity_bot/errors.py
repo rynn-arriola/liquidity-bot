@@ -22,6 +22,20 @@ class AdapterError(RuntimeError):
         super().__init__(message)
 
 
+def is_not_found(exc: BaseException) -> bool:
+    """One classification for a venue "resource not found" read failure.
+
+    The SDK raises ``NotFoundError`` for exactly HTTP 404, and the gateway keeps
+    both that name in the message and the status on ``AdapterError``. Prefer
+    the structured status so a wording change cannot silently alter retry or
+    terminal-proof handling; the long-standing text match remains for errors
+    built without a status. For real SDK responses both agree.
+    """
+
+    return (getattr(exc, "status_code", None) == 404
+            or (isinstance(exc, AdapterError) and "NotFound" in str(exc)))
+
+
 class AccountSnapshotConsistencyError(AdapterError):
     """A complete account snapshot crossed a real cash-state transition.
 

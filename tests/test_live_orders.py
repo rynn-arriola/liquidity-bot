@@ -236,6 +236,31 @@ class LiveOrderExecutorTests(unittest.TestCase):
             len(self.client.orders.retrieve_calls),
             self.gateway.RETRIEVE_NOT_FOUND_ATTEMPTS)
 
+    def test_retrieve_retries_a_404_whose_wording_changed(self):
+        # Classification follows the structured status, so a renamed SDK
+        # exception or reworded message cannot silently end the wait.
+        class GoneError(Exception):
+            status_code = 404
+
+        self.client.orders.retrieve_errors = [GoneError("resource gone")]
+        self.client.orders.retrieve_result = {
+            "order": {"id": "exchange-one", "state": "ORDER_STATE_CANCELED"}}
+
+        response = self.run_async(self.gateway.retrieve("exchange-one"))
+
+        self.assertEqual(response["order"]["state"], "ORDER_STATE_CANCELED")
+        self.assertEqual(len(self.client.orders.retrieve_calls), 2)
+
+    def test_retrieve_does_not_retry_other_failures(self):
+        class ServerError(Exception):
+            status_code = 500
+
+        self.client.orders.retrieve_errors = [ServerError("upstream failed")]
+
+        with self.assertRaises(AdapterError):
+            self.run_async(self.gateway.retrieve("exchange-one"))
+        self.assertEqual(len(self.client.orders.retrieve_calls), 1)
+
     def test_acknowledged_create_uses_one_gate_and_waits_for_exchange_state(self):
         self.client.orders.create_results = [{"id": "exchange-one", "executions": []}]
         submitted = self.run_async(self.executor.place(

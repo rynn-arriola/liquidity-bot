@@ -119,3 +119,43 @@ separate refill/scan concern. No new runtime recovery/error was logged.
 Private notifications arrived with no gap; local admission-cause telemetry
 was exercised. No position/fill occurred, so live reducer-retry and network-
 fault behavior remain natural follow-ups, not fully observed acceptance.
+
+## Five-hour live review — September25,19:02–19:05Z
+
+Read-only operator request; no code/configuration change, deployment or restart.
+Same supervisor198478/runner198496 and marker`ad09519e4` remain active. Fresh
+authenticated19:02:32Z evidence:28 orders =25 flat entries +three exact reducers
+covering positions-15/+15/+15. Unresolved/unknown state zero; ledger counts agree
+at this moving read, not an atomic release gate.12–18ET settled loss$6.2932/$30
+selects cap25; the noon boundary correctly opened loss0/cap30 first.
+
+Completed windows through19:02:40Z:49,836 calls over19,147.2s (2.603rps), zero
+429s.144 failed reads comprise140 individual-order404s, two reward-earnings
+transport timeouts and two individual-order401s. The401s are confined to the
+14:49:23Z budget window; later authenticated activity and current known exposure
+show no persistent authentication block. Root cause remains unproved and needs
+targeted follow-up, not key replacement or blind retry. Reward timeouts were
+13:59:27Z and18:10:39Z; they are correctly labeled `earnings@transport`, not
+unknown. This does not exercise the new account-endpoint cooldown directly.
+
+All32 observed hard-inventory IOC acknowledgement episodes have a subsequent
+same-market flat observation. Deadline-to-ACK ranged1.835–9.028s (median5.315s);
+the slowest ACK-to-flat observation was5.471s. These are logged venue-observation
+times, not exact execution timestamps; later flat does not prove on-deadline
+completion. No reducer-decision error record occurred, so the new deferred
+reducer retry branch still lacks a natural failure case.71 quality reentries
+were at least75s after the paired quality cancel; none below60s. No matched
+whole-bot performance/profitability improvement is claimed.
+
+Known latency remains: latest lifecycle refill53.7s and decision p95 peaked
+21.647s around it, then8.456s next window. Missing pregame metadata continued
+to refuse the affected markets. One private listener gap was later followed
+by receiving state; one status-feed timeout recovered HEALTHY. No current
+runtime recovery/ownership failure or uncovered position was found.
+
+Official checks: [changelog](https://docs.polymarket.us/changelog) still shows
+September21 `v0.0.92` as the latest entry; the
+[status feed](https://status.polymarketexchange.com/api/v2/summary.json) reports
+All Systems Operational, zero incidents and zero maintenance. Neither explains
+the earlier401s. Preserve the open refill/timing/authentication follow-ups;
+this status check does not authorize implementation or restarting.

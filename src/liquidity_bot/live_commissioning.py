@@ -8105,6 +8105,44 @@ class CommissioningRunner:
             f"accrues only while resting. Idle reasons: {detail}.",
             critical=True)
 
+    def _redacted_error_detail(self, exc: Exception) -> str:
+        detail = str(exc).replace("\n", " ")
+        for name in ("key_id", "secret_key"):
+            secret = str(getattr(self.client, name, "") or "")
+            if secret:
+                detail = detail.replace(secret, "<redacted>")
+        return error_summary(detail)
+
+    def _note_periodic_reconcile(self, exc: Exception | None) -> None:
+        """Log periodic account-proof failures and the first success after them.
+
+        Local log only: no Discord, no traceback, and no effect on the gate.
+        The freshness gate, not this record, still decides whether new risk is
+        allowed. Measured 2026-09-25: these failures were previously silent,
+        hiding evidence for the open 401/429 investigation.
+        """
+
+        try:
+            failures = getattr(self, "_periodic_reconcile_failures", 0)
+            if exc is None:
+                if failures:
+                    print(
+                        f"[periodic-reconcile] at={self._now().isoformat()} "
+                        f"outcome=recovered after_failures={failures}",
+                        flush=True)
+                self._periodic_reconcile_failures = 0
+                return
+            failures += 1
+            self._periodic_reconcile_failures = failures
+            print(
+                f"[periodic-reconcile] at={self._now().isoformat()} "
+                f"outcome=failed consecutive={failures} "
+                f"status={getattr(exc, 'status_code', None)} "
+                f"error={type(exc).__name__}: {self._redacted_error_detail(exc)}",
+                flush=True)
+        except Exception:
+            pass  # Diagnostics never alter the periodic proof loop.
+
     async def _report_runtime_error(
         self, component: str, exc: Exception, attempt: int | None = None, *,
         include_traceback: bool = True,
@@ -8114,12 +8152,7 @@ class CommissioningRunner:
         self._runtime_error_counts[component] = max(
             attempt, self._runtime_error_counts.get(component, 0))
         now = self._now()
-        detail = str(exc).replace("\n", " ")
-        for name in ("key_id", "secret_key"):
-            secret = str(getattr(self.client, name, "") or "")
-            if secret:
-                detail = detail.replace(secret, "<redacted>")
-        detail = error_summary(detail)
+        detail = self._redacted_error_detail(exc)
         print(
             f"[runtime-recovery] at={now.isoformat()} component={component} "
             f"attempt={attempt} error={type(exc).__name__}: {detail}",
@@ -11143,11 +11176,13 @@ class CommissioningRunner:
                         # twenty-slot head-of-line blocker.
                         await self._rest_reconcile(
                             now, tag="periodic", strict_order_markets=frozenset())
-                    except Exception:
+                    except Exception as exc:
                         # Preserve the last proven state briefly. If both the
                         # private stream and REST remain quiet/unavailable, the
                         # freshness gate expires and shuts down new risk.
-                        pass
+                        self._note_periodic_reconcile(exc)
+                    else:
+                        self._note_periodic_reconcile(None)
                     next_state_reconcile = now + timedelta(seconds=10)
                     market_task, private_task, stop_reason = (
                         await self._periodic_position_checkpoint(

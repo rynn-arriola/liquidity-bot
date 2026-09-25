@@ -28,7 +28,7 @@ class ReviewRegressions(IsolatedAsyncioTestCase):
                 runner.clock = lambda: moment
                 client.account.current_balance = Decimal(cash)
                 scan = AsyncMock(return_value=Decimal(adjustment))
-                with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash", scan):
+                with patch("liquidity_bot.runner_account.fetch_nontrading_cash", scan):
                     await runner._refresh_balance(moment)
                 scan.assert_awaited_once()
                 self.assertEqual(runner.risk_guard.current_equity -
@@ -48,7 +48,7 @@ class ReviewRegressions(IsolatedAsyncioTestCase):
         client.account.current_balance = Decimal(0)
         moment = NOW + timedelta(seconds=5)
         runner.clock = lambda: moment
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash",
                    AsyncMock(side_effect=AdapterError("cash history unavailable"))):
             with self.assertRaises(AdapterError):
                 await runner._refresh_balance(moment)

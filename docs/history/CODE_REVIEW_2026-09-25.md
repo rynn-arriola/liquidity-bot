@@ -100,6 +100,24 @@ WSL suite: 2,290 pass. Self-review: reward eligibility gates quoting, so this
 is decision-adjacent, but relocation is AST-proven identical; a duplicated
 generated import was removed before commit.
 
+**Slice 6 — account/risk gates (`runner_account.AccountRiskMixin`).**
+Moved 23 methods (672 lines): balance/equity refreshes, cash-report deferral
+and reporting equity, window safety/observation/release, loss entry-order cap
+and its cancel/block helpers, `_entry_risk_allowed`, `_portfolio_worst_loss`,
+`_is_risk_reducing_mutation`, account-proof freshness and safe-stop checks.
+`NONTRADING_CASH_MAX_PAGES = 4` and both 5.0s decision refresh margins moved
+with their comments to `runner_shared.py`. Only the moved code called
+`fetch_nontrading_cash(_changes)`, so the mixin now imports them from
+`cash_activity` and `live_commissioning` no longer does; all 24 test patches
+were retargeted to `liquidity_bot.runner_account.*`. Proof: 23 moved and 209
+remaining method ASTs identical; removed constants keep values; the two
+cash functions are the same objects as before; `RestFallbackRunner.
+_position_priority_has_fresh_account_proof` and `AccountSourceRunner.
+_account_source_recovery_checkpoint` overrides keep priority and chain to the
+moved code. Full WSL suite: 2,290 pass. Self-review mutation: pointing one
+retargeted patch back at `live_commissioning` fails loudly with
+AttributeError, so no stale patch can silently stop intercepting.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

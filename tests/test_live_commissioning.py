@@ -6360,7 +6360,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._nontrading_cash_observed_at = None
 
         with patch(
-                "liquidity_bot.live_commissioning.fetch_nontrading_cash",
+                "liquidity_bot.runner_account.fetch_nontrading_cash",
                 new=AsyncMock(side_effect=AdapterError("cash unavailable"))):
             with self.assertRaisesRegex(AdapterError, "cash unavailable"):
                 await runner._refresh_balance(tomorrow)
@@ -8344,7 +8344,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._nontrading_cash_day = runner._baseline_day
         client.account.current_balance = Decimal("120")
 
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash",
                    AsyncMock(return_value=Decimal("100"))):
             await runner._refresh_balance(NOW)
 

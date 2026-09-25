@@ -282,7 +282,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         runner, client, _ = await self.runner()
         previous = runner._window_risk.current
         client.account.current_balance = D(0)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(side_effect=AdapterError("unknown transfer"))):
             with self.assertRaises(AdapterError):
                 await runner._refresh_balance(live.NOW)
@@ -299,7 +299,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         change = NontradingCashChange(live.NOW + timedelta(seconds=2), D(-30))
         client.account.current_balance = D(70)
         now += timedelta(seconds=5)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(return_value=(change,))) as history:
             for _ in range(2):
                 await runner._refresh_balance(now)
@@ -311,7 +311,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
         deposit = NontradingCashChange(live.NOW + timedelta(seconds=3), D(30))
         client.account.current_balance = D(100)
         now += timedelta(seconds=5)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(return_value=(change, deposit))):
             for _ in range(2):
                 await runner._refresh_balance(now)

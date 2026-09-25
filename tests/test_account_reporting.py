@@ -92,7 +92,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         client.account.current_balance = D(150)
         self.now += timedelta(seconds=30)
         change = NontradingCashChange(self.now - timedelta(seconds=1), D(100))
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(return_value=(change,))):
             await runner._refresh_trading_balance(self.now)
         report = runner._account_report
@@ -104,7 +104,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
     async def test_cash_429_preserves_independent_safety_and_does_not_retry_every_tick(self):
         runner, _, _ = await self.build()
         self.now += timedelta(seconds=30)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(side_effect=AdapterError("limited", status_code=429))) as history:
             await runner._refresh_trading_balance(self.now)
             self.assertEqual(runner.risk_guard.equity_observed_at, self.now)
@@ -117,14 +117,14 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
     async def test_unknown_cash_still_blocks_and_requires_full_success_to_recover(self):
         runner, _, _ = await self.build()
         self.now += timedelta(seconds=30)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(side_effect=AdapterError("unclassified transfer"))):
             with self.assertRaises(AdapterError):
                 await runner._refresh_trading_balance(self.now)
         self.assertTrue(runner._cash_report_blocked)
         self.assertIsNone(runner.risk_guard.equity_observed_at)
         self.now += timedelta(seconds=5)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(return_value=())) as history:
             await runner._refresh_trading_balance(self.now)
         history.assert_awaited_once()
@@ -144,7 +144,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         attempted = runner._cash_report_attempted_at
         self.now += timedelta(seconds=30)
         with patch.object(runner, "_position_near_its_flatten_deadline", return_value=True), \
-                patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", AsyncMock()) as history:
+                patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", AsyncMock()) as history:
             await runner._refresh_trading_balance(self.now)
         history.assert_not_awaited()
         self.assertEqual(runner._cash_report_attempted_at, attempted)
@@ -157,7 +157,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
             self.now = fixtures.NOW
             runner, _, _ = await self.build()
             self.now = boundary
-            with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+            with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                        AsyncMock(return_value=())) as history:
                 await runner._refresh_trading_balance(self.now)
             history.assert_awaited_once()
@@ -165,7 +165,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
     async def test_full_refresh_and_disabled_optimization_remain_synchronous(self):
         runner, _, _ = await self.build()
         self.now += timedelta(seconds=5)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes",
                    AsyncMock(return_value=())) as history:
             await runner._refresh_balance(self.now)
             runner.config = replace(runner.config, cash_history_refresh_seconds=0)
@@ -175,7 +175,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
     async def test_legacy_risk_never_uses_deferred_cash(self):
         runner, _, _ = await self.build(legacy=True)
         self.now += timedelta(seconds=5)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash",
                    AsyncMock(return_value=D(0))) as history:
             await runner._refresh_trading_balance(self.now)
         history.assert_awaited_once()
@@ -196,7 +196,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
 
     async def test_fast_proof_keeps_all_loss_tiers_and_hard_latch(self):
         runner, _, _ = await self.build()
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", AsyncMock()) as history:
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", AsyncMock()) as history:
             for index, cap in enumerate((25, 20, 15, 10, 0)):
                 self.now += timedelta(seconds=1)
                 test_risk_windows.WindowRunnerTests.settle_loss(
@@ -212,12 +212,12 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         runner, _, _ = await self.build()
         self.now += timedelta(seconds=30)
         with patch.object(runner, "_entry_observation_pending", return_value=True), \
-                patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", AsyncMock()) as history:
+                patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", AsyncMock()) as history:
             await runner._refresh_trading_balance(self.now)
         history.assert_not_awaited()
         with patch.object(runner, "_position_priority_tokens", return_value={"held": ()}), \
                 patch.object(runner, "_position_priority_rank", return_value=1), \
-                patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", AsyncMock()) as history:
+                patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", AsyncMock()) as history:
             await runner._refresh_trading_balance(self.now)
         history.assert_not_awaited()
 
@@ -228,7 +228,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         async def moved_cash(*args, **kwargs):
             client.account.current_balance = D(200)
             return ()
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", moved_cash):
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", moved_cash):
             await runner._refresh_trading_balance(self.now)
         self.assertIs(runner._account_report, old_report)
         self.assertIsNone(runner._reporting_equity(self.now))
@@ -242,7 +242,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         async def slow_cash(*args, **kwargs):
             self.now += timedelta(seconds=16)
             return ()
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", slow_cash):
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", slow_cash):
             await runner._refresh_trading_balance(started)
         self.assertEqual(runner.risk_guard.equity_observed_at, started)
         self.assertEqual(runner._account_report.equity.observed_at, started)
@@ -252,7 +252,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         runner, _, _ = await self.build()
         self.now += timedelta(seconds=5)
         runner._account_report = None
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash_changes", AsyncMock(return_value=())) as history:
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash_changes", AsyncMock(return_value=())) as history:
             await runner._refresh_trading_balance(self.now)
             self.assertIsNotNone(runner._account_report)
             runner._transport_recovery_component = "private_stream"

@@ -58,7 +58,7 @@ class ReviewBoundaryTests(IsolatedAsyncioTestCase):
                 async def delayed_cash(*args, **kwargs):
                     self.now += timedelta(seconds=25)
                     return Decimal(0)
-                with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash", delayed_cash):
+                with patch("liquidity_bot.runner_account.fetch_nontrading_cash", delayed_cash):
                     await runner._refresh_balance(started)
                 self.assertEqual(runner.risk_guard.equity_observed_at, started)
                 self.assertFalse(runner.risk_guard.can_add_new_risk(now=self.now))
@@ -69,7 +69,7 @@ class ReviewBoundaryTests(IsolatedAsyncioTestCase):
         runner, _ = await self.build()
         before = runner._equity_snapshot
         stamp = runner.risk_guard.equity_observed_at
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash",
                    AsyncMock(side_effect=AdapterError("cash history unavailable"))):
             with self.assertRaises(AdapterError):
                 await runner._refresh_balance(self.now)

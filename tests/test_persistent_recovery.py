@@ -55,7 +55,7 @@ class PersistentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         restarted, _, _ = self.fixture.build_runner(ledger=runner.ledger, client=client)
         self.addAsyncCleanup(restarted.private_stream.close)
         self.addAsyncCleanup(restarted.market_stream.close)
-        with patch("liquidity_bot.live_commissioning.fetch_nontrading_cash",
+        with patch("liquidity_bot.runner_account.fetch_nontrading_cash",
                    AsyncMock(side_effect=AdapterError("unavailable", status_code=503))):
             with self.assertRaises(AdapterError):
                 await restarted.preflight()

@@ -70,9 +70,9 @@ the production-compatible interpreter and installed dependencies in the
 ## Deployment and acceptance
 
 Pushed to GitHub in `e0cf77738`; not deployed and not restarted. Final parity
-therefore correctly reports Windows/GitHub current while the WSL checkout is
-two commits behind at `6100f9e9` and the live process remains on loaded source
-`ef5a73f3d`. On the next separately authorized safe
+therefore correctly reports Windows/GitHub current while the WSL checkout
+remains behind at `6100f9e9` pending reviewed deployment and the live process
+remains on loaded source `ef5a73f3d`. On the next separately authorized safe
 restart, natural acceptance should show the same-side quality cycle replaced by
 at most one cancel followed by either continued refusal or a re-entry after a
 full healthy minute. Verify that reducers/exits remain immediate and compare

@@ -13,7 +13,7 @@ with no defects found. Every item below is pending operator review.
 | # | Priority | Finding | Status |
 |---|---|---|---|
 | 1 | Fix soon | Periodic 10s REST account proof (main proof in hybrid mode) discarded exceptions with no outer log | DONE `f7e6ed903`, pushed, NOT deployed, not in staged `9f0d7864a` |
-| 2 | Long-term | `live_commissioning.py` is 11,800 lines, mostly one class; 11 of the 20 longest functions (run 566, `__init__` 426, `_send_summary` 345, `_decide_for_market` 337, `_shutdown` 313); 236 of 319 `src` commits since Aug 1 touched it | IN PROGRESS (operator authorized). Slice 1 done; see log below |
+| 2 | Long-term | `live_commissioning.py` is 11,800 lines, mostly one class; 11 of the 20 longest functions (run 566, `__init__` 426, `_send_summary` 345, `_decide_for_market` 337, `_shutdown` 313); 236 of 319 `src` commits since Aug 1 touched it | DONE, slices 1-11 (operator authorized), pushed, NOT deployed; see log below |
 | 3 | Low | `AsyncTradingGateway.retrieve` detects 404 by `"NotFound" in str(exc)` while `9f0d7864a` uses `status_code == 404` | Open; align on status code |
 | 4 | Low | `risk.maximum_safe_order_size` unused; NaN `loss_budget` would return full `size_cap` (fail-open) if ever reused. `shadow_math.py` has an unused `split_reward_day_interval` import | Open; delete |
 | 5 | Housekeeping | Laptop Windows Python lacks `httpx`, `tzdata`, `cryptography`; 80 test files fail to import there. Use WSL `.venv` for tests | Open; workstation setup only |
@@ -193,6 +193,19 @@ priority and chain to the moved code. Full WSL suite: 2,290 pass.
 Self-review mutation: pointing one retargeted `print` patch back at
 `live_commissioning` fails the test, so a stale patch cannot silently pass.
 
-Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
-then stream recovery, then the core loop/decision/shutdown only if the risk is
-justified. Each needs the same proof before commit.
+**Final state and end-to-end proof.** Eight `runner_shared` import
+statements were merged into one (same 23 names; no other statement changed).
+Against the pre-refactor baseline `cb951ecc5`: all 285 original
+`CommissioningRunner` method definitions (including property/setter pairs) are
+found AST-identical through the MRO; class-level attributes are unchanged; all
+32 literal module constants keep value and type; every original module-level
+name is still importable from `live_commissioning`; no method name is defined
+in two MRO layers. Full WSL suite: 2,290 pass. `live_commissioning.py` fell
+from 11,860 to 4,898 lines; 147 methods, `run`, `__init__` and the
+property/compatibility layer remain in the runner.
+
+Deployment notes: activation must ship `live_commissioning.py` together with
+all twelve `runner_*.py` modules (a partial install would fail at import, not
+trade differently). None of this is in the staged `9f0d7864a` package. Follow-
+up (not done, would change measurement code): `market_quality_store`
+provenance hashes still list only `live_commissioning.py` among runner files.

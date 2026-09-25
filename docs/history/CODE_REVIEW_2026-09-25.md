@@ -42,5 +42,18 @@ target to the helper's new module path. Full WSL suite: 2,290 tests pass.
 `market_quality_store` provenance hashes are unaffected (summary code is not
 in that list). Not deployed; newer than the staged `9f0d7864a` package.
 
-Next candidates, in order of isolation: `_log_*` diagnostics, then scan/top-up
-scheduling, then stream recovery. Each needs the same proof before commit.
+**Slice 2 — diagnostic log lines (`runner_diagnostics.RunnerDiagnosticsMixin`).**
+Moved `_log_selection_scan`, `_log_maintenance_schedule_state`,
+`_log_decision_scheduler`, `_log_api_budget`, `_log_shutdown`,
+`_log_book_rate_limit` and `_log_api_backpressure` (214 lines) plus their only
+constant `DECISION_SCHEDULER_LOG_SECONDS = 60.0`, which `live_commissioning`
+re-exports unchanged. Proof: 7 moved and 264 remaining method ASTs identical;
+the constant is the only other module-level removal; every global used
+resolves to the same object/value; runner and REST/hybrid subclasses resolve
+the moved names to the same functions. No test changes. Full WSL suite: 2,290
+tests pass. Not deployed.
+
+Remaining candidates, in order of isolation: earnings/reward reporting
+helpers, then scan/top-up scheduling (timing-sensitive: move only, never retune),
+then stream recovery, then the core loop/decision/shutdown only if the risk is
+justified. Each needs the same proof before commit.

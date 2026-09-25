@@ -54,3 +54,13 @@ Input comparison uses the project's CRLF→LF normalization: seven unchanged JSO
 - P4: external429 threshold/cause remains unknown. Existing backoff verified, not eliminated.
 - P5: retain monitoring of missing pregame/empty-book and report consistency recovery; current report/backup ownership should be located before interpreting legacy log silence. Raw exception-chain dumps outside routine summaries are not covered by the new formatting helper.
 - Preserve earlier shutdown ownership, touch/quality churn and matched REST-saving follow-ups. No broader policy changes are implied.
+
+## Authorized deployment staging without restart — September25 21:48 UTC
+
+Operator subsequently requested “Push and deploy and but dont restart.” Commit `9f0d7864a` is already pushed. Installed its exact Git archive into `/home/polybot/releases/liquidity-bot-9f0d7864a/source`, separate from the editable live checkout to avoid mixed old/new imports. This is a verified pending release, not active runtime deployment. No process was stopped, signaled or restarted; no venue requests or mutations were needed for staging.
+
+At21:48:08Z all249 source/test/script/config inputs matched the accepted test stage after CRLF normalization; installed dependency freeze was identical. Dependency declarations are unchanged from the loaded release. Imported the four changed modules using the production Python with the pending source on PYTHONPATH and verified every module resolved inside that source; no bot initialization occurred. The adjacent `evidence/` directory retains the accepted test log, input manifest, dependency freeze, full468-file release SHA256 manifest, `RELEASE_COMMIT` and `VERIFIED_AT`. All staged native hashes passed. Reused the unchanged2,286-test result rather than rerunning it.
+
+Live source remains at checkout `f0ddc06c4`, marker `ad09519e4f7ca31fac8d56cc5eee33008d8eb3c3`. Same supervisor198478/runner198496 remain running, started13:43:32/33Z; saved size15/32 hybrid/four$30 policy remains unchanged. Latest authenticated exposure remains the21:12:09Z observation above, not a new current exposure claim. Parity is expected to report live runtime behind the pushed release until authorized activation; do not resolve that intentional difference by live-fast-forwarding execution source.
+
+Next authorized restart must stop gracefully, obtain fresh flat/known-state proof, verify the staged manifest/environment against accepted evidence, install the reviewed source into the live checkout, then update the deployment marker only after checks pass. Preserve normal fresh start gates and observe terminal/reducer and completed-refill behavior naturally. A staged release does not authorize an automatic or scheduled restart.

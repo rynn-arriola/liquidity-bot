@@ -154,6 +154,16 @@ changes. Full WSL suite: 2,290 pass. Self-review note: those two exception
 classes' `__module__` is now `liquidity_bot.runner_shared`; nothing reads it,
 and it would only appear in an uncaught traceback's text.
 
+**Slice 9 — startup gates (`runner_startup.StartupMixin`).**
+Moved 6 methods (496 lines): `preflight` (with its unchanged
+`api_workflow("startup")` label), `preflight_until_ready`,
+`_release_partial_startup` and the three startup scoping helpers. No constants
+needed moving. Proof: 6 moved and 176 remaining method ASTs identical; globals
+resolve to the same objects; `RestFallbackRunner.preflight` and
+`AccountSourceRunner.preflight` keep priority and their `super()` chains reach
+the moved code. The test-patched `load_runtime_secrets`/`ReconcilerPolicy`
+are not used by moved code. No test changes. Full WSL suite: 2,290 pass.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

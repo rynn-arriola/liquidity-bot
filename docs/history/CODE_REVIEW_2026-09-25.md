@@ -255,3 +255,34 @@ class-level `partial` exists. Remaining Windows-only failures: 44 tests in six
 files, all `WinError 32` open-file deletion during temporary-database cleanup
 or the intentional POSIX `flock` requirement — documented in README, not
 defects. WSL production-interpreter release evidence is unchanged.
+
+## Final pre-deployment review — live `ad09519e4` vs `07b2d6e26`
+
+Scope: every undeployed commit (September 25 terminal/refill release
+`9f0d7864a` plus all review items). No `config/`, `scripts/` or dependency
+change. Definition-level AST comparison of all 946 baseline definitions
+(runner mixins and `runner_shared` mapped back to `live_commissioning`):
+none removed; added only `error_summary.diagnostic_id/error_summary`,
+`errors.is_not_found`, `_note_periodic_reconcile`, `_redacted_error_detail`;
+changed only `AccountSourceRunner._hybrid_order_needs_immediate_proof` and
+`_read_exact_order_states` (September 25, operator-authorized behavior),
+`AsyncReadOnlyGateway._adapter_error/_error_code/_trace_id` (September 25
+bounded diagnostics), `CommissioningRunner.__init__`,
+`_replacement_candidates_for_top_up` and the run loop's top-up clear
+(September 25 completed-scan reuse, still bounded by the 120 s cache and fresh
+revalidation), `run`/`_report_runtime_error` (item 1 logging and shared
+redaction), `AsyncTradingGateway.retrieve` (item 3; same 4 attempts and
+0.5/1/2 s delays) and `risk.maximum_safe_order_size` (item 4; unused by
+trading). All module constants, class attributes and `CommissioningConfig`
+are unchanged. Venue `error_code` values now pass through `diagnostic_id`,
+but every decision compares only locally created `LOCAL_*` codes and the
+legacy permission repair's `code=7` token still passes, so no decision
+changes. Tests: none removed, 22 added, 27 changed only by patch-target
+retargeting or the Python 3.14 fixture; no changed test lost an assertion.
+Performance (production WSL interpreter, 3 runs each): instance method lookup
+47-57 ns live vs 47-52 ns new; import 1.37-1.44 s vs 1.39-1.51 s — no
+measurable difference despite the 15-class MRO. Parity/sync tooling globs all
+`src/liquidity_bot/*.py`, and staging uses a full git archive, so the new
+modules are included automatically. Full WSL suite: 2,296 pass. Intentional
+behavior changes are only those in the operator-authorized September 25
+release; no business rule, risk limit or timing value changed.

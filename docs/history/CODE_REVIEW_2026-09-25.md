@@ -16,7 +16,7 @@ with no defects found. Every item below is pending operator review.
 | 2 | Long-term | `live_commissioning.py` is 11,800 lines, mostly one class; 11 of the 20 longest functions (run 566, `__init__` 426, `_send_summary` 345, `_decide_for_market` 337, `_shutdown` 313); 236 of 319 `src` commits since Aug 1 touched it | DONE, slices 1-11 (operator authorized), pushed, NOT deployed; see log below |
 | 3 | Low | `AsyncTradingGateway.retrieve` detects 404 by `"NotFound" in str(exc)` while `9f0d7864a` uses `status_code == 404` | DONE, pushed, NOT deployed; see below |
 | 4 | Low | `risk.maximum_safe_order_size` unused; NaN `loss_budget` would return full `size_cap` (fail-open) if ever reused. `shadow_math.py` has an unused `split_reward_day_interval` import | DONE differently, pushed, NOT deployed; see below |
-| 5 | Housekeeping | Laptop Windows Python lacks `httpx`, `tzdata`, `cryptography`; 80 test files fail to import there. Use WSL `.venv` for tests | Open; workstation setup only |
+| 5 | Housekeeping | Laptop Windows Python lacks `httpx`, `tzdata`, `cryptography`; 80 test files fail to import there. Use WSL `.venv` for tests | DONE (local venv repaired; one test fixture made Python 3.14-safe); see below |
 
 Reviewed and judged intentional: the remaining ~26 silent `except Exception`
 sites (telemetry/cleanup that must not affect trading), UTC ISO text timestamp
@@ -237,3 +237,21 @@ deleting tests, so instead of deleting it the NaN trap was removed: a NaN
 full cap. Finite behavior (including existing tests) is unchanged; no trading
 path calls it. New regression test covers both NaN inputs; removing the guard
 fails it. Full WSL suite: 2,296 pass.
+
+## Item 5 — Windows test environment
+
+The laptop's ignored `.venv` already held every pinned dependency
+(cryptography 50.0.0, polymarket-us 0.1.2, Pillow 12.3.0, httpx 0.28.1,
+tzdata 2026.3) but had been created under an old OneDrive path: no
+`Scripts/python.exe`, and its editable `.pth` pointed at a now-empty OneDrive
+`src`. Repaired locally with `python -m venv --upgrade .venv` (no downloads)
+and by pointing the `.pth` at this checkout's `src`; neither file is tracked.
+Native Windows (Python 3.14.7) full run then exposed one real forward-
+compatibility defect: `HybridCompoundReadPrecheckTests.factory =
+partial(...)` receives the TestCase as an extra argument because Python 3.14
+made `functools.partial` a method descriptor (production WSL is 3.12, so it
+passed there). Wrapped in `staticmethod`; passes on 3.14 and 3.12; no other
+class-level `partial` exists. Remaining Windows-only failures: 44 tests in six
+files, all `WinError 32` open-file deletion during temporary-database cleanup
+or the intentional POSIX `flock` requirement — documented in README, not
+defects. WSL production-interpreter release evidence is unchanged.

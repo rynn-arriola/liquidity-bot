@@ -105,7 +105,9 @@ class CompoundReadPrecheckTests(IsolatedAsyncioTestCase):
 
 
 class HybridCompoundReadPrecheckTests(CompoundReadPrecheckTests):
-    factory = partial(AccountSourceRunner, account_state_mode="hybrid")
+    # staticmethod: Python 3.14 made functools.partial a method descriptor,
+    # so a bare class attribute would receive the TestCase as an argument.
+    factory = staticmethod(partial(AccountSourceRunner, account_state_mode="hybrid"))
 
 
 class AdmissionPrecheckTests(IsolatedAsyncioTestCase):

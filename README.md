@@ -202,6 +202,14 @@ It reports failures immediately and lists the slowest files. Use `-j 1` for a
 serial diagnostic run, or pass filename globs for a focused run, for example
 `python -B scripts/run_tests.py 'test_rest_*.py'`.
 
+Release evidence comes from the production interpreter inside WSL, where the
+bot runs. A native Windows run needs the repository `.venv` (plain `python`
+lacks the pinned dependencies) and still reports six files
+(`test_host_protection`, `test_market_quality`, `test_next_release_bundle`,
+`test_scalp_measurement`, `test_shadow_run`, `test_summary_image_report`) as
+failing only because Windows cannot delete open temporary databases and the
+host-wide API coordinator deliberately requires POSIX `flock`.
+
 ## Bounded read-only probe
 
 Environment variables take precedence. When absent, the probe reuses the

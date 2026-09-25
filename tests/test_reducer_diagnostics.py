@@ -164,7 +164,7 @@ class ReducerDiagnosticIntegrationTests(IsolatedAsyncioTestCase):
             return result
 
         with patch.object(runner.driver, "apply_one", apply), \
-                patch("liquidity_bot.live_commissioning.print") as output:
+                patch("liquidity_bot.runner_decisions.print") as output:
             outcome, delay = await runner._decide_for_market(held, self.now)
         rows = [json.loads(c.args[0].split(" ", 1)[1]) for c in output.call_args_list
                 if str(c.args[0]).startswith("[reducer-decision] ")]
@@ -178,7 +178,7 @@ class ReducerDiagnosticIntegrationTests(IsolatedAsyncioTestCase):
 
     async def test_capture_failure_does_not_change_cancel(self):
         runner, client, held = await self.build()
-        with patch("liquidity_bot.live_commissioning.capture_reducer_decision",
+        with patch("liquidity_bot.runner_decisions.capture_reducer_decision",
                    side_effect=ValueError("bad observation")):
             outcome, delay = await runner._decide_for_market(held, self.now)
         self.assertIsNone(outcome)
@@ -192,7 +192,7 @@ class ReducerDiagnosticIntegrationTests(IsolatedAsyncioTestCase):
             if str(args[0]).startswith("[reducer-decision]"):
                 raise OSError("sink unavailable")
 
-        with patch("liquidity_bot.live_commissioning.print", side_effect=output):
+        with patch("liquidity_bot.runner_decisions.print", side_effect=output):
             outcome, delay = await runner._decide_for_market(held, self.now)
         self.assertIsNone(outcome)
         self.assertEqual(delay, 0)
@@ -203,7 +203,7 @@ class ReducerDiagnosticIntegrationTests(IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock
         with patch.object(runner.driver, "apply_one", side_effect=RuntimeError("secret must not log")), \
                 patch.object(runner, "_handle_action_failure", AsyncMock(return_value=None)) as recover, \
-                patch("liquidity_bot.live_commissioning.print") as output:
+                patch("liquidity_bot.runner_decisions.print") as output:
             outcome, delay = await runner._decide_for_market(held, self.now)
         self.assertIsNone(outcome)
         self.assertGreater(delay, 0)

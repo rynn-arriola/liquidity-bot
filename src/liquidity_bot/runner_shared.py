@@ -71,3 +71,28 @@ class _CancellationEvidencePending(CommissioningUnavailable):
 MAINTENANCE_FAILURE_THRESHOLD = 3
 MAINTENANCE_STABLE_READS = 3
 MAINTENANCE_POLL_SECONDS = 60.0
+
+# Conditions that describe one market's inventory or exit, never the account.
+# The reconciler plans per market, so these are per-market verdicts: the right
+# response is to stop quoting that market and keep working its exit, not to end
+# a session in which every other market is healthy and flat. Kept as an
+# explicit set so an unrecognised future critical still fails closed.
+# A retired market waits this long before its exit is planned again. Long
+# enough that a failing exit cannot spin the loop, short enough that many
+# retries still fit inside the 300-second pre-kickoff flatten window.
+# How many times a "recoverable" strategy condition may fail to recover for
+# one market before that market is retired instead of retried forever.
+MAX_RECOVERY_ATTEMPTS = 12
+
+
+class _ConfirmedMarketNotOpen(CommissioningUnavailable):
+    """Exact fetched metadata says the owner cannot currently accept orders."""
+
+
+class _RewardUnavailable(CommissioningUnavailable):
+    """Successful contract reads lack applicable rewards for an open event."""
+
+# Empty, order-free, ambiguity-free owners may become dormant after this many
+# failed rounds. Any remaining position/order keeps recovery alive, with the
+# per-round exit budget and 60-second cooldown unchanged.
+MAX_RETIREMENT_ROUNDS = 10

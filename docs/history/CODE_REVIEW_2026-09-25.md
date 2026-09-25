@@ -176,6 +176,23 @@ moved code. Signal registration (`add_signal_handler(sig, runner.request_stop,
 ...)`) stays in the runner and binds through the instance as before. No test
 changes. Full WSL suite: 2,290 pass.
 
+**Slice 11 — decisions/orders/exits (`runner_decisions.DecisionMixin`).**
+Moved 26 methods (1,469 lines): `_decide_for_market`, `_prepare_market_decision`,
+`_decision_sweep`, action failure handling, uncertain-cancel retry, owned-order
+reads, decision-time execution-state refresh, urgent-position/exit service,
+hard-exit retry delay and reducer-decision capture/recording. Moved to
+`runner_shared.py` with comments, unbroken: `MAX_RECOVERY_ATTEMPTS = 12` with
+`_ConfirmedMarketNotOpen`/`_RewardUnavailable`, and `MAX_RETIREMENT_ROUNDS = 10`.
+Only moved code used `capture_reducer_decision`/`completed_reducer_decision`, so
+`live_commissioning` no longer imports them; the 4 `test_reducer_diagnostics`
+patches (`print`, `capture_reducer_decision`) were retargeted to
+`liquidity_bot.runner_decisions.*` — every `[reducer-decision]` line those
+tests read is printed by moved code. Proof: 26 moved and 136 remaining method
+ASTs identical; removed names keep values; ten REST/hybrid overrides keep
+priority and chain to the moved code. Full WSL suite: 2,290 pass.
+Self-review mutation: pointing one retargeted `print` patch back at
+`live_commissioning` fails the test, so a stale patch cannot silently pass.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

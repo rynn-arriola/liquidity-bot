@@ -86,6 +86,20 @@ module and still apply. Follow-up (not done, would change measurement code):
 the new mixin files, so its archive fingerprint no longer covers moved
 selection code.
 
+**Slice 5 — reward evaluation/rotation (`runner_rewards.RewardRotationMixin`).**
+Moved 11 methods (571 lines): `_evaluate_rewards(_inner)`, eligibility
+recorders, `_reward_*_and_flat`, `_rotate_reward_market(_inner)`,
+`_awaiting_rotation`, `_rotation_blockers`. The whole contract-refresh constant
+group (60.0/900.0/60.0/8/5.0) moved with its comment block, unbroken, to
+`runner_shared.py`. Property/setter compatibility pairs (e.g. `_reward_eligible`)
+deliberately stay together in the runner. Proof: 11 moved and 232 remaining
+method ASTs identical; every removed constant still reachable from
+`live_commissioning` with its original value and type (new check 2b); globals
+resolve to the same objects; no subclass overrides. No test changes. Full
+WSL suite: 2,290 pass. Self-review: reward eligibility gates quoting, so this
+is decision-adjacent, but relocation is AST-proven identical; a duplicated
+generated import was removed before commit.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

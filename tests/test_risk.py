@@ -39,6 +39,13 @@ class EconomicsTests(unittest.TestCase):
             maximum_safe_order_size("offer", 0.80, loss_budget=4.0, size_cap=10),
             10.0)
 
+    def test_missing_budget_fails_closed_instead_of_returning_full_cap(self):
+        for kwargs in ({"loss_budget": float("nan"), "size_cap": 10},
+                       {"loss_budget": 4.0, "size_cap": float("nan")}):
+            with self.subTest(**{k: str(v) for k, v in kwargs.items()}):
+                with self.assertRaises(ValueError):
+                    maximum_safe_order_size("bid", 0.80, **kwargs)
+
 
 class SettingsTests(unittest.TestCase):
     def test_defaults_are_non_live_and_small(self):

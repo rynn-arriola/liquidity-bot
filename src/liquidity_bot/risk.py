@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -66,6 +67,10 @@ def maximum_safe_order_size(
         raise ValueError("side must be 'bid' or 'offer'")
     if not 0 < price < 1:
         raise ValueError("price must be between 0 and 1")
+    # NaN compares false to everything, so min(size_cap, nan) would silently
+    # return the full cap. A missing budget must fail closed instead.
+    if math.isnan(loss_budget) or math.isnan(size_cap):
+        raise ValueError("budgets and caps must be numbers")
     if loss_budget < 0 or size_cap < 0:
         raise ValueError("budgets and caps cannot be negative")
     unit_loss = price if side == "bid" else 1.0 - price

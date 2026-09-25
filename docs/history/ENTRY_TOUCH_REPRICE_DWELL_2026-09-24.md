@@ -68,3 +68,31 @@ second with zero 429s or cooldown; the only failures were normal transient
 individual-order 404 publication reads. No filter, ranking, size, risk, entry,
 exit or account-authority rule changed. Natural touch-cycle and quality-recovery
 comparison remains pending; do not induce book movement, fills, or faults.
+
+## September25 04:08Z read-only follow-up
+
+Same supervisor37031/runner37045 and release marker; all184 source/test files
+still match. Authenticated04:08:17Z reads proved30 flat entry orders plus two
+exact SELL reducers covering+7 and+15 positions, zero unresolved/unknown state,
+and ledger agreement. Total venue orders include reducers; the30-entry cap does not.
+
+Through04:08:36Z,6,343 attempts over2,096.5s averaged3.026/s with zero429s,
+28 individual-order404s and one earnings timeout. The earnings refresh logged
+recovery; the trader stayed alive. The preceding02:58–03:29 sample averaged
+2.540/s. These are different market/fill workloads, so no REST reduction or
+causal regression is established.
+
+Six side-specific quality cancellations were correctly attributed; none had
+subsequently re-entered by that cutoff. That rules out rapid same-side churn in
+those observed cases, but does not prove a complete healthy60s recovery cycle.
+There were42 touch-reprice cancels across changing markets versus one in the
+preceding sample. Logs do not record each suppressed dwell decision, so neither
+a measured reduction nor a failure of the narrow10s dwell is established.
+
+Five timed IOC acknowledgements occurred1.80–6.50s after their deadlines.
+Two passive reducer attempts encountered local admission deferral and later
+succeeded: one replacement was acknowledged24.25s after cancel confirmation,
+the other after5.11s. Lifecycle refill committed after63.1s in the latest
+sample, with decision p95 reaching65.1s during that work. These recovered
+latency observations remain follow-up work, not evidence of a crash or429.
+No trading source/config changes or restart were performed for this check.

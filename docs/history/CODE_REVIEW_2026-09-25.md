@@ -164,6 +164,18 @@ resolve to the same objects; `RestFallbackRunner.preflight` and
 the moved code. The test-patched `load_runtime_secrets`/`ReconcilerPolicy`
 are not used by moved code. No test changes. Full WSL suite: 2,290 pass.
 
+**Slice 10 — stop/HARD/quarantine/shutdown (`runner_shutdown.ShutdownMixin`).**
+Moved 14 methods (808 lines): `request_stop`, `_stop_reason`, HARD latch/
+release/announce, maintenance-flatten and flatten-deadline checks, order
+quarantine and its terminal assertion, `_shutdown_slugs` and `_shutdown`. No
+constants needed moving. Proof: 14 moved and 162 remaining method ASTs
+identical; globals resolve to the same objects; `AccountSourceRunner._shutdown`,
+`RestFallbackRunner._position_near_its_flatten_deadline` and
+`RestFallbackRunner._quarantine_strategy_orders` keep priority and chain to the
+moved code. Signal registration (`add_signal_handler(sig, runner.request_stop,
+...)`) stays in the runner and binds through the instance as before. No test
+changes. Full WSL suite: 2,290 pass.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

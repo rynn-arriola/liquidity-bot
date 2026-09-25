@@ -118,6 +118,23 @@ moved code. Full WSL suite: 2,290 pass. Self-review mutation: pointing one
 retargeted patch back at `live_commissioning` fails loudly with
 AttributeError, so no stale patch can silently stop intercepting.
 
+**Slice 7 — REST account proof (`runner_rest_proof.RestProofMixin`).**
+Moved 11 methods (512 lines): `_rest_reconcile`, `_collect_rest_snapshots`,
+`_fetch_rest_order_snapshot`, `_note_periodic_reconcile`, orphan-place proof
+advance, unresolved-owner scoping, quiet-book REST refresh check,
+transition-proof freshness, retained-value replacement snapshot and both
+hard-exit reconcile helpers. `ORPHAN_PLACE_CLEAR_PROOFS = 3` and
+`ORPHAN_PLACE_CLEAR_MIN_SECONDS = 10.0` moved with their comment to
+`runner_shared.py`. Proof: 11 moved and 198 remaining method ASTs identical;
+removed constants keep values; globals resolve to the same objects. Seven
+overrides (`RestFallbackRunner` x5, `AccountSourceRunner` x2, `_rest_reconcile`
+in both) keep priority and their chain reaches the moved code after the
+subclass layers, exactly as before; `rest_fallback.py:883`'s explicit
+`CommissioningRunner._rest_reconcile(...)` resolves to the same function. The
+verifier's chain check was corrected to walk past both subclass layers
+(first version wrongly required a single hop). No test changes. Full WSL
+suite: 2,290 pass.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

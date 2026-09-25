@@ -35,3 +35,12 @@ NONTRADING_CASH_MAX_PAGES = 4
 # can itself take several seconds when individual books need REST recovery.
 DECISION_EQUITY_REFRESH_MARGIN_SECONDS = 5.0
 DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
+
+# A PLACE whose response carried no exchange order id must never be resent: the
+# venue may have accepted it even though the acknowledgement was lost.  It can,
+# however, stop being live risk once several complete account snapshots agree
+# that its market has neither an open order nor a position.  Requiring both
+# repetition and elapsed time protects against an eventually-consistent first
+# snapshot after a venue outage while keeping recovery in-process.
+ORPHAN_PLACE_CLEAR_PROOFS = 3
+ORPHAN_PLACE_CLEAR_MIN_SECONDS = 10.0

@@ -10479,7 +10479,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
 
         with patch(
-                "liquidity_bot.live_commissioning.resting_side_hours_by_day",
+                "liquidity_bot.runner_summary.resting_side_hours_by_day",
                 return_value=({risk_day(runner._now()): 416.65}, {})):
             await runner._send_summary(runner._now())
 
@@ -10497,7 +10497,7 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.preflight()
 
         with patch(
-                "liquidity_bot.live_commissioning.resting_side_hours_by_day",
+                "liquidity_bot.runner_summary.resting_side_hours_by_day",
                 side_effect=RuntimeError("read-only resting report failed")):
             await runner._send_summary(runner._now())
 

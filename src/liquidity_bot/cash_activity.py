@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from .adapters import AsyncReadOnlyGateway
+from .api_diagnostics import api_workflow
 from .errors import AdapterError
 
 
@@ -167,6 +168,7 @@ def _cash_rows(activity: dict[str, Any]) -> Iterable[tuple[dict, dict]]:
         yield change, change
 
 
+@api_workflow("cash_history_refresh")
 async def fetch_nontrading_cash_changes(
     gateway: AsyncReadOnlyGateway,
     *,

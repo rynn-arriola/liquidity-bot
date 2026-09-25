@@ -656,15 +656,21 @@ These are implementation requirements, not suggestions.
     ownership. Missing rewards never authorize entry or prove program closure.
 83. Post-flat refill priority may shorten only avoidable scheduler delay. It
     requires a transition from positively held near-deadline inventory to no
-    remaining near-deadline position, observed through the normal private
+    remaining near-deadline position and at least one previously held owner
+    positively flat, observed through the normal private
     projector or a complete REST position snapshot, plus mandatory empty,
-    expired, closed or reward-ended capacity. It may yield the ordinary full-
-    slate service sweep but never priority cancel recovery, reducer/exit work,
+    expired, closed or reward-ended capacity. Restoring reducer coverage alone
+    cannot trigger discovery. Existing owners receive the ordinary guarded
+    decision pass before a refill or retry; never skip priority cancel recovery, reducer/exit work,
     the near-deadline guard, release revalidation, complete account proof or
     stream freshness. A full-universe selection no older than 120 seconds may
     seed candidates only after fresh bulk metadata and incentive reads plus a
     fresh full book and every normal selector gate for each candidate; stale,
-    failed or insufficient validation falls back to the bounded complete scan.
+    failed validation falls back to the bounded complete scan. A nonempty
+    freshly revalidated subset may fill fewer than all free slots. An empty
+    remainder of a recent complete selection may defer urgent discovery only
+    until that selection's original120-second expiry; it never authorizes
+    entry or renews a clock. Scheduled full discovery remains available.
     The urgent path may not accelerate invariant 82's economic-idle eviction.
     A failed attempt clears only the request it consumed and establishes one
     retry-not-before deadline honored by every ordinary and event-driven top-up

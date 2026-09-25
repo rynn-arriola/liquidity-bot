@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - exercised only by native Windows
     fcntl = None
 
 from .errors import AdapterError, ApiAdmissionDeferred, EmptyBookError
+from .api_diagnostics import log_rate_limit, response_ids
 from . import read_backoff
 from .models import (
     BookLevel,
@@ -1251,11 +1252,18 @@ class AsyncIntervalLimiter:
         operation: str = "", request_kind: str = "read",
         admission_token: str | None = None,
         transport_failure: bool = False,
+        server_ids: Mapping[str, str] | None = None,
     ) -> None:
         """Record the outcome of one already-counted attempt."""
 
         chosen_class = self.traffic_class_for("", "read", traffic_class)
         duration = max(0.0, float(duration_seconds))
+        if status_code == 429:
+            log_rate_limit(category=_request_category(operation, request_kind),
+                           request_kind=request_kind, traffic_class=chosen_class,
+                           duration_seconds=duration,
+                           retry_after_seconds=retry_after_seconds,
+                           server_ids=server_ids)
         self._response_samples.append(duration)
         if failed:
             self._failed_responses += 1
@@ -1586,7 +1594,7 @@ class AsyncReadOnlyGateway:
     @classmethod
     def _trace_id(cls, exc: Exception) -> str | None:
         headers = cls._response_headers(exc)
-        for wanted in ("x-trace-id", "trace-id", "x-request-id"):
+        for wanted in ("x-trace-id", "trace-id", "x-request-id", "cf-ray"):
             for name, value in headers.items():
                 if str(name).lower() == wanted and value not in (None, ""):
                     return str(value)
@@ -1704,6 +1712,8 @@ class AsyncReadOnlyGateway:
                         operation=operation, request_kind="read",
                         admission_token=admission_token,
                         transport_failure=read_backoff.is_transport_failure(exc),
+                        server_ids=response_ids(self._response_headers(exc),
+                                                getattr(exc, "trace_id", None)),
                     )
                 raise
             except Exception as exc:
@@ -1719,6 +1729,8 @@ class AsyncReadOnlyGateway:
                         operation=operation, request_kind="read",
                         admission_token=admission_token,
                         transport_failure=read_backoff.is_transport_failure(exc),
+                        server_ids=response_ids(self._response_headers(exc),
+                                                getattr(exc, "trace_id", None)),
                     )
                 # Retry only a confirmed HTTP 429. Polymarket documents that
                 # requests delayed over five seconds can return the text

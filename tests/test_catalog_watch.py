@@ -408,11 +408,15 @@ class CatalogWatchTests(IsolatedAsyncioTestCase):
                 raise LedgerConflict("fill changed")
             runner.request_stop("unexpected_retry")
             return False
+        # Ordinary owners now run before discovery. Keep this test's account
+        # flat so it isolates terminal scan handling, not fake shutdown fills.
         with patch.object(runner, "_incremental_top_up_due", return_value=True), \
+                patch.object(runner, "_decision_sweep", new=AsyncMock(return_value=None)) as decide, \
                 patch.object(runner, "_top_up_active_markets", side_effect=top_up):
             async with asyncio.timeout(5):
                 result = await runner.run()
         self.assertEqual(calls, 1)
+        decide.assert_awaited_once()
         self.assertEqual(result.stop_reason, "critical:market_top_up_LedgerConflict")
         self.assertFalse(client.orders.create_calls)
 

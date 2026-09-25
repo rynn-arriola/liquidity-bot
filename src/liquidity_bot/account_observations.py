@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
+from .api_diagnostics import api_workflow
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ class PositionWatch:
         if self.next_at is not None and started < self.next_at:
             return
 
+        @api_workflow("catalog_position_watch")
         async def collect():
             try:
                 rows = await self.fetch(observed_at=started)

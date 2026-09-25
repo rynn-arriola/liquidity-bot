@@ -13,6 +13,7 @@ through ``main()`` with all explicit arming acknowledgements.
 from __future__ import annotations
 
 from . import read_backoff
+from .api_diagnostics import api_workflow
 
 import argparse
 import asyncio
@@ -1329,6 +1330,7 @@ class CommissioningRunner:
             await self.sleep(
                 float(self.config.market_selection_refresh_seconds))
 
+    @api_workflow("contract_refresh")
     async def _refresh_contracts(
         self, now: datetime, slug: str | None = None, *,
         for_exit: bool = False,
@@ -1548,6 +1550,7 @@ class CommissioningRunner:
         state.reward_authorization_loss_reason = None
         state.reward_authorization_loss_confirmed_at = None
 
+    @api_workflow("contract_refresh")
     async def _refresh_due_contract_batches(
         self, now: datetime, slugs: tuple[str, ...],
     ) -> None:
@@ -2366,6 +2369,7 @@ class CommissioningRunner:
             await self._report_runtime_error("reward_earnings_refresh", exc)
         return now + timedelta(seconds=self.config.earnings_refresh_seconds)
 
+    @api_workflow("reward_refresh")
     async def _refresh_earnings(self, now: datetime) -> None:
         """Persist authenticated venue earnings without treating them as P&L."""
 
@@ -2524,6 +2528,7 @@ class CommissioningRunner:
         positions = await self.account.fetch_positions(observed_at=now)
         return orders, positions
 
+    @api_workflow("account_reconcile", reason_kw="tag")
     async def _rest_reconcile(
         self, now: datetime, *, tag: str = "",
         strict_order_markets: frozenset[str] | None = None,
@@ -2745,6 +2750,7 @@ class CommissioningRunner:
             as_of=now, observed_at=now, complete=True)
         had_near_deadline_position = (
             self._position_near_its_flatten_deadline(self._now()))
+        held_before = self._held_refill_owners() if had_near_deadline_position else ()
         self.ledger.apply_position_snapshot(
             f"commissioning-rest-positions:{stamp}", positions,
             as_of=now, observed_at=now, complete_account=True)
@@ -2766,7 +2772,7 @@ class CommissioningRunner:
         if self._inactive_market_wait_slugs:
             self._sync_inactive_market_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
-            had_near_deadline_position, self._now())
+            had_near_deadline_position, self._now(), held_before=held_before)
         self._record_resolved_intent_owners(unresolved_owners)
         for slug in execution_owners_before.symmetric_difference(
                 self._execution_owner_slugs()):
@@ -2855,6 +2861,7 @@ class CommissioningRunner:
         received_at = getattr(event, "received_at", None) or now
         had_near_deadline_position = (
             self._position_near_its_flatten_deadline(now))
+        held_before = self._held_refill_owners() if had_near_deadline_position else ()
         self.gate.observe(event, received_at=received_at)
         self.projector.apply(event, received_at=received_at)
         if getattr(event, "kind", None) in {
@@ -2865,7 +2872,7 @@ class CommissioningRunner:
         if self._inactive_market_wait_slugs:
             self._sync_inactive_market_wait_positions(self._now())
         self._request_post_flat_top_up_if_needed(
-            had_near_deadline_position, self._now())
+            had_near_deadline_position, self._now(), held_before=held_before)
         self._record_resolved_intent_owners(unresolved_owners)
         affected_slugs.update(
             execution_owners_before.symmetric_difference(
@@ -3381,6 +3388,7 @@ class CommissioningRunner:
         if self.config.auto_select_reward_markets:
             self._bind_markets(())
 
+    @api_workflow("startup")
     async def preflight(self) -> str:
         now = self._now()
         self.started_at = now
@@ -4827,6 +4835,7 @@ class CommissioningRunner:
                 raise  # Malformed/unknown transfers remain conservative.
             await self._report_runtime_error("account_cash_report", exc)
 
+    @api_workflow("financial_refresh")
     async def _refresh_balance(self, now: datetime) -> None:
         previous = self.risk_guard.equity_observed_at if self.risk_guard else None
         self._risk_refresh_stage = "equity_snapshot"
@@ -6001,6 +6010,7 @@ class CommissioningRunner:
         }
         return active.issubset(blocked)
 
+    @api_workflow("unresolved_order_repair")
     async def _repair_unresolved_orders(
         self, now: datetime, *, markets: frozenset[str],
     ) -> None:
@@ -6906,6 +6916,7 @@ class CommissioningRunner:
         if self._pending_market_stream_error is None:
             self._pending_market_stream_error = error
 
+    @api_workflow("decision_sweep")
     async def _decision_sweep(
         self, slugs: tuple[str, ...] | None = None,
         *, position_only: bool = False, service_books: bool = True,
@@ -8339,6 +8350,7 @@ class CommissioningRunner:
             blockers.append("whole-account execution state is not known")
         return tuple(blockers)
 
+    @api_workflow("stream_bind")
     async def _open_streams_for_active_market(
         self, *, strict_order_markets: frozenset[str] | None = None,
     ) -> None:
@@ -8615,13 +8627,22 @@ class CommissioningRunner:
         retained = len(self.active_slugs) - len(mandatory)
         return max(0, self.config.max_markets - retained)
 
+    def _held_refill_owners(self) -> tuple[str, ...]:
+        return tuple(str(row["market_slug"]) for row in self.ledger.query(
+            "SELECT market_slug FROM execution_positions WHERE CAST(net_qty AS REAL)!=0"))
+
     def _request_post_flat_top_up_if_needed(
         self, had_near_deadline_position: bool, now: datetime,
+        *, held_before: tuple[str, ...],
     ) -> None:
         """Request one immediate refill when the final urgent position clears."""
 
         if (not had_near_deadline_position
                 or self._position_near_its_flatten_deadline(now)):
+            return
+        # REST urgency includes reducer gaps/quantity corrections. Restoring
+        # coverage is not a position close and must not launch another scan.
+        if not any(self.ledger.position(slug) == 0 for slug in held_before):
             return
         underfilled = self._mandatory_top_up_gap(now)
         if underfilled <= 0:
@@ -8716,6 +8737,8 @@ class CommissioningRunner:
 
         return (
             self.config.auto_select_reward_markets
+            and not self._stop_requested
+            and not self._streams_need_rebind
             and not self._entry_pause_active()
             and now >= self._top_up_retry_not_before
             and (now >= next_selection
@@ -8755,6 +8778,11 @@ class CommissioningRunner:
                 candidates = tuple(
                     item.market.slug for item in cached.top_viable(
                         candidate_limit, exclude=exclude))
+                if not candidates:
+                    # Recent complete selection is bounded no-supply evidence,
+                    # never entry authority. Keep its original clock so another
+                    # urgent request cannot indefinitely renew this shortcut.
+                    return (), "cached_no_supply", cache_age
                 revalidate = getattr(
                     self.reward_selector, "revalidate_viable", None)
                 if candidates and callable(revalidate):
@@ -8788,7 +8816,7 @@ class CommissioningRunner:
                                 and item.market.slug in candidate_set
                                 and item.market.slug not in exclude))
                         elapsed = time.monotonic() - validation_started
-                        if len(viable) >= wanted:
+                        if viable:
                             print(
                                 f"[top-up-cache] at={self._now().isoformat()} "
                                 f"outcome=validated age_seconds={cache_age:.1f} "
@@ -8851,6 +8879,7 @@ class CommissioningRunner:
                 f" post_flat_underfilled_slot_minutes={slot_minutes:.2f}")
         return fields
 
+    @api_workflow("market_top_up")
     async def _top_up_active_markets(
         self,
         now: datetime,
@@ -8885,6 +8914,8 @@ class CommissioningRunner:
         That is the whole difference from full rotation, which cancels them.
         """
 
+        if self._stop_requested or self._streams_need_rebind:
+            return False
         if not self.config.auto_select_reward_markets:
             return False
         if self.reward_selector is None:
@@ -8948,6 +8979,7 @@ class CommissioningRunner:
             1,
             capacity_without_optional_release + len(optional_candidates),
         )
+        self._top_up_cache_expires_at = None
         replacement_candidates, selection_source, cache_age = (
             await self._replacement_candidates_for_top_up(
                 now,
@@ -8955,6 +8987,12 @@ class CommissioningRunner:
                 wanted=wanted,
                 allow_cached_selection=allow_cached_selection,
             ))
+        if self._stop_requested or self._streams_need_rebind:
+            return False
+        if selection_source in {"cached_revalidated", "cached_no_supply"}:
+            self._top_up_cache_expires_at = (
+                self._market_selection_observed_at
+                + timedelta(seconds=POST_FLAT_SELECTION_CACHE_SECONDS))
         optional_capacity = max(
             0, len(replacement_candidates) - capacity_without_optional_release)
         optional_released = optional_candidates[:optional_capacity]
@@ -9012,6 +9050,8 @@ class CommissioningRunner:
         # scope change, cancellation or rebind.
         await self._rest_reconcile(
             self._now(), strict_order_markets=frozenset(released))
+        if self._stop_requested or self._streams_need_rebind:
+            return False
         # Closed/not-open is positive lifecycle proof, not an inference from a
         # missing selector row. Re-read each exact owner at the transaction
         # boundary; a failed read or a market that reopened aborts before the
@@ -9027,6 +9067,8 @@ class CommissioningRunner:
             await self._refresh_due_contract_batches(self._now(), tuple(reward_idle))
             if self._stop_requested:
                 return False
+        if self._stop_requested or self._streams_need_rebind:
+            return False
         self._assert_runtime_scope()
         # The complete snapshot above can discover a fill, a newly absent
         # order, or another unresolved mutation. Recheck the release predicate
@@ -9079,6 +9121,7 @@ class CommissioningRunner:
         )
         return True
 
+    @api_workflow("market_rotation")
     async def _rotate_reward_market(self, now: datetime) -> bool:
         transition_started = time.monotonic()
         try:
@@ -9256,6 +9299,7 @@ class CommissioningRunner:
                 await self.sleep(delay)
         raise AssertionError("unreachable private handoff retry loop")
 
+    @api_workflow("private_stream_recovery")
     async def _recover_private_stream(self, initial: Exception) -> str | None:
         """Stay alive but dormant until private state is proven again."""
 
@@ -9444,6 +9488,7 @@ class CommissioningRunner:
                     return "runner_failure:private_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
+    @api_workflow("market_stream_recovery")
     async def _recover_market_stream(
         self, initial: Exception, *, private_task: asyncio.Task[Any] | None = None,
     ) -> str | None:
@@ -9573,6 +9618,7 @@ class CommissioningRunner:
                     return "runner_failure:market_stream_recovery_exhausted"
                 await self.sleep(min(2 ** min(attempt - 1, 5), 30))
 
+    @api_workflow("bound_stream_recovery")
     async def _recover_bound_streams(self, initial: Exception) -> str | None:
         """Rebind streams after a failed bind or mid-pass shared failure.
 
@@ -10021,12 +10067,15 @@ class CommissioningRunner:
             delay = 1.0
         return min(max(delay, 1.0), 60.0)
 
-    def _log_api_backpressure(self, component: str, delay: float) -> None:
+    def _log_api_backpressure(
+        self, component: str, delay: float, *, cause: str | None = None,
+    ) -> None:
         """Record designed local deferral without calling it a venue error."""
 
         print(
             f"[api-backpressure] at={self._now().isoformat()} "
-            f"component={component} delay={delay:.1f}s requests_sent=0",
+            f"component={component} delay={delay:.1f}s requests_sent=0 "
+            f"cause={cause if isinstance(cause, str) and cause.startswith('LOCAL_') and cause.replace('_', '').isalnum() else 'unspecified'}",
             flush=True,
         )
 
@@ -10606,6 +10655,7 @@ class CommissioningRunner:
             self.kill_switch.status(slug).safe_to_stop
             for slug in self._shutdown_slugs())
 
+    @api_workflow("shutdown")
     async def _shutdown(self, reason: str) -> None:
         await self.notifier.send_async(
             f"⚠️ Liquidity Bot LIVE shutdown started: {reason}. "
@@ -11141,11 +11191,7 @@ class CommissioningRunner:
                 # due. Nonzero positions are included unconditionally; flat
                 # unchanged markets skip the existing service/decision work.
                 # The reconciler and action driver below are unchanged.
-                scheduler_preempted = self._post_flat_top_up_can_preempt(
-                    self._now())
-                scheduled = (
-                    () if scheduler_preempted
-                    else self._scheduled_market_slugs(self._now()))
+                scheduled = self._scheduled_market_slugs(self._now())
                 service_cpu_started = time.process_time()
                 stop_reason = await self._service_bound_markets(
                     scheduled, refresh_books=False)
@@ -11172,10 +11218,8 @@ class CommissioningRunner:
                 # synchronize the exact affected owner once more before its
                 # decision. Existing book coalescing and private wire ordering
                 # remain the authority; this only notices their applied state.
-                latest_scheduled = (
-                    () if scheduler_preempted
-                    else self._scheduled_market_slugs(
-                        self._now(), record_pass=False))
+                latest_scheduled = self._scheduled_market_slugs(
+                    self._now(), record_pass=False)
                 resync = tuple(
                     slug for slug in latest_scheduled
                     if (slug not in serviced_generations
@@ -11207,74 +11251,6 @@ class CommissioningRunner:
                 # slots held by markets that have kicked off and are flat, or
                 # fill capacity that startup validation left free. That path
                 # keeps every resting order where it is.
-                if self._incremental_top_up_due(now, next_selection):
-                    consumed_post_flat_at = (
-                        self._post_flat_top_up_requested_at)
-                    post_flat_requested = consumed_post_flat_at is not None
-                    normal_scan_due = now >= next_selection
-                    old_market, old_private = market_task, private_task
-                    market_task = private_task = None
-                    await self._settle_stream_readers(old_market, old_private)
-                    try:
-                        await self._top_up_active_markets(
-                            now,
-                            # Every urgent refill may reuse a recent complete
-                            # scan after bounded live revalidation. At 17:00Z
-                            # on 2026-08-30 a lifecycle refill ignored a scan
-                            # only 40 seconds old, repeated discovery, then its
-                            # critical positions proof hit Cloudflare 1015.
-                            allow_cached_selection=(
-                                self._urgent_top_up_can_use_cache(
-                                    post_flat_requested)),
-                            # Optional economic-idle eviction remains on the
-                            # operator-approved 900-second cadence. An urgent
-                            # lifecycle refill may fill mandatory holes early,
-                            # but it cannot pull a merely uneconomic owner early.
-                            allow_economic_idle=normal_scan_due,
-                        )
-                        self._clear_incremental_top_up_requests(
-                            consumed_post_flat_at)
-                        self._top_up_retry_not_before = datetime.min.replace(
-                            tzinfo=timezone.utc)
-                        next_selection = self._now() + timedelta(
-                            seconds=self.config.market_selection_refresh_seconds)
-                    except ApiAdmissionDeferred as exc:
-                        self._clear_incremental_top_up_requests(
-                            consumed_post_flat_at)
-                        delay = self._api_admission_delay(exc)
-                        self._log_api_backpressure("market_top_up", delay)
-                        retry_at = self._now() + timedelta(seconds=delay)
-                        self._top_up_retry_not_before = max(
-                            self._top_up_retry_not_before, retry_at)
-                        next_selection = retry_at
-                    except (LedgerConflict, RuntimeInvariantViolation) as exc:
-                        self.gate.on_reconciliation_conflict()
-                        await self._report_runtime_error("market_top_up_terminal", exc)
-                        stop_reason = self._terminal_exception_reason("market_top_up", exc)
-                        break
-                    except Exception as exc:
-                        self._clear_incremental_top_up_requests(
-                            consumed_post_flat_at)
-                        await self._report_runtime_error(
-                            "market_top_up", exc)
-                        # Event-driven lifecycle/post-flat requests bypass the
-                        # ordinary selection time, so guard their admission too.
-                        # On 2026-09-02 each failed 100-page catalog scan took
-                        # about a minute and the next owner signal restarted it
-                        # seconds later, leaving no useful decision time.
-                        retry_at = self._now() + timedelta(
-                            seconds=TOP_UP_FAILURE_RETRY_SECONDS)
-                        self._top_up_retry_not_before = max(
-                            self._top_up_retry_not_before, retry_at)
-                        next_selection = retry_at
-                    market_task = asyncio.create_task(
-                        self.market_stream.next_book())
-                    private_task = asyncio.create_task(
-                        self.private_stream.next_event())
-                    now = self._now()
-                    next_book_refresh = now + timedelta(seconds=3)
-                    next_contract_refresh = now + timedelta(minutes=1)
-                    continue
                 if (self.config.auto_select_reward_markets
                         and now >= next_selection
                         and not self._entry_pause_active()
@@ -11408,6 +11384,81 @@ class CommissioningRunner:
                 if stop_reason:
                     break
                 if self._streams_need_rebind:
+                    continue
+                # Existing owners get their guarded decision pass before any
+                # refill, including every interrupted/retried catalog attempt.
+                now = self._now()
+                if self._incremental_top_up_due(now, next_selection):
+                    consumed_post_flat_at = (
+                        self._post_flat_top_up_requested_at)
+                    post_flat_requested = consumed_post_flat_at is not None
+                    normal_scan_due = now >= next_selection
+                    old_market, old_private = market_task, private_task
+                    market_task = private_task = None
+                    await self._settle_stream_readers(old_market, old_private)
+                    try:
+                        await self._top_up_active_markets(
+                            now,
+                            # Every urgent refill may reuse a recent complete
+                            # scan after bounded live revalidation. At 17:00Z
+                            # on 2026-08-30 a lifecycle refill ignored a scan
+                            # only 40 seconds old, repeated discovery, then its
+                            # critical positions proof hit Cloudflare 1015.
+                            allow_cached_selection=(not normal_scan_due and
+                                self._urgent_top_up_can_use_cache(
+                                    post_flat_requested)),
+                            # Optional economic-idle eviction remains on the
+                            # operator-approved 900-second cadence. An urgent
+                            # lifecycle refill may fill mandatory holes early,
+                            # but it cannot pull a merely uneconomic owner early.
+                            allow_economic_idle=normal_scan_due,
+                        )
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
+                        self._top_up_retry_not_before = datetime.min.replace(
+                            tzinfo=timezone.utc)
+                        next_selection = self._now() + timedelta(
+                            seconds=self.config.market_selection_refresh_seconds)
+                        cache_expiry = getattr(self, "_top_up_cache_expires_at", None)
+                        if cache_expiry is not None:
+                            next_selection = min(next_selection, cache_expiry)
+                    except ApiAdmissionDeferred as exc:
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
+                        delay = self._api_admission_delay(exc)
+                        self._log_api_backpressure(
+                            "market_top_up", delay, cause=exc.error_code)
+                        retry_at = self._now() + timedelta(seconds=delay)
+                        self._top_up_retry_not_before = max(
+                            self._top_up_retry_not_before, retry_at)
+                        next_selection = retry_at
+                    except (LedgerConflict, RuntimeInvariantViolation) as exc:
+                        self.gate.on_reconciliation_conflict()
+                        await self._report_runtime_error("market_top_up_terminal", exc)
+                        stop_reason = self._terminal_exception_reason("market_top_up", exc)
+                        break
+                    except Exception as exc:
+                        self._clear_incremental_top_up_requests(
+                            consumed_post_flat_at)
+                        await self._report_runtime_error(
+                            "market_top_up", exc)
+                        # Event-driven lifecycle/post-flat requests bypass the
+                        # ordinary selection time, so guard their admission too.
+                        # On 2026-09-02 each failed 100-page catalog scan took
+                        # about a minute and the next owner signal restarted it
+                        # seconds later, leaving no useful decision time.
+                        retry_at = self._now() + timedelta(
+                            seconds=TOP_UP_FAILURE_RETRY_SECONDS)
+                        self._top_up_retry_not_before = max(
+                            self._top_up_retry_not_before, retry_at)
+                        next_selection = retry_at
+                    market_task = asyncio.create_task(
+                        self.market_stream.next_book())
+                    private_task = asyncio.create_task(
+                        self.private_stream.next_event())
+                    now = self._now()
+                    next_book_refresh = now + timedelta(seconds=3)
+                    next_contract_refresh = now + timedelta(minutes=1)
                     continue
                 if now >= next_summary:
                     next_summary = await self._send_scheduled_summary(now)

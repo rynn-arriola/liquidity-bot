@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway
+from .api_diagnostics import response_ids
 from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
 from .execution_ledger import ExecutionLedger, QuoteObservation
 from .models import MarketMetadata
@@ -256,6 +257,8 @@ class AsyncTradingGateway:
                         else self.gateway._retry_after_seconds(exc)),
                     traffic_class=traffic_class,
                     operation=operation, request_kind="mutation",
+                    server_ids=response_ids(self.gateway._response_headers(exc),
+                                            getattr(exc, "trace_id", None)),
                 )
             # Preserve structured metadata if the SDK boundary has already
             # normalized the exception. Re-normalizing an AdapterError would

@@ -8,6 +8,7 @@ trades latency for availability, and cannot detect silently stale venue data.
 from __future__ import annotations
 
 from . import read_backoff
+from .api_diagnostics import api_workflow
 
 import asyncio
 import json
@@ -868,6 +869,7 @@ class RestFallbackRunner(CommissioningRunner):
         finally:
             self._strategy_recovery_owner = None
 
+    @api_workflow("position_proof", reason_kw="tag")
     async def _reconcile_position_state(self, slug, *, tag):
         self._position_confirmation_proofs.clear()
         reusable = tag in {"position-transition", "hybrid-preplan"}

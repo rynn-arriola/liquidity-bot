@@ -10764,6 +10764,25 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         runner._report_runtime_error.assert_not_awaited()
         runner._quarantine_working_orders.assert_not_awaited()
 
+    async def test_action_admission_deferral_preserves_retry_after(self):
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        self.addAsyncCleanup(runner.private_stream.close)
+        self.addAsyncCleanup(runner.market_stream.close)
+        runner._evaluate_rewards(NOW)
+        failure = ApiAdmissionDeferred(
+            "request not sent", error_code="LOCAL_HYBRID_OBSERVATION_PENDING",
+            retry_after_seconds=7.0)
+        with patch.object(runner.reconciler, "plan", return_value=[]), \
+                patch.object(runner.driver, "apply_one", new=AsyncMock(side_effect=failure)), \
+                patch.object(runner, "_log_api_backpressure") as log:
+            outcome, delay = await runner._decide_for_market("market-one", NOW)
+        self.assertIsNone(outcome)
+        self.assertEqual(delay, 7.0)
+        log.assert_called_once_with("action_driver:market-one", 7.0,
+                                    cause="LOCAL_HYBRID_OBSERVATION_PENDING")
+        self.assertNotIn("market-one", runner._last_action_at)
+
     async def test_operator_interrupted_admission_does_not_open_entry_circuit(self):
         runner, _, _ = self.build_runner()
         runner._report_runtime_error = AsyncMock()

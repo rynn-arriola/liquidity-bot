@@ -140,6 +140,49 @@ class RestPositionPriorityTests(IsolatedAsyncioTestCase):
         self.assertEqual([s for s, _ in visited], [slugs[0]])
         self.assertEqual(runner._next_decision_at[slugs[-1]], deadline)
 
+    async def test_deferred_uncovered_owner_retries_when_due_without_token_change(self):
+        runner, _, slugs = await self.build(count=5)
+        held = slugs[-1]
+        self.position(runner, held)
+        attempts = 0
+
+        async def decide(slug, now):
+            nonlocal attempts
+            if slug == held:
+                attempts += 1
+                if attempts == 1:
+                    return None, 1.0  # no network send; position token unchanged
+            return None, 0.0
+
+        visited, _ = await self.sweep(runner, slugs, decide=decide)
+        self.assertEqual([s for s, _ in visited][:4],
+                         [held, slugs[0], held, slugs[1]])
+        self.assertGreaterEqual((visited[2][1] - visited[0][1]).total_seconds(), 5)
+
+    async def test_deferred_covered_owner_does_not_gain_urgent_retry(self):
+        runner, _, slugs = await self.build(count=3)
+        held = slugs[-1]
+        self.position(runner, held)
+        async def decide(slug, now):
+            return None, 1.0 if slug == held else 0.0
+        with patch.object(runner, "_position_priority_must_yield", return_value=False):
+            visited, _ = await self.sweep(runner, slugs, decide=decide)
+        self.assertEqual([s for s, _ in visited], [held, *slugs[:-1]])
+
+    async def test_repeated_local_deferral_keeps_visit_budget(self):
+        runner, _, slugs = await self.build(count=15)
+        held = slugs[-1]
+        self.position(runner, held)
+
+        async def decide(slug, now):
+            return None, 1.0 if slug == held else 0.0
+
+        visited, _ = await self.sweep(runner, slugs, decide=decide)
+        self.assertEqual(sum(s == held for s, _ in visited),
+                         runner._position_priority_visit_limit(held))
+        self.assertEqual(visited[-1][0], held)
+        self.assertGreater(runner._next_decision_at[held], self.now)
+
     async def test_stop_arriving_during_poll_prevents_any_priority_mutation(self):
         runner, client, slugs = await self.build(count=2)
 

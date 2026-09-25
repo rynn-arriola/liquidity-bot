@@ -7,6 +7,7 @@ import httpx
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from polymarket_us.errors import APIConnectionError, APITimeoutError
 
 from liquidity_bot.adapters import AsyncIntervalLimiter, AsyncReadOnlyGateway, fcntl
 from liquidity_bot.errors import AdapterError, ApiAdmissionDeferred
@@ -25,6 +26,23 @@ class RateLimited(Exception):
 
 
 class AccountReadBackoffTests(unittest.IsolatedAsyncioTestCase):
+    async def test_official_sdk_transport_errors_open_endpoint_backoff(self):
+        for error in (APITimeoutError(), APIConnectionError()):
+            with self.subTest(error=type(error).__name__):
+                limiter = AsyncIntervalLimiter()
+                gateway = AsyncReadOnlyGateway(object(), limiter=limiter)
+                call = AsyncMock(side_effect=error)
+                with self.assertRaises(AdapterError) as caught:
+                    await gateway._call(POSITIONS, call)
+                self.assertTrue(read_backoff.is_backpressure(caught.exception))
+                with self.assertRaises(ApiAdmissionDeferred):
+                    await gateway._call(POSITIONS, call)
+                self.assertEqual(call.await_count, 1)
+                self.assertEqual(limiter.telemetry().rate_limited_responses, 0)
+                self.assertEqual(dict(limiter.telemetry().failed_responses_by_category_status),
+                                 {"positions@transport": 1})
+                await limiter.wait(operation="cancel", request_kind="mutation")
+
     async def test_server_outages_back_off_without_mutation_or_endpoint_cooldown(self):
         for status in read_backoff.TRANSIENT_STATUSES:
             with self.subTest(status=status):

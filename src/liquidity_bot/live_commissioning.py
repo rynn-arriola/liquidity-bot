@@ -6822,6 +6822,11 @@ class CommissioningRunner:
             )
             if stop:
                 return stop, 0.0
+            if isinstance(exc, ApiAdmissionDeferred):
+                delay = self._api_admission_delay(exc)
+                self._log_api_backpressure(
+                    f"action_driver:{slug}", delay, cause=exc.error_code)
+                return None, delay
             return None, self._recovery_delay(f"action_driver:{slug}")
         if actions:
             # Stamp a successful mutation, not an empty healthy plan.
@@ -7162,6 +7167,13 @@ class CommissioningRunner:
             if delay > 0:
                 self._next_decision_at[slug] = (
                     self._now() + timedelta(seconds=delay))
+                if (slug in priority_after
+                        and self._position_priority_must_yield(slug)):
+                    # A locally refused reducer changed no position/order
+                    # token. It still needs another priority visit once its
+                    # backoff expires, not after the entire flat slate. Keep
+                    # the same visit budget and every proof/admission gate.
+                    priority_seen.pop(slug, None)
             elif slug in priority_after:
                 # REST position service must not inherit a flat quote's reward
                 # dwell timer. Explicit failure backoff above remains binding.

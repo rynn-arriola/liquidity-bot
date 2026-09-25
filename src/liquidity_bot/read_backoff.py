@@ -9,6 +9,7 @@ import math
 import socket
 
 from httpx import TransportError
+from polymarket_us.errors import APIConnectionError
 
 from .errors import AdapterError, ApiAdmissionDeferred
 
@@ -24,7 +25,8 @@ def is_transport_failure(exc):
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        if isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror, TransportError)):
+        if isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror,
+                            TransportError, APIConnectionError)):
             return True
         if not isinstance(exc, AdapterError):
             return False

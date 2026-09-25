@@ -1268,7 +1268,8 @@ class AsyncIntervalLimiter:
         if failed:
             self._failed_responses += 1
             category = _request_category(operation, request_kind)
-            status = str(status_code) if status_code is not None else "unknown"
+            status = (str(status_code) if status_code is not None
+                      else "transport" if transport_failure else "unknown")
             self._failed_responses_by_category_status[
                 f"{category}@{status}"] += 1
         else:

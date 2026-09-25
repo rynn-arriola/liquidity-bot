@@ -898,12 +898,105 @@ class ReconcilerTests(unittest.TestCase):
             WorkingOrder("offer-one", "offer", .51, Decimal("2")),
         )
 
-        actions = DesiredStateReconciler(policy()).plan(frame(
+        actions = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=0)).plan(frame(
             snapshot=book(bid=.49, offer=.50), orders=orders))
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].kind, ActionKind.CANCEL)
         self.assertEqual(actions[0].order_id, "offer-one")
+
+    def test_one_tick_less_aggressive_touch_move_waits_before_reprice(self):
+        """A brief touch flicker must not destroy otherwise safe resting time."""
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        bid = WorkingOrder("bid-one", "bid", .48, Decimal("2"))
+        offer = WorkingOrder("offer-one", "offer", .56, Decimal("2"))
+        moved = book(bid=.48, offer=.55)
+
+        first = reconciler.plan(frame(snapshot=moved, orders=(bid, offer)))
+        before_deadline = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=9),
+            snapshot=book(T0 + timedelta(seconds=9), bid=.48, offer=.55),
+            orders=(bid, offer)))
+        at_deadline = reconciler.plan(frame(
+            now=T0 + timedelta(seconds=10),
+            snapshot=book(T0 + timedelta(seconds=10), bid=.48, offer=.55),
+            orders=(bid, offer)))
+
+        self.assertEqual(first, [])
+        self.assertEqual(before_deadline, [])
+        self.assertEqual(len(at_deadline), 1)
+        self.assertEqual(at_deadline[0].kind, ActionKind.CANCEL)
+        self.assertEqual(at_deadline[0].reason, "resting_price_left_the_touch")
+
+    def test_touch_return_clears_reprice_dwell(self):
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        bid = WorkingOrder("bid-one", "bid", .48, Decimal("2"))
+        offer = WorkingOrder("offer-one", "offer", .56, Decimal("2"))
+
+        self.assertEqual(reconciler.plan(frame(
+            snapshot=book(bid=.48, offer=.55), orders=(bid, offer))), [])
+        self.assertEqual(reconciler.plan(frame(
+            now=T0 + timedelta(seconds=5),
+            snapshot=book(T0 + timedelta(seconds=5), bid=.48, offer=.56),
+            orders=(bid, offer))), [])
+        # A later flicker starts a new continuous dwell instead of inheriting
+        # the first one's clock.
+        self.assertEqual(reconciler.plan(frame(
+            now=T0 + timedelta(seconds=11),
+            snapshot=book(T0 + timedelta(seconds=11), bid=.48, offer=.55),
+            orders=(bid, offer))), [])
+
+    def test_more_aggressive_stale_entry_cancels_immediately(self):
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        # In offer-frame pricing, 0.55 is more aggressive than the newly
+        # desired 0.56 (the short-side cost is 1-price).
+        offer = WorkingOrder("offer-one", "offer", .55, Decimal("2"))
+
+        actions = reconciler.plan(frame(
+            snapshot=book(bid=.49, offer=.56), orders=(offer,)))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+        self.assertEqual(actions[0].reason, "resting_price_left_the_touch")
+
+    def test_multi_tick_stale_entry_cancels_immediately(self):
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        offer = WorkingOrder("offer-one", "offer", .57, Decimal("2"))
+
+        actions = reconciler.plan(frame(
+            snapshot=book(bid=.48, offer=.55), orders=(offer,)))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+
+    def test_quantity_mismatch_never_uses_touch_dwell(self):
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        wrong_size = WorkingOrder(
+            "offer-one", "offer", .56, Decimal("1"))
+
+        actions = reconciler.plan(frame(
+            snapshot=book(bid=.48, offer=.55), orders=(wrong_size,)))
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, ActionKind.CANCEL)
+
+    def test_touch_reprice_dwell_exposes_its_next_decision_deadline(self):
+        reconciler = DesiredStateReconciler(policy(
+            entry_touch_reprice_dwell_seconds=10))
+        offer = WorkingOrder("offer-one", "offer", .56, Decimal("2"))
+        reconciler.plan(frame(
+            snapshot=book(bid=.48, offer=.55), orders=(offer,)))
+
+        self.assertEqual(
+            reconciler.next_flat_decision_deadline(
+                "market-one", resting_sides=frozenset({"offer"})),
+            T0 + timedelta(seconds=10))
 
     def test_a_book_already_wider_than_two_cents_is_quoted_at_the_touch(self):
         """A 7c book stays where it is -- no stepping inside the touch."""

@@ -7170,7 +7170,7 @@ class CommissioningRunner:
                 resting_sides = frozenset(
                     order.side for order in self._working_orders(slug))
                 eligibility_at = (
-                    self.reconciler.next_reward_eligibility_deadline(
+                    self.reconciler.next_flat_decision_deadline(
                         slug, resting_sides=resting_sides))
                 if (eligibility_at is not None
                         and eligibility_at > self._now()):

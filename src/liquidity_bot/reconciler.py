@@ -103,6 +103,12 @@ class ReconcilerPolicy:
     # configured minimum; this only prevents a noisy book from placing the
     # same order again on the next good frame and cancelling it seconds later.
     entry_quality_recovery_seconds: float = 60.0
+    # A resting entry that is exactly one tick *less aggressive* than a new
+    # touch is still safe and can keep earning while a brief book flicker is
+    # confirmed. More-aggressive, multi-tick, wrong-size and exit orders never
+    # use this dwell. This targets measured touch oscillation without delaying
+    # risk removal or changing the desired touch price.
+    entry_touch_reprice_dwell_seconds: float = 10.0
     force_exit_before_start_seconds: float = 300.0
     # A fractional maker fill can leave only a few cents of maximum settlement
     # exposure while still retaining a whole reward slot. Give that position a
@@ -148,6 +154,9 @@ class ReconcilerPolicy:
         if (not math.isfinite(self.entry_quality_recovery_seconds)
                 or self.entry_quality_recovery_seconds < 0):
             raise ValueError("entry-quality recovery must be nonnegative")
+        if (not math.isfinite(self.entry_touch_reprice_dwell_seconds)
+                or self.entry_touch_reprice_dwell_seconds < 0):
+            raise ValueError("entry touch reprice dwell must be nonnegative")
 
 
 @dataclass(frozen=True)
@@ -328,6 +337,10 @@ class DesiredStateReconciler:
     _entry_quality_blocked: set[tuple[str, str]] = field(default_factory=set)
     _entry_quality_recovered_since: dict[tuple[str, str], datetime] = field(
         default_factory=dict)
+    # (order id, resting price, desired price, first continuous observation)
+    _entry_touch_mismatch: dict[
+        tuple[str, str], tuple[str, float, float, datetime]
+    ] = field(default_factory=dict)
     _hard_exit_cancel_at: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_cancel_order_id: dict[str, str] = field(default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
@@ -416,6 +429,58 @@ class DesiredStateReconciler:
         ]
         return min(deadlines, default=None)
 
+    def next_flat_decision_deadline(
+        self, market_slug: str, *, resting_sides: frozenset[str] | None = None,
+    ) -> datetime | None:
+        """Return the next strategy-owned deadline for a flat market.
+
+        Reward eligibility and safe one-tick touch confirmation are both
+        continuous-time rules. The runner needs their earliest deadline so a
+        quiet stream cannot leave a confirmed stale quote in place forever.
+        """
+
+        slug = str(market_slug)
+        deadlines: list[datetime] = []
+        reward_at = self.next_reward_eligibility_deadline(
+            slug, resting_sides=resting_sides)
+        if reward_at is not None:
+            deadlines.append(reward_at)
+        deadlines.extend(
+            observed_at + timedelta(
+                seconds=self.policy.entry_touch_reprice_dwell_seconds)
+            for (owner, side), (_, _, _, observed_at)
+            in self._entry_touch_mismatch.items()
+            if owner == slug
+            and (resting_sides is None or side in resting_sides)
+        )
+        return min(deadlines, default=None)
+
+    def _clear_entry_touch_mismatch(
+        self, market_slug: str, side: str | None = None,
+    ) -> None:
+        slug = str(market_slug)
+        for key in tuple(self._entry_touch_mismatch):
+            if key[0] == slug and (side is None or key[1] == side):
+                self._entry_touch_mismatch.pop(key, None)
+
+    def _may_confirm_less_aggressive_touch_move(
+        self, order: WorkingOrder, *, desired_price: float,
+        tick: float | None,
+    ) -> bool:
+        """Whether a stale flat entry may safely rest through a brief flicker."""
+
+        if (self.policy.entry_touch_reprice_dwell_seconds <= 0
+                or order.remaining_qty != self.policy.quote_size
+                or tick is None or not math.isfinite(tick) or tick <= 0):
+            return False
+        delta = desired_price - order.price
+        one_tick = abs(abs(delta) - tick) < 1e-9
+        less_aggressive = (
+            (order.side == "bid" and delta > 0)
+            or (order.side == "offer" and delta < 0)
+        )
+        return one_tick and less_aggressive
+
     def _clear_entry_quality_recovery(self, market_slug: str) -> None:
         slug = str(market_slug)
         self._entry_quality_blocked = {
@@ -490,6 +555,7 @@ class DesiredStateReconciler:
         if (frame.position == 0 and not frame.new_risk_allowed
                 and frame.working_orders):
             self._reset_entry_quality_recovery_clock(slug)
+            self._clear_entry_touch_mismatch(slug)
             return [PlanAction(
                 ActionKind.CANCEL, slug,
                 "side_no_longer_desired:account_new_risk_paused",
@@ -497,13 +563,16 @@ class DesiredStateReconciler:
                 for order in frame.working_orders]
         if not frame.state_known:
             self._reset_entry_quality_recovery_clock(slug)
+            self._clear_entry_touch_mismatch(slug)
             return self._critical(frame, "execution_state_unknown")
         if frame.book.slug != slug:
             self._reset_entry_quality_recovery_clock(slug)
+            self._clear_entry_touch_mismatch(slug)
             return self._critical(frame, "book_market_mismatch")
         age = (frame.now - frame.book_observed_at).total_seconds()
         if not frame.book_known or age < 0 or age > self.policy.max_book_age_seconds:
             self._reset_entry_quality_recovery_clock(slug)
+            self._clear_entry_touch_mismatch(slug)
             return self._critical(frame, "book_stale")
         if frame.position == 0:
             self._clear_hard_exit(slug)
@@ -512,6 +581,7 @@ class DesiredStateReconciler:
             # Nothing is wrong, there is just no work.
             if not frame.book.is_two_sided:
                 self._reset_entry_quality_recovery_clock(slug)
+                self._clear_entry_touch_mismatch(slug)
                 return []
             return self._flat_plan(frame)
         # Holding. Exiting a long needs only the bid side to sell into, a short
@@ -521,6 +591,7 @@ class DesiredStateReconciler:
         # flat-state quality recovery memory must not delay the later flat
         # owner after this position is reduced.
         self._clear_entry_quality_recovery(slug)
+        self._clear_entry_touch_mismatch(slug)
         return self._inventory_plan(frame)
 
     def _inventory_plan(self, frame: MarketFrame) -> list[PlanAction]:
@@ -957,12 +1028,30 @@ class DesiredStateReconciler:
             if order.side in kept_sides:
                 reason = "duplicate_order_on_side"
             elif order.side not in desired_sides:
+                self._clear_entry_touch_mismatch(slug, order.side)
                 cause = drop_cause.get(order.side)
                 reason = ("side_no_longer_desired:" + cause if cause
                           else "side_no_longer_desired")
             elif not self._matches(order, price=desired_price, qty=quote_size):
+                key = (slug, order.side)
+                if self._may_confirm_less_aggressive_touch_move(
+                        order, desired_price=desired_price, tick=tick):
+                    signature = (order.order_id, order.price, desired_price)
+                    remembered = self._entry_touch_mismatch.get(key)
+                    if remembered is None or remembered[:3] != signature:
+                        observed_at = frame.now
+                        self._entry_touch_mismatch[key] = (
+                            *signature, observed_at)
+                    else:
+                        observed_at = remembered[3]
+                    if (frame.now - observed_at).total_seconds() < (
+                            self.policy.entry_touch_reprice_dwell_seconds):
+                        kept_sides.add(order.side)
+                        continue
+                self._clear_entry_touch_mismatch(slug, order.side)
                 reason = "resting_price_left_the_touch"
             else:
+                self._clear_entry_touch_mismatch(slug, order.side)
                 kept_sides.add(order.side)
                 continue
             actions.append(PlanAction(

@@ -318,10 +318,24 @@ class RestReducerContinuityTests(IsolatedAsyncioTestCase):
         with patch.object(runner, "_refresh_execution_state_for_decision", AsyncMock()), \
                 patch.object(runner, "_refresh_equity_for_decision", AsyncMock()), \
                 patch.object(runner, "_decide_for_market", AsyncMock(return_value=(None, 0))), \
-                patch.object(runner.reconciler, "next_reward_eligibility_deadline",
+                patch.object(runner.reconciler, "next_flat_decision_deadline",
                              return_value=self.now + timedelta(seconds=100)):
             await runner._decision_sweep((held,))
         self.assertNotIn(held, runner._next_decision_at)
+
+    async def test_flat_strategy_deadline_is_scheduled_without_stream_traffic(self):
+        runner, _, _ = await self.build()
+        runner._bind_markets((runner.market_slug, "flat"))
+        deadline = self.now + timedelta(seconds=10)
+        with patch.object(runner, "_refresh_execution_state_for_decision", AsyncMock()), \
+                patch.object(runner, "_refresh_equity_for_decision", AsyncMock()), \
+                patch.object(runner, "_decide_for_market", AsyncMock(return_value=(None, 0))), \
+                patch.object(runner, "_position_priority_tokens", return_value={}), \
+                patch.object(runner.reconciler, "next_flat_decision_deadline",
+                             return_value=deadline):
+            await runner._decision_sweep(("flat",))
+
+        self.assertEqual(runner._next_decision_at["flat"], deadline)
 
     async def test_exhausted_owner_does_not_starve_other_positions(self):
         runner, _, held = await self.build()

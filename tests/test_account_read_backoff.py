@@ -26,6 +26,24 @@ class RateLimited(Exception):
 
 
 class AccountReadBackoffTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cash_429_without_retry_after_still_backs_off_shared_history(self):
+        class CloudflareLimit(Exception):
+            status_code = 429
+            response = SimpleNamespace(headers={'cf-ray': 'example-EWR'})
+        limiter = AsyncIntervalLimiter()
+        gateway = AsyncReadOnlyGateway(object(), limiter=limiter)
+        call = AsyncMock(side_effect=CloudflareLimit('<html>1015</html>'))
+        with self.assertRaises(AdapterError) as caught:
+            await gateway._call(CASH, call)
+        self.assertEqual(caught.exception.status_code, 429)
+        self.assertEqual(call.await_count, 1)
+        self.assertGreater(dict(limiter.telemetry().account_read_cooldowns)['activities'], 0)
+        with self.assertRaises(ApiAdmissionDeferred):
+            await gateway._call(HISTORY, call)
+        self.assertEqual(call.await_count, 1)
+        await limiter.wait(operation='cancel', request_kind='mutation')
+        self.assertEqual(limiter.telemetry().rate_limited_responses, 1)
+
     async def test_official_sdk_transport_errors_open_endpoint_backoff(self):
         for error in (APITimeoutError(), APIConnectionError()):
             with self.subTest(error=type(error).__name__):

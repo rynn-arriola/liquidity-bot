@@ -20,7 +20,7 @@ from .account_source import AccountSourceControl, AccountSourcePolicy
 from .account_observations import AccountSnapshotReader, PositionWatch, DeferredIdentityResolver
 from .account_snapshots import AsyncAccountSnapshotGateway
 from .errors import AdapterError, ApiAdmissionDeferred, RuntimeInvariantViolation
-from .execution_ledger import LedgerConflict, ACTIVE_ORDER_STATES
+from .execution_ledger import LedgerConflict, ACTIVE_ORDER_STATES, TERMINAL_ORDER_STATES
 from .venue_state import normalize_execution, normalize_order, normalize_position
 from .live_commissioning import CommissioningRunner
 from .live_session import PrivateStateGate
@@ -378,7 +378,7 @@ class AccountSourceRunner(RestFallbackRunner):
     def _hybrid_order_needs_immediate_proof(self, observation, now):
         """Wake REST for fills, malformed data or changed order facts.
 
-        Terminal/no-fill notifications still bar new POSTs until the ordinary
+        Flat terminal/no-fill notifications still bar new POSTs until the ordinary
         REST cadence proves the account, but do not each restart a whole-account
         proof. A synchronized expiry wave can therefore coalesce into the same
         proof REST mode would have performed. Malformed data remains urgent.
@@ -413,6 +413,20 @@ class AccountSourceRunner(RestFallbackRunner):
         if len(rows) != 1:
             return True
         row = rows[0]
+        # A GTD entry can become the remaining exact reducer after the other
+        # side fills. Its terminal event must wake proof now, not wait behind
+        # flat expiry batching. This schedules REST; it does not authorize an
+        # exit or infer a position from the private order notification.
+        if (order.status in TERMINAL_ORDER_STATES
+                and row["status"] in ACTIVE_ORDER_STATES
+                and self.ledger.position(order.market_slug) != 0
+                and not any(intent["operation"] == "CANCEL"
+                            and intent["exchange_order_id"] == order.exchange_order_id
+                            for intent in self.ledger.unresolved_intents(order.market_slug))):
+            # A bot-requested cancel already owns immediate scoped confirmation
+            # in _decide_for_market. Resetting its global poll clock would add
+            # a second full proof before the replacement reducer.
+            return True
         # Ignore only the expected state transition itself. Any changed
         # identity/economic field or cumulative quantity is anomalous enough to
         # demand immediate authoritative proof.
@@ -781,6 +795,7 @@ class AccountSourceRunner(RestFallbackRunner):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         failures = []
+        not_found = set()
         throttle = None
         # Workers only read; one synchronous ordered projector owns the ledger.
         for exchange_id, result in zip(exchange_ids, results):
@@ -790,6 +805,8 @@ class AccountSourceRunner(RestFallbackRunner):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+                if isinstance(result, AdapterError) and result.status_code == 404:
+                    not_found.add(exchange_id)
                 if read_backoff.is_backpressure(result):
                     throttle = result
             else:
@@ -798,6 +815,31 @@ class AccountSourceRunner(RestFallbackRunner):
                 order = replace(order, client_order_id=(resolved.get(exchange_id)
                                                        or order.client_order_id))
                 self.executor.apply_order_state(exchange_id, order, observed_at=now)
+        if self.account_state_mode == "hybrid" and self.private_stream.pending:
+            # All read workers have joined. Apply the held/queued stream prefix
+            # on this serial owner before declaring a failed lookup unresolved.
+            # Only a newly applied positive terminal transition can supersede
+            # a 404. Auth/transport/schema failures keep their original meaning.
+            before = {row["exchange_order_id"]: row["status"] for row in
+                      self.ledger.working_orders(owned_only=True)}
+            await self._drain_private_events()
+            proved = set()
+            for exchange_id in not_found:
+                rows = self.ledger.query(
+                    "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+                    (exchange_id,))
+                if len(rows) != 1 or exchange_id not in before:
+                    continue
+                row = rows[0]
+                if (row["status"] in TERMINAL_ORDER_STATES
+                        and not row["unknown_reason"]
+                        and not str(row["client_order_id"]).startswith("venue:")
+                        and row["market_slug"] in self.active_slugs
+                        and datetime.fromisoformat(row["received_at"]) >= now
+                        and not self.ledger.unresolved_intents(row["market_slug"])
+                        and not self.ledger.absent_orders(row["market_slug"])):
+                    proved.add(exchange_id)
+            failures = [(key, detail) for key, detail in failures if key not in proved]
         if throttle is not None:
             # Join every worker and preserve successful positive facts first.
             # Do not erase typed endpoint backpressure into a per-owner string.

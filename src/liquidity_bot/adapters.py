@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - exercised only by native Windows
     fcntl = None
 
 from .errors import AdapterError, ApiAdmissionDeferred, EmptyBookError
+from .error_summary import diagnostic_id, error_summary
 from .api_diagnostics import log_rate_limit, response_ids
 from . import read_backoff
 from .models import (
@@ -1589,7 +1590,7 @@ class AsyncReadOnlyGateway:
         for key in ("code", "errorCode", "error_code"):
             value = body.get(key)
             if value not in (None, ""):
-                return str(value)
+                return diagnostic_id(value)
         return None
 
     @classmethod
@@ -1598,12 +1599,12 @@ class AsyncReadOnlyGateway:
         for wanted in ("x-trace-id", "trace-id", "x-request-id", "cf-ray"):
             for name, value in headers.items():
                 if str(name).lower() == wanted and value not in (None, ""):
-                    return str(value)
+                    return diagnostic_id(value)
         body = getattr(exc, "body", None)
         if isinstance(body, Mapping):
             for key in ("traceId", "trace_id", "requestId", "request_id"):
                 if body.get(key) not in (None, ""):
-                    return str(body[key])
+                    return diagnostic_id(body[key])
         return None
 
     @classmethod
@@ -1619,7 +1620,7 @@ class AsyncReadOnlyGateway:
             detail.append(f"trace={trace}")
         suffix = f" ({', '.join(detail)})" if detail else ""
         return AdapterError(
-            f"{operation} failed: {type(exc).__name__}: {exc}{suffix}",
+            f"{operation} failed: {type(exc).__name__}: {error_summary(exc)}{suffix}",
             operation=operation,
             status_code=status,
             error_code=code,

@@ -672,6 +672,11 @@ These are implementation requirements, not suggestions.
     until that selection's original120-second expiry; it never authorizes
     entry or renews a clock. Scheduled full discovery remains available.
     The urgent path may not accelerate invariant 82's economic-idle eviction.
+    A complete selection awaiting a failed/deferred top-up account or bind
+    check may also enter that existing120-second fresh revalidation path on
+    retry, even when the retry deadline is labeled a normal scan. Only that
+    exact completed selection is retained; partial scans cannot seed it, its
+    original clock never renews, and a finished top-up clears the retry token.
     A failed attempt clears only the request it consumed and establishes one
     retry-not-before deadline honored by every ordinary and event-driven top-up
     trigger; a newer post-flat transition must survive. Timing
@@ -1153,6 +1158,15 @@ These are implementation requirements, not suggestions.
     balance/history and every risk/exit rule remain. Mode choice is explicit;
     missing private messages use REST without changing the selected mode or
     canceling healthy quotes solely because the optional listener failed.
+    An unsolicited terminal transition of a working order in a held market
+    wakes REST immediately; flat expirations retain ordinary batching. A
+    bot-requested cancel retains its existing immediate scoped confirmation,
+    without forcing a redundant global poll. After exact-read workers join,
+    the serial owner may apply queued private evidence before classifying a
+    404: only a newly applied terminal transition for that exact owned ID,
+    with no remaining owner ambiguity, supersedes that failed lookup.
+    Complete account/position/history proof is still mandatory; no absence,
+    auth failure, schema failure or transport error becomes terminal evidence.
     Read-only catalog work classifies queued events before yielding: an exact
     unchanged ACK or optional transport gap cannot alone discard discovery.
     Previously applied uncertainty must yield even with an empty event queue.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from . import read_backoff
 from .api_diagnostics import api_workflow
+from .error_summary import error_summary
 
 import argparse
 import asyncio
@@ -651,6 +652,7 @@ class CommissioningRunner:
             self._mark_market_dirty(slug)
         self._market_selection: RewardMarketSelection | None = None
         self._market_selection_observed_at: datetime | None = None
+        self._top_up_retry_selection: RewardMarketSelection | None = None
         from .selection_provenance import SelectionProvenance
         self._selection_provenance = SelectionProvenance()
         self.balance: AccountBalance | None = None
@@ -8117,6 +8119,7 @@ class CommissioningRunner:
             secret = str(getattr(self.client, name, "") or "")
             if secret:
                 detail = detail.replace(secret, "<redacted>")
+        detail = error_summary(detail)
         print(
             f"[runtime-recovery] at={now.isoformat()} component={component} "
             f"attempt={attempt} error={type(exc).__name__}: {detail}",
@@ -8779,6 +8782,13 @@ class CommissioningRunner:
             return (), "unavailable", None
         observed = self._market_selection_observed_at
         cached = self._market_selection
+        # A completed scan may outlive a deferred post-scan account/bind proof.
+        # The run loop then labels its retry "normal due". Preserve just that
+        # completed selection for the existing bounded fresh revalidation path;
+        # an interrupted/partial catalog never installs this identity token.
+        retry_completed = (cached is not None and cached is getattr(
+            self, "_top_up_retry_selection", None))
+        allow_cached_selection = allow_cached_selection or retry_completed
         if allow_cached_selection and cached is not None and observed is not None:
             cache_age = (now - observed).total_seconds()
             if 0 <= cache_age <= POST_FLAT_SELECTION_CACHE_SECONDS:
@@ -8853,6 +8863,7 @@ class CommissioningRunner:
         self._log_selection_scan(selection)
         self._market_selection = selection
         self._market_selection_observed_at = self._now()
+        self._top_up_retry_selection = selection
         return (
             tuple(item.market.slug for item in selection.top_viable(
                 self.config.max_markets, exclude=exclude)),
@@ -11425,6 +11436,7 @@ class CommissioningRunner:
                             # but it cannot pull a merely uneconomic owner early.
                             allow_economic_idle=normal_scan_due,
                         )
+                        self._top_up_retry_selection = None
                         self._clear_incremental_top_up_requests(
                             consumed_post_flat_at)
                         self._top_up_retry_not_before = datetime.min.replace(

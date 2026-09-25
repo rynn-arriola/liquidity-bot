@@ -12,6 +12,74 @@ from liquidity_bot.private_stream import PrivateEvent, PrivateEventKind
 
 
 class RefillSchedulingTests(IsolatedAsyncioTestCase):
+    async def test_completed_scan_retry_revalidates_instead_of_repeating_catalog(self):
+        runner = await self.build()
+        selection = fixtures.multi_selection('spare')
+        runner.reward_selector.select = AsyncMock(return_value=selection)
+        runner.reward_selector.revalidate_viable = AsyncMock(return_value=selection.opportunities)
+        first = await runner._replacement_candidates_for_top_up(
+            runner._now(), exclude=set(), wanted=1, allow_cached_selection=False)
+        self.assertEqual(first[1], 'fresh_scan')
+        # Simulate later top-up account proof yielding. The retry is marked as
+        # a normal due scan by the run loop, but the catalog already completed.
+        second = await runner._replacement_candidates_for_top_up(
+            runner._now(), exclude=set(), wanted=1, allow_cached_selection=False)
+        self.assertEqual(second[1], 'cached_revalidated')
+        self.assertEqual(second[0], ('spare',))
+        runner.reward_selector.select.assert_awaited_once()
+        runner.reward_selector.revalidate_viable.assert_awaited_once()
+
+    async def test_partial_scan_cannot_seed_retry_and_expired_retry_requires_scan(self):
+        runner = await self.build()
+        original = runner._market_selection
+        runner.reward_selector.select = AsyncMock(side_effect=ApiAdmissionDeferred(
+            'account changed', error_code='LOCAL_CATALOG_ACCOUNT_CHANGED'))
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner._replacement_candidates_for_top_up(
+                runner._now(), exclude=set(), wanted=1, allow_cached_selection=False)
+        self.assertIsNone(runner._top_up_retry_selection)
+        self.assertIs(runner._market_selection, original)
+        selection = fixtures.multi_selection('spare')
+        runner._market_selection = runner._top_up_retry_selection = selection
+        runner._market_selection_observed_at = runner._now() - timedelta(seconds=121)
+        runner.reward_selector.select = AsyncMock(return_value=selection)
+        runner.reward_selector.revalidate_viable = AsyncMock()
+        _, source, _ = await runner._replacement_candidates_for_top_up(
+            runner._now(), exclude=set(), wanted=1, allow_cached_selection=False)
+        self.assertEqual(source, 'fresh_scan')
+        runner.reward_selector.revalidate_viable.assert_not_awaited()
+
+    async def test_completed_retry_never_accepts_failed_revalidation_or_renews_clock(self):
+        runner = await self.build()
+        selection = fixtures.multi_selection('spare')
+        runner._market_selection = runner._top_up_retry_selection = selection
+        observed = runner._now()
+        runner._market_selection_observed_at = observed
+        runner.reward_selector.select = AsyncMock()
+        runner.reward_selector.revalidate_viable = AsyncMock(side_effect=ApiAdmissionDeferred(
+            'cooldown', error_code='LOCAL_ACCOUNT_READ_COOLDOWN'))
+        with self.assertRaises(ApiAdmissionDeferred):
+            await runner._replacement_candidates_for_top_up(
+                runner._now(), exclude=set(), wanted=1, allow_cached_selection=False)
+        runner.reward_selector.select.assert_not_awaited()
+        self.assertEqual(runner._market_selection_observed_at, observed)
+
+    async def test_finished_top_up_clears_retry_selection(self):
+        fixture = fixtures.LiveCommissioningTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        runner, _, _ = fixture.build_runner()
+        async def top_up(*args, **kwargs):
+            runner._top_up_retry_selection = fixtures.multi_selection('spare')
+            runner.request_stop('test_done')
+            return False
+        with patch.object(runner, '_incremental_top_up_due', return_value=True), \
+                patch.object(runner, '_decision_sweep', new=AsyncMock(return_value=None)), \
+                patch.object(runner, '_top_up_active_markets', side_effect=top_up):
+            async with asyncio.timeout(5):
+                await runner.run()
+        self.assertIsNone(runner._top_up_retry_selection)
+
     async def build(self):
         fixture = fixtures.TopUpSafetyTests()
         self.addCleanup(fixture.doCleanups)

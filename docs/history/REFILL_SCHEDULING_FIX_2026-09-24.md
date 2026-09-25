@@ -1,5 +1,44 @@
 # September24 refill scheduling and per-429 flow provenance
 
+## Activated restart and low-order review — September25 UTC / September24 ET
+
+The operator subsequently authorized "Ok restart". Stopped authenticated gate
+00:06:15Z and final gate00:09:18Z proved zero venue orders/positions and zero
+unresolved/unknown/working ledger state. Reviewed source`ef5a73f3d` was pushed,
+deployed with247 matching inputs and the existing2250-test production-environment
+evidence; installed17 focused new tests and21 catalog-watch tests passed.
+Supervisor4354/runner4368 started about00:09:20Z, auto15/32 hybrid. Runtime HEAD
+and DEPLOYED_COMMIT match. Window18–00ET logs hard30/cap30, matched-fill basis,
+open orders/positions excluded. No business filters/configuration changed.
+
+The old run's00:05:30Z fresh scan already found11 viable markets/19 sides from
+16 books, while its retained scope held20 prior owners. Restart00:09:48Z found
+11 viable/18 sides from15 books;00:10:33Z found11/17. By00:16:56Z it found13/24
+and committed two added owners. Thus raw retained-owner counts and fresh
+selection counts are different; the initial explanation that missing markets
+had simply expired was too broad. Existing stricter fresh-entry gates versus
+retention can reduce scope across restart. Exact per-market causes for every
+omitted owner remain unavailable: full discovery capture rejects catalogs over
+20000 rows, while these catalogs contain28618–29051. Scan/book measurements
+remain available. This diagnostic gap is not a trading filter or restart change.
+
+The Fomin/Rehotun trade sequence was initially misread from intermittent snapshots.
+Positive fills show BUY15 at0.48 (00:11:22), SELL15 at0.49 (00:12:37), flat proof,
+new two-sided entries00:12:42, SELL15 at0.50 (00:13:44), then BUY15 at0.47
+(00:14:31). These are two completed cycles, not duplicate exit overselling.
+A transient hybrid quantity observation -30 corrected to REST -15; no oversized
+mutation was seen in this sequence. Do not conflate that observation with venue
+exposure or claim it establishes all hybrid edge cases safe.
+
+Authenticated00:19:13Z proved22 venue orders:21 flat entries plus one exact
+SELL12.42 reducer for the sole+12.42 position, zero unresolved/unknown state.
+Ledger21 working versus venue22 is a non-atomic live observation, not equality
+proof. The earlier fresh in-flight intent cleared. Runner remained healthy for
+over nine minutes. All completed API windows through00:19Z had zero429, at
+2.100–3.380 requests/s, with individual-order404s still present. No matched-load
+speedup or permanent zero429 claim. No further trading code or restart was
+performed during the double-check; local analysis and handoff only.
+
 ## Authority and deployment boundary
 
 Operator: "Ok fix it" and explicitly requests tracking where each429 comes

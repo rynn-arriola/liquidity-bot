@@ -286,3 +286,38 @@ measurable difference despite the 15-class MRO. Parity/sync tooling globs all
 modules are included automatically. Full WSL suite: 2,296 pass. Intentional
 behavior changes are only those in the operator-authorized September 25
 release; no business rule, risk limit or timing value changed.
+
+## End-to-end flow review of items 1-5
+
+Launch: `supervise_commissioning.sh` runs `python -m liquidity_bot.live_commissioning`,
+so the module loads once as `__main__` (only `main`/`_run`) and again as
+`liquidity_bot.live_commissioning` when `_run` imports `AccountSourceRunner`.
+That double load predates this work; `main`/`_run` reference no moved or
+`runner_shared` name, and the executing runner's methods now live in modules
+loaded once. Replaying the exact launch path with `--help` (no credentials,
+lock or venue access) on the production interpreter: live and new both exit 0
+with identical CLI options, and the hybrid runner's MRO reaches the normal
+module's `CommissioningRunner`.
+
+Item 1 through failure/recovery: every full REST proof first calls
+`gate.on_reconciliation_conflict()` and only a success sets
+`_rest_poll_completed_at`, so after a 401/429 read failure the next periodic
+pass performs a real proof and `outcome=recovered` means a successful proof.
+Nuance: a failure raised before reads start (for example private-event drain)
+leaves the prior proof fresh, so the next pass may skip as "not due" and still
+log recovered. Volume is at most one line per 10 s pass; `CancelledError`
+still propagates. `tv_dashboard` classifies activity by known tags and ignores
+`[periodic-reconcile]`; during a very long outage these lines can occupy part
+of its 128 KB log-tail window.
+
+Item 3 through callers: `retrieve` serves absent-order repair and exact order
+reads with identical classification for real SDK errors. Edge noted: the
+retained text fallback also matches local names such as `FileNotFoundError`;
+in `retrieve` that was already true, and in the hybrid 404 path it only adds a
+candidate that can be cleared by fresh positive terminal proof under the
+unchanged strict conditions, never by the error itself.
+
+Rollback: none of items 1-5 or the September 25 release changes the ledger
+schema; the documented rollback uses a separate worktree or revert commits and
+server hash verification, so the added `runner_*.py` files are removed
+cleanly and older code can still open the ledger.

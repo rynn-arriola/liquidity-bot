@@ -76,3 +76,46 @@ retained the existing safety/risk/strategy boundaries described above.
   failure/backoff telemetry for acceptance. Do not induce fills/errors, promise
   a REST saving percentage or claim all429s eliminated.300 coverage remains
   paused. No production restart was performed for this work.
+
+## Command1 activation — September25
+
+The operator subsequently authorized Command1. The old supervisor was stopped
+and runner received SIGTERM. During shutdown an unowned order temporarily
+blocked reconciliation; the operator confirmed manual position closure. The
+venue was flat at13:39:30Z, but the ledger still showed one unowned working
+order and two positions, so deployment was withheld. The existing runner then
+reconciled normally and exited with `flat=true` at13:41:16Z. A separate exact
+read at13:41:26Z confirmed the imported order was fully FILLED. No force-kill,
+manual ledger repair or safety bypass was used; no claim that this release
+fixed the old shutdown incident.
+
+Independent authenticated gates at13:42:05Z and13:43:32Z each proved zero venue
+orders/positions and zero unresolved intents, unknown orders, working ledger
+orders and ledger positions. Clean WSL main fast-forwarded from`eb35283d5` to
+pushed `ad09519e4f7ca31fac8d56cc5eee33008d8eb3c3`. All247 relevant staged,
+Windows, committed and installed input hashes matched after normal line-ending
+normalization; interpreter, dependencies and installed import/CLI smoke check
+passed. Reused the exact completed2,274-test result; no redundant full rerun.
+The pre-deployment parity recovery copy was integrity/hash verified at13:39:11Z.
+
+`DEPLOYED_COMMIT` now names`ad09519e4`. Normal `auto 15 32 hybrid` launch started
+supervisor198478/runner198496 at13:43:33Z. Public-WS selection supplied all20
+candidate books with zero REST fallbacks. Live13:44:08Z risk retained matched
+loss$7.5404/hard$30/cap25 in the06:00–12:00ET window, held=false; positions and
+open orders are excluded. The approved ratchet, not a new rule, selects25.
+Private notifications are arriving, and sanitized local admission deferrals
+are logged with their cause. First completed API window:238 attempts/98.5s,
+2.416rps, zero failures/429/cooldown. Natural sustained acceptance follows;
+rare fault-retry timing is not proved merely by clean startup.
+
+At13:48:28Z authenticated acceptance found22 flat entry orders on16 markets,
+zero positions, unresolved intents or unknown orders. Ledger working count24
+was read afterward while the account moved, so no atomic count-parity claim.
+The four completed API windows contained616 attempts over280.7s (2.195rps),
+zero failures/429s and zero cooldown. Last two steady windows were1.598/1.843rps;
+this is startup acceptance, not a matched before/after savings comparison.
+Latest decision-latency p95 was1.767s; startup had48.581s, preserving the
+separate refill/scan concern. No new runtime recovery/error was logged.
+Private notifications arrived with no gap; local admission-cause telemetry
+was exercised. No position/fill occurred, so live reducer-retry and network-
+fault behavior remain natural follow-ups, not fully observed acceptance.

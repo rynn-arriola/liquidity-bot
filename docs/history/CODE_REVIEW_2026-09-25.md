@@ -53,7 +53,19 @@ resolves to the same object/value; runner and REST/hybrid subclasses resolve
 the moved names to the same functions. No test changes. Full WSL suite: 2,290
 tests pass. Not deployed.
 
-Remaining candidates, in order of isolation: earnings/reward reporting
-helpers, then scan/top-up scheduling (timing-sensitive: move only, never retune),
+**Slice 3 — earnings refresh (`runner_earnings.EarningsReportingMixin`).**
+Moved `_refresh_due_earnings` and `_refresh_earnings` (60 lines) including the
+`api_workflow("reward_refresh")` wrapper, whose only label is that static
+string. Proof: 2 moved and 262 remaining method ASTs identical; no
+module-level removals; globals resolve to the same objects. Deliberately NOT
+moved: `_publish_entry_pause_transition` (sets the entry-cancel request and
+dirties markets), `_can_defer_cash_report`/`_remember_account_report`/
+`_reporting_equity` (feed the cash-report entry gate), and the dashboard
+`_publish_*_snapshot` writers (tests redirect their output by patching
+`live_commissioning.*_CACHE_PATH`; moving them could let tests write the real
+dashboard files). No test changes. Full WSL suite: 2,290 tests pass. Not
+deployed.
+
+Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

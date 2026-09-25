@@ -66,6 +66,26 @@ dirties markets), `_can_defer_cash_report`/`_remember_account_report`/
 dashboard files). No test changes. Full WSL suite: 2,290 tests pass. Not
 deployed.
 
+Operator direction (September 25, later): finish slices 4-11 without pausing;
+Claude reviews each slice itself before committing and records the review.
+
+**Slice 4 — scan/top-up scheduling (`runner_top_up.TopUpSchedulingMixin`).**
+Moved 19 methods (650 lines): `_select_reward_market`, the `_top_up_*`,
+`_selection_*`, refill/post-flat request helpers and `_safe_to_scan`. The one
+constant also used by remaining code, `POST_FLAT_SELECTION_CACHE_SECONDS =
+120.0` with its comment, moved to new `runner_shared.py`; `live_commissioning`
+imports the identical object. Proof: 19 moved and 243 remaining method ASTs
+identical; globals resolve to the same objects/values; the hybrid
+`AccountSourceRunner._replacement_candidates_for_top_up` override still takes
+priority and its `super()` reaches the moved code. No test changes. Full WSL
+suite: 2,290 pass. Self-review: no timing value changed; the 9 moved `print`
+sites are not under any `live_commissioning.print` patch (suite unchanged);
+tests patching `live_commissioning.time.process_time` patch the shared `time`
+module and still apply. Follow-up (not done, would change measurement code):
+`market_quality_store` provenance hashes list `live_commissioning.py` but not
+the new mixin files, so its archive fingerprint no longer covers moved
+selection code.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

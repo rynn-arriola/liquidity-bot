@@ -6,6 +6,8 @@ runner and its mixins read the identical objects without a circular import.
 
 from __future__ import annotations
 
+from .commissioning import CommissioningUnavailable
+
 # A recent full-universe selection can seed an urgent post-flat refill, but it
 # is never trusted directly. Within this small window the runner bulk-refreshes
 # metadata/incentives and re-reads every candidate book; older evidence falls
@@ -44,3 +46,28 @@ DECISION_STATE_REFRESH_MARGIN_SECONDS = 5.0
 # snapshot after a venue outage while keeping recovery in-process.
 ORPHAN_PLACE_CLEAR_PROOFS = 3
 ORPHAN_PLACE_CLEAR_MIN_SECONDS = 10.0
+
+# Ordinary reconnects are bounded so a local/schema defect cannot hold a live
+# process dormant forever. Positively classified venue transport/5xx outages
+# cross into the maintenance coordinator below instead. Neither path infers
+# flatness; shutdown remains the only authority for that proof.
+MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS = 12
+MAX_MARKET_STREAM_RECOVERY_ATTEMPTS = 12
+MAX_BOUND_STREAM_RECOVERY_ATTEMPTS = 12
+
+
+class _OrphanPlaceEvidencePending(CommissioningUnavailable):
+    """A no-id PLACE remains dormant while repeated venue proof accumulates."""
+
+
+class _CancellationEvidencePending(CommissioningUnavailable):
+    """A requested cancel still lacks authoritative terminal order proof."""
+
+# A venue outage is different from an unsafe account.  After the ordinary
+# bounded reconnect has proved that the failure persists, keep this process
+# dormant and probe only complete authenticated reads.  Three passes one
+# minute apart means "back" is sustained for about two minutes, rather than a
+# single lucky 200 during a rolling maintenance restart.
+MAINTENANCE_FAILURE_THRESHOLD = 3
+MAINTENANCE_STABLE_READS = 3
+MAINTENANCE_POLL_SECONDS = 60.0

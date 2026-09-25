@@ -135,6 +135,25 @@ verifier's chain check was corrected to walk past both subclass layers
 (first version wrongly required a single hop). No test changes. Full WSL
 suite: 2,290 pass.
 
+**Slice 8 — stream recovery (`runner_streams.StreamRecoveryMixin`).**
+Moved 16 methods (940 lines): private/market/bound stream recovery, stream
+rebind/open/settle/consume, bound-recovery position service/preemption,
+startup-recovery scoping, transient-error classification (`@classmethod`),
+venue-outage wait, strategy-state recovery and recovery delay. Moved to
+`runner_shared.py` with comments, unbroken: the three
+`MAX_*_STREAM_RECOVERY_ATTEMPTS = 12`, `_OrphanPlaceEvidencePending`,
+`_CancellationEvidencePending` (same `CommissioningUnavailable` base and
+docstrings, re-exported by `live_commissioning`) and the maintenance-probe
+group (3/3/60.0). Proof: 16 moved and 182 remaining method ASTs identical;
+removed names reachable with original values; both exception classes are
+single objects shared by all catch sites; four overrides
+(`AccountSourceRunner._consume_ready_stream_tasks`, three `RestFallbackRunner`
+bound-recovery hooks) keep priority and chain to the moved code. The verifier
+now compares raw class-dict entries so classmethods compare correctly. No test
+changes. Full WSL suite: 2,290 pass. Self-review note: those two exception
+classes' `__module__` is now `liquidity_bot.runner_shared`; nothing reads it,
+and it would only appear in an uncaught traceback's text.
+
 Remaining candidates, in order of isolation: scan/top-up scheduling (timing-sensitive: move only, never retune),
 then stream recovery, then the core loop/decision/shutdown only if the risk is
 justified. Each needs the same proof before commit.

@@ -2,12 +2,11 @@
 
 ## Outcome
 
-The reviewed quality-recovery and touch-churn repairs are pushed and staged in
-the laptop WSL checkout at `ecea13b2f9eb249d14630026a810b2794a173cfb`.
-They are **not loaded**: the operator explicitly required deployment without a
-restart. Supervisor `4354` / runner `4368`, started September 25 at 00:09:20Z,
-remained alive on loaded marker
-`ef5a73f3d9a2afdf05962d9df1a79ec0cde70dce` throughout deployment.
+The reviewed quality-recovery and touch-churn repairs were pushed at
+`ecea13b2f9eb249d14630026a810b2794a173cfb`, documented in release head
+`a4703cbe8f42f70fb4b5bac2dde93628e4c28e20`, and loaded by Command1 on the
+laptop WSL runtime. Supervisor `37031` / runner `37045` started September 25 at
+03:33:38Z in size 15 / 32-slot hybrid mode.
 
 ## Incident and scope
 
@@ -51,10 +50,21 @@ The earlier 60-second recovery after a 70%-quality cancellation is retained.
 - WSL tracked files are clean; only the existing untracked `DEPLOYED_COMMIT`
   marker and editable-install metadata remain.
 
-## Activation boundary
+## Activation and live acceptance
 
-No process stop, account mutation, marker change, or restart was performed.
-The fixes will load only on a later explicitly authorized restart after the
-ordinary account/ownership gates. Natural acceptance should compare
-`resting_price_left_the_touch` cycle frequency and resting continuity; do not
-induce book movement, fills, or faults.
+The old runner stopped cleanly with terminal `flat=true`. Authenticated gates
+at 03:31:13Z and 03:33:38Z each proved zero venue orders, positions, unresolved
+intents, unknown orders, working ledger orders and ledger positions. Windows,
+GitHub and WSL were all at `a4703cbe8`; the inactive peer was offline and left
+pending, while parity created a hash-verified private ledger recovery copy.
+
+The fresh scan found 17 viable markets and the bot built to 28 venue orders.
+After natural fills, authenticated 03:41:18Z state showed 24 orders across 16
+markets and four positions, each covered by an exact reducer. Unresolved and
+unknown counts were zero and the ledger agreed. The current risk row remained
+loss $0 / hard $30 / cap 30, based on matched fills and excluding open orders
+and positions. Five completed API windows ran from 2.309 to 3.359 requests per
+second with zero 429s or cooldown; the only failures were normal transient
+individual-order 404 publication reads. No filter, ranking, size, risk, entry,
+exit or account-authority rule changed. Natural touch-cycle and quality-recovery
+comparison remains pending; do not induce book movement, fills, or faults.

@@ -41,6 +41,45 @@ performed during the double-check; local analysis and handoff only.
 
 ## Authority and deployment boundary
 
+### Subsequent read-only scan-to-order trace,00:24–00:31Z
+
+At00:24:57Z discovery returned28481 raw nested market records; metadata checks
+retained727 executable markets,653 had reward records,15 reached detailed book
+evaluation and12 passed at least one side (20 viable sides). The detailed rows
+were day_of. Three whole-market refusals were both-side entry-quality, one-cent
+spread and extreme price; four other sides failed entry quality. The precise
+split of638 pre-book exclusions is not archived because of the full-catalog
+measurement bound described above. Supported reward period, active time/horizon
+and catalog spread checks all precede books; the unchanged100-book budget was
+not binding. Missing catalog BBO is allowed to reach book evaluation.
+
+The00:25:03 binding retained13 owners and added Kim/Perov, yielding14 assigned
+markets. Scan12 versus scope14 is explained by retained owners. Authenticated
+00:29:53Z returned16 orders, all within that scope:13 flat entry orders across
+eight markets plus three exact reducers for positions -15,+6,-15. No unknown
+orders/unresolved intents. Three assigned owners had no order: Sir/Ur and
+Rak/Neb approached00:30 kickoff (both later retired00:30:20), while Fomin/Rehotun
+had flattened00:29:32 and resumed two orders by00:30:14. Later00:29:58 scan had
+10 viable candidates; retained scope reduced14→12 at the lifecycle retirement.
+These timestamps are sequential observations, not an atomic cross-API snapshot.
+
+187 durable entry quote observations since startup all contain retained-value
+ratios>=0.70 (minimum0.765605639344262). Existing working flat entries joined to
+their quote observations. Market ranking/side eligibility is re-evaluated with
+fresh data before placement; a side refused during scan may qualify later.
+Mencheyuhwan/Onychofunkoz bid shows repeated quality-based cancellation/re-entry
+around00:27–00:30; this confirms churn but does not establish a new defect or
+authorize changing the70% rule. Investigate its score inputs/threshold crossings
+and resting-time cost using existing records before proposing a business change.
+
+The optional entry-admission archive also tries to read clientOrderId/side from
+the wire payload, which contains neither field (side is encoded in intent;
+client identity remains in the durable ledger). These diagnostic fields are
+null, preventing exact admission-record/order joins through those fields.
+Durable order/intent/quote joins still work. A future diagnostic-only repair
+should propagate local identity separately without modifying the API payload.
+No trading code, config, venue mutation or restart was performed for this trace.
+
 Operator: "Ok fix it" and explicitly requests tracking where each429 comes
 from and which flow triggered it. Prepared only; no deployment/restart was
 authorized or performed. Supervisor405/runner419 remain on`7f68c06e9`, size15/32

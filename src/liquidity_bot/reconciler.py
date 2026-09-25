@@ -97,6 +97,12 @@ class ReconcilerPolicy:
     # seconds later, several at the identical price. A side that is genuinely
     # dead stays ineligible and still clears this dwell.
     reward_eligibility_dwell_seconds: float = 90.0
+    # A side that was cancelled by the enabled entry-quality gate must remain
+    # above the threshold before it may be re-entered.  The gate still pulls a
+    # resting order immediately when stressed retained value falls below the
+    # configured minimum; this only prevents a noisy book from placing the
+    # same order again on the next good frame and cancelling it seconds later.
+    entry_quality_recovery_seconds: float = 60.0
     force_exit_before_start_seconds: float = 300.0
     # A fractional maker fill can leave only a few cents of maximum settlement
     # exposure while still retaining a whole reward slot. Give that position a
@@ -139,6 +145,9 @@ class ReconcilerPolicy:
         if (not math.isfinite(self.small_residual_timeout_seconds)
                 or self.small_residual_timeout_seconds <= 0):
             raise ValueError("small residual timeout must be positive")
+        if (not math.isfinite(self.entry_quality_recovery_seconds)
+                or self.entry_quality_recovery_seconds < 0):
+            raise ValueError("entry-quality recovery must be nonnegative")
 
 
 @dataclass(frozen=True)
@@ -316,6 +325,9 @@ class DesiredStateReconciler:
     policy: ReconcilerPolicy
     _ineligible_since: dict[tuple[str, str], datetime] = field(
         default_factory=dict)
+    _entry_quality_blocked: set[tuple[str, str]] = field(default_factory=set)
+    _entry_quality_recovered_since: dict[tuple[str, str], datetime] = field(
+        default_factory=dict)
     _hard_exit_cancel_at: dict[str, datetime] = field(default_factory=dict)
     _hard_exit_cancel_order_id: dict[str, str] = field(default_factory=dict)
     _hard_exit_sent: dict[str, datetime] = field(default_factory=dict)
@@ -391,7 +403,8 @@ class DesiredStateReconciler:
         The eligibility dwell is owned here, beside the exact timestamps used
         by ``_flat_plan``. Exposing its deadline lets the runner skip unchanged
         flat markets without duplicating or changing this strategy rule in the
-        scheduler.
+        scheduler. Entry-quality recovery is deliberately not returned here:
+        each fresh book must remain able to reset its continuous-health clock.
         """
 
         deadlines = [
@@ -402,6 +415,18 @@ class DesiredStateReconciler:
             and (resting_sides is None or side in resting_sides)
         ]
         return min(deadlines, default=None)
+
+    def _clear_entry_quality_recovery(self, market_slug: str) -> None:
+        slug = str(market_slug)
+        self._entry_quality_blocked = {
+            key for key in self._entry_quality_blocked if key[0] != slug}
+        self._reset_entry_quality_recovery_clock(slug)
+
+    def _reset_entry_quality_recovery_clock(self, market_slug: str) -> None:
+        slug = str(market_slug)
+        for key in tuple(self._entry_quality_recovered_since):
+            if key[0] == slug:
+                self._entry_quality_recovered_since.pop(key, None)
 
     def note_hard_exit_cancel_submitted(
         self, market_slug: str, order_id: str, *, submitted_at: datetime,
@@ -464,17 +489,21 @@ class DesiredStateReconciler:
         # these through durable intents and exact terminal reconciliation.
         if (frame.position == 0 and not frame.new_risk_allowed
                 and frame.working_orders):
+            self._reset_entry_quality_recovery_clock(slug)
             return [PlanAction(
                 ActionKind.CANCEL, slug,
                 "side_no_longer_desired:account_new_risk_paused",
                 side=order.side, order_id=order.order_id)
                 for order in frame.working_orders]
         if not frame.state_known:
+            self._reset_entry_quality_recovery_clock(slug)
             return self._critical(frame, "execution_state_unknown")
         if frame.book.slug != slug:
+            self._reset_entry_quality_recovery_clock(slug)
             return self._critical(frame, "book_market_mismatch")
         age = (frame.now - frame.book_observed_at).total_seconds()
         if not frame.book_known or age < 0 or age > self.policy.max_book_age_seconds:
+            self._reset_entry_quality_recovery_clock(slug)
             return self._critical(frame, "book_stale")
         if frame.position == 0:
             self._clear_hard_exit(slug)
@@ -482,11 +511,16 @@ class DesiredStateReconciler:
             # between them -- so a one-sided book simply has nothing to quote.
             # Nothing is wrong, there is just no work.
             if not frame.book.is_two_sided:
+                self._reset_entry_quality_recovery_clock(slug)
                 return []
             return self._flat_plan(frame)
         # Holding. Exiting a long needs only the bid side to sell into, a short
         # only the offer side, so a one-sided book is usually still enough.
         # Requiring both here is what stranded positions until they settled.
+        # A completed fill starts the independent inventory lifecycle. Any
+        # flat-state quality recovery memory must not delay the later flat
+        # owner after this position is reduced.
+        self._clear_entry_quality_recovery(slug)
         return self._inventory_plan(frame)
 
     def _inventory_plan(self, frame: MarketFrame) -> list[PlanAction]:
@@ -739,6 +773,8 @@ class DesiredStateReconciler:
                        and seconds_to_event is not None
                        and seconds_to_event
                        > self.policy.force_exit_before_start_seconds)
+        if not market_open:
+            self._clear_entry_quality_recovery(slug)
         # Why each side stopped being wanted, so the cancel can name it. A
         # single `side_no_longer_desired` could not be attributed from the
         # logs -- the 2026-08-14 churn was never diagnosed for exactly this
@@ -767,36 +803,6 @@ class DesiredStateReconciler:
                     self.policy.reward_eligibility_dwell_seconds):
                 drop_cause[side] = "reward_ineligible"
                 desired_sides.discard(side)
-        # "Not evaluated" is not "uneconomic". `clear_economics()` wipes
-        # `expected_net_by_side` before every pass, so a side the runner
-        # skipped this pass -- an overlapping book, or any early return out of
-        # `_evaluate_rewards` -- simply has no entry. Reading that absence
-        # through `.get(side, 0.0)` turned it into a hard zero and cancelled
-        # the resting order.
-        #
-        # That defeated the dwell. `reward_eligibility_dwell_seconds` (90s)
-        # exists so a side that momentarily stops qualifying keeps its quote
-        # rather than flapping; a side inside that grace was killed here
-        # instead, by a dictionary default. Measured 2026-08-19: mean resting
-        # fraction 57.3% across 179 sides, with the same side re-placed at the
-        # same price every 2-3 minutes.
-        #
-        # Absence is safe to skip because the two real reasons are caught
-        # elsewhere and by their own names: an overlapping book fails
-        # `_entry_price` below and drops as `no_entry_price`, and a side that
-        # stays unqualified is dropped by the eligibility dwell above. A side
-        # that WAS evaluated and priced at or below zero still drops here.
-        for side in tuple(desired_sides):
-            if side not in frame.expected_net_by_side:
-                continue
-            value = frame.expected_net_by_side[side]
-            if not math.isfinite(value):
-                drop_cause[side] = "expected_net_not_finite"
-                desired_sides.discard(side)
-            elif value <= 0:
-                drop_cause[side] = "expected_net_not_positive"
-                desired_sides.discard(side)
-
         # A tight book is priced, not refused. An exact one-tick book joins
         # both touches; a locked book backs off until two cents sit in the
         # middle. Only an overlapping book -- the two outcomes' best bids
@@ -849,22 +855,8 @@ class DesiredStateReconciler:
                 desired_sides.remove(side)
 
         quote_size = self.policy.quote_size
-        candidate_loss = 0.0
-        if "bid" in desired_sides:
-            candidate_loss += float(quote_size) * frame.book.best_bid.price
-        if "offer" in desired_sides:
-            candidate_loss += float(quote_size) * (1.0 - frame.book.best_offer.price)
-        if (candidate_loss > self.policy.max_market_worst_loss + 1e-9
-                or frame.existing_portfolio_worst_loss + candidate_loss
-                > self.policy.max_portfolio_worst_loss + 1e-9):
-            for side in desired_sides:
-                drop_cause[side] = "worst_loss_budget"
-            desired_sides.clear()
-            risk_halt = True
-        else:
-            risk_halt = False
-
         # Require a stressed complete close before either side can build risk.
+        quality_passed: set[str] = set()
         for side in tuple(desired_sides):
             result = cross_exit(
                 frame.book, entry_side=side,
@@ -882,6 +874,77 @@ class DesiredStateReconciler:
             elif (quality_blocker := self.policy.entry_quality_policy.blocker(result)):
                 drop_cause[side] = quality_blocker
                 desired_sides.remove(side)
+                key = (slug, side)
+                if (key in self._entry_quality_blocked
+                        or side in resting_sides):
+                    self._entry_quality_blocked.add(key)
+                    self._entry_quality_recovered_since.pop(key, None)
+            else:
+                quality_passed.add(side)
+
+        # Preserve the configured 70% fresh-entry rule while preventing a
+        # below/above-threshold book from repeatedly cancelling and replacing
+        # the same quote. Only a side previously cancelled while resting is in
+        # recovery. Its first healthy frame starts the clock; any intervening
+        # safety/reward/quality failure resets it. A never-rested candidate can
+        # still enter immediately on its first healthy frame.
+        for side in ("bid", "offer"):
+            key = (slug, side)
+            if key not in self._entry_quality_blocked:
+                continue
+            if side not in quality_passed:
+                self._entry_quality_recovered_since.pop(key, None)
+                continue
+            if side in resting_sides:
+                self._entry_quality_blocked.discard(key)
+                self._entry_quality_recovered_since.pop(key, None)
+                continue
+            recovered_at = self._entry_quality_recovered_since.setdefault(
+                key, frame.now)
+            if (frame.now - recovered_at).total_seconds() < (
+                    self.policy.entry_quality_recovery_seconds):
+                drop_cause[side] = "entry_quality_recovery_dwell"
+                desired_sides.discard(side)
+            else:
+                self._entry_quality_blocked.discard(key)
+                self._entry_quality_recovered_since.pop(key, None)
+
+        # "Not evaluated" is not "uneconomic". `clear_economics()` wipes
+        # `expected_net_by_side` before every pass, so a skipped side has no
+        # entry. Only an explicitly evaluated non-positive value may veto it.
+        # This check follows the stressed-exit/quality gates so a quality
+        # refusal is named correctly instead of being disguised by the zero
+        # marker that live economics records for that refusal.
+        for side in tuple(desired_sides):
+            if side not in frame.expected_net_by_side:
+                continue
+            value = frame.expected_net_by_side[side]
+            if not math.isfinite(value):
+                drop_cause[side] = "expected_net_not_finite"
+                desired_sides.discard(side)
+            elif value <= 0:
+                drop_cause[side] = "expected_net_not_positive"
+                desired_sides.discard(side)
+
+        # Exposure is calculated from sides that passed every preceding entry
+        # gate. This preserves the prior behavior where a quality-refused side
+        # was removed by its zero expected-net marker before the budget was
+        # evaluated, while allowing the cancellation to carry the truthful
+        # quality reason.
+        candidate_loss = 0.0
+        if "bid" in desired_sides:
+            candidate_loss += float(quote_size) * frame.book.best_bid.price
+        if "offer" in desired_sides:
+            candidate_loss += float(quote_size) * (1.0 - frame.book.best_offer.price)
+        if (candidate_loss > self.policy.max_market_worst_loss + 1e-9
+                or frame.existing_portfolio_worst_loss + candidate_loss
+                > self.policy.max_portfolio_worst_loss + 1e-9):
+            for side in desired_sides:
+                drop_cause[side] = "worst_loss_budget"
+            desired_sides.clear()
+            risk_halt = True
+        else:
+            risk_halt = False
 
         actions: list[PlanAction] = []
         kept_sides: set[str] = set()

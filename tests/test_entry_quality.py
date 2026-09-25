@@ -80,6 +80,134 @@ class EntryQualityTests(unittest.TestCase):
         disabled = DesiredStateReconciler(recon.policy())
         self.assertEqual({a.side for a in disabled.plan(f)},{'bid','offer'})
 
+    def test_quality_cancel_requires_stable_recovery_before_reentry(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True),
+            entry_quality_recovery_seconds=60))
+        bad_order = WorkingOrder('bad','bid',.49,Decimal('2'))
+        bad = recon.frame(snapshot=cliff(),orders=(bad_order,))
+
+        cancelled = r.plan(bad)
+        self.assertEqual(len(cancelled),1)
+        self.assertEqual(
+            cancelled[0].reason,
+            'side_no_longer_desired:entry_quality_below_minimum')
+
+        first_good_at = recon.T0 + timedelta(seconds=1)
+        first_good = recon.frame(
+            now=first_good_at, snapshot=recon.book(first_good_at))
+        self.assertNotIn('bid',{a.side for a in r.plan(first_good)})
+
+        almost_ready_at = first_good_at + timedelta(seconds=59)
+        almost_ready = recon.frame(
+            now=almost_ready_at, snapshot=recon.book(almost_ready_at))
+        self.assertNotIn('bid',{a.side for a in r.plan(almost_ready)})
+
+        ready_at = first_good_at + timedelta(seconds=60)
+        ready = recon.frame(now=ready_at,snapshot=recon.book(ready_at))
+        self.assertIn('bid',{a.side for a in r.plan(ready)})
+
+    def test_quality_recovery_must_remain_continuously_healthy(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True),
+            entry_quality_recovery_seconds=60))
+        r.plan(recon.frame(
+            snapshot=cliff(),
+            orders=(WorkingOrder('bad','bid',.49,Decimal('2')),)))
+
+        first_good_at = recon.T0 + timedelta(seconds=1)
+        r.plan(recon.frame(
+            now=first_good_at, snapshot=recon.book(first_good_at)))
+        failed_again_at = recon.T0 + timedelta(seconds=30)
+        r.plan(recon.frame(now=failed_again_at,snapshot=cliff()))
+        recovered_again_at = recon.T0 + timedelta(seconds=31)
+        r.plan(recon.frame(
+            now=recovered_again_at,
+            snapshot=recon.book(recovered_again_at)))
+
+        old_deadline_at = recon.T0 + timedelta(seconds=61)
+        old_deadline = recon.frame(
+            now=old_deadline_at,snapshot=recon.book(old_deadline_at))
+        self.assertNotIn('bid',{a.side for a in r.plan(old_deadline)})
+        new_deadline_at = recon.T0 + timedelta(seconds=91)
+        new_deadline = recon.frame(
+            now=new_deadline_at,snapshot=recon.book(new_deadline_at))
+        self.assertIn('bid',{a.side for a in r.plan(new_deadline)})
+
+    def test_unknown_state_resets_quality_recovery_clock(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True),
+            entry_quality_recovery_seconds=60))
+        r.plan(recon.frame(
+            snapshot=cliff(),
+            orders=(WorkingOrder('bad','bid',.49,Decimal('2')),)))
+        first_good_at = recon.T0 + timedelta(seconds=1)
+        r.plan(recon.frame(
+            now=first_good_at,snapshot=recon.book(first_good_at)))
+        unknown_at = recon.T0 + timedelta(seconds=30)
+        r.plan(recon.frame(
+            now=unknown_at,snapshot=recon.book(unknown_at),state_known=False))
+
+        recovered_at = recon.T0 + timedelta(seconds=61)
+        recovered = recon.frame(
+            now=recovered_at,snapshot=recon.book(recovered_at))
+        self.assertNotIn('bid',{a.side for a in r.plan(recovered)})
+
+    def test_position_lifecycle_clears_flat_quality_recovery(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True),
+            entry_quality_recovery_seconds=60))
+        r.plan(recon.frame(
+            snapshot=cliff(),
+            orders=(WorkingOrder('bad','bid',.49,Decimal('2')),)))
+        position_at = recon.T0 + timedelta(seconds=1)
+        r.plan(recon.frame(
+            now=position_at,position='2',entry=.49,opened=position_at,
+            snapshot=recon.book(position_at)))
+        flat_at = recon.T0 + timedelta(seconds=2)
+
+        actions = r.plan(recon.frame(
+            now=flat_at,snapshot=recon.book(flat_at)))
+
+        self.assertIn('bid',{a.side for a in actions})
+
+    def test_quality_reason_wins_over_its_expected_net_zero_marker(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True)))
+        f = recon.frame(
+            snapshot=cliff(),
+            orders=(WorkingOrder('bad','bid',.49,Decimal('2')),))
+        f.expected_net_by_side['bid'] = 0.0
+
+        actions = r.plan(f)
+
+        self.assertEqual(actions[0].reason,
+            'side_no_longer_desired:entry_quality_below_minimum')
+
+    def test_never_resting_quality_candidate_enters_on_first_healthy_frame(self):
+        r = DesiredStateReconciler(recon.policy(
+            entry_quality_policy=EntryQualityPolicy(True),
+            entry_quality_recovery_seconds=60))
+        r.plan(recon.frame(snapshot=cliff()))
+        good_at = recon.T0 + timedelta(seconds=1)
+
+        actions = r.plan(recon.frame(
+            now=good_at,snapshot=recon.book(good_at)))
+
+        self.assertEqual({a.side for a in actions},{'bid','offer'})
+
+    def test_quality_refused_side_does_not_consume_candidate_risk_budget(self):
+        r = DesiredStateReconciler(recon.policy(
+            max_market_worst_loss=1,
+            max_portfolio_worst_loss=15,
+            entry_quality_policy=EntryQualityPolicy(True)))
+
+        actions = r.plan(recon.frame(snapshot=cliff()))
+
+        self.assertEqual(len(actions),1)
+        self.assertEqual(actions[0].kind,ActionKind.PLACE_POST_ONLY)
+        self.assertEqual(actions[0].side,'offer')
+
     def test_reducers_ioc_shutdown_and_existing_gates_are_unchanged(self):
         enabled = recon.policy(age=900,entry_quality_policy=EntryQualityPolicy(True,1))
         disabled = replace(enabled,entry_quality_policy=EntryQualityPolicy())

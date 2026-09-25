@@ -61,3 +61,47 @@ After maintenance, verify authenticated exposure and natural recovery; classify
 the unknown order-read failures/recovery; retain the reducer/refill latency and
 matched touch-churn follow-ups. No business-rule changes are authorized by this
 status request. Use the existing logs rather than adding more API polling.
+
+## September25 13:08Z recheck and priorities
+
+Same supervisor37031/runner37045, no restart. Official status summary now shows
+all systems operational and no active maintenance/incidents. Runner account
+health probes proved zero orders/positions at11:48–11:50Z. Official completion
+set resume eligibility12:15:13.896Z; entry pause cleared12:15:41.881Z, after the
+configured buffer and health gate. Automatic maintenance recovery worked.
+
+Authenticated13:08:49Z sample:34 venue orders, comprising30 flat entries and
+four exact reducers for four positions (+15,+15,-13.47,+8); zero unresolved
+intents and unknown orders. These are sequential live reads, not an atomic
+snapshot: local working count32 differed from the earlier venue order read.
+The preceding13:07:55Z sample saw25 entries/three position orders/four positions
+because Mosvas/Tebyar filled during the read sequence. Its reducer was
+acknowledged13:07:48.915Z and later partial-filled; fresh13:08 proof shows exact
+BUY13.47 remaining. Do not call that first sequential sample a sustained
+uncovered-position defect. Transient local quantity -15→-30→-15 was corrected
+before the15-contract reducer decision; examine fill/snapshot ordering before
+classifying that as a true doubled venue position.
+
+Completed post-resumption API windows through13:08:08Z:9,998 attempts across
+3,180.8s,3.143/s,zero429;65 failures were individual-order404.396 touch-reprice
+cancellations,68 quality cancellations and52 quality re-entries (minimum64s,
+none<60s). This is much more touch activity than the prior overnight interval,
+but different books/workloads prevent causal attribution to the10s dwell.
+Latest lifecycle refill53.2s; decision p95 in latest two windows16.99/23.80s.
+Do not compare the active3.143/s directly to the maintenance-inclusive2.270/s
+as proof of regression. Hybrid is receiving private order notifications and
+REST remains complete authority; proof reuse logs show real skipped reads.
+
+Recommended order of work, diagnosis only unless separately authorized:
+
+1. Position safety/timing: recover exact reducer-gap causes, final closure
+   timing and partial-fill/snapshot sequencing without weakening proof.
+2. Entry repricing churn: trace396 cancellations against actual book/tick/side
+   changes, distinguishing required adverse moves from avoidable replacements.
+   This is the clearest current REST/resting-time optimization candidate.
+3. Overnight recovery: classify287 unknown-status order-read failures and the
+   public-book startup/backoff episode; do not mislabel them as429.
+4. Refill scheduling:53–63s delays still warrant tracing after position and
+   churn work. Keep300 coverage and strategy changes deferred.
+
+No trading source/config changes, order mutations or restart for this recheck.

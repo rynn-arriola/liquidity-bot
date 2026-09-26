@@ -873,6 +873,7 @@ class CommissioningRunner(
         self._active_market_slugs = clean
         # Optional evidence must never veto a valid scope change.
         self._remember_selection_binding(clean)
+        self._remember_warm_restart_scope(clean)
         from .market_quality_measurement import emit, binding_snapshot
         emit(self.quality_sink, "binding", binding_snapshot, self)
         self._markets = {

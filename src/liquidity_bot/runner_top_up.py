@@ -34,6 +34,10 @@ class TopUpSchedulingMixin:
 
         if self.reward_selector is None:
             raise RuntimeError("automatic reward selector is unavailable")
+        # Markets this ledger's runner already held that still pass every
+        # mandatory-retention check keep their "already selected" status
+        # (operator decision 2026-09-26). Empty on any doubt.
+        readmitted = await self._warm_restart_readmission(now)
         attempt = 0
         while True:
             attempt += 1
@@ -44,7 +48,7 @@ class TopUpSchedulingMixin:
                 self._selection_scan_seconds_last = (
                     time.monotonic() - scan_started)
             self._log_selection_scan(selection)
-            if selection.selected is not None:
+            if selection.selected is not None or readmitted:
                 self._market_selection = selection
                 self._market_selection_observed_at = self._now()
                 # Bind the whole authorized set, not just the best one.
@@ -52,9 +56,12 @@ class TopUpSchedulingMixin:
                 # until the first rotation 900 seconds later, so the measured
                 # constraint -- authorized uptime, not per-market size -- went
                 # untouched for the first quarter hour of every run.
-                chosen = tuple(
+                # Re-admitted markets come first; fresh viable ones fill the rest.
+                fresh = tuple(
                     item.market.slug for item in selection.top_viable(
-                        self.config.max_markets, exclude=self._barred_slugs()))
+                        max(0, self.config.max_markets - len(readmitted)),
+                        exclude=self._barred_slugs() | set(readmitted)))
+                chosen = readmitted + fresh
                 self._bind_markets(
                     chosen or (selection.selected.market.slug,))
                 self._runtime_error_counts.pop("startup_market_wait", None)
@@ -88,6 +95,75 @@ class TopUpSchedulingMixin:
                     critical=False)
             await self.sleep(
                 float(self.config.market_selection_refresh_seconds))
+
+    async def _warm_restart_readmission(self, now: datetime) -> tuple[str, ...]:
+        """Remembered markets that still pass mandatory retention; never raises."""
+
+        from collections import Counter
+        from . import warm_restart
+        path = warm_restart.scope_path(self.ledger.path)
+
+        def report(outcome, remembered=0, kept=(), dropped=None, age=None):
+            print(f"[warm-restart] at={self._now().isoformat()} outcome={outcome} "
+                  f"remembered={remembered} readmitted={len(kept)} "
+                  f"dropped={dict(dropped or {})} "
+                  f"age_seconds={'-' if age is None else round(age, 1)}", flush=True)
+
+        try:
+            slugs, age = warm_restart.read_scope(path, now=self._now())
+        except FileNotFoundError:
+            report("no_scope")
+            return ()
+        except Exception as exc:
+            report(f"ignored:{type(exc).__name__}")
+            return ()
+        if not slugs:
+            report("empty_scope", age=age)
+            return ()
+        try:
+            selector = self.reward_selector
+            markets = await selector.gateway.fetch_markets_by_slugs(slugs)
+            incentives = await selector.gateway.fetch_incentives(tuple(markets))
+            now = self._now()
+            window_end = selector.policy.discovery_window_end(now)
+            barred = self._barred_slugs(now)
+            dropped = Counter()
+            kept = []
+            for slug in slugs:
+                market = markets.get(slug)
+                if market is None:
+                    dropped["not_found"] += 1
+                elif slug in barred:
+                    dropped["barred"] += 1
+                elif not selector._catalog_market_is_executable(
+                        market, now=now, window_end=window_end):
+                    # Closed, started, excluded league or not tradable now.
+                    dropped["not_executable"] += 1
+                elif ((market.game_start - now).total_seconds()
+                      <= self.config.force_exit_before_start_seconds):
+                    dropped["inside_flatten_window"] += 1
+                elif (slug not in incentives or selector._applicable_period(
+                        market, incentives[slug], now) is None):
+                    dropped["no_active_reward"] += 1
+                else:
+                    kept.append(slug)
+            kept = tuple(kept[:self.config.max_markets])
+        except Exception as exc:
+            report(f"read_failed:{type(exc).__name__}", remembered=len(slugs), age=age)
+            return ()
+        report("readmitted", remembered=len(slugs), kept=kept, dropped=dropped, age=age)
+        return kept
+
+    def _remember_warm_restart_scope(self, slugs) -> None:
+        """Best effort: optional evidence must never veto a scope change."""
+
+        try:
+            from . import warm_restart
+            warm_restart.write_scope(
+                warm_restart.scope_path(self.ledger.path), slugs, now=self._now())
+        except Exception as exc:
+            print(f"[warm-restart] at={self._now().isoformat()} "
+                  f"outcome=scope_write_failed error={type(exc).__name__}", flush=True)
 
     def _request_lifecycle_top_up(self, now: datetime) -> None:
         """Schedule one incremental scan without authorizing a slot release."""

@@ -1,4 +1,8 @@
-# Warm restart — design (awaiting operator confirmation)
+# Warm restart — design and implementation
+
+> **Status (September 26):** operator confirmed the 2-cent interpretation;
+> implemented in `warm_restart.py`, `TopUpSchedulingMixin._warm_restart_readmission`
+> / `_remember_warm_restart_scope` and `_bind_markets`. Pushed, **not deployed**.
 
 September 26, 2026. Operator asked to proceed with the warm restart. This
 document states the approach, tradeoffs and acceptance before implementation.
@@ -71,3 +75,27 @@ file falls back to fresh scan; re-admission failure does not block startup;
 no orders from binding alone; bounded read counts. Live acceptance after an
 approved Command 1: `[warm-restart]` line, and active count after the next
 restart versus the pre-stop count (compare with the 216 market-hour baseline).
+
+## Implementation notes
+
+- Scope file: `data/warm-restart-scope.json` beside the ledger (git-ignored);
+  schema `{schema: 1, written_at, markets[<=100]}`, atomic temp+rename, written
+  on every `_bind_markets` (startup and each committed top-up), best effort.
+- Re-admission runs once in `_select_reward_market` (automatic selection,
+  non-recovery startup only) before the first scan. Checks per remembered slug:
+  present in a fresh bulk market read, not barred, `_catalog_market_is_executable`
+  (open, not started, event entry allowed, size, moneyline, league not
+  excluded), more than `force_exit_before_start_seconds` before kickoff, and an
+  applicable reward period from a fresh incentive read. No book reads.
+- Binding order: re-admitted (capped at `max_markets`) then fresh viable
+  markets excluding duplicates and barred slugs; re-admitted markets also let
+  startup proceed when the scan has nothing viable.
+- Any error or doubt returns no re-admission and logs `[warm-restart]` with the
+  outcome; startup then behaves exactly as before.
+- Tests: `tests/test_warm_restart.py` (9): file round-trip/stale/future/
+  malformed/missing; still-valid tight market kept while started, near-kickoff,
+  no-reward, excluded, barred and missing are dropped with bounded reads and no
+  book reads; read failure contained; binding order and scan-with-nothing-viable;
+  real runner writes the scope and a restart with an unreadable venue falls back
+  safely with no orders. Reversals (no re-admission call, no scope write, no
+  flatten-window check) each fail the suite. Full WSL suite: 2,315 pass.

@@ -42,3 +42,24 @@ Sources: 24 h of `[api-budget]` category counts (201,159 calls, **2.41/s**) plus
 4. **Subscribe to `ORDER_SNAPSHOT`** on connect/reconnect, and review the SDK 1.0.2 upgrade. This improves WebSocket recovery; it does not directly save REST calls.
 
 **Together, options 1–3 could save about 0.7–0.9/s (30–35%)**, enough to cover 50 orders (+0.2/s) with margin.
+
+## Deep check (operator: "their documentation is wrong, don't trust that")
+
+The official docs were compared with our code and **measured** behavior only.
+
+| Area | Docs claim | Measured / our code |
+|---|---|---|
+| Real venue HTTP 429s | 20/s per key | Only **4** `[api-429]` responses Sept 24–26, all account reads on the safety lane with retry-after 0; average 2.6/s, peaks 3.8/s. The `rate_limited=` counters in `[api-budget]` (499 in 3 days) are mostly our own shared-governor throttling, not venue refusals. **Our self-imposed 4/s cap is the real constraint.** |
+| Private WS orders/positions | Real-time | Reliable today: `gaps=0`; fills arrive and trigger urgent proofs. |
+| Private WS balance | Snapshot + updates | **Never received** (September 19 test, 60 s). A 60 s window may simply have had no ledger change, so a longer test spanning a fill is needed before concluding. |
+| `ORDER_SNAPSHOT` | Initial open orders | Never subscribed by the bot, so untested. |
+| Modify / batched create/cancel/modify | Up to 20 per call; modify = cancel-replace | **Unused.** Each reprice is cancel → confirm → create, which costs 2 calls and leaves a gap with no order resting. Untested live. |
+| Activities filters (`types`, `marketSlug`, sort) | Available | We read the newest activity page every proof (0.39/s). |
+
+**Evidence-based plan** (each a separate, reviewable change; test live before trusting any doc claim):
+1. **Raise the internal API cap gradually** (4 → 5/s), watching real 429s. This alone covers 50 orders; it is a config/code constant.
+2. **Relax the with-position proof cadence from 1 s to 3 s** while `gaps=0`; the WebSocket already delivers fills immediately. About 0.4/s saved.
+3. **Balance every 10 s instead of about 3.4 s:** about 0.2/s saved.
+4. **Read-only WebSocket test** of `ORDER_SNAPSHOT` and balance over a period that includes fills (needs operator approval). Only if proven should the WebSocket replace some REST reads.
+5. **Modify for reprices:** a flagged live trial measuring outcomes via the order stream. This saves a call per reprice and removes the resting gap.
+6. **Investigate the `order_retrieve` sources (0.47/s):** why exact reads happen despite 95% bulk-listing proofs.

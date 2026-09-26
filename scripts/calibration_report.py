@@ -31,6 +31,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+import zlib
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,7 +127,16 @@ def read_archive_records(paths: Iterable[Path], kinds: set[str]) -> list[dict]:
         finally:
             conn.close()
         for kind, body, digest in rows:
-            if isinstance(body, bytes) or hashlib.sha256(body.encode()).hexdigest() != digest:
+            if isinstance(body, bytes):  # large records are zlib-packed by the store
+                from liquidity_bot.market_quality_store import MAX_DISCOVERY_BYTES, PACKED
+                if not body.startswith(PACKED):
+                    raise ValueError(f"unknown archive encoding: {path}")
+                unpacker = zlib.decompressobj()
+                raw = unpacker.decompress(body[len(PACKED):], MAX_DISCOVERY_BYTES + 1)
+                if len(raw) > MAX_DISCOVERY_BYTES or not unpacker.eof:
+                    raise ValueError(f"invalid compressed archive record: {path}")
+                body = raw.decode("utf8")
+            if hashlib.sha256(body.encode()).hexdigest() != digest:
                 raise ValueError(f"quality archive record failed verification: {path}")
             payload = json.loads(body)
             if isinstance(payload, dict):

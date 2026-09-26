@@ -189,6 +189,14 @@ class CalibrationReportTests(unittest.TestCase):
             conn.commit()
             (record,) = report.read_archive_records([path], {"entry_suppressed", "fill_markout"})
             self.assertEqual(record["kind"], "entry_suppressed")
+            import zlib
+            from liquidity_bot.market_quality_store import PACKED
+            packed = json.dumps({"rows": [{"market_slug": "aec-wtt-a-b"}]})
+            conn.execute("INSERT INTO records VALUES (3,'rewards','x',?,?,0)",
+                         (PACKED + zlib.compress(packed.encode()), hashlib.sha256(packed.encode()).hexdigest()))
+            conn.commit()
+            (rewards,) = report.read_archive_records([path], {"rewards"})
+            self.assertEqual(rewards["rows"][0]["market_slug"], "aec-wtt-a-b")
             conn.execute("UPDATE records SET body='{}' WHERE seq=1")
             conn.commit()
             conn.close()

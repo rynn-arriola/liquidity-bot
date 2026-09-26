@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Rank every rewarded market starting within six hours by what it would earn us.
+
+Measurement only: read-only venue reads on the opportunistic report lane, a
+read-only ledger snapshot and the market-quality archives. No order, no
+selection change. For each rewarded market (any market type) it reports:
+
+* expected reward per hour for our quote size on both sides, from the live
+  reward model with the live policy except the 2-cent spread rule;
+* expected trading P&L per hour from our own history for that league
+  (first-fill rate per 30 s times average position result);
+* whether the league has ever been paid (never-paid leagues earn 0);
+* whether the bot trades it now and, if not, which live rule blocks it.
+
+    cd /home/polybot/liquidity-bot
+    .venv/bin/python -B scripts/market_ranker.py --archive data/market-quality/*.sqlite3
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import json
+from pathlib import Path
+import sys
+from typing import Any, Iterable
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+# Credentials are found relative to the imported package, so prefer the
+# working checkout's src (production) over this script's own checkout.
+sys.path.insert(0, str(Path.cwd() / "src") if (Path.cwd() / "src" / "liquidity_bot").is_dir()
+                else str(ROOT / "src"))
+
+from liquidity_bot.fill_hazard import league_from_slug  # noqa: E402
+from liquidity_bot.market_selector import (  # noqa: E402
+    EVENT_DISCOVERY_CLOCK_SKEW_SECONDS, EVENT_DISCOVERY_PAGE_SIZE, OPEN_MARKET_STATUSES,
+    evaluate_market_opportunity)
+from liquidity_bot.rewards import select_applicable_period  # noqa: E402
+
+UTC = timezone.utc
+RANK_HORIZON_SECONDS = 6 * 3600  # operator: keep prioritizing the six-hour window
+# 2026-09-26: 17,207 markets start within six hours (9,325 props, 4,591
+# spreads, 2,448 totals, 621 drawable, 222 moneylines). Reward lookups for all
+# of them take ~30 min on the report lane, so the frequent run covers the
+# market types the bot could plausibly trade; spreads/totals run daily.
+FREQUENT_TYPES = ("SPORTS_MARKET_TYPE_MONEYLINE", "SPORTS_MARKET_TYPE_DRAWABLE_OUTCOME")
+DAILY_TYPES = FREQUENT_TYPES + ("SPORTS_MARKET_TYPE_SPREAD", "SPORTS_MARKET_TYPE_TOTAL")
+MEASURE_SPREAD = 0.001           # score tight books the live 2-cent rule skips
+
+
+# ---------------------------------------------------------------- pure logic
+
+def pre_book_blockers(market, incentive, *, now, policy) -> list[str]:
+    """Live rules that stop a rewarded market before any book is read."""
+    blockers = []
+    if not market.is_supported_moneyline:
+        blockers.append("not_moneyline")
+    if league_from_slug(market.slug) in policy.excluded_leagues:
+        blockers.append("excluded_league")
+    if market.minimum_trade_qty is None or market.minimum_trade_qty > policy.quote_size:
+        blockers.append("minimum_quantity")
+    if (market.catalog_best_bid is not None and market.catalog_best_offer is not None
+            and market.catalog_best_offer - market.catalog_best_bid + 1e-9 < policy.minimum_entry_spread):
+        blockers.append("spread_below_2c")
+    return blockers
+
+
+def applicable_period(incentive, market, *, now, policy):
+    try:
+        return select_applicable_period(
+            incentive.periods, market.game_start, now,
+            allow_daily_event=policy.allow_daily_event_rewards,
+            daily_event_horizon_seconds=policy.daily_event_horizon_seconds,
+            daily_event_observed_at=incentive.observed_at)
+    except Exception:
+        return None
+
+
+def league_history(fill_cells: list[dict], episode_rows: list[dict]) -> dict:
+    """Per-league first-fill rate per 30 s and average position result."""
+    rates = {row["cell"].split(":", 1)[1]: row["observed_per_30s"]
+             for row in fill_cells if row["cell"].startswith("league:")
+             and row["observed_per_30s"] is not None and row["orders"] >= 50}
+    results = {row["key"]: float(row["pnl_per_closed"]) for row in episode_rows
+               if row["pnl_per_closed"] is not None and row["closed"] >= 5}
+    glob = next((r["observed_per_30s"] for r in fill_cells if r["cell"] == "global"), None)
+    all_rows = [r for r in episode_rows if r["pnl_per_closed"] is not None]
+    closed = sum(r["closed"] for r in all_rows)
+    overall = (sum(float(r["closed_pnl"]) for r in all_rows) / closed) if closed else 0.0
+    return dict(rates=rates, results=results, global_rate=glob or 0.0, global_result=overall)
+
+
+def expected_trading_per_hour(league: str | None, sides: int, history: dict) -> tuple[float, str]:
+    rate = history["rates"].get(league)
+    result = history["results"].get(league)
+    basis = "league_history" if rate is not None and result is not None else "global_average"
+    rate = history["global_rate"] if rate is None else rate
+    result = history["global_result"] if result is None else result
+    return rate * 120 * sides * result, basis
+
+
+def paid_leagues(reward_snapshots: list[dict]) -> set[str] | None:
+    """Leagues with any PAID liquidity reward in the newest archived snapshot."""
+    snaps = [s for s in reward_snapshots if isinstance(s.get("rows"), list)]
+    if not snaps:
+        return None
+    newest = max(snaps, key=lambda s: s.get("at", ""))
+    return {league_from_slug(r["market_slug"]) or "other" for r in newest["rows"]
+            if str(r.get("status", "")).upper() == "PAID" and Decimal(str(r.get("reward", 0))) > 0}
+
+
+def unpaid_leagues(paid: set[str] | None, rested: set[str]) -> set[str] | None:
+    """Leagues we rested orders in but were never paid for.
+
+    A league we never quoted has no payout evidence either way; it is not
+    "never paid", only unproven (operator question, 2026-09-26).
+    """
+    return None if paid is None else {league for league in rested if league not in paid}
+
+
+def score_row(market, period, relaxed, live, *, now, policy, history, unpaid, traded,
+              rested=frozenset()) -> dict:
+    """One ranked row; reward and trading value per hour for our quote size."""
+    league = league_from_slug(market.slug)
+    per_hour = 3600 / policy.projection_horizon_seconds
+    reward_sides = [s for s in relaxed.sides if s.projection.eligible]
+    reward = sum(s.projection.projected_reward for s in reward_sides) * per_hour
+    never_paid = unpaid is not None and (league or "other") in unpaid
+    counted_reward = 0.0 if never_paid else reward
+    trading, basis = expected_trading_per_hour(league, max(len(reward_sides), 1), history)
+    live_viable = bool(live and live.viable_sides)
+    side_blockers = sorted({s.blocker for s in (live.sides if live else ()) if s.blocker})
+    return dict(
+        market=market.slug, league=league or "other",
+        market_type=getattr(market, "sports_market_type_v2", None),
+        hours_to_start=round((market.game_start - now).total_seconds() / 3600, 2),
+        period=period.period, pool=float(period.reward_pool or 0),
+        spread=round(relaxed.book.best_offer.price - relaxed.book.best_bid.price, 4),
+        reward_per_hour=round(reward, 4), never_paid=never_paid,
+        reward_evidence=("never_paid" if never_paid else
+                         "paid_before" if (league or "other") in rested else "no_history"),
+        trading_per_hour=round(trading, 4), trading_basis=basis,
+        net_per_hour=round(counted_reward + trading, 4),
+        traded_now=traded, live_viable=live_viable,
+        blocked_by=[] if live_viable else side_blockers or ["not_viable_under_live_rules"])
+
+
+def book_priority(items, *, traded: set[str], unpaid: set[str] | None):
+    """Order book reads: traded, then paying-or-unproven moneylines, then the
+    rest by pool; never-paid leagues last.
+
+    Never-paid leagues are still measured (operator, 2026-09-26: "we can still
+    measure those ... but they should not get priority"), only after every
+    other market, so they cannot use up the book budget.
+    """
+    def never_paid(item):
+        return unpaid is not None and (league_from_slug(item[0].slug) or "other") in unpaid
+
+    ordered = sorted(items, key=lambda item: (
+        never_paid(item), item[0].slug not in traded, not item[0].is_supported_moneyline,
+        -float(item[2].reward_pool or 0), item[0].slug))
+    return ordered, sum(1 for item in items if never_paid(item))
+
+
+def rank(rows: list[dict]) -> list[dict]:
+    rows = sorted(rows, key=lambda r: (-r["net_per_hour"], r["market"]))
+    for index, row in enumerate(rows, 1):
+        row["rank"] = index
+    return rows
+
+
+# ----------------------------------------------------------------- run
+
+async def collect(*, now, policy, max_books: int, market_types: tuple[str, ...],
+                  traded: set[str] = frozenset(), unpaid: set[str] | None = None) -> dict:
+    from liquidity_bot.adapters import (
+        AsyncReadOnlyGateway, OPPORTUNISTIC_REPORT_RATE_PER_SECOND, shared_api_limiter)
+    from liquidity_bot.probe import client_from_environment
+    gateway = AsyncReadOnlyGateway(
+        client_from_environment(), limiter=shared_api_limiter(OPPORTUNISTIC_REPORT_RATE_PER_SECOND),
+        default_traffic_class="report", max_pages=10)
+    skew = timedelta(seconds=EVENT_DISCOVERY_CLOCK_SKEW_SECONDS)
+    catalog = await gateway.list_upcoming_sports_markets(
+        start=now - skew, end=now + timedelta(seconds=RANK_HORIZON_SECONDS) + skew,
+        limit=EVENT_DISCOVERY_PAGE_SIZE, require_complete=True)
+    universe = [m for m in catalog if m.active and not m.closed
+                and m.status in OPEN_MARKET_STATUSES and m.game_start is not None
+                and m.tick_size is not None
+                and str(getattr(m, "sports_market_type_v2", "") or "").upper() in market_types
+                and now < m.game_start <= now + timedelta(seconds=RANK_HORIZON_SECONDS)]
+    incentives = await gateway.fetch_incentives(sorted(m.slug for m in universe))
+    books, errors = {}, {}
+    rewarded = [(m, incentives[m.slug]) for m in universe
+                if m.slug in incentives and incentives[m.slug].periods]
+    with_period = []
+    for market, incentive in rewarded:
+        period = applicable_period(incentive, market, now=now, policy=policy)
+        if period is not None:
+            with_period.append((market, incentive, period))
+    ordered, never_paid = book_priority(with_period, traded=traded, unpaid=unpaid)
+    for market, _, _ in ordered[:max_books]:
+        try:
+            books[market.slug] = await gateway.fetch_book(market.slug)
+        except Exception as exc:
+            errors[market.slug] = type(exc).__name__
+    return dict(catalog_rows=len(catalog), event_pages=gateway.last_upcoming_event_pages,
+                universe=universe, rewarded=rewarded, with_period=with_period,
+                never_paid_markets=never_paid, books=books, book_errors=errors)
+
+
+def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested=frozenset()) -> dict:
+    relaxed_policy = replace(policy, minimum_entry_spread=MEASURE_SPREAD, excluded_leagues=frozenset())
+    rows, skipped = [], {"no_applicable_period": 0, "book_not_read": 0, "book_unusable": 0}
+    skipped["no_applicable_period"] = len(collected["rewarded"]) - len(collected["with_period"])
+    for market, incentive, period in collected["with_period"]:
+        book = collected["books"].get(market.slug)
+        if book is None:
+            skipped["book_not_read"] += 1
+            continue
+        try:
+            relaxed = evaluate_market_opportunity(market, incentive, book, period=period,
+                                                  now=now, policy=relaxed_policy)
+            live = evaluate_market_opportunity(market, incentive, book, period=period,
+                                               now=now, policy=policy)
+        except Exception:
+            skipped["book_unusable"] += 1
+            continue
+        row = score_row(market, period, relaxed, live, now=now, policy=policy,
+                        history=history, unpaid=unpaid, traded=market.slug in traded_slugs,
+                        rested=rested)
+        row["blocked_by"] = pre_book_blockers(market, incentive, now=now, policy=policy) + (
+            [] if row["live_viable"] else row["blocked_by"])
+        rows.append(row)
+    ranked = rank(rows)
+    return dict(
+        generated_at=now.isoformat(), horizon_hours=RANK_HORIZON_SECONDS / 3600,
+        enforcement="none", quote_size=policy.quote_size,
+        catalog_rows=collected["catalog_rows"], event_pages=collected["event_pages"],
+        open_markets_in_window=len(collected["universe"]),
+        rewarded_markets=len(collected["rewarded"]),
+        paying_now=len(collected["with_period"]), scored=len(ranked), skipped=skipped,
+        paid_history_known=unpaid is not None,
+        never_paid_leagues=sorted(unpaid or ()),
+        never_paid_markets=collected.get("never_paid_markets", 0), rows=ranked)
+
+
+def render(report: dict, top: int = 40) -> str:
+    out = [f"# Rewarded-market ranking — {report['generated_at'][:16]}Z",
+           "",
+           f"- Open markets starting within {report['horizon_hours']:g} h: {report['open_markets_in_window']}; "
+           f"rewarded: {report['rewarded_markets']}; reward paying now: {report['paying_now']}; "
+           f"scored: {report['scored']}; skipped: {report['skipped']}",
+           f"- Quote size {report['quote_size']:g}; measurement only; money per hour is an estimate.",
+           "",
+           "| # | market | league | h to start | reward $/h | trading $/h | net $/h | traded now | blocked by |",
+           "|---|---|---|---|---|---|---|---|---|"]
+    for r in report["rows"][:top]:
+        out.append(f"| {r['rank']} | {r['market'][4:]} | {r['league']} | {r['hours_to_start']} | "
+                   f"{r['reward_per_hour']:.3f}{' (never paid)' if r['never_paid'] else ' (no history)' if r.get('reward_evidence') == 'no_history' else ''} | "
+                   f"{r['trading_per_hour']:.3f} | {r['net_per_hour']:.3f} | "
+                   f"{'yes' if r['traded_now'] else 'no'} | {', '.join(r['blocked_by']) or '-'} |")
+    return "\n".join(out) + "\n"
+
+
+def traded_now(path: Path) -> set[str]:
+    try:
+        return set(json.loads(path.read_text(encoding="utf-8")).get("markets") or [])
+    except Exception:
+        return set()
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--db", type=Path, default=Path("data/commissioning.db"))
+    p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--max-books", type=int, default=150)
+    p.add_argument("--include-spreads-totals", action="store_true",
+                   help="daily run: also rank spread and total markets (slower)")
+    p.add_argument("--output-root", type=Path, default=Path("data/market-rankings"))
+    a = p.parse_args(argv)
+    from liquidity_bot.commissioning import CommissioningConfig
+    from scripts.calibration_report import (
+        episode_summary, fill_model_calibration, read_archive_records, read_ledger)
+    now = datetime.now(UTC)
+    policy = CommissioningConfig.diagnostic_defaults().reward_selection_policy()
+    data = read_ledger(a.db)
+    since = now - timedelta(days=a.days)
+    history = league_history(fill_model_calibration(data, since=since, now=now)["cells"],
+                             episode_summary(data, since=since).get("league", []))
+    paid = paid_leagues(read_archive_records(a.archive, {"rewards"}))
+    # Payouts post 1-3 days late: only rest at least 3 days old can prove "never paid".
+    settled = (now - timedelta(days=3)).isoformat()
+    rested = {league_from_slug(o["market_slug"]) or "other" for o in data["observations"]
+              if (now - timedelta(days=30)).isoformat() <= o["observed_at"] <= settled}
+    unpaid = unpaid_leagues(paid, rested)
+    types = DAILY_TYPES if a.include_spreads_totals else FREQUENT_TYPES
+    traded = traded_now(Path("data/tv-active-scope.json"))
+    collected = asyncio.run(collect(now=now, policy=policy, max_books=a.max_books,
+                                    market_types=types, traded=traded, unpaid=unpaid))
+    report = build(collected, now=now, policy=policy, history=history, unpaid=unpaid,
+                   traded_slugs=traded, rested=rested)
+    report["market_types"] = list(types)
+    out = a.output_root / now.strftime("%Y%m%dT%H%M%SZ")
+    out.mkdir(parents=True, exist_ok=False)
+    (out / "ranking.json").write_text(json.dumps(report, indent=1, default=str), encoding="utf8")
+    (out / "ranking.md").write_text(render(report), encoding="utf8")
+    print(f"Ranking: {out}; scored={report['scored']} of rewarded={report['rewarded_markets']}; "
+          "enforcement=none")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

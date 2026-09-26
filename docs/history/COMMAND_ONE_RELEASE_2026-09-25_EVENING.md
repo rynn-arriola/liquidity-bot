@@ -90,3 +90,21 @@ passed to the book stage (matching the live scans' 13-17 ranked). Another 160
 moneylines were beyond the 24 h window and 53 had started. Breadth therefore
 rises as each game crosses T-6 h, picked up by the 15-minute scheduled scans
 and kickoff-triggered top-ups; this is the venue reward window, not bot speed.
+
+## Why `daily_event` rewards are not being used (00:17Z September 26)
+
+Log history: `daily_event` appears only in ranked candidates from
+2026-09-22T13:51Z to 2026-09-24T00:06Z, on four markets (ITF men's tennis and
+WTT table tennis) under one program `politics_mid_20260921` (pool $100,
+target 5,000 shares, discount 0.2; example remaining reward about $0.03 for
+the bot's size). None in 169 scans on September 24 or 126 on September 25. No
+code touching incentive parsing/period selection changed since September 22.
+The incentive read sends `program_type=liquidityProgram` with exact symbols
+and parses every liquidity period regardless of period kind. A bounded raw
+read of 40 sampled executable markets **without** a program-type filter
+returned only `liquidityProgram` periods `live` (33), `day_of` (28) and
+`early` (1): the venue is not attaching `daily_event` (or another program
+type) to the sports moneylines the bot trades. Daily per-event pools described
+by the docs target events without a fixed start (for example politics); the
+bot deliberately trades only pregame sports moneylines with a kickoff risk
+clock. Using those pools would be a new strategy, not a selection fix.

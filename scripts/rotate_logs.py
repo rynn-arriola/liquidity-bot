@@ -48,8 +48,8 @@ def cron_line(root: Path) -> str:
             f"scripts/rotate_logs.py >> logs/rotate.log 2>&1 {CRON_MARK}")
 
 
-def with_cron_line(existing: str, line: str) -> str:
-    kept = [row for row in existing.splitlines() if CRON_MARK not in row]
+def with_cron_line(existing: str, line: str, *, mark: str = CRON_MARK) -> str:
+    kept = [row for row in existing.splitlines() if mark not in row]
     return "\n".join(kept + [line]) + "\n"
 
 

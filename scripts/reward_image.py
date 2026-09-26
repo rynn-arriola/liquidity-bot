@@ -125,9 +125,15 @@ def render_reward_png(payload: dict) -> bytes:
                      right=col > 0, max_width=240 if col else 180)
             y += 56
         y += 12
-    text("P&L: closed fills · * today · Hours: local rest", 40, y+8, size=23, color=muted)
+    text("P&L: closed fills + settlements · * today · Hours: local rest",
+         40, y+8, size=23, color=muted)
+    notes = []
+    if "posting: payouts still arriving" in embed["footer"]["text"]:
+        notes.append("posting: payouts still arriving")
     if "+ partial split" in embed["footer"]["text"]:
-        text("+ partial split · Avg includes untyped hours", 40, y+40, size=23, color=muted)
+        notes.append("+ partial split · Avg includes untyped hours")
+    if notes:
+        text(" · ".join(notes), 40, y+40, size=23, color=muted)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     result = output.getvalue()

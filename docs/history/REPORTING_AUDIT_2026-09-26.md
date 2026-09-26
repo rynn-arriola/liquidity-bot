@@ -76,3 +76,60 @@ LOW. Also measured: `ACTIVITY_TYPE_LIQUIDITY_PROGRAM` and
 `ACTIVITY_TYPE_TAKER_FEE_REBATE` activity returned 0 rows, so reward payouts
 are not appearing as account cash activity and are not leaking into
 account-marked trading P&L.
+
+## Fixes (03:3xZ, operator: "fix all the problems") — pushed, not deployed
+
+Reporting only. Nothing in trading, risk, selection or timing changed.
+
+1. **Settlements booked (finding 1).** New `liquidity_bot/settlement_activity.py`
+   reads `ACTIVITY_TYPE_POSITION_RESOLUTION` (report lane, bounded pages,
+   fails closed on a page bound or a bad row) and caches them in
+   `data/settlement-resolutions.json` (git-ignored). The first run reads the
+   whole history (408 rows, 5 pages); later runs read one page with a 2-day
+   overlap. `settled_replay` keeps the ledger's fill order exactly and, at each
+   resolution, closes whatever inventory the ledger still carries in that
+   market at the venue's long-side resolution price using the ledger's own
+   cost basis (fees were already charged at fill time). Settled P&L by day and
+   the TV lifetime figure now include these. If the venue read fails, days
+   the cached history does not cover show unavailable, never zero; with no
+   history at all, settled P&L is unavailable and the lifetime figure stays
+   ledger-only and says so. Verified on real data: 45 settlements, −$50.65
+   (venue's own before/after delta −$50.27); venue position size equals the
+   ledger residual in all 45; 09-20 settled −$56.03 now equals account-marked
+   −$56.03. With no resolutions the replay is identical to the old one.
+   The 15 unexplained 08-15/16 markets remain; the lifetime figure keeps its
+   "estimate" flag.
+2. **Still-posting rewards (finding 2).** The newest 2 closed ET days with
+   paid rows show "Still posting" (Discord: `posting`, with a footer note) and
+   never finalize. A real PENDING amount is still shown when present.
+3. **Daily net (finding 3).** A day whose recorded boundaries are both within
+   60 seconds of midnight is the calendar day (they land 0–9 s after
+   midnight). Live dry run: finalized net 09-19 +$158.96, 09-20 +$131.32,
+   09-21 +$74.54 (was none). 09-22/09-23 stay unavailable because the 09-23
+   opening was recorded 16m47s after midnight (restart), outside the
+   15-minute window — correct, not a bug. Making midnight snapshots robust
+   across restarts would touch the live runner and is not done here.
+4. **Labels (finding 4).** "Old balanced-pair estimate (Nd; diagnostic only,
+   misses settlements and unpaired fills)"; its 265 count is described as
+   markets it cannot pair (buy fills only), not unbalanced positions. Settled
+   P&L is "closed fills + settlements". Resting side-hours note that reducers
+   count and the tracker (entry-only) reads lower. TV lifetime detail reads
+   "Fills + settlements + paid gain · estimate".
+5. **Report 429 (finding 5).** Today's account mark reuses the running bot's
+   `data/tv-live-pnl.json` when it is for today, ≤5 minutes old, reconciles
+   and the ET opening baseline is valid; otherwise the old bounded reads run.
+   This removes two balance reads, the positions read and the cash-activity
+   read from each hourly run. Dry run took 21 s.
+
+Tests: `tests/test_reporting_audit_fixes.py` (19) plus updated
+`test_reward_table.py` expectations. Deliberate reversals (no tolerance, no
+posting days, dashboard/table ignoring posting, zero settlement, wrong short
+payout, no staleness limit, no coverage check) each fail. Full WSL suite
+2,339 PASS. Two read-only dry runs against production data (no Discord post,
+no dashboard write) and a local image render. The dry run created the
+settlement cache in the production `data/` directory; it is read by nothing
+until these files are deployed.
+
+Deployment: reporting scripts, the TV dashboard server and its page. The
+runner itself does not need these changes, but production files change only
+with operator approval (Command 1 or an explicit reporting-only sync).

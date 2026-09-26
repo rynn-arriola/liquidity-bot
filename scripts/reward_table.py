@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One daily table: trading P&L, venue reward, and resting side-hours.
 
-Read-only. The command makes bounded account-wide earnings, cash-activity,
-balance and position reads and opens the commissioning ledger in SQLite
-read-only mode. It never places, cancels, modifies, or reprices an order.
+Read-only. The command makes bounded account-wide earnings, cash-activity
+and settlement-activity reads, reuses the running bot's fresh account mark
+when available (otherwise bounded balance and position reads), and opens the
+commissioning ledger in SQLite read-only mode. It never places, cancels, modifies, or reprices an order.
 
     .venv/bin/python -B scripts/reward_table.py --days 7
 
@@ -54,13 +55,28 @@ from liquidity_bot.pnl import MatchedInventory  # noqa: E402
 from liquidity_bot.probe import client_from_environment  # noqa: E402
 from liquidity_bot.reward_calendar import NEW_YORK, reward_day  # noqa: E402
 from liquidity_bot.resting_time import resting_side_hours_by_day  # noqa: E402
+from liquidity_bot.settlement_activity import (  # noqa: E402
+    CACHE_FILENAME as SETTLEMENT_CACHE_FILENAME, Resolution,
+    refresh_resolutions)
 
 
 ACCOUNT_ACTIVITY_MAX_PAGES = 4
 ACCOUNT_REPORT_RATE_PER_SECOND = OPPORTUNISTIC_REPORT_RATE_PER_SECOND
+LIVE_PNL_CACHE_FILENAME = "tv-live-pnl.json"
 # Reporting only: use the first saved opening, at most 15 minutes late.
 # Never relabel a much later restart as midnight or change the risk baseline.
 NEAR_MIDNIGHT_MAX_DELAY = timedelta(minutes=15)
+# A daily row whose recorded boundaries are both this close to midnight is
+# treated as the exact calendar day and may finalize its net.
+CALENDAR_DAY_TOLERANCE = timedelta(seconds=60)
+# Payouts for the newest paid days keep arriving over about two cycles and
+# are returned as PAID, not PENDING. These days are shown as still posting
+# and never finalize their net.
+REWARD_POSTING_DAYS = 2
+# The running bot's own account mark is reused when at most this old, which
+# avoids the report's separate balance/position reads.
+LIVE_MARK_MAX_AGE = timedelta(minutes=5)
+LIVE_MARK_MAX_FUTURE = timedelta(seconds=30)
 
 # This baseline landed four minutes after midnight because the hard-stop
 # shutdown had already proved the account flat at 03:50:49Z and the next
@@ -281,22 +297,30 @@ def historical_account_trading_by_day(
     return result
 
 
-def settled_trading_by_day(
-    db: str, days: list[date],
-) -> dict[str, Decimal]:
-    """Return closed-fill P&L by ET day from one chronological ledger replay.
+def _settlement_value(inventory: MatchedInventory, long_price: Decimal) -> Decimal:
+    """Close the ledger's residual at the venue's resolution price.
 
-    The replay includes older fills to establish the cost basis, then assigns
-    each realized match and observed fill fee to the venue event's ET day. Open
-    inventory contributes no gross P&L. Reversed fills are excluded. This is a
-    separate, narrower measurement than account-marked P&L: it can remain
-    available when a midnight account snapshot is missing, but it never fills
-    that evidence gap or finalizes account net.
+    Uses the ledger's own cost basis; fill fees were already charged when the
+    fills occurred, so the settlement itself carries no fee.
     """
 
-    result = {day.isoformat(): Decimal(0) for day in days}
-    if not result:
-        return result
+    if inventory.position == 0 or inventory.average_cost is None:
+        return Decimal(0)
+    payout = long_price if inventory.position > 0 else Decimal(1) - long_price
+    return abs(inventory.position) * (payout - inventory.average_cost)
+
+
+def settled_replay(
+    db: str, resolutions: tuple[Resolution, ...] = (),
+) -> list[tuple[str, Decimal, bool]]:
+    """Return ``(ET day, P&L, is_settlement)`` events in time order.
+
+    Fills realize matched pairs and fees as before. A venue resolution then
+    closes whatever inventory the ledger still carries in that market at the
+    resolution price. Resolutions in markets the ledger never traded, or where
+    its inventory is already flat, add nothing.
+    """
+
     try:
         connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
@@ -312,8 +336,26 @@ def settled_trading_by_day(
         raise AccountMetricUnavailable(
             "settled-fill ledger is unreadable") from exc
 
+    # Fills keep the ledger's own order exactly; each resolution is applied
+    # just before the first fill that happened after it.
+    pending = sorted(resolutions, key=lambda item: item.resolved_at)
     inventories: dict[str, MatchedInventory] = {}
+    result: list[tuple[str, Decimal, bool]] = []
+    position = 0
+
+    def settle(item: Resolution) -> None:
+        inventory = inventories.get(item.market_slug)
+        if inventory is None or inventory.position == 0:
+            return
+        result.append((reward_day(item.resolved_at),
+                       _settlement_value(inventory, item.long_price), True))
+        inventories[item.market_slug] = MatchedInventory()
+
     for row in rows:
+        at = _timestamp(row["event_at"], "fill event")
+        while position < len(pending) and pending[position].resolved_at < at:
+            settle(pending[position])
+            position += 1
         delta = inventories.setdefault(
             str(row["market_slug"]), MatchedInventory()).apply(
                 intent=str(row["intent"] or ""),
@@ -321,9 +363,53 @@ def settled_trading_by_day(
                 quantity=str(row["qty"]),
                 fee=str(row["fee"] or 0),
             )
-        key = reward_day(_timestamp(row["event_at"], "fill event"))
+        result.append((reward_day(at), delta, False))
+    for item in pending[position:]:
+        settle(item)
+    return result
+
+
+def settlement_total(
+    db: str, resolutions: tuple[Resolution, ...],
+) -> Decimal:
+    """Lifetime settlement P&L the fill ledger cannot see on its own."""
+
+    return sum((delta for _, delta, settlement in settled_replay(db, resolutions)
+                if settlement), Decimal(0))
+
+
+def settled_trading_by_day(
+    db: str, days: list[date], *,
+    resolutions: tuple[Resolution, ...] = (),
+    complete_through: datetime | None = None,
+) -> dict[str, Decimal | None]:
+    """Return settled trading P&L by ET day from one chronological replay.
+
+    The replay includes older fills to establish the cost basis, then assigns
+    each realized match and observed fill fee to the venue event's ET day, and
+    each market settlement (``resolutions``) to its resolution ET day. Open
+    inventory contributes no gross P&L. Reversed fills are excluded. This is a
+    separate, narrower measurement than account-marked P&L: it can remain
+    available when a midnight account snapshot is missing, but it never fills
+    that evidence gap or finalizes account net.
+
+    With ``complete_through``, a day ending after it is ``None``: the
+    settlement history does not cover it, so its total is not proven.
+    """
+
+    result: dict[str, Decimal | None] = {
+        day.isoformat(): Decimal(0) for day in days}
+    if not result:
+        return result
+    for key, delta, _ in settled_replay(db, resolutions):
         if key in result:
             result[key] += delta
+    if complete_through is not None:
+        for day in days:
+            end = datetime.combine(
+                day + timedelta(days=1), time.min, tzinfo=NEW_YORK)
+            if end > complete_through:
+                result[day.isoformat()] = None
     return result
 
 
@@ -414,6 +500,58 @@ async def account_realized_today(
         return AccountRealizedToday(None, str(exc))
 
 
+def account_realized_from_live_cache(
+    db: str, path: Path, *, now: datetime,
+) -> AccountRealizedToday | None:
+    """Reuse the running bot's own proven mark instead of new venue reads.
+
+    The runner publishes ``tv-live-pnl.json`` after each consistent account
+    report, measured from the same recorded ET opening. Returns None (so the
+    caller makes its own bounded reads) unless the file is valid, for today's
+    ET day, and at most ``LIVE_MARK_MAX_AGE`` old.
+    """
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        return None
+    today = now.astimezone(NEW_YORK).date()
+    boundary = datetime.combine(today, time.min, tzinfo=NEW_YORK).astimezone(
+        timezone.utc)
+    try:
+        if path.stat().st_size > 8_192:
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(payload, dict)
+                or payload.get("schema_version") != 1
+                or payload.get("scope") != "ACCOUNT_WIDE_TRADING"
+                or payload.get("risk_date_et") != today.isoformat()):
+            return None
+        observed_at = _timestamp(payload.get("observed_at"), "live mark")
+        age = now - observed_at
+        if age > LIVE_MARK_MAX_AGE or age < -LIVE_MARK_MAX_FUTURE:
+            return None
+        if observed_at.astimezone(NEW_YORK).date() != today:
+            return None
+        marked = _decimal(payload.get("marked_pnl"), "live marked pnl")
+        nontrading = _decimal(payload.get("nontrading_cash"), "live nontrading cash")
+        realized = unrealized = None
+        if payload.get("realized_pnl") is not None:
+            realized = _decimal(payload["realized_pnl"], "live realized pnl")
+            unrealized = _decimal(payload.get("unrealized_pnl"), "live unrealized pnl")
+            if realized + unrealized != marked:
+                return None
+        elif payload.get("unrealized_pnl") is not None:
+            return None
+        opening_cash, opening_equity, opening_at = _opening_snapshot_for_day(
+            db, today, boundary)
+    except (OSError, ValueError):  # includes AccountMetricUnavailable
+        return None
+    return AccountRealizedToday(
+        realized, "ok (running bot's latest mark)", marked_value=marked,
+        open_unrealized=unrealized, as_of=observed_at,
+        opening_equity=opening_equity, opening_cash=opening_cash,
+        nontrading_cash=nontrading, opening_as_of=opening_at)
+
+
 def _money(value: Decimal | None, *, zero_if_missing: bool = False) -> str:
     if value is None:
         return "$0.00" if zero_if_missing else "—"
@@ -467,7 +605,17 @@ def _trading_is_estimate(
         return False
     start = datetime.combine(day_value, time.min, tzinfo=NEW_YORK)
     end = datetime.combine(day_value + timedelta(days=1), time.min, tzinfo=NEW_YORK)
-    return interval != (start, end)
+    # The runner records each ET opening a few seconds after midnight. A
+    # boundary that close is the calendar day; anything later is an estimate.
+    return any(abs(actual - exact) > CALENDAR_DAY_TOLERANCE
+               for actual, exact in zip(interval, (start, end)))
+
+
+def reward_posting_days(paid: dict, *, today: date) -> frozenset[str]:
+    """The newest closed ET days with paid rows; their payouts may still grow."""
+
+    posted = sorted(key for key in paid if key < today.isoformat())
+    return frozenset(posted[-REWARD_POSTING_DAYS:])
 
 
 def _covered_total(values: list[Decimal | None]) -> str:
@@ -515,6 +663,19 @@ def _net_subtotal(values: list[Decimal]) -> str:
             else "Unavailable (no finalized days)")
 
 
+def _settled_total(
+    days: list[date], settled_history: dict[str, Decimal | None] | None,
+) -> Decimal | None:
+    """Sum settled P&L only when every day is proven."""
+
+    if settled_history is None or not days:
+        return None
+    values = [settled_history.get(day.isoformat()) for day in days]
+    if any(value is None for value in values):
+        return None
+    return sum(values, Decimal(0))
+
+
 def _dashboard_money(value: Decimal | None) -> str | None:
     if value is None:
         return None
@@ -528,7 +689,8 @@ def build_dashboard_snapshot(
     overall_trading: Decimal,
     account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
-    settled_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal | None] | None = None,
+    overall_includes_settlements: bool = False,
 ) -> dict[str, Any]:
     """Build the bounded local file consumed by the zero-API TV dashboard."""
 
@@ -538,6 +700,7 @@ def build_dashboard_snapshot(
         raise ValueError("the TV dashboard supports at most 7 days")
 
     rows: list[dict[str, Any]] = []
+    posting = reward_posting_days(paid, today=today)
     for day_value in days:
         key = day_value.isoformat()
         trading = _displayed_trading(
@@ -553,7 +716,8 @@ def build_dashboard_snapshot(
             Decimal(0) if has_gain else None)
         finalized = (
             day_value < today and trading is not None and paid_value is not None
-            and not pending_value and not _trading_is_estimate(
+            and not pending_value and key not in posting
+            and not _trading_is_estimate(
                 day_value, today=today, account_history=account_history))
         net = trading + paid_value if finalized else None
         rows.append({
@@ -569,6 +733,7 @@ def build_dashboard_snapshot(
                 day_value, today=today, account_history=account_history),
             "gain": _dashboard_money(gain),
             "pending": _dashboard_money(pending_gain),
+            "gain_posting": key in posting,
             "side_hours": round(float(resting_hours.get(key, 0.0)), 6),
             "net": _dashboard_money(net),
             "net_status": "finalized" if finalized else "pending",
@@ -601,10 +766,9 @@ def build_dashboard_snapshot(
             "overall_trading": _dashboard_money(overall_trading),
             "overall_gain": _dashboard_money(paid_total),
             "overall_since_et": BOT_ERA_START_DATE,
-            "settled_total": _dashboard_money(sum(
-                (settled_history.get(day.isoformat(), Decimal(0))
-                 for day in days), Decimal(0))
-                if settled_history is not None else None),
+            "overall_includes_settlements": overall_includes_settlements,
+            "settled_total": _dashboard_money(_settled_total(
+                days, settled_history)),
         },
         "rows": rows,
     }
@@ -634,8 +798,9 @@ def render_table(
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
     today: date, account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
-    settled_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal | None] | None = None,
 ) -> str:
+    posting = reward_posting_days(paid, today=today)
     lines = [
         "| Date (ET) | Settled P&L | Account P&L | Paid reward | Pending reward | "
         "Finalized net | Resting side-hours | Avg. sides resting |",
@@ -653,6 +818,7 @@ def render_table(
         has_reward_row = paid_reward is not None or pending_reward is not None
         if (day_value < today and trade is not None
                 and paid_reward is not None and not pending_reward
+                and key not in posting
                 and not _trading_is_estimate(
                     day_value, today=today, account_history=account_history)):
             net = trade + paid_reward
@@ -665,7 +831,9 @@ def render_table(
             pending_text = "Not posted"
         else:
             paid_text = _money(paid_reward, zero_if_missing=True)
-            pending_text = _money(pending_reward, zero_if_missing=True)
+            pending_text = (
+                "Still posting" if key in posting and not pending_reward
+                else _money(pending_reward, zero_if_missing=True))
         resting = float(resting_hours.get(key, 0.0))
         elapsed = float(elapsed_hours.get(key, 0.0))
         average = resting / elapsed if elapsed > 0 else 0.0
@@ -697,9 +865,7 @@ def render_table(
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     resting_total = sum(resting_hours.get(day.isoformat(), 0.0) for day in days)
-    settled_total = (sum(
-        (settled_history.get(day.isoformat(), Decimal(0)) for day in days),
-        Decimal(0)) if settled_history is not None else None)
+    settled_total = _settled_total(days, settled_history)
     lines.extend([
         "",
         (f"- Account marked trading today (ET): "
@@ -714,9 +880,11 @@ def render_table(
          and account_realized.open_unrealized is not None
          else "- Closed / open mark today: **Unavailable**"),
         f"- Account marked trading total ({len(days)}d): **{_covered_total(displayed_trades)}**",
-        f"- Settled closed-fill trading total ({len(days)}d): "
+        f"- Settled trading total, closed fills + settlements ({len(days)}d): "
         f"**{_money(settled_total)}**",
-        f"- Balanced-pair estimate (7d): **${float(pair_total):+,.2f}**",
+        f"- Old balanced-pair estimate ({len(days)}d; diagnostic only, "
+        f"misses settlements and unpaired fills): "
+        f"**${float(pair_total):+,.2f}**",
         f"- Paid rewards: **${float(paid_total):,.2f}**",
         f"- Known pending rewards: **${float(pending_total):,.2f}**",
         f"- Finalized net subtotal (proven closed days only): "
@@ -724,16 +892,24 @@ def render_table(
         f"- Total resting side-hours: **{resting_total:,.2f}**",
         "",
         "`*` Current ET day is partial. `Not posted` is not zero. Pending "
-        "reward is never counted in finalized net.",
+        "reward is never counted in finalized net. `Still posting` marks the "
+        f"newest {REWARD_POSTING_DAYS} paid days: payouts keep arriving as "
+        "PAID for about two cycles, so their paid amount may still grow and "
+        "their net is not finalized.",
         "Trading P&L uses recorded account snapshots, with cash changes matched "
         "to the same interval. `~` means delayed midnight snapshots, not an "
-        "exact calendar day; its calendar-day net is not finalized. "
+        "exact calendar day; its calendar-day net is not finalized. Boundaries "
+        "within one minute of midnight count as the calendar day. "
         "Missing boundaries remain unavailable, not a matched-pair fallback. Today's row "
         "is marked trading: closed P&L plus current open-position cashValue, "
         "with proven non-trading cash excluded, since the recorded ET opening.",
-        "Settled P&L is the separate closed-fill ledger result; open positions "
-        "and non-trading cash are excluded and it never finalizes a missing "
+        "Settled P&L is the separate ledger result: closed fills plus venue "
+        "settlements of inventory held at resolution; open positions and "
+        "non-trading cash are excluded and it never finalizes a missing "
         "account-marked day.",
+        "Resting side-hours count every resting order, including orders that "
+        "reduce a position; the market-quality tracker counts entry orders "
+        "only, so it reads somewhat lower.",
     ])
     if account_realized is not None and _current_mark(account_realized) is None:
         lines.append(f"Account mark unavailable: {account_realized.reason}.")
@@ -767,12 +943,13 @@ def build_discord_payload(
     today: date, generated_at: datetime, unbalanced_markets: int,
     account_realized: AccountRealizedToday | None = None,
     account_history: dict[str, Decimal] | None = None,
-    settled_history: dict[str, Decimal] | None = None,
+    settled_history: dict[str, Decimal | None] | None = None,
     period_hours: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Build a compact settled-trading and reward report for Discord.
 
-    The webhook deliberately uses only the closed-fill ledger for trading P&L.
+    The webhook deliberately uses only the ledger (closed fills plus venue
+    settlements) for trading P&L.
     Account-marked equity remains available to the dashboard and CLI, but it
     is not mixed into this operator-facing reward report.
     """
@@ -791,6 +968,8 @@ def build_discord_payload(
         "------ ------- ------- -----",
     ]
     partial_split = False
+    posting = reward_posting_days(paid, today=today)
+    posting_shown = False
     for day_value in days:
         key = day_value.isoformat()
         paid_reward = paid.get(key)
@@ -801,7 +980,12 @@ def build_discord_payload(
         trading_text = _discord_amount(_trading_money(settled, missing="--"), 8)
         if has_reward:
             paid_text = _discord_amount(_money(paid_reward, zero_if_missing=True), 7)
-            pending_text = _discord_amount(_money(pending_reward, zero_if_missing=True), 7)
+            if key in posting and not pending_reward:
+                pending_text = "posting"
+                posting_shown = True
+            else:
+                pending_text = _discord_amount(
+                    _money(pending_reward, zero_if_missing=True), 7)
         else:
             paid_text = "--"
             pending_text = "--"
@@ -827,10 +1011,7 @@ def build_discord_payload(
         (paid.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
     pending_total = sum(
         (pending.get(day.isoformat(), Decimal(0)) for day in days), Decimal(0))
-    settled_total = (sum(
-        (settled_history[day.isoformat()] for day in days),
-        Decimal(0)) if settled_history is not None and days and all(
-            settled_history.get(day.isoformat()) is not None for day in days) else None)
+    settled_total = _settled_total(days, settled_history)
     reward_observed = any(
         paid.get(day.isoformat()) is not None
         or pending.get(day.isoformat()) is not None for day in days)
@@ -855,7 +1036,8 @@ def build_discord_payload(
         "fields": fields,
         "color": 0x3498DB,
         "timestamp": generated_at.isoformat(),
-        "footer": {"text": "P&L: closed fills · * today" + (
+        "footer": {"text": "P&L: closed fills + settlements · * today" + (
+            " · posting: payouts still arriving" if posting_shown else "") + (
             " · + partial split; Avg includes untyped hours" if partial_split else "")},
     }
     total_chars = (
@@ -899,12 +1081,28 @@ async def main() -> int:
         overall_trading = ledger.realized_pnl()
     finally:
         ledger.close()
-    settled_history = settled_trading_by_day(args.db, days)
     gateway = AsyncReadOnlyGateway(
         client_from_environment(),
         limiter=shared_api_limiter(ACCOUNT_REPORT_RATE_PER_SECOND),
         default_traffic_class="report",
         max_pages=ACCOUNT_ACTIVITY_MAX_PAGES)
+    settlements = await refresh_resolutions(
+        gateway, Path(args.db).parent / SETTLEMENT_CACHE_FILENAME, now=now)
+    if settlements.error is not None:
+        print(f"Settlement history: {settlements.error}", file=sys.stderr)
+    if settlements.complete_through is None:
+        # No settlement history at all: settled P&L is not proven for any day.
+        settled_history = {day.isoformat(): None for day in days}
+        overall_includes_settlements = False
+    else:
+        # A fresh read covers everything up to now, including today so far.
+        # After a failed read only the days the cached history covers count.
+        settled_history = settled_trading_by_day(
+            args.db, days, resolutions=settlements.resolutions,
+            complete_through=(None if settlements.complete_through >= now
+                              else settlements.complete_through))
+        overall_trading += settlement_total(args.db, settlements.resolutions)
+        overall_includes_settlements = True
     paid, pending = await reward_by_day(gateway)
     history: dict[str, Decimal] = {}
     try:
@@ -921,8 +1119,14 @@ async def main() -> int:
         # Historical account rows remain unavailable. Today's independently
         # bounded snapshot still runs; no incomplete ledger fallback.
         history = {}
-    account_realized = await account_realized_today(
-        args.db, gateway, now=now)
+    # Judge the mark's age at read time; the reads above can take minutes.
+    read_at = datetime.now(timezone.utc)
+    account_realized = (account_realized_from_live_cache(
+        args.db, Path(args.db).parent / LIVE_PNL_CACHE_FILENAME, now=read_at)
+        if reward_day(read_at) == today.isoformat() else None)
+    if account_realized is None:
+        account_realized = await account_realized_today(
+            args.db, gateway, now=now)
     resting, elapsed = resting_side_hours_by_day(
         args.db, days, now=now)
     table = render_table(
@@ -940,13 +1144,15 @@ async def main() -> int:
                 overall_trading=overall_trading,
                 account_realized=account_realized,
                 account_history=history,
-                settled_history=settled_history))
+                settled_history=settled_history,
+                overall_includes_settlements=overall_includes_settlements))
     if not args.quiet:
         print(table)
         print()
         print("Daily trading is account marked P&L excluding non-trading cash. "
-              "The separate pair estimate is incomplete: "
-              f"{unbalanced} unbalanced market(s); settled exits can be missing.")
+              "The old pair estimate is diagnostic only: it pairs buy fills "
+              f"alone, cannot pair {unbalanced} market(s) and excludes "
+              "settlements.")
         if _displayed_trading(
                 today, today=today, pnl={},
                 account_realized=account_realized) is None:

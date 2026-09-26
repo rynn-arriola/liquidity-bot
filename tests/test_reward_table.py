@@ -98,14 +98,17 @@ class RewardTableTests(unittest.TestCase):
                 Decimal("-30.9844"), "ok"),
         )
 
-        self.assertIn("| 2026-08-23 | $-8.00 | $-10.00 | $15.00 | $0.00 | **+5.00**", output)
+        # Both paid days are the newest two, so their payouts may still grow.
+        self.assertIn("| 2026-08-23 | $-8.00 | $-10.00 | $15.00 | Still posting | Pending", output)
         self.assertIn("| 2026-08-24 | $-8.00 | $-10.00 | $5.00 | $20.00 | Pending", output)
         self.assertIn(
             "| 2026-08-25* | $-8.00 | $-30.98 | Not posted | Not posted | Pending",
             output)
-        self.assertIn("Finalized net subtotal (proven closed days only): **$+5.00**", output)
+        self.assertIn("Finalized net subtotal (proven closed days only): "
+                      "**Unavailable (no finalized days)**", output)
         self.assertIn("Account marked trading today (ET): **$-30.98**", output)
-        self.assertIn("Balanced-pair estimate (7d): **$-30.00**", output)
+        self.assertIn("Old balanced-pair estimate (3d; diagnostic only, "
+                      "misses settlements and unpaired fills): **$-30.00**", output)
 
     def test_discord_embed_contains_two_aligned_visual_tables(self):
         days = [date(2026, 8, 19 + offset) for offset in range(7)]
@@ -171,7 +174,8 @@ class RewardTableTests(unittest.TestCase):
             "Finalized net subtotal (proven closed days only): **Unavailable (no finalized days)**",
             output)
         self.assertIn(
-            "Balanced-pair estimate (7d): **$-26.41**", output)
+            "Old balanced-pair estimate (1d; diagnostic only, "
+            "misses settlements and unpaired fills): **$-26.41**", output)
 
     def test_discord_missing_settled_day_does_not_become_zero_in_total(self):
         days = [date(2026, 9, 18), date(2026, 9, 19)]
@@ -235,11 +239,14 @@ class RewardTableTests(unittest.TestCase):
             "overall_trading": "-130.65",
             "overall_gain": "15",
             "overall_since_et": "2026-08-14",
+            "overall_includes_settlements": False,
             "settled_total": "-20",
         })
         self.assertEqual(payload["rows"][0]["settled_trading"], "-8")
-        self.assertEqual(payload["rows"][0]["net"], "5")
-        self.assertEqual(payload["rows"][0]["net_status"], "finalized")
+        # The only paid day is the newest one: still posting, not final.
+        self.assertTrue(payload["rows"][0]["gain_posting"])
+        self.assertIsNone(payload["rows"][0]["net"])
+        self.assertEqual(payload["rows"][0]["net_status"], "pending")
         self.assertIsNone(payload["rows"][1]["net"])
         self.assertEqual(payload["rows"][1]["net_status"], "pending")
         self.assertEqual(payload["rows"][1]["gain"], "0")
@@ -302,7 +309,7 @@ class RewardTableTests(unittest.TestCase):
                 [("2026-09-05", "1000", "0", "1000",
                   "2026-09-05T04:00:00+00:00", "fresh_et_day"),
                  ("2026-09-06", "1100", "0", "1100",
-                  "2026-09-06T04:01:00+00:00", "fresh_et_day"),
+                  "2026-09-06T04:02:00+00:00", "fresh_et_day"),
                  ("2026-09-07", "1100", "0", "1100",
                   "2026-09-07T04:00:00+00:00", "fresh_et_day")])
         days = [date(2026, 9, 5), date(2026, 9, 6)]
@@ -329,7 +336,7 @@ class RewardTableTests(unittest.TestCase):
                 self.assertTrue(row["trading_estimate"])
                 self.assertIsNone(row["net"])
                 self.assertEqual(row["trading_interval"][1],
-                                 "2026-09-06T04:01:00+00:00")
+                                 "2026-09-06T04:02:00+00:00")
                 rendered = render_table(
                     days, pnl={}, paid={}, pending={}, resting_hours={},
                     elapsed_hours={}, today=date(2026, 9, 7), account_history=history)
@@ -480,7 +487,7 @@ class RewardTableTests(unittest.TestCase):
         payload = build_discord_payload(
             days, elapsed_hours={}, generated_at=datetime(2026, 9, 4, 12,
             tzinfo=timezone.utc), unbalanced_markets=136, **kwargs)
-        self.assertIn("9/3      -80.32   85.76    0.00",
+        self.assertIn("9/3      -80.32   85.76 posting",
                       payload["embeds"][0]["fields"][0]["value"])
         self.assertNotIn("$-66.90", payload["embeds"][0]["fields"][0]["value"])
         snapshot = build_dashboard_snapshot(

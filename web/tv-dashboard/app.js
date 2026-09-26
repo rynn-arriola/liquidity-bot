@@ -179,7 +179,9 @@ function renderGainReport(report, livePnl) {
     closedValue == null || openValue == null
       ? `Marked account trading · ${markAge}`
       : `Closed ${closed} · open ${open} · ${markAge}`;
-  byId("overall-pnl-detail").textContent = `Incomplete ledger + paid gain · Since ${headline.overall_since_et} ET`;
+  byId("overall-pnl-detail").textContent = headline.overall_includes_settlements
+    ? `Fills + settlements + paid gain · estimate · Since ${headline.overall_since_et} ET`
+    : `Incomplete ledger + paid gain · Since ${headline.overall_since_et} ET`;
   byId("gain-report-age").textContent = readableAge(report.age_seconds);
   const stale = Number(report.age_seconds) > 7200;
   byId("gain-report-state").textContent = stale ? "SNAPSHOT STALE" : "LOCAL SNAPSHOT READY";
@@ -196,7 +198,14 @@ function renderGainReport(report, livePnl) {
       ? livePnl.marked_pnl : item.trading;
     appendMoneyCell(row, rowTrading, { signed: true, missing: "Unavailable", estimate: item.trading_estimate });
     appendMoneyCell(row, item.gain, { missing: "Not posted" });
-    appendMoneyCell(row, item.pending, { missing: "Not posted" });
+    if (item.gain_posting && (item.pending == null || Number(item.pending) === 0)) {
+      const posting = document.createElement("td");
+      posting.className = "gain-money pending-net";
+      posting.textContent = "Still posting";
+      row.append(posting);
+    } else {
+      appendMoneyCell(row, item.pending, { missing: "Not posted" });
+    }
     const hours = document.createElement("td");
     hours.className = "side-hours";
     hours.textContent = Number.isFinite(Number(item.side_hours)) ? Number(item.side_hours).toFixed(2) : "—";

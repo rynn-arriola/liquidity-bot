@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One isolated, non-overlapping hourly reward report. The report opens the
-# trading ledger read-only and makes at most twelve bounded account reads. Its
+# trading ledger read-only and makes a small number of bounded account reads
+# (settlement history: one to three pages once its local cache exists). Its
 # opportunistic API lane waits for unused host allowance and is capped at one
 # request per four seconds; the wider timeout lets it finish within the hourly
 # interval without competing with trading. It posts only to the dedicated

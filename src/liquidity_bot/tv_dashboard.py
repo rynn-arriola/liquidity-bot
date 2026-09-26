@@ -162,6 +162,7 @@ def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
                     source.get("gain"), f"gain row {index} gain"),
                 "pending": _money_value(
                     source.get("pending"), f"gain row {index} pending"),
+                "gain_posting": source.get("gain_posting") is True,
                 "side_hours": side_hours,
                 "net": net,
                 "net_status": net_status,
@@ -191,6 +192,8 @@ def _read_gain_snapshot(path: Path | None, now: datetime) -> dict[str, Any]:
             "overall_gain": _money_value(
                 source_headline.get("overall_gain"), "overall gain"),
             "overall_since_et": since,
+            "overall_includes_settlements":
+                source_headline.get("overall_includes_settlements") is True,
         }
         today_as_of = _parse_time(source_headline.get("today_as_of"))
         headline["today_as_of"] = _iso(today_as_of)

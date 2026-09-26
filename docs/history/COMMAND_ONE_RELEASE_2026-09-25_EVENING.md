@@ -74,3 +74,19 @@ Finding for follow-up: `LOCAL_CATALOG_ACCOUNT_CHANGED` top-up deferrals were
 0 on September 23-24 but 474 on September 25 (old runner) and 13 in the first
 8 minutes of this run; they lengthen refill latency (open refill-latency item)
 and are not introduced by the refactor (selector/top-up logic AST-unchanged).
+
+## Why rewarded markets unlock slowly (measured 00:14:38Z September 26)
+
+Bounded read-only pre-book diagnostic (catalog + incentive reads through the
+shared limiter at report priority; no books, no orders) using the live policy
+(size 15, daily-event lookahead 24 h). Of 709 rewarded executable markets:
+606 had no reward period active now — games 6-24 h away whose programs were
+only `day_of` (starts six hours before kickoff) and `live` (in-play, never
+traded); by kickoff distance 214 at 6-12 h, 284+86+8+3 at 12-24 h. No
+`daily_event` program was attached to any of them tonight, so the 24 h
+lookahead could not bind them early. 90 were inside the `day_of` window but
+their catalog spread was already below the 2-cent minimum entry spread. 13
+passed to the book stage (matching the live scans' 13-17 ranked). Another 160
+moneylines were beyond the 24 h window and 53 had started. Breadth therefore
+rises as each game crosses T-6 h, picked up by the 15-minute scheduled scans
+and kickoff-triggered top-ups; this is the venue reward window, not bot speed.

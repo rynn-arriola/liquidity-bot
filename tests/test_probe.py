@@ -38,7 +38,7 @@ class ProbeTests(unittest.TestCase):
         with patch(
                 "liquidity_bot.probe.load_runtime_secrets",
                 return_value=SimpleNamespace(key_id="key", secret_key="secret")), \
-                patch("liquidity_bot.probe.AsyncPolymarketUS") as client:
+                patch("liquidity_bot.sdk_client.AsyncPolymarketUS") as client:
             client_from_environment()
 
         client.assert_called_once_with(

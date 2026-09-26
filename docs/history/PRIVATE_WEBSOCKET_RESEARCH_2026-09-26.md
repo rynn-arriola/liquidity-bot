@@ -97,7 +97,9 @@ annotation-only for us: the SDK returns raw JSON and the bot already parses the
 `marketData` wrapper and both settlement field forms. Dependencies already
 satisfied (httpx 0.28.1, pynacl 1.6.2, websockets 17.1). Package:
 `polymarket_us-1.0.2-py3-none-any.whl`, 33,304 bytes, sha256
-`bc22778a16e31eb7b5b6fded6f8fa85ec6bf4c81c6686d2ae84d6ba827bae7f3`.
+`c7f61e318a1e5e018ef7c117f97e6de58008170d1a4b8724fd3801e5bae12b8e` (CORRECTED: an earlier
+web-summary value `bc22778a…` was fabricated; the raw PyPI JSON digest matches the
+downloaded file; sdist `346fcf39d466ef439e1e67b09977b2f51204a95dacc651c21ad711502ad3ee47`).
 Plan: download (needs operator OK) into an isolated venv, add `max_retries=0`
 at every client construction, run the full suite, then a reviewed deployment
 via Command 1.
@@ -116,3 +118,30 @@ via Command 1.
 > snake_case (`request_id`/`subscription_type`) and numeric type 4, 30 s each,
 > zero frames. The docs state a balance snapshot is sent on subscribe. Is the
 > balance stream currently supported for Retail accounts, and is a fix planned?
+
+## SDK 1.0.2 upgrade prepared (operator approved; NOT deployed)
+
+Downloaded only the wheel with `pip download --no-deps`, verified the
+sha256 against raw PyPI JSON (`c7f61e31…12b8e`, match) before installing it
+with `--no-deps --no-index` into an isolated copy of the production venv
+(`/tmp/sdk102-venv`); the live venv stays on 0.1.2. Dependencies already
+satisfied (httpx 0.28.1, pynacl 1.6.2, websockets 17.1).
+
+Code: new `sdk_client.new_async_client` builds every client (runner, probe,
+reward census) and passes `max_retries=0` whenever the SDK supports it, so the
+bot's limiter sees every request; `pyproject.toml` pins `polymarket-us==1.0.2`.
+Tests: `test_sdk_client.py` (retries disabled when supported, older SDK
+unchanged, installed SDK ends with no retries), `test_probe.py` retargeted to
+the helper, `test_sdk_websocket_close.py` using the real SDK
+`PrivateWebSocket`: with 1.0.2 a graceful server close reaches the bot as
+"private WebSocket disconnected"; with 0.1.2 it is silent (the fixed bug). Full
+suite passes on both SDKs: 2,320 tests each.
+
+Deployment (with an approved Command 1, after the flat gates): copy the
+verified wheel to the laptop, re-check its sha256, then
+`.venv/bin/python -m pip install --no-deps --no-index <wheel>` in the live
+checkout, confirm `polymarket-us 1.0.2`, run the installed suite, update the
+recorded dependency freeze, then restart. Rollback: reinstall 0.1.2 the same
+way (the helper works on both). A bot-initiated stream close now also emits a
+close event into the discarded stream's queue; streams are replaced on close,
+so no consumer reads it.

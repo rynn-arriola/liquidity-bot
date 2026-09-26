@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from polymarket_us import AsyncPolymarketUS
+from .sdk_client import new_async_client
 
 from .adapters import (
     AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS, shared_api_limiter)
@@ -300,7 +300,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         secrets = load_runtime_secrets(require_polymarket=True)
     except RuntimeSecretError as exc:
         raise SystemExit(str(exc)) from exc
-    client = AsyncPolymarketUS(
+    client = new_async_client(
         key_id=secrets.key_id, secret_key=secrets.secret_key,
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     gateway = AsyncReadOnlyGateway(

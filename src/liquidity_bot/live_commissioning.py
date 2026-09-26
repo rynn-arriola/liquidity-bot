@@ -32,7 +32,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from polymarket_us import AsyncPolymarketUS
+from .sdk_client import new_async_client
 
 from .active_scope_cache import write_active_scope_snapshot
 from .account_snapshots import (
@@ -4695,7 +4695,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
             "normal and critical Discord delivery must be configured")
     lease = SingleInstanceLease(args.lock_file)
     lease.acquire()
-    client = AsyncPolymarketUS(
+    client = new_async_client(
         key_id=secrets.key_id, secret_key=secrets.secret_key,
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
     ledger = ExecutionLedger(args.database)

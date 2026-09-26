@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from polymarket_us import AsyncPolymarketUS
+from .sdk_client import new_async_client
 
 from .adapters import (
     AsyncIntervalLimiter, AsyncReadOnlyGateway, REST_REQUEST_TIMEOUT_SECONDS,
@@ -34,7 +35,7 @@ def client_from_environment() -> AsyncPolymarketUS:
         secrets = load_runtime_secrets(require_polymarket=True)
     except RuntimeSecretError as exc:
         raise SystemExit(str(exc)) from exc
-    return AsyncPolymarketUS(
+    return new_async_client(
         key_id=secrets.key_id, secret_key=secrets.secret_key,
         timeout=REST_REQUEST_TIMEOUT_SECONDS)
 

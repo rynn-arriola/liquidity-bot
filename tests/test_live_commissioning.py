@@ -8788,6 +8788,44 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         await runner.private_stream.close()
         await runner.market_stream.close()
 
+    async def test_failed_blind_cancel_pass_is_named_once_per_minute(self):
+        """A swallowed blind cancellation failure must leave a reason line.
+
+        Recovery outcome is unchanged: the pass stays best-effort and the
+        bounded retry still ends in the same runner_failure.
+        """
+
+        for component, recover, limit in (
+                ("private_stream", "_recover_private_stream",
+                 MAX_PRIVATE_STREAM_RECOVERY_ATTEMPTS),
+                ("bound_streams", "_recover_bound_streams",
+                 MAX_BOUND_STREAM_RECOVERY_ATTEMPTS)):
+            with self.subTest(component=component):
+                runner, client, _ = self.build_runner()
+                await runner.preflight()
+                runner.private_stream_factory = FailingPrivateStream
+                runner.sleep = AsyncMock()
+                runner._quarantine_working_orders = AsyncMock(
+                    side_effect=AdapterError("cancel pass failed"))
+                with patch("sys.stdout", new_callable=io.StringIO) as out:
+                    stop = await getattr(runner, recover)(
+                        AdapterError("stream lost"))
+                    runner._log_blind_quarantine_failure(
+                        component, AdapterError("later"))
+
+                self.assertEqual(stop, f"runner_failure:{component.replace('_streams', '_stream')}"
+                                       "_recovery_exhausted")
+                self.assertEqual(
+                    runner._quarantine_working_orders.await_count, limit)
+                lines = [line for line in out.getvalue().splitlines()
+                         if line.startswith("[blind-quarantine-failed]")]
+                self.assertEqual(len(lines), 1, lines)
+                self.assertIn(f"component={component} folded=0 "
+                              "error=AdapterError: cancel pass failed", lines[0])
+                self.assertEqual(client.orders.create_calls, [])
+                await runner.private_stream.close()
+                await runner.market_stream.close()
+
     def test_maintenance_classifier_is_narrow(self):
         runner, _, _ = self.build_runner()
 

@@ -22,6 +22,32 @@ from .runner_shared import MAINTENANCE_FAILURE_THRESHOLD, MAINTENANCE_POLL_SECON
 
 class StreamRecoveryMixin:
 
+    def _log_blind_quarantine_failure(self, component: str, exc: Exception) -> None:
+        """Name why the best-effort blind cancellation pass failed.
+
+        The pass stays best-effort (recovery continues exactly as before), but a
+        failure here can leave quotes resting while no private listener works,
+        and it used to be swallowed silently. At most one line per component per
+        minute; the count says how many were folded in. Logging cannot raise.
+        """
+
+        try:
+            now = self._now()
+            state = getattr(self, "_blind_quarantine_log", None)
+            if state is None:
+                state = self._blind_quarantine_log = {}
+            last, folded = state.get(component, (None, 0))
+            if last is not None and 0 <= (now - last).total_seconds() < 60:
+                state[component] = (last, folded + 1)
+                return
+            state[component] = (now, 0)
+            print(f"[blind-quarantine-failed] at={now.isoformat()} "
+                  f"component={component} folded={folded} "
+                  f"error={type(exc).__name__}: {self._redacted_error_detail(exc)}",
+                  flush=True)
+        except Exception:
+            pass
+
     def _identified_recovery_markets(self) -> tuple[str, ...]:
         """Return every ledger market that may still require retirement."""
 
@@ -497,8 +523,9 @@ class StreamRecoveryMixin:
                     try:
                         await self._quarantine_working_orders(
                             require_terminal=False)
-                    except Exception:
-                        pass
+                    except Exception as quarantine_exc:
+                        self._log_blind_quarantine_failure(
+                            "private_stream", quarantine_exc)
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1
@@ -754,8 +781,9 @@ class StreamRecoveryMixin:
                     try:
                         await self._quarantine_working_orders(
                             require_terminal=False)
-                    except Exception:
-                        pass
+                    except Exception as quarantine_exc:
+                        self._log_blind_quarantine_failure(
+                            "bound_streams", quarantine_exc)
                 exc = recovery_exc
                 venue_failure_streak = (
                     venue_failure_streak + 1

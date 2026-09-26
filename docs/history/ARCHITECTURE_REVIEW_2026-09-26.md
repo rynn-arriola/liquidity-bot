@@ -89,4 +89,17 @@ The main weaknesses are throughput of the decision loop, the runner's structure,
   - WSL `sudo` needs a password, so there is no system logrotate entry. Instead, `scripts/rotate_logs.py` runs `/usr/sbin/logrotate` as `polybot` with its own state file (`data/logrotate.state`) and a generated config: weekly, `copytruncate`, dated names, `compress` + `delaycompress`, and `rotate 520`, so evidence is effectively never deleted.
   - A daily user-crontab line (`--install-cron`, idempotent, marked `# liquidity-bot log rotation`) runs it at 03:17 with `nice`/`ionice`; logrotate decides when a week has passed. Output goes to `logs/rotate.log`.
   - Tests: `tests/test_rotate_logs.py` includes a real logrotate run under an open `>>` writer (the new write lands at offset 0, and old lines are in the dated file). Dropping `copytruncate` fails 2; duplicating cron lines fails 1.
-  - Known cost: lines written during the roughly 1 s copy can be lost at each rotation. Readers were checked: the TV dashboard reads only the last 128 KB, and the status/acceptance scripts tolerate a short file.
+  - Live (restart-free deploy `dfcf297dc`; the trader was untouched):
+    - The cron line is installed.
+    - The runner's stdout/stderr were confirmed opened with O_APPEND (fdinfo flags `0102001`).
+    - First forced rotation at 15:39Z: 258,780,696 bytes moved to `logs/commissioning.log-20260926`. The new log started at offset 0 with no NUL bytes, and the runner/supervisor kept running.
+    - The status scheduler's check/diag scripts now also read the newest uncompressed rotated file, so the 2-hour window survives a rotation.
+  - Known cost (finding 4): lines written during the roughly 1 s copy can be lost at each rotation. Readers were checked: the TV dashboard reads only the last 128 KB, and the status/acceptance scripts tolerate a short file.
+- **Finding 6 — done in code (September 26); live after the next Command 1.**
+  - All 18 `except Exception: pass` sites in `src/liquidity_bot` were read in context. 16 are correct as they are:
+    - `streams.py` ×8, `hybrid_stream.py:90`, `runner_startup.py:217`: best-effort socket/reader closes during cleanup that then re-raise the original error.
+    - `api_diagnostics.py:77`, `runner_decisions.py:213`, `market_quality_measurement.py` ×2, `market_quality_store.py:170`: failures of optional logging/measurement that are already counted or must not affect trading.
+    - `runner_account.py:267`: a diagnostic failure before the original error is re-raised.
+  - 2 could change trading outcomes silently: `runner_streams.py` private-stream and bound-stream recovery. When the replacement stream cannot start, a best-effort blind cancel pass runs; if it failed, quotes could stay resting while no listener worked, and nothing said why.
+  - Both now call `_log_blind_quarantine_failure`, which prints `[blind-quarantine-failed] component=… folded=… error=…` (redacted, at most once per component per minute, and it cannot raise). Behavior is unchanged: the pass stays best-effort and the bounded retries end the same way.
+  - Test: `test_failed_blind_cancel_pass_is_named_once_per_minute` (both components). Restoring the silent `pass` fails it; removing the rate limit fails 2 subtests.

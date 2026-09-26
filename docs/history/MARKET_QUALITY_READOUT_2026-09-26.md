@@ -223,3 +223,24 @@ UTR/R6 trading history (ledger, read-only): the bot placed **no UTR orders from
 since August" therefore reflects no UTR trading before 09-18; the only
 complete-day UTR evidence is those 21 orders. R6's single day (09-18, $0) is
 the stronger but still thin case. Decide activation after the next posting.
+
+## Refill pauses and restart cost (offline log analysis, 01:4xZ September 26)
+
+**Correction:** `LOCAL_CATALOG_ACCOUNT_CHANGED` did not start on 09-25. Top-up
+`[api-backpressure]` deferrals were 53 (09-22), 338 (09-23), 448 (09-24),
+481 (09-25) and 59 (09-26 so far); before the 09-25 release they were logged
+without a `cause=` field. They are the intentional catalog checkpoint yielding
+to position service when the account changes mid-scan. Top-up waits were
+steady: lifecycle median 41.8-51.6 s (p90 64-104 s), post-flat median 30.9-47.5 s.
+Measured post-flat underfilled slot-minutes: 2.4-100.9 per day (≤1.7
+slot-hours); lifecycle refills add roughly one slot-hour per day by estimate.
+At ~$0.25 net per side-hour this is about $1/day: a scan-resume redesign of
+this safety checkpoint is not justified by value.
+
+**Restart cost:** market-hours below the pre-restart active count during the 3 h
+after each runner start (from `[top-up] active=`), 21 starts 09-20..09-25:
+216.2 market-hours total (0.3-37.2 each; five 09-24 starts ≈ 60). At roughly
+$0.50 per market-hour (two sides) that is on the order of $5 per restart and
+~$18/day at the recent restart rate. Fewer, better-timed restarts capture much
+of this without code; a warm restart that re-admits still-valid previously
+bound markets targets the rest.

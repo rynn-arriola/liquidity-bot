@@ -113,3 +113,34 @@ atp 0.46, atpdb 0.41, wtt 0.36, setkameua 0.25, setkamemd 0.26, setkamecz
 -0.335. Limits: one week, account-wide earnings, approximate rest hours,
 small samples for several leagues, supply constraints (a lower-value market
 may still beat an empty slot) and no causal proof.
+
+## Pool crowding and market-maker competition versus payout (offline)
+
+1,060 rested markets (≥0.5 side-h, game dates 09-18..09-24; 1,012 `day_of`,
+48 `daily_event`). Pool/target/discount from tracker signatures; crowding =
+distinct events/markets observed carrying the same program on that ET day in
+`[market-measurement]` logs (observed only, not complete venue membership);
+competition fields are per-side maxima/medians recorded at quote placement.
+Spearman against paid $/side-h (net in parentheses); quartile paid $/h:
+
+| Factor | Spearman | Q1 → Q4 paid $/h |
+|---|---:|---|
+| Our share of reward score | +0.62 (+0.31) | 0.072, 0.239, 0.365, 0.674 |
+| Competition: total reward score on side | -0.41 (-0.27) | 0.575, 0.330, 0.260, 0.184 |
+| Queue ahead of our order | -0.40 (-0.26) | 0.524, 0.360, 0.283, 0.182 |
+| Advertised pool $ | +0.21 (+0.15) | 0.182, 0.278, 0.359, 0.531 |
+| Target size | -0.22 (-0.16) | no monotonic pattern |
+| Discount factor | +0.14 (+0.03) | no monotonic pattern |
+| Book depth | +0.08 (0.00) | no pattern |
+| Events sharing the program that day | +0.04 (+0.02) | no pattern |
+| Pool $ per observed event | -0.02 (0.00) | no pattern |
+
+The advertised program pool is not split across the program's events in
+practice: 689/968 paid markets (71%) were paid more than pool/observed-events
+(e.g. a setkameua market paid $6.70 = 19% of a $35 pool shared by 298 observed
+events). Program crowding therefore does not predict payout; in-market
+competition does. The selector's projection already uses order share and total
+score, consistent with its 0.78 market-level rank correlation (higher than
+share alone, 0.62). No crowding penalty is indicated. Limits: one week,
+placement-time snapshots, approximate rest time, account-wide earnings,
+correlational.

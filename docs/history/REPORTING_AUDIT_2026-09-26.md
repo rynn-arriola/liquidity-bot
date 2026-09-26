@@ -133,3 +133,26 @@ until these files are deployed.
 Deployment: reporting scripts, the TV dashboard server and its page. The
 runner itself does not need these changes, but production files change only
 with operator approval (Command 1 or an explicit reporting-only sync).
+
+## Accuracy verification of the fixes (03:2xZ)
+
+- **Code review** of the full diff: no defects found.
+- **Posting window** measured from the 15-minute earnings snapshots: payouts
+  arrive in batches about a day apart, and each batch completes the previous
+  day and starts the next (09-24 batch: 09-22 $108.83→$125.15, 09-23 starts;
+  09-25 batch: 09-23 $92.09→$127.37, 09-24 starts at $67.51). While a batch is
+  in progress the second-newest day is still growing, so two days is the
+  correct window; between batches it withholds one already-final day
+  (conservative, never overstates).
+- **Live mark reuse:** twice, the runner's cached mark equalled the report's
+  own independent balance/position/cash read exactly (−$51.0755, non-trading
+  $327.86, 0 positions).
+- **Settlements vs account truth, last 30 days (21 days with account data):**
+  mean daily |settled − account| 20.26 → 13.40. Totals: fills-only −$1,046.41,
+  with settlements −$1,204.93, account −$1,359.07. Excluding 09-16, with
+  settlements −$1,166.58 vs account −$1,171.01 (fills-only −$1,008.06). Single
+  days still differ because the account marks open positions across midnight
+  while settled P&L books them when they close or settle.
+- **Open:** 09-16 account −$188.06 vs settled −$38.35 ($150 gap). This gap is
+  unchanged by settlements and predates these fixes; its cause is not
+  established.

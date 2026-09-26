@@ -61,3 +61,23 @@ Watch the following, while in-play reducers exist:
 - `execution_state_unknown` is no longer repeated across markets.
 
 `[order-read-listed]` must never name an order that later proves to have been gone.
+
+## Command 1 (05:18Z) and a warm-restart startup fix
+
+Command 1 steps:
+- Graceful stop at 05:18:51Z, flat. Two shutdown ownership retries in one WTA market cleared.
+- Gate 1 at 05:19Z: all zero.
+- `45cfb5735` fast-forwarded into WSL; hashes match; SDK 1.0.2.
+- Production suite: 2,344 PASS.
+- Gate 2 at 05:21:28Z: all zero. `DEPLOYED_COMMIT=45cfb5735`.
+- Started `auto 15 32 hybrid` (supervisor 440299).
+
+The runner then died three times in about 29 s each. The supervisor held `ATTENTION_REQUIRED` ("3 fast process deaths", trading stopped); the account stayed flat throughout.
+
+Cause:
+- This was the first restart with a saved scope.
+- `[warm-restart] outcome=readmitted remembered=32 readmitted=32`.
+- `_select_reward_market` then asked `selection.top_viable(0)` for fresh markets, and the selector raises `ValueError: selection limit must be positive`.
+- The earlier warm-restart tests covered partial re-admission only.
+
+Fix (operator standing instruction "just fix it so you can run the bot"): skip the fresh request when re-admitted markets already fill every slot. A regression test fails with the original `ValueError` without the fix. Full suite: 2,345 PASS. Deployed by a second stop/gate/start in the same Command 1.

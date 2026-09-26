@@ -153,6 +153,13 @@ class StartupSelectionTests(unittest.IsolatedAsyncioTestCase):
         await runner._select_reward_market(NOW)
         self.assertEqual(runner.bound, [("keep-1", "keep-2", "fresh-a")])
 
+    async def test_readmission_that_fills_every_slot_starts_without_fresh_request(self):
+        # 2026-09-26 05:21Z: 32 of 32 re-admitted; asking top_viable(0) crashed startup.
+        runner = selection_runner(multi_selection("keep-1", "fresh-a"),
+                                  ["keep-1", "keep-2", "keep-3"], max_markets=3)
+        await runner._select_reward_market(NOW)
+        self.assertEqual(runner.bound, [("keep-1", "keep-2", "keep-3")])
+
     async def test_readmitted_markets_start_even_when_scan_has_nothing_viable(self):
         runner = selection_runner(no_viable_selection(), ["keep-1"])
         await runner._select_reward_market(NOW)

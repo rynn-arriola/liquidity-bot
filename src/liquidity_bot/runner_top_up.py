@@ -57,10 +57,15 @@ class TopUpSchedulingMixin:
                 # constraint -- authorized uptime, not per-market size -- went
                 # untouched for the first quarter hour of every run.
                 # Re-admitted markets come first; fresh viable ones fill the rest.
+                # `top_viable` refuses a zero limit, and a full warm restart
+                # leaves none (2026-09-26 05:21Z: 32 of 32 re-admitted, three
+                # startup crashes before the supervisor held attention).
+                remaining = self.config.max_markets - len(readmitted)
                 fresh = tuple(
                     item.market.slug for item in selection.top_viable(
-                        max(0, self.config.max_markets - len(readmitted)),
-                        exclude=self._barred_slugs() | set(readmitted)))
+                        remaining,
+                        exclude=self._barred_slugs() | set(readmitted))
+                ) if remaining > 0 else ()
                 chosen = readmitted + fresh
                 self._bind_markets(
                     chosen or (selection.selected.market.slug,))

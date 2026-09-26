@@ -110,3 +110,29 @@ The operator asked what data to save "to better calibrate our gate entries or ho
 ```bash
 cd /home/polybot/liquidity-bot && .venv/bin/python -B scripts/market_ranker.py --install-cron
 ```
+
+## Command 1 activation of `9e3b4f6e8` (20:24–20:32Z)
+
+**Review before restart.** The three pending changes were reviewed: calibration records, catalog/funnel fix and UTR/R6 exclusion. Warm-restart readmission also applies the exclusion (`_catalog_market_is_executable`).
+
+**Self-stop just before the stop.**
+- At 20:24:15, :19 and :23Z three `venue:` taker orders (not bot-created) closed positions on `aec-itfme-nazmel-yukike`, `aec-itfme-chekog-aledub` and `aec-setkameua-paryur-novrus`.
+- The runner raised `RuntimeInvariantViolation: working order has no owned place intent`, first in private-stream handling, then in the decision sweep, and began its own shutdown. The operator's stop arrived at 20:24:34Z.
+- This is the designed ownership fail-closed rule, not a code defect.
+
+**Stop and deploy.**
+- Gate 1 at 20:24:48Z: all zero.
+- Deployed `9e3b4f6e8`: 16 changed-file hashes match; production suite 2,334 PASS.
+- Gate 2 passed at 20:28:44Z; supervisor 724417, runner 724433.
+
+**Acceptance at 20:32Z.**
+- `[selection-exclusions] excluded_leagues=r6,utr`.
+- Warm restart 31/32 (1 inside the flatten window).
+- 26 placements; 0 Traceback, critical, pregame-unavailable, 404 and `[measurement-disabled]`.
+- 1 benign `account_cash_report` retry (cash changed during the report).
+- API 2.39/s, 0 rate-limited.
+- 14 orders on 13 markets (cap 15 from the window loss).
+- First funnel line: `rewarded=628 unsupported=0 no_period=478 spread_filtered=97 eligible=53 books_ranked=52 viable=46`.
+- New archive records are flowing: discovery 1, entry_suppressed 70, fill_markout 3.
+
+**Ranker schedule.** Switched to the production script with `--install-cron`.

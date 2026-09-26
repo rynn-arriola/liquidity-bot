@@ -156,3 +156,23 @@ with operator approval (Command 1 or an explicit reporting-only sync).
 - **Open:** 09-16 account −$188.06 vs settled −$38.35 ($150 gap). This gap is
   unchanged by settlements and predates these fixes; its cause is not
   established.
+
+## Report-only deployment (03:3xZ, operator: "Go update")
+
+Following the 09-15/09-16 report-only precedent: `2bc9c3b39` fast-forwarded
+into the WSL production checkout without stopping or restarting trading.
+Supervisor 413082 / runner 413096 keep their 02:35:46Z start and remain loaded
+on `9f000d404`; `DEPLOYED_COMMIT` deliberately still names that commit. The
+only `src/` differences from it are `settlement_activity.py` (new) and
+`tv_dashboard.py`, neither imported by the runner. Parity will therefore show
+"WSL source differs from DEPLOYED_COMMIT" for those two files until the next
+Command 1, which is expected, not a fault.
+
+Evidence: six changed files' SHA-256 equal between Windows and WSL; the
+reporting tests (91) pass in the production checkout; the full production
+suite ran 2,339 tests and caught only a docs line budget (`BUGFIXES.md` at 101
+lines), fixed by folding the entry into its header. Only the TV dashboard was
+restarted (PID 445 → 423867); `/api/state` serves the gain report and the
+live mark, and the page carries the new labels. The first new-code Discord
+post and TV table refresh are the 00:07 ET hourly timer run (natural
+acceptance; no manual Discord post).

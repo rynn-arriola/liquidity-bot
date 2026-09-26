@@ -63,3 +63,30 @@ The official docs were compared with our code and **measured** behavior only.
 4. **Read-only WebSocket test** of `ORDER_SNAPSHOT` and balance over a period that includes fills (needs operator approval). Only if proven should the WebSocket replace some REST reads.
 5. **Modify for reprices:** a flagged live trial measuring outcomes via the order stream. This saves a call per reprice and removes the resting gap.
 6. **Investigate the `order_retrieve` sources (0.47/s):** why exact reads happen despite 95% bulk-listing proofs.
+
+## CORRECTION after double-checking (same evening)
+
+The operator asked whether the plan had been double-checked. It had not, and the "4 real 429s" claim above is **wrong**.
+- `AsyncReadOnlyGateway` increments `rate_limited_responses` **only on HTTP 429** (`adapters.py`), so the `[api-budget] rate_limited=` counts are real venue 429s.
+- Of `[api-429]` log lines, only 4 exist for the same period. The `log_rate_limit` print in `api_diagnostics.py` is wrapped in a silent `except: pass`, so most are evidently being lost. That is a diagnostic bug to fix.
+
+**Measured 429s (September 24–26, from `failure_categories`)** — all on account endpoints, about 499 in total:
+
+| Endpoint | 429s |
+|---|---|
+| Balance | 175 |
+| Cash history | 131 |
+| Execution history | 116 |
+| Positions | 77 |
+
+**Load when they happen:** minutes with a 429 averaged **3.19/s**, against 2.55/s without. The venue's effective limit on account reads sits near our current load.
+
+**Other wasted calls:**
+- `order_retrieve@404`: 3,624 in 3 days (exact reads of orders the venue no longer returns);
+- `open_orders@503`: 187.
+
+**Revised plan:**
+- **Do NOT raise the internal 4/s cap.**
+- Reduce **account-endpoint** polling instead (with-position proof cadence, balance cadence, exact reads/404s). That is where the throttling happens, and it is also what makes room for more orders.
+- Each change needs its timing checked against the 15 s equity-freshness and proof rules before it is proposed.
+- Fix the silent `[api-429]` logging.

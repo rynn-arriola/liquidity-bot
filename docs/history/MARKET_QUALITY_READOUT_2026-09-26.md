@@ -37,3 +37,31 @@ typically more liquid and higher-ranked; the always-wide cohort is small; this
 says nothing about markets that are already one cent at discovery (never
 selected). It does indicate that retained tight markets are valuable, which
 raises the value of preserving already-selected markets across restarts.
+
+## Authenticated liquidity earnings (read-only, 00:4xZ September 26)
+
+One account-wide `GET /v1/incentives/earnings` (`program_type=liquidityProgram`,
+`start_date=2026-08-14`, report limiter) plus one targeted
+`2026-09-25..26` query. Account-wide rows: manual activity cannot be
+excluded, but the account is otherwise bot-dedicated in this era.
+
+- 6,208 rows, 2026-08-14..2026-09-24, **all PAID, $5,142.20**; zero PENDING or
+  SKIPPED. 4,795 PAID rows are under $1 (latest 2026-09-24), so sub-$1
+  market/day rewards are being paid in practice despite the September 18
+  support wording; no $1 filter is justified by payout evidence.
+- September 25 rows are not posted yet (targeted query returned 0).
+- Daily paid fell: 17th $188.08, 18th $146.69, 19th $201.63, 20th $187.35,
+  21st $116.37, 22nd $125.15, 23rd $127.37, 24th $67.51, while paid
+  market-days stayed 173-238. Average per market-day fell $0.97 → $0.39;
+  share under $0.25 rose 43% → 58%. League moves: WTT $22-59/day through the
+  19th then $0 on 21st-23rd; ATP $19-30 on 19th-20th then ~0; modus $0 after
+  the 20th; setkameua $31.72 on the 24th versus $50-84 before. ET 2026-09-24
+  also contained about seven runner starts (touch/quality/deferred-exit
+  releases). Cause is not attributed: venue program availability/pool sizes and
+  bot restarts/releases are both plausible and confounded.
+- Bot era PAID by league: setkameua $1,735.20 (2,367 market-days, avg $0.73),
+  cs2 $726.46 (avg $2.30), wtt $590.05, setkamemd $480.07, itfme $356.40
+  (avg $0.38), itfwo $204.48 (avg $0.36).
+- September 18-24 reward per tracker resting side-hour: itfme $0.104/h and
+  itfwo $0.092/h used 854 side-hours (~25% of measured resting time) versus
+  setkameua $0.298/h, wtt $0.453/h, atp $0.461/h, cs2 $0.317/h.

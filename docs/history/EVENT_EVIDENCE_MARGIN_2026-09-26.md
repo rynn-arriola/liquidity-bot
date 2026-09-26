@@ -41,3 +41,32 @@ About 490 of the roughly 5,760 daily 60-second batch refreshes failing (about 8.
 ## Acceptance after Command 1
 
 `event pregame state is unavailable` lines should fall by more than 90%. Any left over name their reason, and a reason other than `evidence_age` points to a different cause.
+
+## Command 1 activation (September 26, 16:34–16:50Z)
+
+The operator asked for a review of all changes, then a restart. The review found no defects:
+- the event margin keeps the 30 s rule, and the extra refresh failed only 5 times all day;
+- the blind-cancel log is log-only and cannot raise;
+- the archive removed no module the trader or any timer imports.
+
+**Stop.** Graceful stop at 16:34:13Z, with 0 shutdown failures.
+- Summary `flat=false`: a 16:29Z maker fill (short 15 at 0.55 on `aec-itfme-dakbobnatcox-seadarmaxste`) came after the 16:24Z pre-check.
+- Being 85 min from kickoff, it was **parked** by design with its exact reducer (BUY 15 at 0.53) resting.
+- Two near-kickoff positions were flattened.
+
+**Gate 1 refused (START REFUSED).** The operator chose "start with the position".
+
+**Deploy.** Deployed `f404d420a`:
+- 35 changed-file hashes match, and the deleted files are absent;
+- production suite: 2,311 PASS.
+
+**Stopped reconciliation.** While stopped, the parked reducer filled at 16:42:47Z and the venue showed 0 orders and 0 positions. The ledger still held the pre-fill state, so the operator-approved position gate refused on the mismatch. `.local-tools/reconcile_stopped_trial.py` (stopped-only, read-only on the venue; used in earlier releases) then recorded 1 terminal order and 1 fill. After that, the strict `--require-flat` gate passed with everything at zero. The start therefore needed **no exception**.
+
+**Start and acceptance.** Gate 2 passed at 16:46:03Z; `DEPLOYED_COMMIT=f404d420a`; supervisor 677247, runner 677270.
+
+Acceptance at 16:49:32Z:
+- warm restart readmitted 22/24 (2 `not_executable`: games started);
+- 62 placements;
+- 0 of each: Traceback, critical, `[runtime-recovery]`, "pregame state is unavailable", `[event-evidence-unfresh]`, `[blind-quarantine-failed]`, 404 and import errors;
+- API 3.17/s (startup burst), 1 failure, 0 rate-limited;
+- 30 orders on 19 markets and 2 fresh positions, each covered by an exact-size reducer at 16:50:17Z; 0 unresolved/unknown.

@@ -153,7 +153,7 @@ class AccountSourcePolicy:
         normalize_mode(self.default_mode)
         for field, low, high in (("verification_seconds", 15, 60),
                                  ("read_concurrency", 1, 4),
-                                 ("rest_pending_entry_ceiling", 1, 30)):
+                                 ("rest_pending_entry_ceiling", 1, 40)):
             value = getattr(self, field)
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f"account-source {field} must be {low}-{high}")

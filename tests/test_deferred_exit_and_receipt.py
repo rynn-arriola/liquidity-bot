@@ -14,7 +14,7 @@ from test_venue_state import raw_order
 from liquidity_bot.account_source_runner import AccountSourceRunner
 from liquidity_bot.execution_ledger import Execution
 from liquidity_bot.reconciler import ActionKind, DesiredStateReconciler, WorkingOrder
-from liquidity_bot.risk_windows import load_risk_window_policy
+from liquidity_bot.risk_windows import RiskWindowPolicy, load_risk_window_policy
 
 
 class DeferredExitTests(unittest.TestCase):
@@ -122,7 +122,7 @@ class ReceiptWindowTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(live, "CommissioningRunner", partial(
                         AccountSourceRunner, account_state_mode=mode)):
                     runner, client, _ = self.fixture.build_runner(
-                        clock=lambda: clock[0], risk_window_policy=load_risk_window_policy())
+                        clock=lambda: clock[0], risk_window_policy=RiskWindowPolicy())
                 self.addAsyncCleanup(runner.market_stream.close)
                 self.addAsyncCleanup(runner.private_stream.close)
                 await runner.preflight()
@@ -165,7 +165,7 @@ class ReceiptWindowTests(unittest.IsolatedAsyncioTestCase):
                     with patch.object(live, "CommissioningRunner", partial(
                             AccountSourceRunner, account_state_mode=mode)):
                         runner, client, _ = self.fixture.build_runner(
-                            clock=lambda: clock[0], risk_window_policy=load_risk_window_policy())
+                            clock=lambda: clock[0], risk_window_policy=RiskWindowPolicy())
                     self.addAsyncCleanup(runner.market_stream.close)
                     self.addAsyncCleanup(runner.private_stream.close)
                     await runner.preflight()

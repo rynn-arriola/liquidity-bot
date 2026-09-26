@@ -11,7 +11,7 @@ from tests import test_live_commissioning as fixtures
 from tests import test_risk_windows
 from liquidity_bot.cash_activity import NontradingCashChange
 from liquidity_bot.errors import AdapterError
-from liquidity_bot.risk_windows import load_risk_window_policy
+from liquidity_bot.risk_windows import RiskWindowPolicy, load_risk_window_policy
 
 
 class AccountReportingTests(IsolatedAsyncioTestCase):
@@ -29,7 +29,7 @@ class AccountReportingTests(IsolatedAsyncioTestCase):
         with patch.object(fixtures, "CommissioningRunner", cls):
             runner, client, notifier = self.fixture.build_runner(
                 clock=lambda: self.now,
-                risk_window_policy=None if legacy else load_risk_window_policy())
+                risk_window_policy=None if legacy else RiskWindowPolicy())
         if mode == "hybrid":
             from test_hybrid_account import SilentStream
             runner._websocket_factory = SilentStream

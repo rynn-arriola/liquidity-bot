@@ -94,7 +94,7 @@ class ControlTests(TestCase):
     def test_source_policy_bounds(self):
         for kwargs in ({"default_mode": "auto"}, {"read_concurrency": 5},
                        {"read_concurrency": True}, {"verification_seconds": 0},
-                       {"rest_pending_entry_ceiling": 31}):
+                       {"rest_pending_entry_ceiling": 41}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 AccountSourcePolicy(**kwargs)
 
@@ -210,8 +210,8 @@ class SourceRunnerTests(IsolatedAsyncioTestCase):
         self.assertEqual(startup_mode(None, runner.ledger.path.parent), "rest")
 
     async def test_window_budget_survives_rest_websocket_handoff(self):
-        from liquidity_bot.risk_windows import load_risk_window_policy
-        runner, client, _ = await self.build(risk_window_policy=load_risk_window_policy())
+        from liquidity_bot.risk_windows import RiskWindowPolicy, load_risk_window_policy
+        runner, client, _ = await self.build(risk_window_policy=RiskWindowPolicy())
         meter = runner._window_risk
         # A complete matched pair realizes a $6 loss, reaching the first
         # scaled reducer tier. Cash by itself is not a

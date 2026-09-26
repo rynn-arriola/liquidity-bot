@@ -28,7 +28,7 @@ class RiskWindowTests(unittest.TestCase):
         self.addCleanup(root.cleanup)
         self.ledger = ExecutionLedger(Path(root.name) / "ledger.db")
         self.addCleanup(self.ledger.close)
-        self.policy = load_risk_window_policy()
+        self.policy = RiskWindowPolicy()
         self.meter = WindowRiskMeter(self.ledger.connection, self.policy)
 
     def observe(self, pnl, *, at=START):
@@ -60,26 +60,28 @@ class RiskWindowTests(unittest.TestCase):
         for size, slots in ((5, 20), (10, 32), (30, 24)):
             config = CommissioningConfig("market", True, True, True,
                                          quote_size=D(size), max_markets=slots)
-            self.assertEqual(config.hard_stop_loss_usd, D(30))
-            self.assertEqual(config.weekly_operating_reserve_usd, D(840))
-            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 20)
+            self.assertEqual(config.hard_stop_loss_usd, D(40))
+            self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 32)
             for hour in range(24):
-                self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 30)
+                self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 40)
 
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
             "market", True, True, True, quote_size=D(15), max_markets=32)
-        self.assertEqual(config.hard_stop_loss_usd, D(30))
+        self.assertEqual(config.hard_stop_loss_usd, D(40))
         self.assertEqual(config.max_early_exit_loss_usd, D(12))
         self.assertEqual(config.max_stressed_exit_loss_usd, D(60))
         self.assertEqual(config.max_market_exposure_usd, D(135))
         self.assertEqual(config.max_portfolio_exposure_usd, D(630))
         self.assertEqual(config.execution_fee_observation_usd, D(20))
-        self.assertEqual(config.weekly_operating_reserve_usd, D(840))
+        self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
-             for loss in (0, 6, 12, 18, 24, 30)],
-            [30, 25, 20, 15, 10, 0])
+             for loss in (0, 6, 8, 16, 24, 32, 40)],
+            # Operator 2026-09-26 evening: cap 40, window stop $40, same
+            # remaining-budget fractions (caps drop at $8/$16/$24/$32 loss).
+            [40, 40, 32, 24, 16, 8, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
         self.observe(0)
@@ -195,7 +197,7 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def runner(self, **kwargs):
         runner, client, notifier = self.fixture.build_runner(
-            risk_window_policy=load_risk_window_policy(), **kwargs)
+            risk_window_policy=RiskWindowPolicy(), **kwargs)
         self.addAsyncCleanup(runner.private_stream.close)
         self.addAsyncCleanup(runner.market_stream.close)
         await runner.preflight()
@@ -473,4 +475,4 @@ class WindowRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def policy():
-        return load_risk_window_policy()
+        return RiskWindowPolicy()

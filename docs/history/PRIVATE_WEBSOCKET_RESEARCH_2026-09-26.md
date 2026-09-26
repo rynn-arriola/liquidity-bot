@@ -60,3 +60,59 @@ Sources: docs.polymarket.us/api-reference/websocket/private and /overview;
 docs.polymarket.us/trader-guide/connection-issues; docs.polymarket.us/changelog;
 status.polymarketexchange.com; github.com/Polymarket/polymarket-us-python
 (commits 83128f4, c04cb1a, 87385ad; README; private.py); pypi.org/project/polymarket-us.
+
+## Follow-up after "do all recommended" (01:5xZ)
+
+**Read-only matrix** (four separate 30 s connections, same key, no orders or
+ledger access; live bot unaffected: 01:54:49Z authenticated gate 30 orders,
+0 unresolved/unknown):
+
+| Case | Frames | Result |
+|---|---:|---|
+| `SUBSCRIPTION_TYPE_ORDER_SNAPSHOT` (camelCase) | 2 | `orderSubscriptionSnapshot`, `eof=true`, 29 orders (REST 30 at 01:54:49, moving) |
+| `SUBSCRIPTION_TYPE_ACCOUNT_BALANCE` camelCase | 0 | no data, no error |
+| same, snake_case keys | 0 | no data, no error |
+| snake_case with numeric type `4` | 0 | no data, no error |
+
+Order snapshot works when requested; balance is not delivered in any
+documented format and no error is returned: venue-side.
+
+**Order-snapshot wiring: NOT implemented (stopped for operator decision).**
+Each private shard already uses the venue's 10-subscription cap (1 order + 8
+per-market positions + 1 balance), and `PrivateLedgerProjector` applies an
+order snapshot as a *complete* order set (`apply_order_snapshot(...,
+complete=True)`), so an order placed between snapshot capture and delivery
+would be absent and could trigger unknown/absent repair and quarantine churn.
+In hybrid mode REST already proves the full order set at startup, so value is
+low and risk is in the ownership path. Websocket-only mode also cannot become
+ready because `initial_state_ready` requires a balance snapshot the venue never
+sends.
+
+**SDK 0.1.2 → 1.0.2 review:** POST (create/cancel) is never retried; GET/HEAD/
+OPTIONS/DELETE are retried twice by default on 408/409/429/5xx and network
+errors, hidden from the bot's shared limiter — the upgrade must construct
+clients with `max_retries=0`. Each request gains a `poly-correlation-id` (useful
+for venue tracing of 401/429). The "BREAKING" market type change is
+annotation-only for us: the SDK returns raw JSON and the bot already parses the
+`marketData` wrapper and both settlement field forms. Dependencies already
+satisfied (httpx 0.28.1, pynacl 1.6.2, websockets 17.1). Package:
+`polymarket_us-1.0.2-py3-none-any.whl`, 33,304 bytes, sha256
+`bc22778a16e31eb7b5b6fded6f8fa85ec6bf4c81c6686d2ae84d6ba827bae7f3`.
+Plan: download (needs operator OK) into an isolated venv, add `max_retries=0`
+at every client construction, run the full suite, then a reviewed deployment
+via Command 1.
+
+**Support message draft (operator to send; no credentials):**
+
+> Subject: Retail private WebSocket — SUBSCRIPTION_TYPE_ACCOUNT_BALANCE delivers no data
+>
+> On `wss://api.polymarket.us/v1/ws/private`, authenticated connections accept
+> subscriptions and deliver `SUBSCRIPTION_TYPE_ORDER`, `SUBSCRIPTION_TYPE_POSITION`
+> and `SUBSCRIPTION_TYPE_ORDER_SNAPSHOT` data normally, but
+> `SUBSCRIPTION_TYPE_ACCOUNT_BALANCE` returns nothing — no
+> `accountBalancesSnapshot`, no updates and no error frame. Reproduced on
+> 2026-09-19 14:40:07–14:41:07 UTC (60 s, balance only) and on 2026-09-26
+> 01:53:43–01:54:43 UTC with camelCase (`requestId`/`subscriptionType`),
+> snake_case (`request_id`/`subscription_type`) and numeric type 4, 30 s each,
+> zero frames. The docs state a balance snapshot is sent on subscribe. Is the
+> balance stream currently supported for Retail accounts, and is a fix planned?

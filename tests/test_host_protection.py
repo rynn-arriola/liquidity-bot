@@ -86,9 +86,19 @@ class EntryExpiryTests(unittest.IsolatedAsyncioTestCase):
                        {"time_in_force": "TIME_IN_FORCE_GOOD_TILL_CANCEL"}):
             with self.subTest(change=change), self.assertRaises(OrderValidationError):
                 build_order_payload(replace(request, **change), market())
-        for value in (0, -1, 59, 301, True, 120.5):
+        for value in (0, -1, 59, 601, True, 120.5):
             with self.assertRaises(ValueError):
                 EntryExpiryPolicy(lifetime_seconds=value)
+
+    def test_production_policy_is_ten_minutes_within_the_ceiling(self):
+        policy = load_entry_expiry_policy()
+        self.assertTrue(policy.enabled)
+        self.assertEqual(policy.lifetime_seconds, 600)
+        self.assertEqual(EntryExpiryPolicy(lifetime_seconds=600).deadline(
+            NOW, NOW + timedelta(hours=2), 300), NOW + timedelta(seconds=600))
+        # Still shortened to the pregame flatten boundary.
+        self.assertEqual(EntryExpiryPolicy(lifetime_seconds=600).deadline(
+            NOW, NOW + timedelta(seconds=420), 300), NOW + timedelta(seconds=120))
 
     def test_policy_can_disable_without_changing_reducers(self):
         self.assertIsNone(EntryExpiryPolicy(False).deadline(NOW, None, 300))

@@ -15,9 +15,12 @@ class EntryExpiryPolicy:
     def __post_init__(self):
         if type(self.enabled) is not bool:
             raise ValueError("entry expiry enabled must be boolean")
+        # 600 s ceiling (operator, 2026-09-26): each expiry forces a proof
+        # and a replacement gap, while unattended-host exposure grows with the
+        # lifetime. Ten minutes halves the churn without a longer silent risk.
         if (type(self.lifetime_seconds) is not int
-                or not 60 <= self.lifetime_seconds <= 300):
-            raise ValueError("entry expiry lifetime must be 60..300 seconds")
+                or not 60 <= self.lifetime_seconds <= 600):
+            raise ValueError("entry expiry lifetime must be 60..600 seconds")
 
     def deadline(self, now: datetime, game_start: datetime | None,
                  before_start_seconds: int) -> datetime | None:

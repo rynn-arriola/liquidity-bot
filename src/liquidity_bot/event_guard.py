@@ -201,8 +201,36 @@ class EventAwareGateway(AsyncReadOnlyGateway):
     async def fetch_markets_by_slugs(self, slugs):
         slugs = tuple(slugs)
         markets = await super().fetch_markets_by_slugs(slugs)
+        reason = None
         try:
             await self.refresh_event_states(slugs)
-        except AdapterError:
-            pass
+        except AdapterError as exc:
+            reason = f"{type(exc).__name__}:{exc}"
+        self._log_unfresh_event_evidence(slugs, reason)
         return {s: self.apply_event_status(m) for s, m in markets.items()}
+
+    def _log_unfresh_event_evidence(self, slugs, reason) -> None:
+        """Diagnostic only: say why a contract batch lacks fresh event proof.
+
+        Measured 2026-09-26: whole eight-market batches repeatedly failed with
+        "event pregame state is unavailable" while this refresh swallowed its
+        reason. Behavior is unchanged; entries still require fresh evidence.
+        """
+
+        now = self._event_now()
+        unfresh = [s for s in slugs
+                   if s not in self._started and not self.event_entry_allowed(s)]
+        if not unfresh:
+            return
+        last = getattr(self, "_event_unfresh_logged_at", None)
+        if last is not None and 0 <= (now - last).total_seconds() < 60:
+            return
+        self._event_unfresh_logged_at = now
+        if reason is None:
+            retry_at = self._event_retry_at
+            reason = (f"retry_window_until={retry_at.isoformat()}"
+                      if retry_at is not None and now < retry_at
+                      else "no_fresh_pregame_evidence")
+        sample = ",".join(unfresh[:3])
+        print(f"[event-evidence-unfresh] at={now.isoformat()} markets={len(unfresh)}/"
+              f"{len(slugs)} reason={reason[:240]} sample={sample}", flush=True)

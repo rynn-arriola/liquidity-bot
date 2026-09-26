@@ -106,6 +106,35 @@ class EventGuardTests(unittest.IsolatedAsyncioTestCase):
         market = await gate.fetch_market("aec-fixture")
         self.assertTrue(market.event_allows_entry(self.now))
 
+    async def test_contract_batch_logs_why_event_evidence_is_unfresh(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        parent = EventAwareGateway.__mro__[1]
+        market = _market(market_row())
+        fetch = AsyncMock(return_value={"aec-fixture": market})
+        gate = self.gateway()
+        self.events.side_effect = AdapterError("event lifecycle batch has missing events")
+        with patch.object(parent, "fetch_markets_by_slugs", fetch):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                result = await gate.fetch_markets_by_slugs(["aec-fixture"])
+            self.assertIn("[event-evidence-unfresh]", out.getvalue())
+            self.assertIn("markets=1/1", out.getvalue())
+            self.assertIn("missing events", out.getvalue())
+            self.assertFalse(result["aec-fixture"].event_allows_entry(self.now))
+            repeat = io.StringIO()
+            with contextlib.redirect_stdout(repeat):
+                await gate.fetch_markets_by_slugs(["aec-fixture"])
+            self.assertEqual(repeat.getvalue(), "", "logged at most once a minute")
+            self.now += timedelta(seconds=61)
+            self.events.side_effect = None
+            fresh = io.StringIO()
+            with contextlib.redirect_stdout(fresh):
+                result = await gate.fetch_markets_by_slugs(["aec-fixture"])
+            self.assertEqual(fresh.getvalue(), "")
+            self.assertTrue(result["aec-fixture"].event_allows_entry(self.now))
+
     async def test_exact_membership_cannot_be_inferred_or_removed(self):
         gate = self.gateway()
         await gate.refresh_event_states(["aec-fixture"])

@@ -204,10 +204,9 @@ serial diagnostic run, or pass filename globs for a focused run, for example
 
 Release evidence comes from the production interpreter inside WSL, where the
 bot runs. A native Windows run needs the repository `.venv` (plain `python`
-lacks the pinned dependencies) and still reports six files
+lacks the pinned dependencies) and still reports four files
 (`test_host_protection`, `test_market_quality`, `test_next_release_bundle`,
-`test_scalp_measurement`, `test_shadow_run`, `test_summary_image_report`) as
-failing only because Windows cannot delete open temporary databases and the
+`test_summary_image_report`) as failing only because Windows cannot delete open temporary databases and the
 host-wide API coordinator deliberately requires POSIX `flock`.
 
 ## Bounded read-only probe
@@ -373,7 +372,11 @@ WebSocket event loop. Use `--discord-summary-minutes 0` to disable routine
 summaries while retaining code-level critical-alert support. No webhook is
 called by the test suite.
 
-## Persistent shadow evaluation
+## Persistent shadow evaluation (archived 2026-09-26)
+
+The shadow and scalp experiments, with their tests and scripts, moved to
+[archive/experiments/](archive/experiments/README.md) on 2026-09-26. The trader does
+not load them. The commands below are historical; restore the files first to run them.
 
 ```powershell
 $env:PYTHONPATH = "src"

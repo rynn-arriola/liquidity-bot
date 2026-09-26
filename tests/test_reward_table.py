@@ -564,8 +564,6 @@ class RewardTableTests(unittest.TestCase):
             "scripts/rewards_report.py",
             "scripts/usable_markets.py",
             "src/liquidity_bot/reward_census.py",
-            "src/liquidity_bot/scalp_run.py",
-            "src/liquidity_bot/shadow_run.py",
         )
         for relative in report_paths:
             with self.subTest(path=relative):

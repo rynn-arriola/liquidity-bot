@@ -4178,6 +4178,7 @@ class CommissioningRunner(
                     await self._log_api_budget(now)
                     next_api_budget_log = now + timedelta(
                         seconds=API_BUDGET_LOG_SECONDS)
+                self._sample_fill_markouts(now)
                 stop_reason = await self._service_urgent_positions() or ""
                 if stop_reason:
                     break

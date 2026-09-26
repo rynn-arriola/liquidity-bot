@@ -20,6 +20,75 @@ DECISION_SCHEDULER_LOG_SECONDS = 60.0
 
 class RunnerDiagnosticsMixin:
 
+    # Calibration measurements (scripts/calibration_report.py). Both write only
+    # to the optional market-quality archive; neither reads the API, gates,
+    # delays or changes an order. A failure prints once and switches that
+    # measurement off for this process instead of being swallowed silently.
+
+    def _measurement_failed(self, component: str, exc: Exception) -> None:
+        disabled = getattr(self, "_disabled_measurements", None)
+        if disabled is None:
+            disabled = self._disabled_measurements = set()
+        if component not in disabled:
+            disabled.add(component)
+            print(f"[measurement-disabled] at={self._now().isoformat()} "
+                  f"component={component} error={type(exc).__name__}: "
+                  f"{str(exc)[:160]}", flush=True)
+
+    def _sample_fill_markouts(self, now: datetime) -> None:
+        """Record mid prices 30 s / 2 min / 10 min after each owned fill."""
+
+        sink = getattr(self, "quality_sink", None)
+        if sink is None or "fill_markout" in getattr(self, "_disabled_measurements", ()):
+            return
+        try:
+            from .fill_markouts import FillMarkoutSampler
+            from .market_quality_measurement import emit
+            sampler = getattr(self, "_fill_markout_sampler", None)
+            if sampler is None:
+                sampler = self._fill_markout_sampler = FillMarkoutSampler()
+
+            def book_for(slug):
+                state = self._markets.get(slug)
+                return None if state is None else (state.book, state.book_observed_at)
+
+            sampler.poll(self.ledger.query, now, book_for,
+                         lambda record: emit(sink, "fill_markout", lambda: record))
+        except Exception as exc:
+            self._measurement_failed("fill_markout", exc)
+
+    def _note_entry_suppressed(self, slug: str, action: Any, now: datetime,
+                               reason: str) -> None:
+        """One record per market side per minute when a cap blocks an entry."""
+
+        sink = getattr(self, "quality_sink", None)
+        if sink is None or "entry_suppressed" in getattr(self, "_disabled_measurements", ()):
+            return
+        try:
+            from .market_quality_measurement import emit
+            seen = getattr(self, "_entry_suppressed_at", None)
+            if seen is None:
+                seen = self._entry_suppressed_at = {}
+            key = (slug, action.side, reason)
+            last = seen.get(key)
+            if last is not None and 0 <= (now - last).total_seconds() < 60:
+                return
+            seen[key] = now
+            state = self._markets.get(slug)
+            start = (state.market.game_start
+                     if state is not None and state.market is not None else None)
+            working, reservations = self._flat_entry_orders_and_reservations()
+            emit(sink, "entry_suppressed", lambda: {
+                "at": now.isoformat(), "market": slug, "side": action.side,
+                "price": action.price, "reason": reason,
+                "plan_reason": action.reason,
+                "cap": self._effective_entry_order_cap(now),
+                "pending_entries": len(working) + reservations,
+                "seconds_to_event": ((start - now).total_seconds()
+                                     if start is not None else None)})
+        except Exception as exc:
+            self._measurement_failed("entry_suppressed", exc)
+
     def _log_selection_scan(self, selection: RewardMarketSelection) -> None:
         """Expose discovery headroom once for every successful full scan."""
 

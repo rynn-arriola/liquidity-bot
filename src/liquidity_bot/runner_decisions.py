@@ -663,6 +663,8 @@ class DecisionMixin:
                 # still flow through the reconciler; only a building PLACE is
                 # suppressed. The next ledger/private input dirties the owner
                 # and retries after real capacity exists.
+                self._note_entry_suppressed(
+                    slug, actions[0], frame.now, "pending_entry_cap")
                 actions = []
             if (actions and actions[0].kind == ActionKind.PLACE_POST_ONLY
                     and frame.position == 0 and self._entry_observation_pending()):

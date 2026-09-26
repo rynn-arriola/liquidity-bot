@@ -927,6 +927,66 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(stop)
         self.assertEqual(client.orders.create_calls, [])
 
+    async def test_cap_blocked_entry_is_recorded_once_per_minute(self):
+        """Measurement only: the blocked PLACE is still never sent."""
+
+        class Sink:
+            def __init__(self):
+                self.records = []
+
+            def emit(self, kind, payload):
+                self.records.append((kind, payload))
+
+        runner, client, _ = self.build_runner()
+        await runner.preflight()
+        runner._evaluate_rewards(NOW)
+        runner.quality_sink = Sink()
+        runner._loss_entry_order_cap = 0
+
+        await runner._decide_for_market("market-one", NOW)
+        await runner._decide_for_market("market-one", NOW + timedelta(seconds=30))
+
+        self.assertEqual(client.orders.create_calls, [])
+        suppressed = [p for k, p in runner.quality_sink.records if k == "entry_suppressed"]
+        self.assertEqual(len(suppressed), 1)
+        self.assertEqual(suppressed[0]["market"], "market-one")
+        self.assertEqual(suppressed[0]["reason"], "pending_entry_cap")
+        self.assertEqual(suppressed[0]["cap"], 0)
+        self.assertIsNotNone(suppressed[0]["seconds_to_event"])
+
+    async def test_fill_markouts_sample_the_runner_book_and_fail_visibly(self):
+        records = []
+        runner, _, _ = self.build_runner()
+        await runner.preflight()
+        runner.quality_sink = SimpleNamespace(emit=lambda kind, payload: records.append((kind, payload)))
+        runner._sample_fill_markouts(NOW)  # baseline: no history backfill
+        runner.ledger.apply_execution(Execution(
+            execution_id="markout-fill", client_order_id="client-markout",
+            exchange_order_id="exchange-markout", market_slug="market-one", side="BUY",
+            price=Decimal("0.49"), qty=Decimal("10"), fee=Decimal("0"),
+            liquidity="MAKER", intent="ORDER_INTENT_BUY_LONG", event_at=NOW), received_at=NOW)
+        runner._sample_fill_markouts(NOW + timedelta(seconds=3))
+        state = runner.state_for("market-one")
+        state.book = BookSnapshot(slug="market-one", bids=(BookLevel(0.50, 10),),
+                                  offers=(BookLevel(0.52, 10),))
+        state.book_observed_at = NOW + timedelta(seconds=30)
+        runner._sample_fill_markouts(NOW + timedelta(seconds=31))
+        (kind, record), = records
+        self.assertEqual((kind, record["execution_id"], record["horizon_seconds"]),
+                         ("fill_markout", "markout-fill", 30))
+        self.assertAlmostEqual(record["mid"], 0.51)
+
+        runner.ledger.query = Mock(side_effect=RuntimeError("disk gone"))
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            runner._sample_fill_markouts(NOW + timedelta(seconds=40))
+            runner._sample_fill_markouts(NOW + timedelta(seconds=50))
+        self.assertEqual(output.getvalue().count("[measurement-disabled]"), 1)
+        self.assertIn("component=fill_markout", output.getvalue())
+        import inspect
+        self.assertIn("self._sample_fill_markouts(now)",
+                      inspect.getsource(CommissioningRunner.run), "run loop must sample")
+
     async def test_position_orders_and_reducers_do_not_consume_entry_cap(self):
         runner, _, _ = self.build_runner()
         await runner.preflight()

@@ -85,3 +85,8 @@ The main weaknesses are throughput of the decision loop, the runner's structure,
   - On live data its JSON matched the old script field for field, and `--require-flat` refused (exit 1) while trading.
   - Updated callers: the status-check scripts (`wsl_pm_check`, `wsl_pm_restart`, `wsl_pm_fix_deploy`, `gate_read`) and the Command 1 scratch scripts. The scheduler's `pm_check.sh` was re-run successfully on the new path.
   - 352 unreferenced `.local-tools` files (224 MB) were moved, not deleted, to `.local-tools/archive/2026-09-26-unreferenced/`. The 22 files still cited by history evidence stay in place.
+- **Finding 4 — done (September 26).**
+  - WSL `sudo` needs a password, so there is no system logrotate entry. Instead, `scripts/rotate_logs.py` runs `/usr/sbin/logrotate` as `polybot` with its own state file (`data/logrotate.state`) and a generated config: weekly, `copytruncate`, dated names, `compress` + `delaycompress`, and `rotate 520`, so evidence is effectively never deleted.
+  - A daily user-crontab line (`--install-cron`, idempotent, marked `# liquidity-bot log rotation`) runs it at 03:17 with `nice`/`ionice`; logrotate decides when a week has passed. Output goes to `logs/rotate.log`.
+  - Tests: `tests/test_rotate_logs.py` includes a real logrotate run under an open `>>` writer (the new write lands at offset 0, and old lines are in the dated file). Dropping `copytruncate` fails 2; duplicating cron lines fails 1.
+  - Known cost: lines written during the roughly 1 s copy can be lost at each rotation. Readers were checked: the TV dashboard reads only the last 128 KB, and the status/acceptance scripts tolerate a short file.

@@ -22,7 +22,7 @@ earnings download and the TV snapshot. Nothing was posted.
 
 ## Findings
 
-1. **HIGH — lifetime P&L on the TV dashboard is not reliable.**
+1. **LOW (corrected below; originally reported HIGH) — lifetime P&L on the TV dashboard excludes settlement outcomes.**
    `tv-gain-snapshot.json` (02:07Z): overall $3,578.42 = ledger trading
    −$1,563.78 + PAID $5,142.20, flagged `overall_estimate`. Fill inventory does
    not net to zero in 291 of 3,501 traded markets (6,180.65 contracts,
@@ -59,3 +59,20 @@ earnings download and the TV snapshot. Nothing was posted.
 - Make midnight account snapshots robust, or show a clearly labeled provisional
   net (paid − settled) when account P&L is missing.
 - Label the pair estimate and resting-hours definitions or drop the pair estimate.
+
+## CORRECTION to finding 1 (03:1xZ)
+
+The 291-market / $2,957.87 figure was an analysis error: fill direction was
+inferred from whether the intent contained "LONG", which inverts the 234
+`ORDER_INTENT_SELL_LONG` and 115 `ORDER_INTENT_SELL_SHORT` fills from the early
+bot. Using the ledger's own `intent_direction`, **60** markets have fills that
+do not net to zero. Read-only `ACTIVITY_TYPE_POSITION_RESOLUTION` history (408
+rows since 2026-06-21, 406 with a held position) explains **45** of them as
+market settlements (settlement P&L `afterPosition.realized −
+beforePosition.realized` ≈ −$50.27 on those markets); **15** remain unexplained,
+all last filled 2026-08-15/16 (85 contracts). The TV lifetime figure is
+therefore off by roughly $50–$90, not thousands. Finding 1 is downgraded to
+LOW. Also measured: `ACTIVITY_TYPE_LIQUIDITY_PROGRAM` and
+`ACTIVITY_TYPE_TAKER_FEE_REBATE` activity returned 0 rows, so reward payouts
+are not appearing as account cash activity and are not leaking into
+account-marked trading P&L.

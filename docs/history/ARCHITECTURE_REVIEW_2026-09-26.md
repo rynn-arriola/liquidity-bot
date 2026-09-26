@@ -110,3 +110,11 @@ The main weaknesses are throughput of the decision loop, the runner's structure,
   - who may stop or restart the bot, and under which guard.
 
   Each claim was checked against `supervise_commissioning.sh`, `watch_host.ps1`, `host_recovery.py`, the live systemd units, `data/` and the process list. It is linked from the AI_OPERATOR index row for COMMISSIONING. Three stale atomic-write `.tmp` files (Sep 10/22/23) and the inactive 1.35 GB `scalp.db` are listed there but **not deleted**; that is left for the operator's approval.
+- **Remaining findings (operator: "Do all remaining with same process").**
+  - **Finding 1: measured, not built.** The hybrid proof veto costs 0.32 s per expiry gap, and decision latency p95 is 2.9 s. The loss-tier pending-entry cap binds 79% of the time, with a mean shortfall of 0.89 orders, so a decision-loop redesign could add at most about 3%. See RESTING_EFFICIENCY_2026-09-26.
+  - **Finding 2: deferred.** A generated layer map was added instead (`scripts/runner_layers.py`, `tests/test_runner_layers.py`, docs/ARCHITECTURE.md). 9 methods run three layers deep.
+  - **Finding 5: done.** 12 inactive modules (4,167 lines), 6 test files and the scalp scripts were moved to `archive/experiments/` with history preserved. `shadow_math` and `capacity` stay, and the trader-used tests are now `tests/test_shadow_math.py`. The suite went from 2,361 to 2,311 tests.
+  - **Finding 8: done.** STATUS now opens with a plain-English summary, and its stale envelope rows (size 10, $25 stop, $420/$90/$40) were corrected to the loaded values from DECISIONS (size 15, $30 stop, $630/$135/$60, caps 30/25/20/15/10).
+  - **Also fixed on the way:** the cause of the game-status drop-outs (EVENT_EVIDENCE_MARGIN_2026-09-26).
+  - **Measured:** the first effect of the 10-minute expiry (RESTING_EFFICIENCY_2026-09-26).
+  - **Confirmed:** the Kalshi scheduler's automatic wakes (4 consecutive 10-second "Not due" runs with no prompt).

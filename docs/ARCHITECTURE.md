@@ -137,7 +137,7 @@ A method overridden in both subclasses executes three layers deep, so tracing it
 python -B scripts/runner_layers.py
 ```
 
-At `83c0e959a`, 77 methods are overridden below `CommissioningRunner`, and 9 run three layers deep:
+On 2026-09-26, 77 methods are overridden below `CommissioningRunner`, and 9 run three layers deep:
 - `__init__`, `preflight`, `_rest_reconcile`;
 - `_refresh_execution_state_for_decision`;
 - `_read_owned_order_states`, `_read_exact_order_states`;

@@ -31,9 +31,11 @@ def write(payload):
 
 class LoaderTests(unittest.TestCase):
     def test_shipped_file_is_the_operator_decision(self):
-        # 2026-09-26: UTR/R6 exclusion on hold until batched payouts post.
+        # 2026-09-26 operator decision: exclude leagues we rested in but were
+        # never paid for (UTR 2,919 quotes/57 markets, R6 258/9; zero rows of
+        # any program type). Barely-tried leagues (RL, BBL, UFC) stay in.
         self.assertEqual(load_selection_exclusions(DEFAULT_SELECTION_EXCLUSIONS_PATH),
-                         SelectionExclusions())
+                         SelectionExclusions(frozenset({"r6", "utr"})))
 
     def test_valid_leagues_load(self):
         directory, path = write({"excluded_leagues": ["utr", "r6"]})

@@ -7,7 +7,7 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
-**CHECK MONDAY September28 — exclude UTR and R6 from selection? (operator decision)**
+**DECIDED September26 (evening) — UTR and R6 excluded; loads at the next Command 1.** The operator chose to exclude leagues we rested in but were never paid for, and to keep barely-tried leagues (RL, BBL, UFC, LGS Cup) in. A later full-history check found zero rows of any program type for UTR, and zero for UTR by exact slug. Original notes follow.
 - **Paid rewards:** none. Zero paid rows for any `utr` or `r6` market in 6,585 bot-era liquidity payouts (read-only, 17:4xZ September26; Sept24 is fully posted, Sept25 still posting).
 - **Trading:** 12 UTR positions in 7 days, 0 wins, -$9.81, all taker exits (thin books). About 2,900 UTR quotes occupied slots. [Evidence](docs/history/CALIBRATION_MEASUREMENTS_2026-09-26.md), [readout](docs/history/MARKET_QUALITY_READOUT_2026-09-26.md).
 - **On Monday:** recheck payouts (Sept25–27 fully posted) and UTR/R6 trading. If still unpaid, choose between two options. (a) Exclude via `config/selection_exclusions.json` → `["utr", "r6"]`. (b) Operator preference 2026-09-26: keep measuring them but give them only spare slots, never priority; this needs a small selector change. Either option is selection-only: positions and exits are untouched. Also review the first `scripts/market_ranker.py` rankings (every rewarded market within 6 h, net $/h, blocking rule) for the 2-cent rule question.

@@ -99,6 +99,24 @@ def finish(root: Path, status: str, token: str | None = None) -> None:
     write_state(root, state)
 
 
+def resume(root: Path, token: str) -> None:
+    """Return a proven-flat recovery generation to ordinary armed service.
+
+    Operator decision 2026-09-26 (24/7 host, as Kalshi D-144): after a reboot
+    or double process loss, a recovery-only pass that proves the account flat
+    resumes normal trading instead of pausing for review. Only the exact live
+    generation may resume; a manual stop (disarmed), attention or a newer
+    launch refuses. The retry budget resets so a later reboot recovers too.
+    """
+    state = read_state(root)
+    if (state.get("token") != token
+            or state.get("status") not in {"armed", "recovering"}):
+        raise ValueError("host launch disarmed or superseded")
+    state.update(status="armed", attempts=0, updated_at=time.time())
+    state.pop("next_attempt_at", None)
+    write_state(root, state)
+
+
 def process_present() -> bool:
     # All trading processes on this sole live host count, even another checkout.
     result = subprocess.run(["ps", "-eo", "comm=,args="], check=True,
@@ -165,7 +183,7 @@ def tick(root: Path, *, present=process_present, popen=subprocess.Popen,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["tick", "arm", "disarm", "finish", "check"])
+    parser.add_argument("command", choices=["tick", "arm", "disarm", "finish", "check", "resume"])
     parser.add_argument("values", nargs="*")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     # Shell launch/stop already hold descriptor 9 across process changes.
@@ -186,6 +204,10 @@ def main() -> int:
                     "attention", "recovered", "disarmed"}:
                 raise ValueError("finish requires status and token")
             finish(args.root, *args.values)
+        elif args.command == "resume":
+            if len(args.values) != 1:
+                raise ValueError("resume requires the generation token")
+            resume(args.root, args.values[0])
         else:
             state = read_state(args.root)
             if (len(args.values) != 1 or state.get("token") != args.values[0]

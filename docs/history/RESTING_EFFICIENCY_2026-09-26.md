@@ -67,3 +67,21 @@ Acceptance at 13:53Z:
 - API 1.40/s, 0 failures.
 
 Next, compare resting side-hours per hour, expiry replacements per hour, fills per resting hour and loss per fill against 05:31–13:05Z (26.8 average sides; about 310 expiries/h; 125 fills per 7.5 h).
+
+## 24/7 laptop host (operator, after Kalshi D-144; automatic Windows sign-in enabled)
+
+Before this change, after a reboot or the loss of both processes the Windows watchdog ran recovery-only, proved flat, and then left trading paused "for operator review". Three fast crashes latched attention permanently.
+
+- `host_recovery resume TOKEN`: only the exact live armed/recovering generation may resume. Manual stop (disarmed), attention or a newer launch refuses. The retry budget resets so the next reboot recovers too.
+- `supervise_commissioning.sh`:
+  - A recovery-only exit 0 plus a successful resume switches to normal mode. Every normal preflight and ownership gate runs again.
+  - A refused resume keeps the old pause.
+  - Three fast deaths now give `state=COOLDOWN`: 900 s, then retry, at most 12 cycles, then attention.
+  - Refusal (2), unproven flatness (3) and integrity failure (4) still latch attention immediately.
+- Scheduler: `SELF-HEALING` classification, and the restart script refuses during a cooldown.
+- Tests:
+  - resume after flat recovery;
+  - refused resume keeps the pause;
+  - 39 runs across 12 cooldowns, then bounded attention;
+  - resume refuses stop, attention and superseded launches, and resets the budget.
+  - Deliberate reversals each fail.

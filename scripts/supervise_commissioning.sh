@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Restart only after an unexpected process death. Safety refusals/non-flat or
-# repeated crashes remain in attention mode, without relaunching trading.
+# Restart only after an unexpected process death. Safety refusals/non-flat stay
+# in attention mode. Repeated fast crashes cool down 15 minutes and retry (at
+# most 12 cycles); a host recovery that proves flat resumes normal trading
+# (operator decision 2026-09-26, 24/7 laptop host, as Kalshi D-144).
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -37,6 +39,9 @@ MAX_FAST_CRASHES=3
 FAST_CRASH_SECONDS=120
 FAST=0
 BACKOFF=10
+MAX_COOLDOWNS=12
+COOLDOWN_SECONDS=900
+COOLDOWNS=0
 
 alert() {
     "$PY" -m liquidity_bot.supervisor_alert --critical "$1" >/dev/null 2>&1 || true
@@ -116,6 +121,16 @@ while true; do
     wait "$RUNNER_PID"
     CODE=$?
     if [ "$HOST_MODE" = "recovery-only" ]; then
+        if [ "$CODE" -eq 0 ] && "$PY" -B -m liquidity_bot.host_recovery resume "$HOST_TOKEN"; then
+            # Proven flat and still the live armed generation: resume the
+            # ordinary loop. Every normal preflight/ownership gate runs again.
+            echo "[supervisor] host recovery proved flat; resuming normal trading"
+            alert "Liquidity Bot host recovery proved flat; resuming normal trading with the saved settings."
+            HOST_MODE=normal
+            FAST=0
+            BACKOFF=10
+            continue
+        fi
         if [ "$CODE" -eq 0 ]; then
             "$PY" -B -m liquidity_bot.host_recovery finish recovered "$HOST_TOKEN" || true
             alert "Liquidity Bot host recovery proved flat. Trading remains paused for operator review."
@@ -170,7 +185,18 @@ while true; do
         BACKOFF=10
     fi
     if [ "$FAST" -ge "$MAX_FAST_CRASHES" ]; then
-        attention "${FAST} fast process deaths"
+        COOLDOWNS=$((COOLDOWNS + 1))
+        if [ "$COOLDOWNS" -gt "$MAX_COOLDOWNS" ]; then
+            attention "${FAST} fast process deaths after ${MAX_COOLDOWNS} cooldowns"
+        fi
+        # Transient failures (venue outage, network) get another chance
+        # without an operator; a deterministic defect stays bounded.
+        echo "[supervisor] state=COOLDOWN reason=${FAST} fast process deaths cycle=${COOLDOWNS}/${MAX_COOLDOWNS} retry_in=${COOLDOWN_SECONDS}s trading=stopped"
+        alert "Liquidity Bot died ${FAST} times quickly; cooling down ${COOLDOWN_SECONDS}s, then retrying (cycle ${COOLDOWNS}/${MAX_COOLDOWNS})."
+        sleep "$COOLDOWN_SECONDS"
+        FAST=0
+        BACKOFF=10
+        continue
     fi
 
     echo "[supervisor] unexpected exit $CODE after ${RAN}s; restart in ${BACKOFF}s"

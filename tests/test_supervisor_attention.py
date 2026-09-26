@@ -10,7 +10,7 @@ import unittest
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash runtime required")
 class SupervisorAttentionTests(unittest.TestCase):
     def run_supervisor(self, code, *, mode=None, relaunch_proven=False,
-                       recovery=False):
+                       recovery=False, resume_code=0):
         with tempfile.TemporaryDirectory(prefix="supervisor-test-") as directory:
             root = Path(directory)
             for subdir in ("scripts", ".venv/bin", "logs", "bin"):
@@ -26,6 +26,7 @@ case "$*" in
   *liquidity_bot.quote_size*) echo 5; exit 0;;
   *liquidity_bot.slot_capacity*) echo 20; exit 0;;
   *liquidity_bot.supervisor_alert*) exit 0;;
+  *liquidity_bot.host_recovery*resume*) echo "$*" >> host-calls; exit "$TEST_RESUME_CODE";;
   *liquidity_bot.host_recovery*) echo "$*" >> host-calls; exit 0;;
   *liquidity_bot.live_commissioning*) echo "$*" >> calls; exit "$TEST_RUNNER_CODE";;
 esac
@@ -40,6 +41,7 @@ exit 0
 """)
             sleeper.chmod(0o755)
             env = dict(os.environ, TEST_RUNNER_CODE=str(code),
+                       TEST_RESUME_CODE=str(resume_code),
                        TEST_RELAUNCH_CODE="0" if relaunch_proven else "1",
                        PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
             args = ["bash", str(script)]
@@ -48,12 +50,32 @@ exit 0
             if recovery:
                 args += ["recovery-only", "1" * 32]
             result = subprocess.run(args, cwd=root, env=env,
-                                    text=True, capture_output=True, timeout=10)
+                                    text=True, capture_output=True, timeout=30)
             calls = (root / "calls").read_text().splitlines()
+            host_calls = root / "host-calls"
+            self.host_calls = (host_calls.read_text().splitlines()
+                               if host_calls.exists() else [])
             return result, calls
 
-    def test_host_recovery_is_single_pass_even_for_restartable_exit(self):
-        for code in (0, 2, 3, 5):
+    def test_flat_host_recovery_resumes_normal_trading(self):
+        result, calls = self.run_supervisor(0, mode="rest", recovery=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--recovery-only", calls[0])
+        self.assertNotIn("--recovery-only", calls[1])
+        self.assertIn("resuming normal trading", result.stdout)
+        self.assertTrue(any(" resume " + "1" * 32 in call for call in self.host_calls))
+
+    def test_refused_resume_keeps_the_old_pause(self):
+        # E.g. the operator stopped the bot during recovery (disarmed).
+        result, calls = self.run_supervisor(0, mode="rest", recovery=True,
+                                            resume_code=1)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any("finish recovered" in call for call in self.host_calls))
+
+    def test_host_recovery_is_single_pass_for_failed_or_restartable_exit(self):
+        for code in (2, 3, 5):
             with self.subTest(code=code):
                 result, calls = self.run_supervisor(code, mode="rest", recovery=True)
                 self.assertEqual(result.returncode, code)
@@ -75,11 +97,15 @@ exit 0
                 self.assertIn("state=ATTENTION_REQUIRED", result.stdout)
                 self.assertIn("trading=stopped", result.stdout)
 
-    def test_three_fast_crashes_enter_attention_not_a_fourth_run(self):
+    def test_fast_crashes_cool_down_and_retry_then_bounded_attention(self):
         result, calls = self.run_supervisor(5)
-        self.assertEqual(len(calls), 3)
+        # Three fast deaths per cycle, twelve cooldown cycles, then attention.
+        self.assertEqual(len(calls), 3 * 13)
+        self.assertEqual(result.stdout.count("state=COOLDOWN"), 12)
+        self.assertIn("cycle=1/12 retry_in=900s", result.stdout)
         self.assertEqual(result.returncode, -15)
-        self.assertIn("state=ATTENTION_REQUIRED reason=3 fast process deaths", result.stdout)
+        self.assertIn("state=ATTENTION_REQUIRED reason=3 fast process deaths after 12 cooldowns",
+                      result.stdout)
 
     def test_only_verified_run_may_replace_explicit_launch_choice(self):
         for proven in (False, True):

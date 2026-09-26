@@ -14,7 +14,7 @@ from liquidity_bot.entry_expiry import EntryExpiryPolicy, load_entry_expiry_poli
 from liquidity_bot.errors import ApiAdmissionDeferred
 from liquidity_bot.execution_ledger import Execution, ExecutionLedger, OrderState, PositionState
 from liquidity_bot.host_recovery import (
-    arm, control_lock, finish, read_state, tick, write_state)
+    arm, control_lock, finish, read_state, resume, tick, write_state)
 from liquidity_bot.live_orders import (
     AsyncTradingGateway, OrderRequest, OrderValidationError, build_order_payload)
 from liquidity_bot.live_session import ControlledActionDriver
@@ -190,6 +190,32 @@ class HostRecoveryTests(unittest.TestCase):
         finish(self.root, "recovered", new["token"])
         self.assertEqual(self.run_tick(), "recovered")
         self.launch.assert_not_called()
+
+    def test_proven_flat_recovery_resumes_armed_service_with_fresh_budget(self):
+        state = self.armed()
+        for now in (1000, 1200):
+            self.assertEqual(self.run_tick(now=now), "recovery_started")
+        self.assertEqual(read_state(self.root)["attempts"], 2)
+        resume(self.root, state["token"])
+        resumed = read_state(self.root)
+        self.assertEqual((resumed["status"], resumed["attempts"]), ("armed", 0))
+        self.assertNotIn("next_attempt_at", resumed)
+        # A later reboot (both processes gone) is recovered again.
+        self.assertEqual(self.run_tick(now=5000), "recovery_started")
+
+    def test_resume_refuses_manual_stop_attention_or_superseded_launch(self):
+        old = self.armed()
+        new = self.armed()
+        with self.assertRaises(ValueError):
+            resume(self.root, old["token"])
+        finish(self.root, "attention", new["token"])
+        with self.assertRaises(ValueError):
+            resume(self.root, new["token"])
+        newest = self.armed()
+        finish(self.root, "disarmed")
+        with self.assertRaises(ValueError):
+            resume(self.root, newest["token"])
+        self.assertEqual(read_state(self.root)["status"], "disarmed")
 
     def test_launch_failure_preserves_backoff_and_corrupt_state_refuses(self):
         self.armed()

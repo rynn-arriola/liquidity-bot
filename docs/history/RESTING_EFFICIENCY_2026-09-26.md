@@ -115,3 +115,28 @@ Acceptance at 14:51Z:
 The Windows watchdog reports `process_present` against the new `host_recovery` (armed generation).
 
 A real reboot has not been exercised yet. Suggested: one operator restart at a quiet time, without stopping the bot. Expect the watchdog recovery-only pass to prove flat, then "resuming normal trading".
+
+## 10-minute expiry effect — first measurement (September 26, 15:58Z)
+
+**Method.** Ledger-only and read-only:
+- PLACE intents are joined to `execution_orders`.
+- An order's resting interval runs from the intent's `created_at` to the terminal `event_at` (or now while OPEN), clipped to the window.
+- The replacement gap is the time from an EXPIRED order's `event_at` to the next PLACE on the same market/side.
+- Fills are unreversed `execution_fills`; fill age is measured from the order's placement.
+
+To remove the time-of-day effect, the 10-minute window is compared with the same UTC hours on the two previous days (5-minute expiry).
+
+| Window | Avg resting orders | Placements/h | Expiries/h | Replacement gap median / p90 | Expiry-gap order-hours lost per hour | Fills/h (per 100 resting order-hours) | Fills after >5 min resting |
+|---|---|---|---|---|---|---|---|
+| 09-24 13:50–16:00Z (5 min) | 22.4 | 609 | 162 | 39 s / 323 s | 3.42 | 48.9 (219) | 3 (3%) |
+| 09-25 13:50–16:00Z (5 min) | 25.0 | 377 | 259 | 27 s / 346 s | 4.56 | 20.8 (83) | 5 (11%) |
+| 09-26 05:31–13:47Z (5 min, morning) | 27.7 | 361 | 313 | 28 s / 325 s | 6.22 | 16.7 (60) | 2 (1%) |
+| **09-26 13:50–15:55Z (10 min)** | **23.8** | **194** | **126** | **19 s / 319 s** | **2.37** | **8.7 (36)** | **3 (17%)** |
+
+**Reading (MEASURED, 2 hours only).**
+- Expiry churn roughly halved: 126 expiries/h against 259 at the same hours yesterday, and placements fell by about half, which saves API calls and proofs.
+- Order-hours lost to expiry gaps fell from 4.56 to 2.37 per hour.
+- Average resting orders (23.8) are inside the same-hours range (22.4–25.0). The morning's 27.7 reflects time of day, not the expiry change.
+- Fill rate did not rise; it is the lowest of the four windows. 3 of 18 fills came on quotes older than 5 minutes, which is too few to judge the stale-fill risk.
+
+**Next.** Repeat over a full day, including loss per fill, before calling the change accepted.

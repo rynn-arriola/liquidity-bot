@@ -7,6 +7,12 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
+**CHECK MONDAY September28 — exclude UTR and R6 from selection? (operator decision)**
+- **Paid rewards:** none. Zero paid rows for any `utr` or `r6` market in 6,585 bot-era liquidity payouts (read-only, 17:4xZ September26; Sept24 is fully posted, Sept25 still posting).
+- **Trading:** 12 UTR positions in 7 days, 0 wins, -$9.81, all taker exits (thin books). About 2,900 UTR quotes occupied slots. [Evidence](docs/history/CALIBRATION_MEASUREMENTS_2026-09-26.md), [readout](docs/history/MARKET_QUALITY_READOUT_2026-09-26.md).
+- **On Monday:** recheck payouts (Sept25–27 fully posted) and UTR/R6 trading. If still unpaid, propose `config/selection_exclusions.json` → `["utr", "r6"]`. It is selection-only: positions and exits are untouched.
+- **Activation:** needs operator approval plus Command 1, ideally the same restart that loads the markout and blocked-entry records.
+
 **September23 OPEN — unexplained risk-snapshot failure:** the16:29:19–27Z
 account-risk pause cancelled entries across13 markets. The exact triggering
 exception was not logged; earlier REST runs also contain similar waves.

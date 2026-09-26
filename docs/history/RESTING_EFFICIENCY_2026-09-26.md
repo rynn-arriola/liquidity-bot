@@ -96,3 +96,22 @@ A shutdown guard was pushed in `7f505f92e`, never installed, and reverted in `77
 Operator guidance instead:
 - Set wide Windows Update active hours (e.g. 08:00–02:00), or pause updates.
 - When restarting the laptop yourself, restart without stopping the bot. A manual stop disarms the watchdog, so the bot would stay off after the reboot.
+
+## Command 1 activation of the 24/7 host (14:45Z)
+
+- Graceful stop at 14:45:48Z, flat, 0 shutdown failures. 31 active markets; scope saved.
+- Gate 1 at 14:45:55Z: all zero.
+- `29773e246` deployed. Code changes versus `cb8f6a029`: `scripts/supervise_commissioning.sh` and `src/liquidity_bot/host_recovery.py`. Hashes match.
+- Production suite: 2,351 PASS.
+- Gate 2 at 14:48:07Z: all zero. `DEPLOYED_COMMIT=29773e246`. Supervisor 653525 / runner 653539 (new supervisor script).
+
+Acceptance at 14:51Z:
+- warm restart readmitted 31/31;
+- 38 placements, GTD 206–600 s;
+- 25 orders on 21 markets, 0 positions, 0 unresolved/unknown;
+- 0 errors;
+- API 1.33/s.
+
+The Windows watchdog reports `process_present` against the new `host_recovery` (armed generation).
+
+A real reboot has not been exercised yet. Suggested: one operator restart at a quiet time, without stopping the bot. Expect the watchdog recovery-only pass to prove flat, then "resuming normal trading".

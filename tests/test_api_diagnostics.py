@@ -145,3 +145,45 @@ class DiagnosticsTests(IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]['workflow'], ['account_reconcile:periodic'])
         self.assertEqual(rows[1]['workflow'], ['account_reconcile'])
         self.assertNotIn('secret-value', output.getvalue())
+
+
+class EvidenceNeverLostTests(IsolatedAsyncioTestCase):
+    """2026-09-26: 266 runner 429s produced only 4 [api-429] lines."""
+
+    async def test_http_date_retry_after_still_logs_the_429(self):
+        output = io.StringIO()
+        with patch('sys.stdout', output):
+            await AsyncIntervalLimiter().record_result(
+                duration_seconds=.1, status_code=429, failed=True,
+                operation='GET /v1/account/balances', request_kind='read',
+                retry_after_seconds='Sat, 26 Sep 2026 21:00:00 GMT')
+        row = json.loads(output.getvalue().splitlines()[0].split(' ', 1)[1])
+        self.assertEqual((row['category'], row['retry_after_seconds']), ('balance', None))
+
+    async def test_a_logging_failure_prints_a_fallback_line(self):
+        output = io.StringIO()
+        with patch('sys.stdout', output), \
+                patch('liquidity_bot.api_diagnostics.json.dumps', side_effect=RuntimeError('x')):
+            await AsyncIntervalLimiter().record_result(
+                duration_seconds=.1, status_code=429, failed=True,
+                operation='GET /v1/portfolio/positions', request_kind='read')
+        self.assertIn('[api-429] category=positions lane=safety log_error=RuntimeError',
+                      output.getvalue())
+
+    async def test_exact_order_reads_are_counted_by_workflow_and_reset(self):
+        from liquidity_bot.api_diagnostics import take_order_read_counts
+        take_order_read_counts()
+        limiter = AsyncIntervalLimiter()
+
+        @api_workflow('absent_repair')
+        async def repair():
+            await limiter.record_result(duration_seconds=.1, operation='GET /v1/order/a')
+            await limiter.record_result(duration_seconds=.1, status_code=404, failed=True,
+                                        operation='GET /v1/order/b')
+
+        await repair()
+        await limiter.record_result(duration_seconds=.1, operation='GET /v1/order/c')
+        await limiter.record_result(duration_seconds=.1, operation='GET /v1/orders/open')
+        self.assertEqual(dict(take_order_read_counts()),
+                         {'absent_repair@ok': 1, 'absent_repair@404': 1, 'unattributed@ok': 1})
+        self.assertEqual(take_order_read_counts(), [])

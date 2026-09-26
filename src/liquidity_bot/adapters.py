@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - exercised only by native Windows
 
 from .errors import AdapterError, ApiAdmissionDeferred, EmptyBookError
 from .error_summary import diagnostic_id, error_summary
-from .api_diagnostics import log_rate_limit, response_ids
+from .api_diagnostics import log_rate_limit, note_order_read, response_ids
 from . import read_backoff
 from .models import (
     BookLevel,
@@ -1259,6 +1259,8 @@ class AsyncIntervalLimiter:
 
         chosen_class = self.traffic_class_for("", "read", traffic_class)
         duration = max(0.0, float(duration_seconds))
+        if _request_category(operation, request_kind) == "order_retrieve":
+            note_order_read(status_code)
         if status_code == 429:
             log_rate_limit(category=_request_category(operation, request_kind),
                            request_kind=request_kind, traffic_class=chosen_class,

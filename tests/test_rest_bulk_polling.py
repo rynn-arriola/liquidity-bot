@@ -626,6 +626,17 @@ for _name in (
 
 
 class RestPollingPolicyTests(TestCase):
+    def test_shipped_policy_is_the_operator_decision(self):
+        # 2026-09-26 (API_TESTS_2026-09-26): account reads were throttled
+        # near our load (about 499 429s in 3 days, 1,160 risk-pause cancels).
+        # The private WS delivers about 99% of fills in about 0.07 s, and REST
+        # caught the rest within 11 s, so the with-position/intent cadence
+        # moves from 1 s to 3 s. The normal 5 s cadence is unchanged.
+        from liquidity_bot.rest_polling_policy import DEFAULT_REST_POLLING_POLICY_PATH
+        self.assertEqual(load_rest_polling_policy(DEFAULT_REST_POLLING_POLICY_PATH),
+                         RestPollingPolicy(enabled=True, normal_poll_seconds=5,
+                                           active_poll_seconds=3))
+
     def test_strict_policy_validation_and_roundtrip(self):
         good = dict(enabled=True, normal_poll_seconds=5, active_poll_seconds=1)
         with tempfile.TemporaryDirectory() as folder:

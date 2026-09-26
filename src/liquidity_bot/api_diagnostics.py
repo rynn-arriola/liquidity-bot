@@ -1,4 +1,5 @@
 """Bounded request provenance; diagnostic only, never API authority."""
+from collections import Counter
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import wraps
@@ -8,6 +9,27 @@ import os
 import re
 
 _workflow = ContextVar("api_workflow", default=())
+# Process-local attribution of exact order reads (API_TESTS_2026-09-26: about
+# 7 GET /v1/order/{id} per placed order, source unknown). Diagnostic only.
+_order_reads = Counter()
+
+
+def note_order_read(status_code=None):
+    """Count one exact order read by innermost workflow label and outcome."""
+    try:
+        stack = _workflow.get()
+        label = stack[-1] if stack else "unattributed"
+        outcome = "ok" if status_code is None else str(status_code)
+        _order_reads[f"{label}@{outcome}"] += 1
+    except Exception:
+        pass
+
+
+def take_order_read_counts():
+    """Return and reset the counts, most frequent first."""
+    counts = _order_reads.most_common()
+    _order_reads.clear()
+    return counts
 _REASONS = frozenset({"startup", "periodic", "rest-source-decision",
     "rest-source-bind", "operator-source-handoff", "private-shard-handoff",
     "strategy-recovery-start", "strategy-recovery-terminal", "hard-exit",
@@ -61,7 +83,10 @@ def log_rate_limit(*, category, request_kind, traffic_class, duration_seconds,
     # Logging must not turn a response-backed rejection into an unknown result
     # or prevent the limiter from publishing the original cooldown.
     try:
-        retry = None if retry_after_seconds is None else float(retry_after_seconds)
+        try:
+            retry = None if retry_after_seconds is None else float(retry_after_seconds)
+        except (TypeError, ValueError):
+            retry = None  # e.g. an HTTP-date Retry-After; keep the evidence line
         if retry is not None and not math.isfinite(retry):
             retry = None
         print("[api-429] " + json.dumps({
@@ -72,6 +97,12 @@ def log_rate_limit(*, category, request_kind, traffic_class, duration_seconds,
             "response_seconds": round(duration_seconds, 3),
             "retry_after_seconds": retry,
             "server_ids": response_ids(server_ids or {}),
-        }, separators=(",", ":")), flush=True)
-    except Exception:
-        pass
+        }, separators=(",", ":"), default=str), flush=True)
+    except Exception as exc:
+        # 2026-09-26: 266 runner 429s but only 4 [api-429] lines; never lose
+        # the evidence line silently again.
+        try:
+            print(f"[api-429] category={category} lane={traffic_class} "
+                  f"log_error={type(exc).__name__}", flush=True)
+        except Exception:
+            pass

@@ -18,6 +18,15 @@ from .market_selector import RewardMarketSelection
 DECISION_SCHEDULER_LOG_SECONDS = 60.0
 
 
+def _order_read_summary() -> str:
+    """This process's exact order reads since the last line, by workflow."""
+    try:
+        from .api_diagnostics import take_order_read_counts
+        return ",".join(f"{key}:{count}" for key, count in take_order_read_counts()) or "none"
+    except Exception:
+        return "unavailable"
+
+
 class RunnerDiagnosticsMixin:
 
     # Calibration measurements (scripts/calibration_report.py). Both write only
@@ -271,7 +280,8 @@ class RunnerDiagnosticsMixin:
             f"shared={int(evidence.shared_across_processes)} "
             f"categories={categories} "
             f"failure_categories={failure_categories} "
-            f"account_read_cooldowns={','.join(f'{name}:{seconds:.1f}' for name, seconds in evidence.account_read_cooldowns if seconds > 0) or 'none'}",
+            f"account_read_cooldowns={','.join(f'{name}:{seconds:.1f}' for name, seconds in evidence.account_read_cooldowns if seconds > 0) or 'none'} "
+            f"order_reads_by_workflow={_order_read_summary()}",
             flush=True,
         )
 

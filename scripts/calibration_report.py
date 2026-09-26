@@ -474,7 +474,7 @@ def install_cron(root: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--db", type=Path, required=True)
+    p.add_argument("--db", type=Path)
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
     p.add_argument("--log", type=Path, action="extend", nargs="+", default=[])
@@ -484,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     if a.install_cron:
         return install_cron(Path.cwd().resolve())
+    if a.db is None:
+        p.error("--db is required")
     if not 1 <= a.days <= 90:
         p.error("days must be 1..90")
     now = datetime.now(UTC)

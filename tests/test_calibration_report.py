@@ -169,6 +169,12 @@ class CalibrationReportTests(unittest.TestCase):
         self.assertEqual(both, again)
         self.assertEqual(again.count(ROTATE_MARK), 1)
         self.assertEqual(again.count(report.CRON_MARK), 1)
+        from unittest.mock import patch
+        with patch.object(report, "install_cron", return_value=0) as install:
+            self.assertEqual(report.main(["--install-cron"]), 0)
+        install.assert_called_once()
+        with self.assertRaises(SystemExit):
+            report.main(["--days", "1"])
 
     def test_archive_reader_verifies_checksums_and_skips_other_kinds(self):
         import hashlib

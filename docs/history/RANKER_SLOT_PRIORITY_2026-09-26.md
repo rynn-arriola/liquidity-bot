@@ -2,7 +2,7 @@
 
 **Operator request:** "what we want to do with this ranker get slot priority … after we get all that rewarded market we just make sure they get priority slots", then "they still have to go to the checks we are doing", then "Build it".
 
-**State:** built and tested; **not loaded**. It loads at the next Command 1 (trader source changed). Nothing waits for a window boundary: size, stops, caps and risk policy are unchanged.
+**State:** LIVE in `8b3371f6a` since 23:18:31Z (Command 1, then "Restart now" mid-window: size, stops, caps and risk policy are unchanged). Before the restart the runner had already self-stopped at 22:56:53Z because of two operator manual orders; the venue was flat and the stopped ledger was reconciled with read-only order lookups (31 orders terminal, 3 fills added). Acceptance 23:22Z: warm restart 32/32, 52 placements all qty 20, 32 orders/25 markets, 0 positions/unknown, 0 errors/429, `[ranker-priority] status=missing` until the ranker's 23:35Z run writes the first file.
 
 ## What it does
 

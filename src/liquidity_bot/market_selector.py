@@ -19,6 +19,7 @@ from .errors import AdapterError, ApiAdmissionDeferred
 from .fill_hazard import (
     MondayFillHazardModel,
     historical_reward_yield_prior,
+    league_from_slug,
 )
 from .live_orders import OPEN_MARKET_STATUSES
 from .models import BookSnapshot, MarketIncentive, MarketMetadata
@@ -114,8 +115,13 @@ class RewardSelectionPolicy:
     # further without that bound moving too. Set to 7200 to go back.
     selection_horizon_seconds: float = 21600.0
     entry_quality_policy: EntryQualityPolicy = EntryQualityPolicy()
+    # Operator business filter from config/selection_exclusions.json. Empty
+    # by default: selection is unchanged until a league is explicitly listed.
+    excluded_leagues: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
+        if not isinstance(self.excluded_leagues, frozenset):
+            raise ValueError("excluded leagues must be a frozenset")
         if type(self.allow_daily_event_rewards) is not bool:
             raise ValueError("allow_daily_event_rewards must be boolean")
         if not 21600 <= self.daily_event_horizon_seconds <= 86400:
@@ -787,6 +793,9 @@ class RewardMarketSelector:
             # with quote size rather than assuming a single contract.
             and market.minimum_trade_qty <= self.policy.quote_size
             and market.is_supported_moneyline
+            # Refused before incentive/book fan-out, so excluded leagues add
+            # no reads. Empty exclusions leave this gate unchanged.
+            and league_from_slug(market.slug) not in self.policy.excluded_leagues
         )
 
     def _catalog_spread_can_enter(self, market: MarketMetadata) -> bool:

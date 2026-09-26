@@ -4643,6 +4643,8 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         risk_window_policy = load_risk_window_policy()
         from .entry_expiry import load_entry_expiry_policy
         entry_expiry_policy = load_entry_expiry_policy()
+        from .selection_exclusions import load_selection_exclusions
+        selection_exclusions = load_selection_exclusions()
     except (ValueError, OSError) as exc:
         raise CommissioningRefused(str(exc)) from exc
     config = CommissioningConfig(
@@ -4655,6 +4657,7 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         arm_live=args.arm_live,
         recovery_only=bool(getattr(args, "recovery_only", False)),
         entry_expiry_policy=entry_expiry_policy,
+        selection_exclusions=selection_exclusions,
         auto_select_reward_markets=auto_select,
         quote_size=Decimal(args.quote_size),
         max_markets=args.max_markets,
@@ -4664,6 +4667,9 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     )
     # Refuse before opening the credential file, database, client, or network.
     config.assert_authorized(now=now)
+    print("[selection-exclusions] excluded_leagues="
+          + (",".join(sorted(selection_exclusions.excluded_leagues)) or "none"),
+          flush=True)
     from .account_source import load_source_policy, startup_mode
     from .account_source_runner import AccountSourceRunner
     from .rest_polling_policy import (

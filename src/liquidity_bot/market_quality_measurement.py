@@ -16,6 +16,10 @@ def plain(value):
         return {str(k): plain(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
         return [plain(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        # Sorted for deterministic archives; unserializable values would make
+        # the best-effort sink silently drop the whole record.
+        return sorted(plain(v) for v in value)
     return value
 
 

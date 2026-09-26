@@ -173,3 +173,22 @@ threshold change is recommended; the approved shadow ranking should score
 calibrated expected net (league payout ratio × model reward − league realized
 loss per fill × modeled fill rate) alongside the current gate and log where
 they disagree.
+
+## Approved item 1 prepared: league selection exclusion (default off)
+
+`config/selection_exclusions.json` (`{"excluded_leagues": []}`) is loaded
+strictly at startup by `selection_exclusions.load_selection_exclusions`
+(malformed/missing file refuses start), carried by
+`CommissioningConfig.selection_exclusions` into
+`RewardSelectionPolicy.excluded_leagues`, and applied in
+`_catalog_market_is_executable` via `league_from_slug`, before incentive or
+book reads. Startup logs `[selection-exclusions] excluded_leagues=...`. Empty
+list = identical selection and API usage. Exits, reducers and retained
+positions are untouched. The full suite exposed that
+`market_quality_measurement.plain` could not serialize the new frozenset, which
+made the best-effort tracker silently drop discovery records; `plain` now
+writes sets as sorted lists (other types unchanged) with a regression test.
+Tests: 10 in `test_selection_exclusions.py`; removing the selector condition
+fails the exclusion test; full WSL suite 2,306 pass. Activation = set
+`["utr", "r6"]` after the 09-25 payout check, review, deploy and restart, each
+with operator approval.

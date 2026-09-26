@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
 from .entry_expiry import EntryExpiryPolicy
+from .selection_exclusions import SelectionExclusions
 from .risk_windows import RiskWindowPolicy, load_risk_window_policy
 from .entry_order_policy import (
     EntryOrderPolicy, EntryOrderPolicyError, load_entry_order_policy)
@@ -84,6 +85,9 @@ class CommissioningConfig:
     # CLI loads the production policy; legacy replay constructors remain GTC.
     entry_expiry_policy: EntryExpiryPolicy = field(
         default_factory=lambda: EntryExpiryPolicy(enabled=False))
+    # Restart-scoped operator league filter; empty leaves selection unchanged.
+    selection_exclusions: SelectionExclusions = field(
+        default_factory=SelectionExclusions)
     # Raised 1 -> 5 on 2026-08-14, matching maker-lab's QUOTE_SIZE. At one
     # contract both the maker rebate and the taker fee round to zero (section 1
     # of FINDINGS: per-contract economics are ~37% worse at size 1), and reward
@@ -435,6 +439,7 @@ class CommissioningConfig:
             allow_daily_event_rewards=self.allow_daily_event_rewards,
             daily_event_horizon_seconds=self.daily_event_horizon_seconds,
             entry_quality_policy=self.entry_quality_policy,
+            excluded_leagues=self.selection_exclusions.excluded_leagues,
         )
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:
@@ -449,6 +454,8 @@ class CommissioningConfig:
             problems.append("recovery_only must be boolean")
         if not isinstance(self.entry_expiry_policy, EntryExpiryPolicy):
             problems.append("entry expiry policy must be validated")
+        if not isinstance(self.selection_exclusions, SelectionExclusions):
+            problems.append("selection exclusions must be validated")
         if not self.arm_live:
             problems.append("live arming flag is absent")
         if not self.economic_risk_accepted:

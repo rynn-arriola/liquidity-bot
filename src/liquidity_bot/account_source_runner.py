@@ -806,6 +806,7 @@ class AccountSourceRunner(RestFallbackRunner):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+                self._note_order_read_failure(exchange_id, result)
                 if isinstance(result, AdapterError) and is_not_found(result):
                     not_found.add(exchange_id)
                 if read_backoff.is_backpressure(result):

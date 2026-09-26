@@ -488,6 +488,7 @@ class RestFallbackRunner(CommissioningRunner):
                 raise result
             if result is not None:
                 failures.append((exchange_id, f"{type(result).__name__}: {result}"))
+                self._note_order_read_failure(exchange_id, result)
                 if read_backoff.is_backpressure(result):
                     throttle = result
         if throttle is not None:

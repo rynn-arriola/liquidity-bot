@@ -9,13 +9,77 @@ from __future__ import annotations
 
 from .api_diagnostics import api_workflow
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
-from .errors import AdapterError
-from .execution_ledger import LedgerConflict
+from .errors import AdapterError, is_not_found
+from .execution_ledger import TERMINAL_ORDER_STATES, LedgerConflict
 from .runner_shared import ORPHAN_PLACE_CLEAR_MIN_SECONDS, ORPHAN_PLACE_CLEAR_PROOFS
 
 
 class RestProofMixin:
+
+    def _note_order_read_failure(self, exchange_id: str, exc: BaseException) -> None:
+        """Remember an exact read the venue answered with "not found"."""
+
+        found = getattr(self, "_order_read_not_found", None)
+        if found is not None and isinstance(exc, AdapterError) and is_not_found(exc):
+            found.add(exchange_id)
+
+    @staticmethod
+    def _listing_matches_owned_row(order: Any, row: Any) -> bool:
+        return (
+            order.status in {"OPEN", "PARTIAL"}
+            and str(row["status"]) not in TERMINAL_ORDER_STATES
+            and not str(row["client_order_id"]).startswith("venue:")
+            and order.client_order_id == row["client_order_id"]
+            and order.exchange_order_id == row["exchange_order_id"]
+            and order.market_slug == row["market_slug"]
+            and order.side.upper() == row["side"]
+            and order.price == Decimal(row["price"])
+            and order.original_qty == Decimal(row["original_qty"]))
+
+    def _open_listing_supersedes_not_found(
+        self, failures: list[tuple[str, str]], orders: tuple[Any, ...],
+    ) -> list[tuple[str, str]]:
+        """A complete open-order listing is positive state; a 404 is not.
+
+        Measured 2026-09-26: in two in-play markets the venue answered
+        GET /v1/order/{id} with 404 for up to seven minutes after placement
+        while the same order was in the complete open-order listing (none was
+        ever marked absent). Each 404 failed the whole-account proof, so every
+        market read `execution_state_unknown` for about an hour in total over
+        two hours. Only a single listed, non-terminal row whose identity and
+        economics match the owned ledger row supersedes the 404, and only
+        after that listing was applied to the ledger. An order missing from the
+        listing keeps its failure: absence is never cancellation proof.
+        """
+
+        not_found = getattr(self, "_order_read_not_found", None) or set()
+        if not failures or not not_found:
+            return failures
+        listed: dict[str, list[Any]] = {}
+        for order in orders:
+            listed.setdefault(order.exchange_order_id, []).append(order)
+        kept: list[tuple[str, str]] = []
+        superseded: list[str] = []
+        for exchange_id, detail in failures:
+            matches = listed.get(exchange_id, [])
+            rows = self.ledger.query(
+                "SELECT * FROM execution_orders WHERE exchange_order_id=?",
+                (exchange_id,))
+            if (exchange_id in not_found and len(matches) == 1 and len(rows) == 1
+                    and self._listing_matches_owned_row(matches[0], rows[0])):
+                superseded.append(exchange_id)
+            else:
+                kept.append((exchange_id, detail))
+        if superseded:
+            print(
+                f"[order-read-listed] at={self._now().isoformat()} "
+                f"superseded_not_found={len(superseded)} "
+                f"ids={','.join(sorted(superseded))}",
+                flush=True,
+            )
+        return kept
 
     async def _advance_orphan_place_clear_proofs(
         self,
@@ -202,6 +266,7 @@ class RestProofMixin:
                     skipped_order_markets.add(market)
                     continue
             read_ids.append(exchange_id)
+        self._order_read_not_found = set()
         reconcile_failures.extend(await self._read_owned_order_states(read_ids, now))
         # Deliberately before failure classification. The sweep above has just
         # written the venue's current word on every readable order, which is
@@ -368,6 +433,10 @@ class RestProofMixin:
         for slug in execution_owners_before.symmetric_difference(
                 self._execution_owner_slugs()):
             self._mark_market_dirty(slug, self._now())
+        # The complete open-order listing above has been applied to the ledger.
+        blocking_reconcile_failures = self._open_listing_supersedes_not_found(
+            blocking_reconcile_failures, orders)
+        self._order_read_not_found = None
         if blocking_reconcile_failures:
             raise AdapterError(
                 "could not re-read "

@@ -176,6 +176,7 @@ class DecisionMixin:
                 raise
             except Exception as exc:
                 failures.append((exchange_id, f"{type(exc).__name__}: {exc}"))
+                self._note_order_read_failure(exchange_id, exc)
         return failures
 
     def _unresolved_cancel_owners(self) -> dict[str, str]:

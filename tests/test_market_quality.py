@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -316,6 +317,57 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         await RewardMarketSelector(gateway,quality_sink=sink).select(now=SCAN_NOW)
         self.assertEqual(gateway.book_calls,[])
         self.assertEqual(sink.records[0]['payload']['candidates'][0]['stage'],'metadata_refused')
+
+    async def test_oversized_catalog_keeps_executable_rows_instead_of_dropping(self):
+        # 2026-09-26: a 43,935-market catalog exceeded the 20,000 bound and every
+        # scan's discovery record was refused. Above the bound keep executable rows.
+        bad=market('bad',market_type_v2='SPORTS_MARKET_TYPE_SPREAD')
+        markets={'a':market('a'),'bad':bad}
+        gateway=FakeGateway(markets,{s:incentive(s,pool=100) for s in markets},
+                            {s:book(s) for s in markets})
+        sink=Sink()
+        with patch('liquidity_bot.market_quality_measurement.DISCOVERY_CATALOG_BOUND',1):
+            result=await RewardMarketSelector(gateway,quality_sink=sink).select(now=SCAN_NOW)
+        (record,)=sink.records
+        payload=record['payload']
+        self.assertEqual(record['kind'],'discovery')
+        self.assertEqual(payload['catalog_rows'],'executable_only')
+        self.assertEqual([c['market'] for c in payload['candidates']],['a'])
+        self.assertEqual(payload['counts']['catalog_markets'],2)
+        self.assertEqual(payload['counts']['no_applicable_period_markets'],
+                         result.no_applicable_period_markets)
+        sink=Sink()
+        await RewardMarketSelector(FakeGateway(markets,{s:incentive(s,pool=100) for s in markets},
+            {s:book(s) for s in markets}),quality_sink=sink).select(now=SCAN_NOW)
+        self.assertEqual(sink.records[0]['payload']['catalog_rows'],'full')
+        self.assertEqual(len(sink.records[0]['payload']['candidates']),2)
+
+    async def test_store_defers_oversized_catalog_to_writer(self):
+        with tempfile.TemporaryDirectory() as td:
+            store=QualityStore(Path(td),reserve_bytes=0)
+            markets={'a':market('a'),'bad':market('bad',market_type_v2='SPORTS_MARKET_TYPE_SPREAD')}
+            gateway=FakeGateway(markets,{s:incentive(s,pool=100) for s in markets},
+                                {s:book(s) for s in markets})
+            with patch('liquidity_bot.market_quality_measurement.DISCOVERY_CATALOG_BOUND',1):
+                await RewardMarketSelector(gateway,quality_sink=store).select(now=SCAN_NOW)
+                for _ in range(100):
+                    if store.written:
+                        break
+                    await asyncio.sleep(.02)
+            store.close();store.thread.join(2)
+            rows,health=read_archive(store.path)
+            self.assertEqual(health['dropped'],0)
+            (disc,)=[r for r in rows if r['kind']=='discovery']
+            self.assertEqual(disc['payload']['catalog_rows'],'executable_only')
+
+    async def test_no_applicable_period_is_counted(self):
+        later=incentive('later',pool=100,starts_at=SCAN_NOW+timedelta(hours=1))
+        gateway=FakeGateway({'later':market('later'),'now':market('now')},
+                            {'later':later,'now':incentive('now',pool=100)},
+                            {'later':book('later'),'now':book('now')})
+        result=await RewardMarketSelector(gateway).select(now=SCAN_NOW)
+        self.assertEqual(result.no_applicable_period_markets,1)
+        self.assertEqual(result.eligible_pregame_markets,1)
 
     async def test_selection_same_calls_same_decision_with_capture_and_broken_sink(self):
         outputs=[];calls=[]

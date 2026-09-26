@@ -1028,6 +1028,10 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
             executable_catalog_markets=228,
             rewarded_executable_markets=228,
             event_pages_used=2,
+            unsupported_programs=5,
+            no_applicable_period_markets=7,
+            catalog_spread_filtered_markets=3,
+            eligible_pregame_markets=213,
         )
 
         with patch("builtins.print") as emitted:
@@ -1038,6 +1042,9 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event_page_ceiling=10", line)
         self.assertIn("event_markets=7961", line)
         self.assertIn("executable=228", line)
+        # The funnel explains an under-filled slate without a manual selector
+        # run (scripts/usable_markets.py costs about 50 venue calls).
+        self.assertIn("unsupported=5 no_period=7 spread_filtered=3 eligible=213 failures=0", line)
         self.assertIn("payout_est_ge_1=1", line)
         self.assertIn("payout_est_ge_1_5=0", line)
         self.assertIn("scan_seconds=8.8", line)

@@ -86,11 +86,11 @@ class QualityStore:
             self.dropped += 1
             return False
         try:
-            if len(catalog) > 20000:
-                raise ValueError('measurement catalog bound')
-            job = _Discovery((tuple(catalog), dict(executable), dict(incentives),
+            from .market_quality_measurement import bounded_catalog
+            catalog, catalog_rows = bounded_catalog(catalog, executable)
+            job = _Discovery((catalog, dict(executable), dict(incentives),
                 tuple(candidates), tuple(detailed), tuple(deferred), selection, at),
-                dict(reasons=dict(reasons or {}), policy=policy))
+                dict(reasons=dict(reasons or {}), policy=policy, catalog_rows=catalog_rows))
             self.queue.put_nowait((self.sequence, 'discovery',
                 datetime.now(timezone.utc).isoformat(), job, None, self.dropped))
             return True

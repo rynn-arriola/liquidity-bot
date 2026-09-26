@@ -99,9 +99,28 @@ def binding_snapshot(runner):
             "max_markets": runner.config.max_markets, "size": str(runner.config.quote_size)}
 
 
+DISCOVERY_CATALOG_BOUND = 20000
+
+
+def bounded_catalog(catalog, executable):
+    """Keep discovery evidence when the venue catalog outgrows the bound.
+
+    From about 2026-09-25 the upcoming-sports catalog exceeded 20,000 markets
+    (43,935 on 2026-09-26), so every scan's discovery record was refused and
+    per-market selection reasons were lost. Above the bound keep only rows
+    that passed the metadata gate; counts still describe the full catalog.
+    """
+    if len(catalog) <= DISCOVERY_CATALOG_BOUND:
+        return tuple(catalog), "full"
+    return tuple(m for m in catalog if m.slug in executable), "executable_only"
+
+
 def discovery_snapshot(catalog, executable, incentives, candidates, detailed, deferred, selection, at,
-                       *, reasons=None, policy=None):
-    if len(catalog) > 20000:
+                       *, reasons=None, policy=None, catalog_rows=None):
+    catalog, trimmed = bounded_catalog(catalog, executable)
+    # A deferred caller trims before queueing and passes its label through.
+    catalog_rows = catalog_rows or trimmed
+    if len(catalog) > DISCOVERY_CATALOG_BOUND:
         raise ValueError("measurement catalog bound")
     prebook_rank = {m.slug: i for i, (m, _, _) in enumerate(candidates, 1)}
     candidates = {m.slug: p for m, _, p in candidates}
@@ -141,12 +160,14 @@ def discovery_snapshot(catalog, executable, incentives, candidates, detailed, de
                            prebook_rank=prebook_rank.get(slug),
                            grade=priority_grade(rank.get(slug)), book_evaluated=slug in outcomes))
     return {"schema": 1, "at": at.isoformat(), "scope": "bounded_discovery",
+            "catalog_rows": catalog_rows,
             "policy": plain(policy) if policy is not None else None,
             "event_pages": selection.event_pages_used,
             "failures": list(selection.failures),
             "counts": {k: getattr(selection, k) for k in (
                 'catalog_markets', 'executable_catalog_markets', 'rewarded_executable_markets',
-                'unsupported_programs', 'eligible_pregame_markets', 'books_evaluated')},
+                'unsupported_programs', 'eligible_pregame_markets', 'books_evaluated',
+                'catalog_spread_filtered_markets', 'no_applicable_period_markets')},
             "pool_population_complete": False, "viable_count": len(rank),
             "candidates": result,
             "pools": [dict(identity=list(k), observed_events=len(v["events"]),

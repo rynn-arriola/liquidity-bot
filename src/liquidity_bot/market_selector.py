@@ -278,6 +278,7 @@ class RewardMarketSelection:
     failures: tuple[str, ...]
     catalog_spread_filtered_markets: int = 0
     event_pages_used: int = 0
+    no_applicable_period_markets: int = 0
 
     def top_viable(
         self, limit: int, *, exclude: frozenset[str] | set[str] = frozenset(),
@@ -580,6 +581,7 @@ class RewardMarketSelector:
         failures: list[str] = []
         unsupported = 0
         catalog_spread_filtered = 0
+        no_period = 0
         quality_reasons = {}
         for slug in sorted(rewarded_executable):
             incentive = rewarded_executable[slug]
@@ -598,6 +600,7 @@ class RewardMarketSelector:
                 market = executable_catalog[slug]
                 period = self._applicable_period(market, incentive, now)
                 if period is None:
+                    no_period += 1
                     quality_reasons[slug] = "no_applicable_period"
                     continue
                 if not self._catalog_spread_can_enter(market):
@@ -652,6 +655,7 @@ class RewardMarketSelector:
             failures=tuple(failures),
             catalog_spread_filtered_markets=catalog_spread_filtered,
             event_pages_used=event_pages_used,
+            no_applicable_period_markets=no_period,
         )
         if result.selected is not None:
             self._last_selected_slug = result.selected.market.slug

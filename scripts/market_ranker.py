@@ -272,16 +272,48 @@ def traded_now(path: Path) -> set[str]:
         return set()
 
 
+CRON_MARK = "# liquidity-bot market ranker"
+DAILY_CRON_MARK = "# liquidity-bot market ranker daily"
+
+
+def cron_lines(root: Path) -> tuple[str, str]:
+    """Every 30 min (moneyline/drawable) plus a nightly run with spreads/totals.
+
+    flock skips a run while the previous one (about 15 min) is still going.
+    """
+    base = (f"cd {root} && flock -n data/market-ranker.lock nice -n 10 .venv/bin/python -B "
+            "scripts/market_ranker.py --archive data/market-quality/*.sqlite3")
+    return (f"5,35 * * * * {base} >> logs/market-ranker.log 2>&1 {CRON_MARK}",
+            f"50 3 * * * {base} --include-spreads-totals --max-books 400 "
+            f">> logs/market-ranker.log 2>&1 {DAILY_CRON_MARK}")
+
+
+def install_cron(root: Path) -> int:
+    import subprocess
+    from scripts.rotate_logs import with_cron_line
+    current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    table = current.stdout if current.returncode == 0 else ""
+    frequent, daily = cron_lines(root)
+    table = with_cron_line(table, daily, mark=DAILY_CRON_MARK)
+    kept = "\n".join(r for r in table.splitlines() if not r.endswith(CRON_MARK))
+    table = (kept + "\n" if kept else "") + frequent + "\n"
+    return subprocess.run(["crontab", "-"], text=True, input=table).returncode
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", type=Path, default=Path("data/commissioning.db"))
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--max-books", type=int, default=150)
+    p.add_argument("--install-cron", action="store_true",
+                   help="install the 30-minute and nightly runs for this checkout")
     p.add_argument("--include-spreads-totals", action="store_true",
                    help="daily run: also rank spread and total markets (slower)")
     p.add_argument("--output-root", type=Path, default=Path("data/market-rankings"))
     a = p.parse_args(argv)
+    if a.install_cron:
+        return install_cron(Path.cwd().resolve())
     from liquidity_bot.commissioning import CommissioningConfig
     from scripts.calibration_report import (
         episode_summary, fill_model_calibration, read_archive_records, read_ledger)

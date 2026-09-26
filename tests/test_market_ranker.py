@@ -105,6 +105,18 @@ class MarketRankerTests(unittest.TestCase):
         ordered, never_paid = ranker.book_priority(items, traded=set(), unpaid=None)
         self.assertEqual((len(ordered), never_paid), (5, 0))
 
+    def test_cron_lines_do_not_overlap_and_keep_other_jobs(self):
+        from pathlib import Path
+        from scripts.rotate_logs import cron_line as rotate_line
+        frequent, daily = ranker.cron_lines(Path("/bot"))
+        self.assertTrue(frequent.startswith("5,35 * * * * cd /bot && flock -n data/market-ranker.lock"))
+        self.assertTrue(frequent.endswith(ranker.CRON_MARK))
+        self.assertIn("--include-spreads-totals", daily)
+        self.assertTrue(daily.endswith(ranker.DAILY_CRON_MARK))
+        self.assertNotIn("--include-spreads-totals", frequent)
+        self.assertFalse(frequent.endswith(ranker.DAILY_CRON_MARK))
+        self.assertIn(rotate_line(Path("/bot")).split(" # ")[0][:20], rotate_line(Path("/bot")))
+
     def test_rank_orders_by_net_value(self):
         rows = ranker.rank([dict(market="b", net_per_hour=0.1), dict(market="a", net_per_hour=0.5),
                             dict(market="c", net_per_hour=0.1)])

@@ -81,3 +81,14 @@ Cause:
 - The earlier warm-restart tests covered partial re-admission only.
 
 Fix (operator standing instruction "just fix it so you can run the bot"): skip the fresh request when re-admitted markets already fill every slot. A regression test fails with the original `ValueError` without the fix. Full suite: 2,345 PASS. Deployed by a second stop/gate/start in the same Command 1.
+
+**Second start.** At 05:31:38Z, gate 2 was all zero, `DEPLOYED_COMMIT=bd1a754`, and the bot started as supervisor 444280 / runner 444296.
+
+Acceptance at 05:35Z:
+- `[warm-restart] outcome=readmitted remembered=32 readmitted=32` (warm restart's first live success);
+- 45 `PLACE_POST_ONLY`;
+- authenticated: 29 orders on 23 markets, 1 position (−0.77) covered by its exit, 0 unresolved/unknown;
+- API 1.60/s, 0 failures, 0 rate-limited;
+- 0 `[runtime-recovery]`, 0 404, no new Traceback.
+
+`[order-read-listed]` is still to be observed; it needs an in-play reducer lag.

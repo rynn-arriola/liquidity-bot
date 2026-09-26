@@ -192,3 +192,27 @@ Tests: 10 in `test_selection_exclusions.py`; removing the selector condition
 fails the exclusion test; full WSL suite 2,306 pass. Activation = set
 `["utr", "r6"]` after the 09-25 payout check, review, deploy and restart, each
 with operator approval.
+
+## CORRECTION (01:2xZ September 26): payouts arrive in batches; recent days are incomplete
+
+Operator noted that payouts keep appending for days. Confirmed from 188
+account-wide reward snapshots saved by the tracker (09-23 16:16Z .. 09-26
+01:11Z): 09-22 first appeared at $108.83 (161 rows) and grew to $125.15 about
+a day later; 09-23 arrived in batches from $0.55 to $92.09 (09-24 19:16-20:16Z)
+then to $127.37 (09-25 03:49-05:20Z); 09-24 has only its first batch, $67.51
+(09-25 03:49-05:20Z), unchanged since. Each new day's first batch coincides
+with a top-up of the previous day. Therefore:
+
+- The reported daily decline to $67.51 on 09-24 is partly an incompleteness
+  artifact; treat days newer than about two posting cycles as provisional.
+- **UTR evidence is weak:** of UTR rested side-hours with posted game dates,
+  only 1.6 h were on complete days (09-18/19); 20.3 h were 09-24 games and
+  18.3 h 09-25 games, whose payouts are incomplete. "UTR never paid" is not
+  established. R6 had 5.6 h, all on complete days (09-18/19), with $0 — still
+  a small sample.
+- Per-market "genuinely unpaid" counts and the backtest's last test days used
+  partial 09-23/09-24 payouts; conclusions that compare methods on the same
+  days are little affected, absolute unpaid counts are overstated.
+
+The UTR/R6 exclusion committed in `8824d083f` is not deployed. Re-evaluate
+UTR after 09-24's second batch and 09-25's posting before any activation.

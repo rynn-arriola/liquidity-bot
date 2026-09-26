@@ -52,3 +52,25 @@ runner held 32 active markets mostly retained from earlier in the day
 (22:22-23:31Z) and 13-14 after restart. A restart rebuilds from a fresh scan;
 selector code is unchanged. Evening restarts therefore reduce breadth until
 later scans find more markets.
+
+## Breadth trace after restart (operator asked why fewer than ~30 orders)
+
+Flow-by-flow evidence, 23:54Z-00:02Z. Scan: every evening scan ranks few
+books (tonight 15-17 of ~713 rewarded, viable 13-14; same hour last night
+14-17 ranked, 10-14 viable; this morning 26-28 ranked, 18-20 viable). Binding:
+23:55:50Z top-up bound 14. Decisions: at 00:00:01Z (8:00 PM ET) ten markets'
+reward periods became `period_is_live`; pregame-only quoting stops there and
+entries are already barred inside the 300 s pre-kickoff window, which is why
+23:57Z had 14 orders on 9 of 14 bound markets. Replacement: the lifecycle
+top-up requested 00:00:46Z committed 00:01:51Z (released 5, kept 9, added 7,
+active 16); authenticated 00:02:09Z: 15 orders on 10 markets, zero positions
+and unknown orders. Correction to the note above: breadth is not capped by one
+evening scan. Successive scans add newly viable markets while bound ones are
+kept, so after last night's 00:09Z restart active markets rebuilt
+13→15→18→19→22→26→32 by 01:32Z (~83 min). Tonight matches that trajectory.
+`[api-backpressure]` lines were local 1 s deferrals with zero requests
+(`LOCAL_HYBRID_OBSERVATION_PENDING`, `LOCAL_CATALOG_ACCOUNT_CHANGED`).
+Finding for follow-up: `LOCAL_CATALOG_ACCOUNT_CHANGED` top-up deferrals were
+0 on September 23-24 but 474 on September 25 (old runner) and 13 in the first
+8 minutes of this run; they lengthen refill latency (open refill-latency item)
+and are not introduced by the refactor (selector/top-up logic AST-unchanged).

@@ -216,3 +216,10 @@ with a top-up of the previous day. Therefore:
 
 The UTR/R6 exclusion committed in `8824d083f` is not deployed. Re-evaluate
 UTR after 09-24's second batch and 09-25's posting before any activation.
+
+UTR/R6 trading history (ledger, read-only): the bot placed **no UTR orders from
+08-14 to 09-17**; 21 orders on 3 markets on 09-18, then 850 on 09-24, 414 on
+09-25 and 49 so far on 09-26. R6: 311 orders, all on 09-18. "No UTR payment
+since August" therefore reflects no UTR trading before 09-18; the only
+complete-day UTR evidence is those 21 orders. R6's single day (09-18, $0) is
+the stronger but still thin case. Decide activation after the next posting.

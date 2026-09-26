@@ -108,3 +108,18 @@ type) to the sports moneylines the bot trades. Daily per-event pools described
 by the docs target events without a fixed start (for example politics); the
 bot deliberately trades only pregame sports moneylines with a kickoff risk
 clock. Using those pools would be a new strategy, not a selection fix.
+
+## Fate of the markets quoted at the stop (read-only, 00:22Z September 26)
+
+The shutdown log names the 21 markets holding orders at the 23:48Z stop (31
+markets had actions in the preceding 30 minutes; the rest were bound but idle).
+Checked against the current catalog and incentives with the live entry
+policy: 13 were ITF/UTR/Setka games that started at 00:00Z (8 PM ET) and
+could not be re-bound by any restart; 7 were still pregame inside their
+`day_of` window but their catalog spread is now below the 2-cent minimum entry
+spread, so a fresh scan refuses them even though the running bot had kept
+quoting them after binding; 1 passed and was re-bound. The minimum entry
+spread is a selection (entry) rule and is not re-applied to already-bound
+markets, so a restart converts retained tight-spread markets into refused new
+entries. Recovering them on restart ("warm restart" under retention rules) or
+changing the spread rule are operator decisions.

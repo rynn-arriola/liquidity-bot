@@ -76,3 +76,12 @@ The main weaknesses are throughput of the decision loop, the runner's structure,
 2. Finding 1: design first, then implement with the operator's approval. Measure with decision latency and replacement gap.
 3. Finding 2: incremental extraction alongside finding 1, where it naturally applies.
 4. Findings 5 and 8: operator choice.
+
+## Progress
+
+- **Finding 3 — done (September 26).**
+  - The gate is now tracked as `scripts/release_gate.py`, with pure `gate_result`/`is_flat` covered by `tests/test_release_gate.py`. Deliberately inverting the flat decision fails 6 tests; ignoring ledger positions fails 1.
+  - It imports the package from `./src` of the working directory, because credentials are found relative to that package. Callers run it from `/home/polybot/liquidity-bot` via the `/mnt/c` path, so no deploy is needed.
+  - On live data its JSON matched the old script field for field, and `--require-flat` refused (exit 1) while trading.
+  - Updated callers: the status-check scripts (`wsl_pm_check`, `wsl_pm_restart`, `wsl_pm_fix_deploy`, `gate_read`) and the Command 1 scratch scripts. The scheduler's `pm_check.sh` was re-run successfully on the new path.
+  - 352 unreferenced `.local-tools` files (224 MB) were moved, not deleted, to `.local-tools/archive/2026-09-26-unreferenced/`. The 22 files still cited by history evidence stay in place.

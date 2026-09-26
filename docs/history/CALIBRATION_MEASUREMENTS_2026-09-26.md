@@ -89,3 +89,24 @@ The operator asked what data to save "to better calibrate our gate entries or ho
   - silent failure.
 - Full suite: 2,324 PASS.
 - The restart-free deploy first refused because a timing-sensitive `test_adapters` test measured 0.0141 s against a 0.015 s floor under production load. It passed on retry, and fixing that test is filed as a separate task.
+
+## Rewarded-market ranker (added the same evening)
+
+`scripts/market_ranker.py` (`fdec829b9`, schedule `c3c6dd5cd`) ranks every rewarded moneyline/drawable market starting within 6 h. For each one it estimates net $/h: reward (live model, 2-cent rule relaxed for measurement) plus trading P&L from our league history.
+- Leagues we rested in at least 3 days ago but were never paid for count as zero reward and are read last. Never-quoted leagues are marked `no_history`.
+- It is read-only on the report lane, and the bot's API waits were unchanged while it ran.
+
+**First run (19:47Z).** 817 open markets, 683 rewarded, 638 paying now, 148 scored in about 14 min.
+- Never paid: bbl, r6, rl, **ufc**, utr.
+- Our 32 traded markets averaged about -$0.09/h (model).
+- 31 untraded markets were positive, most of them setkamemd books with spreads under 2 cents (the 2-cent rule).
+- CFB pays about $0.002/h at our size, despite about $200 pools.
+- These are preliminary, single-snapshot results.
+
+**Schedule.** Runs at :05/:35 and nightly at 03:50 (with spreads/totals), with `flock` so runs never overlap. Output goes to `data/market-rankings/`.
+
+**TEMPORARY:** the cron lines run the script from the Windows checkout (`/mnt/c/...`), because the restart-free deploy correctly refuses while undeployed trader commits are pending. **After the next Command 1**, switch the schedule to the production script:
+
+```bash
+cd /home/polybot/liquidity-bot && .venv/bin/python -B scripts/market_ranker.py --install-cron
+```

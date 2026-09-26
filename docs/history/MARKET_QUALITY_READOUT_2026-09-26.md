@@ -65,3 +65,31 @@ excluded, but the account is otherwise bot-dedicated in this era.
 - September 18-24 reward per tracker resting side-hour: itfme $0.104/h and
   itfwo $0.092/h used 854 side-hours (~25% of measured resting time) versus
   setkameua $0.298/h, wtt $0.453/h, atp $0.461/h, cs2 $0.317/h.
+
+## Per-market paid versus rested (joined offline, no further API calls)
+
+Tracker rested market-days (Sept 18-24 ET, by rest date) joined to earnings by
+exact market slug: 1,852 rested market-days; 1,294 have a same-date reward
+row. Of the 558 without one, 187 were paid under a different date (the game
+date: e.g. rested 09-18, market `...-2026-09-19`, paid dated 09-19), so rest
+date and payout date differ for overnight/next-day games. 104 never-paid
+markets have game dates 09-25+ (not yet posted). **263 markets / 155.5
+side-hours (~4.4% of measured rest) are genuinely unpaid** on posted dates:
+itfme 46 (54.4 h, 13% of itfme rest), itfwo 27 (25.7 h), **utr 7 (21.9 h,
+100%)**, setkameua 83 (8.5 h, 1%), wta 7 (7.1 h, 37%), **r6 9 (5.6 h,
+100%)**.
+
+**UTR and R6 have zero PAID rows in all 6,208 bot-era liquidity earnings**,
+including any slug containing `utr`/`r6`. Bot UTR order actions by UTC date:
+09-18 25, 09-24 1,629, 09-25 677, 09-26 54 so far; tonight's bound set
+includes UTR markets. ET 09-24, the day UTR activity jumped, was the lowest
+paid day ($67.51). Causation is not proven and 09-25 UTR rows are not yet
+posted, but the venue has never paid this account for UTR/R6 liquidity while
+the selector's reward model ranks them. Excluding a league is a business
+selection change for the operator to decide; the next check is the 09-25
+posting.
+
+Examples: best 09-19 `aec-nhl-tor-mon` paid $46.01 over 3.0 side-h (net
+$38.91); worst 09-24 `aec-setkameua-saavih-matvas-2026-09-25` 5.0 side-h,
+unpaid so far, trading -$5.47. Paid amount per paid rested market-day: <$0.10
+388, $0.10-0.50 422, $0.50-2 354, ≥$2 130.

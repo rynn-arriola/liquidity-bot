@@ -144,3 +144,32 @@ score, consistent with its 0.78 market-level rank correlation (higher than
 share alone, 0.62). No crowding penalty is indicated. Limits: one week,
 placement-time snapshots, approximate rest time, account-wide earnings,
 correlational.
+
+## Entry-gate inputs versus realized outcomes (offline)
+
+Same 1,060 markets; per-market maximum fill probability, minimum retained
+value and minimum stressed exit P&L recorded at quote placement; realized
+fills, closed-fill P&L and PAID reward per side-hour. Quartiles:
+
+| Gate input | Q1 → Q4 fills/h | trade $/h | net $/h |
+|---|---|---|---|
+| Fill probability (low → high) | 0.74, 1.53, 2.51, 3.25 | -0.051, -0.079, -0.104, -0.080 | +0.134, +0.246, +0.203, +0.243 |
+| Retained value (0.70 → 0.98) | 3.03, 2.19, 1.78, 0.78 | -0.107, -0.121, -0.035, -0.045 | +0.350, +0.181, +0.220, +0.073 |
+| Stressed exit P&L (costly → cheap) | 2.84, 2.68, 1.65, 0.72 | -0.142, -0.044, -0.078, -0.046 | +0.263, +0.273, +0.212, +0.083 |
+
+Fill probability ranks fill frequency well, but realized trading loss per
+side-hour is nearly flat and net does not fall with fill risk. The gate
+charges each probable fill a stressed unwind of roughly $0.2-3.7, while
+realized loss per fill is small and league-specific: setkameua -$0.027,
+setkamemd +$0.008, setkamecz -$0.061, atp -$0.016, wtt -$0.102, wtadb -$0.105,
+modus -$0.121, itfwo -$0.171, cs2 -$0.182, itfme -$0.230. Within the admitted
+range, lower retained value and costlier stressed exits coincide with busier,
+better-paying markets (higher net), so neither input identifies worse markets
+there (rejected markets below 70% are unobserved). Reward side is conservative
+(paid/model 1.27-2.12 except modus 0.47, UTR/R6 0). Interpretation (not
+causal): the gate is safe-sided but miscalibrated — too cautious in aggregate
+and blind to league-specific realized payout and loss per fill. No manual
+threshold change is recommended; the approved shadow ranking should score
+calibrated expected net (league payout ratio × model reward − league realized
+loss per fill × modeled fill rate) alongside the current gate and log where
+they disagree.

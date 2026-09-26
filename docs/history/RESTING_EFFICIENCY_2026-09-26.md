@@ -140,3 +140,23 @@ To remove the time-of-day effect, the 10-minute window is compared with the same
 - Fill rate did not rise; it is the lowest of the four windows. 3 of 18 fills came on quotes older than 5 minutes, which is too few to judge the stale-fill risk.
 
 **Next.** Repeat over a full day, including loss per fill, before calling the change accepted.
+
+## Faster replacement (option a vs b) — measured, not built (September 26, 16:10Z)
+
+The operator said "Do all remaining with same process". Before changing timing, the post-expiry gap was split into its parts. Window: 13:50–16:05Z (10-minute entry lifetime), with the entry cap checked from 05:31Z.
+
+**Evidence (MEASURED, read-only ledger and log):**
+- The global hybrid proof veto is small now. `[api-backpressure] … cause=LOCAL_HYBRID_OBSERVATION_PENDING` (one line per 1 s create deferral) averages **0.32 s per expiry gap** (144 lines across 245 gaps). The REST proof cadence is 5 s (1 s with positions or intents).
+- Scheduling is fast: `[decision-scheduler]` decision latency is p50 0.8 s, p95 2.9 s. Log traces of sampled gaps show no per-market activity between the expiry and the next PLACE, so the owner was visited and the strategy chose not to place.
+- **The risk policy's pending-entry cap binds.** In 1,272 samples at 30 s intervals from 05:31Z:
+  - working entry orders were at or above the loss-tier cap (30/25/20) **79%** of the time;
+  - the mean shortfall below the cap was **0.89 orders**;
+  - it was short by 3 or more 8% of the time, and by 5 or more 4%.
+
+**Conclusion.**
+- A perfect decision loop could add at most about 0.9 resting entry orders on average (about 3% of the cap).
+- Option (a), relaxing the no-fill expiry proof, would remove at most the 0.32 s veto share.
+- Option (b), a decision-loop and proof-task redesign, is medium-to-large effort on the live concurrency core, for at most that gain.
+- **Neither is built.** The per-side replacement gap in the earlier tables mostly reflects the cap moving capacity to other markets or sides, plus strategy gates (entry quality, reward eligibility, event evidence; see EVENT_EVIDENCE_MARGIN_2026-09-26), not bot latency.
+
+The remaining lever on resting count is the pending-entry cap in `config/entry_order_policy.json`. It is a risk decision for the operator and is unchanged.

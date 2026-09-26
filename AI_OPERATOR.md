@@ -125,7 +125,7 @@ After the UI-maintenance entry gate is loaded, **"pause entries"** runs `PYTHONP
 
 ## How to work with the operator
 
-- Lead with the result and current bot state. The operator chooses the active model manually; do not recommend, require or pause for model switching.
+- **Reply format (operator rule 2026-09-26, every agent and session):** short bullet points in simple terms — what was done, what it means, what needs the operator. No long messages unless the operator asks for more detail. Lead with the result and current bot state. The operator chooses the active model manually; do not recommend, require or pause for model switching.
 - Explain technical findings in plain language before naming implementation
   details. Translate an error into what it means for orders, positions,
   rewards and risk.

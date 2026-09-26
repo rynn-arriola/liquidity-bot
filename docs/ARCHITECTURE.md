@@ -123,3 +123,26 @@ stale marked equity revokes that permission while preserving cancel/exit paths.
 Recovery starts its replacement private listener before sending quarantine
 cancels, and recovery/shutdown drain buffered terminal events before falling
 back to lagging individual REST reads.
+
+## Runner layering (generated map, 2026-09-26)
+
+The trader class is built in three layers:
+1. `CommissioningRunner`, whose methods live in `live_commissioning.py` plus eleven `runner_*.py` mixins;
+2. `RestFallbackRunner` (`rest_fallback.py`);
+3. `AccountSourceRunner` (`account_source_runner.py`, the hybrid/REST source actually launched by `_run`).
+
+A method overridden in both subclasses executes three layers deep, so tracing it means reading every layer. Print the current map with:
+
+```bash
+python -B scripts/runner_layers.py
+```
+
+At `83c0e959a`, 77 methods are overridden below `CommissioningRunner`, and 9 run three layers deep:
+- `__init__`, `preflight`, `_rest_reconcile`;
+- `_refresh_execution_state_for_decision`;
+- `_read_owned_order_states`, `_read_exact_order_states`;
+- `_reconcile_position_state`, `_fetch_execution_history`, `_set_source_descriptions`.
+
+Account-proof and order-read bugs, such as the 2026-09-26 404 stall, live in this set. `tests/test_runner_layers.py` keeps the map honest against the real classes.
+
+Structural refactoring (splitting `run()` or extracting account-proof and owner-scheduler objects) was reviewed on 2026-09-26 and deferred. Its planned driver, a decision-loop redesign, was measured as not worth building (RESTING_EFFICIENCY_2026-09-26), and `run()`'s loop keeps about a dozen interdependent timers as locals, so extraction would rewrite the live core for maintainability alone.

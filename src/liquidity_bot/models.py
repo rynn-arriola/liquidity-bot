@@ -69,6 +69,16 @@ class MarketMetadata:
             and 0 <= (now - self.event_checked_at).total_seconds() < 30
         )
 
+    def event_entry_block_reason(self, now: datetime) -> str:
+        """Name the failed `event_allows_entry` condition, for logs only."""
+        if self.event_started_at is not None:
+            return "event_started"
+        if self.event_checked_at is None:
+            return "no_event_evidence"
+        if not self.event_not_started:
+            return "not_proven_pregame"
+        return f"evidence_age={(now - self.event_checked_at).total_seconds():.1f}s"
+
     @property
     def is_supported_moneyline(self) -> bool:
         return (self.sports_market_type_v2 or "").strip().upper() == (

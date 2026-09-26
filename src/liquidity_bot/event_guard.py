@@ -14,6 +14,15 @@ from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError
 from .models import MarketMetadata
 
+EVENT_FRESHNESS_SECONDS = 30
+# A contract read applies its entry gate only after further awaits (the
+# incentive read), so evidence reused at 29 s can be stale moments later.
+# 2026-09-26: 3,924 whole-batch "event pregame state is unavailable" failures
+# while the refresh-time diagnostic saw every batch fresh; elapsed time is the
+# only input that differs between the two checks. Contract reads therefore
+# refetch evidence older than 20 s; the 30 s rule at use is unchanged.
+CONTRACT_EVIDENCE_MARGIN_SECONDS = 10.0
+
 
 def event_phase(event: dict) -> str:
     """started / pregame / unknown; positive play beats contradictory copies."""
@@ -132,8 +141,11 @@ class EventAwareGateway(AsyncReadOnlyGateway):
                     and slug in self._event_members.get(parent, set())
                     and 0 <= (self._event_now() - evidence[0]).total_seconds() < 30)
 
-    async def refresh_event_states(self, slugs: Iterable[str], *, force=False) -> None:
+    async def refresh_event_states(self, slugs: Iterable[str], *, force=False,
+                                   min_remaining_seconds: float = 0.0) -> None:
+        """Refetch parents whose evidence would expire within the margin."""
         now = self._event_now()
+        reuse_below = EVENT_FRESHNESS_SECONDS - min_remaining_seconds
         if not force and self._event_retry_at is not None and now < self._event_retry_at:
             return
         requested = set(slugs)
@@ -146,7 +158,8 @@ class EventAwareGateway(AsyncReadOnlyGateway):
                 # Accepted only if the returned event contains this exact slug.
                 parent = slug.removeprefix("aec-")
             evidence = self._event_status.get(parent)
-            if force or evidence is None or not 0 <= (now-evidence[0]).total_seconds() < 30:
+            if (force or evidence is None
+                    or not 0 <= (now-evidence[0]).total_seconds() < reuse_below):
                 parents.add(parent)
         if not parents:
             return
@@ -191,7 +204,8 @@ class EventAwareGateway(AsyncReadOnlyGateway):
     async def fetch_market(self, slug: str):
         market = await super().fetch_market(slug)
         try:
-            await self.refresh_event_states([slug])
+            await self.refresh_event_states(
+                [slug], min_remaining_seconds=CONTRACT_EVIDENCE_MARGIN_SECONDS)
         except AdapterError:
             # Valid contracts must remain available to position reductions.
             # Missing lifecycle evidence still blocks every entry below.
@@ -203,7 +217,8 @@ class EventAwareGateway(AsyncReadOnlyGateway):
         markets = await super().fetch_markets_by_slugs(slugs)
         reason = None
         try:
-            await self.refresh_event_states(slugs)
+            await self.refresh_event_states(
+                slugs, min_remaining_seconds=CONTRACT_EVIDENCE_MARGIN_SECONDS)
         except AdapterError as exc:
             reason = f"{type(exc).__name__}:{exc}"
         self._log_unfresh_event_evidence(slugs, reason)

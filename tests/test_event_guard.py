@@ -91,6 +91,50 @@ class EventGuardTests(unittest.IsolatedAsyncioTestCase):
         await gate.refresh_event_states(slugs)
         self.assertEqual(self.events.await_count, 2)
 
+    async def test_contract_reads_refetch_evidence_that_would_expire_before_use(self):
+        """Reused 25 s evidence failed the gate after the incentive read."""
+        from unittest.mock import patch
+        parent = EventAwareGateway.__mro__[1]
+        market = _market(market_row())
+        gate = self.gateway()
+        await gate.refresh_event_states(["aec-fixture"])
+        self.now += timedelta(seconds=25)
+        await gate.refresh_event_states(["aec-fixture"])
+        self.assertEqual(self.events.await_count, 1, "decision-pass reuse unchanged")
+        with patch.object(parent, "fetch_markets_by_slugs",
+                          AsyncMock(return_value={"aec-fixture": market})):
+            batch = await gate.fetch_markets_by_slugs(["aec-fixture"])
+        self.assertEqual(self.events.await_count, 2)
+        # The incentive read and apply happen after this return.
+        self.assertTrue(batch["aec-fixture"].event_allows_entry(
+            self.now + timedelta(seconds=9.9)))
+        self.now += timedelta(seconds=5)
+        single = await gate.fetch_market("aec-fixture")
+        self.assertEqual(self.events.await_count, 2, "5 s evidence is reused")
+        self.assertTrue(single.event_allows_entry(self.now + timedelta(seconds=5)))
+        self.now += timedelta(seconds=16)
+        single = await gate.fetch_market("aec-fixture")
+        self.assertEqual(self.events.await_count, 3, "21 s evidence is refetched")
+        self.assertTrue(single.event_allows_entry(self.now + timedelta(seconds=9.9)))
+
+    def test_entry_block_reason_names_the_failed_condition(self):
+        base = _market(market_row())
+        fresh = replace(base, event_guard_required=True, event_checked_at=NOW,
+                        event_not_started=True)
+        self.assertTrue(fresh.event_allows_entry(NOW))
+        cases = (
+            (replace(fresh, event_started_at=NOW), "event_started"),
+            (replace(fresh, event_checked_at=None), "no_event_evidence"),
+            (replace(fresh, event_not_started=False), "not_proven_pregame"),
+        )
+        for market, reason in cases:
+            with self.subTest(reason=reason):
+                self.assertFalse(market.event_allows_entry(NOW))
+                self.assertEqual(market.event_entry_block_reason(NOW), reason)
+        stale = NOW + timedelta(seconds=31.3)
+        self.assertFalse(fresh.event_allows_entry(stale))
+        self.assertEqual(fresh.event_entry_block_reason(stale), "evidence_age=31.3s")
+
     async def test_failure_blocks_entry_preserves_contract_and_bounded_retry(self):
         gate = self.gateway()
         await gate.refresh_event_states(["aec-fixture"])

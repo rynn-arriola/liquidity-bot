@@ -1162,7 +1162,9 @@ class CommissioningRunner(
             state.incentive = None
             state.reward_eligible = frozenset()
             state.clear_economics()
-            raise CommissioningUnavailable(f"{slug} event pregame state is unavailable")
+            raise CommissioningUnavailable(
+                f"{slug} event pregame state is unavailable "
+                f"({state.market.event_entry_block_reason(now)})")
         if state.incentive is None:
             raise _RewardUnavailable(
                 f"{slug} has no liquidityProgram incentive")

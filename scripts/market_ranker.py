@@ -122,61 +122,117 @@ def unpaid_leagues(paid: set[str] | None, rested: set[str]) -> set[str] | None:
     return None if paid is None else {league for league in rested if league not in paid}
 
 
-CALIBRATION_DAYS = 14          # operator: two weeks, not one week or a month
+WEEK_WEIGHTS = (0.50, 0.25, 0.25)  # operator: 3 weeks; most recent week 50%, then 25%, 25%
 PAYOUT_SETTLE_DAYS = 3         # payouts post 1-3 days late
 MIN_CALIBRATION_HOURS = 50.0   # resting order-hours before a league gets its own factor
 MAX_REWARD_FACTOR = 3.0
+WORKING_STATES = ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
 
 
 def _stamp(value) -> datetime:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
 
 
-def reward_calibration(data: dict, payout_rows: list[dict], *, start: datetime,
-                       end: datetime) -> dict:
+def week_windows(end: datetime, weights=WEEK_WEIGHTS) -> list[tuple[datetime, datetime, float]]:
+    """Most recent week first: [(start, end, weight), ...]."""
+    return [(end - timedelta(days=7 * (k + 1)), end - timedelta(days=7 * k), w)
+            for k, w in enumerate(weights)]
+
+
+def weighted_reward_calibration(data: dict, payout_rows: list[dict],
+                                windows: list[tuple[datetime, datetime, float]]) -> dict:
     """Actual paid / model-predicted reward for our own resting, by league.
 
     Every entry quote stored the live model's projected reward per 30 s at
-    placement; multiplying by the order's resting time (clipped to the window)
-    gives what the model expected. The market's PAID payouts are what the venue
-    actually paid. Leagues with under MIN_CALIBRATION_HOURS use the overall ratio.
+    placement; that times the order's resting time in a window is what the
+    model expected. Each market's PAID payout is split across windows in
+    proportion to its predicted reward there, then both sides are weighted by
+    the window weight. Leagues under MIN_CALIBRATION_HOURS use the overall ratio.
     """
     projected = {o["client_order_id"]: o["projected_reward"] for o in data["observations"]
                  if o.get("projected_reward") is not None}
     created = {i["client_order_id"]: _stamp(i["created_at"]) for i in data["intents"]
                if i["quote_observation_required"]}
-    predicted, hours, markets = defaultdict(float), defaultdict(float), defaultdict(set)
+    last_end = max(w[1] for w in windows)
+    per = defaultdict(lambda: [0.0, 0.0])        # (market, window index) -> [predicted, hours]
     for order in data["orders"]:
         cid = order["client_order_id"]
         if cid not in created or cid not in projected:
             continue
         begin = created[cid]
-        finish = (end if order["status"] in ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
-                  or not order["event_at"] else _stamp(order["event_at"]))
-        lo, hi = max(begin, start), min(finish, end)
-        if hi <= lo:
-            continue
-        league = league_from_slug(order["market_slug"]) or "other"
-        seconds = (hi - lo).total_seconds()
-        predicted[league] += float(projected[cid]) * seconds / 30
-        hours[league] += seconds / 3600
-        markets[league].add(order["market_slug"])
+        finish = (last_end if order["status"] in WORKING_STATES or not order["event_at"]
+                  else _stamp(order["event_at"]))
+        for k, (w_start, w_end, _) in enumerate(windows):
+            lo, hi = max(begin, w_start), min(finish, w_end)
+            if hi > lo:
+                seconds = (hi - lo).total_seconds()
+                cell = per[(order["market_slug"], k)]
+                cell[0] += float(projected[cid]) * seconds / 30
+                cell[1] += seconds / 3600
     paid_by_market = defaultdict(float)
     for row in payout_rows:
         if str(row.get("status", "")).upper() == "PAID":
             paid_by_market[row["market_slug"]] += float(row.get("reward") or 0)
-    leagues = {}
-    for league in predicted:
-        paid = sum(paid_by_market[m] for m in markets[league])
-        ratio = paid / predicted[league] if predicted[league] > 0 else None
-        leagues[league] = dict(predicted=round(predicted[league], 4), paid=round(paid, 4),
-                               resting_hours=round(hours[league], 1),
-                               ratio=None if ratio is None else round(ratio, 4))
-    total_pred = sum(predicted.values())
-    total_paid = sum(v["paid"] for v in leagues.values())
-    overall = total_paid / total_pred if total_pred > 0 else None
-    return dict(start=start.isoformat(), end=end.isoformat(), leagues=leagues,
-                overall_ratio=None if overall is None else round(overall, 4))
+    market_total = defaultdict(float)
+    for (market, _), (pred, _) in per.items():
+        market_total[market] += pred
+    agg = defaultdict(lambda: dict(predicted=0.0, paid=0.0, hours=0.0))
+    for (market, k), (pred, hrs) in per.items():
+        weight = windows[k][2]
+        share = pred / market_total[market] if market_total[market] > 0 else 0.0
+        row = agg[league_from_slug(market) or "other"]
+        row["predicted"] += weight * pred
+        row["paid"] += weight * paid_by_market[market] * share
+        row["hours"] += hrs
+    leagues = {league: dict(predicted=round(v["predicted"], 4), paid=round(v["paid"], 4),
+                            resting_hours=round(v["hours"], 1),
+                            ratio=round(v["paid"] / v["predicted"], 4) if v["predicted"] > 0 else None)
+               for league, v in agg.items()}
+    total_pred = sum(v["predicted"] for v in agg.values())
+    total_paid = sum(v["paid"] for v in agg.values())
+    return dict(windows=[(a.isoformat(), b.isoformat(), w) for a, b, w in windows], leagues=leagues,
+                overall_ratio=round(total_paid / total_pred, 4) if total_pred > 0 else None)
+
+
+def reward_calibration(data: dict, payout_rows: list[dict], *, start: datetime,
+                       end: datetime) -> dict:
+    """Single unweighted window (kept for callers and tests)."""
+    return weighted_reward_calibration(data, payout_rows, [(start, end, 1.0)])
+
+
+def weighted_league_history(data: dict, windows: list[tuple[datetime, datetime, float]]) -> dict:
+    """Fill rate per 30 s and average position result per league, week-weighted."""
+    from scripts.calibration_report import fill_model_calibration, position_episodes
+    fills, intervals, orders = defaultdict(float), defaultdict(float), defaultdict(int)
+    for w_start, w_end, weight in windows:
+        window_data = dict(data, observations=[
+            o for o in data["observations"] if w_start <= _stamp(o["observed_at"]) < w_end])
+        for row in fill_model_calibration(window_data, since=w_start, now=w_end)["cells"]:
+            if row["cell"] == "global" or row["cell"].startswith("league:"):
+                key = "global" if row["cell"] == "global" else row["cell"].split(":", 1)[1]
+                fills[key] += weight * row["fills"]
+                intervals[key] += weight * row["exposure_hours"] * 120
+                orders[key] += row["orders"]
+    building = {i["client_order_id"] for i in data["intents"] if i["quote_observation_required"]}
+    observed = {o["client_order_id"] for o in data["observations"]}
+    pnl, closed_w, closed_n = defaultdict(float), defaultdict(float), defaultdict(int)
+    for episode in position_episodes(data):
+        if (episode["closed_at"] is None or episode["entry_client_order_id"] not in building
+                or episode["entry_client_order_id"] not in observed):
+            continue
+        for w_start, w_end, weight in windows:
+            if w_start <= episode["opened_at"] < w_end:
+                for key in ("global", league_from_slug(episode["market"]) or "other"):
+                    pnl[key] += weight * float(episode["pnl"])
+                    closed_w[key] += weight
+                    closed_n[key] += 1
+                break
+    rates = {k: fills[k] / intervals[k] for k in intervals
+             if k != "global" and intervals[k] > 0 and orders[k] >= 50}
+    results = {k: pnl[k] / closed_w[k] for k in closed_w if k != "global" and closed_n[k] >= 5}
+    return dict(rates=rates, results=results,
+                global_rate=fills["global"] / intervals["global"] if intervals["global"] else 0.0,
+                global_result=pnl["global"] / closed_w["global"] if closed_w["global"] else 0.0)
 
 
 def reward_factor(league: str | None, calibration: dict | None) -> tuple[float, str]:
@@ -379,7 +435,6 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", type=Path, default=Path("data/commissioning.db"))
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
-    p.add_argument("--days", type=int, default=CALIBRATION_DAYS)
     p.add_argument("--max-books", type=int, default=150)
     p.add_argument("--install-cron", action="store_true",
                    help="install the 30-minute and nightly runs for this checkout")
@@ -390,26 +445,23 @@ def main(argv: list[str] | None = None) -> int:
     if a.install_cron:
         return install_cron(Path.cwd().resolve())
     from liquidity_bot.commissioning import CommissioningConfig
-    from scripts.calibration_report import (
-        episode_summary, fill_model_calibration, read_archive_records, read_ledger)
+    from scripts.calibration_report import read_archive_records, read_ledger
     now = datetime.now(UTC)
     policy = CommissioningConfig.diagnostic_defaults().reward_selection_policy()
     data = read_ledger(a.db)
-    since = now - timedelta(days=a.days)
-    history = league_history(fill_model_calibration(data, since=since, now=now)["cells"],
-                             episode_summary(data, since=since).get("league", []))
+    history = weighted_league_history(data, week_windows(now))
     reward_snapshots = read_archive_records(a.archive, {"rewards"})
     paid = paid_leagues(reward_snapshots)
     newest_rewards = (max(reward_snapshots, key=lambda s: s.get("at", ""))["rows"]
                       if reward_snapshots else [])
     settled_end = now - timedelta(days=PAYOUT_SETTLE_DAYS)
-    calibration = (reward_calibration(data, newest_rewards, start=settled_end - timedelta(days=a.days),
-                                      end=settled_end) if newest_rewards else None)
+    calibration = (weighted_reward_calibration(data, newest_rewards, week_windows(settled_end))
+                   if newest_rewards else None)
     # Payouts post 1-3 days late: only rest at least 3 days old can prove "never paid";
-    # the same two-week window as the reward calibration.
+    # the same three weeks as the reward calibration.
     settled = (now - timedelta(days=PAYOUT_SETTLE_DAYS)).isoformat()
     rested = {league_from_slug(o["market_slug"]) or "other" for o in data["observations"]
-              if (now - timedelta(days=PAYOUT_SETTLE_DAYS + a.days)).isoformat()
+              if (now - timedelta(days=PAYOUT_SETTLE_DAYS + 7 * len(WEEK_WEIGHTS))).isoformat()
               <= o["observed_at"] <= settled}
     unpaid = unpaid_leagues(paid, rested)
     types = DAILY_TYPES if a.include_spreads_totals else FREQUENT_TYPES

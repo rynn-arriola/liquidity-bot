@@ -146,6 +146,53 @@ class MarketRankerTests(unittest.TestCase):
         huge = dict(leagues={"cfb": dict(ratio=9.0, resting_hours=500)}, overall_ratio=1.0)
         self.assertEqual(ranker.reward_factor("cfb", huge), (ranker.MAX_REWARD_FACTOR, "league"))
 
+    def test_weighted_calibration_weighs_the_newest_week_half(self):
+        windows = ranker.week_windows(NOW)
+        self.assertEqual([w for *_, w in windows], [0.5, 0.25, 0.25])
+        self.assertEqual((windows[0][1], windows[2][0]), (NOW, NOW - timedelta(days=21)))
+        at = lambda days_ago, h=0: (NOW - timedelta(days=days_ago) + timedelta(hours=h)).isoformat()
+        data = dict(
+            observations=[dict(client_order_id=c, projected_reward=0.01) for c in "xyz"],
+            intents=[dict(client_order_id="x", created_at=at(3), quote_observation_required=1),
+                     dict(client_order_id="y", created_at=at(18), quote_observation_required=1),
+                     dict(client_order_id="z", created_at=at(7, -5), quote_observation_required=1)],
+            orders=[  # x: 10 h in week 1; y: 10 h in week 3; z: 5 h week 2 + 5 h week 1
+                dict(client_order_id="x", market_slug="aec-cfb-x", status="EXPIRED", event_at=at(3, 10)),
+                dict(client_order_id="y", market_slug="aec-cfb-y", status="EXPIRED", event_at=at(18, 10)),
+                dict(client_order_id="z", market_slug="aec-nfl-z", status="EXPIRED", event_at=at(7, 5))])
+        payouts = [dict(market_slug="aec-cfb-x", status="PAID", reward="36"),
+                   dict(market_slug="aec-nfl-z", status="PAID", reward="24")]
+        cal = ranker.weighted_reward_calibration(data, payouts, windows)
+        # cfb: predicted 12 per market; weighted 0.5*12 + 0.25*12 = 9; paid 0.5*36 = 18
+        self.assertAlmostEqual(cal["leagues"]["cfb"]["ratio"], 2.0)
+        self.assertAlmostEqual(cal["leagues"]["cfb"]["resting_hours"], 20.0)
+        # nfl: 6 predicted per week, payout split 12/12; ratio unchanged by weights
+        self.assertAlmostEqual(cal["leagues"]["nfl"]["predicted"], 0.5 * 6 + 0.25 * 6)
+        self.assertAlmostEqual(cal["leagues"]["nfl"]["ratio"], 2.0)
+        self.assertAlmostEqual(cal["overall_ratio"], round((18 + 9) / (9 + 4.5), 4))
+
+    def test_weighted_history_weighs_fill_rates_and_results_by_week(self):
+        from unittest import mock
+        windows = ranker.week_windows(NOW)
+        cells = {windows[0][0]: [dict(cell="global", orders=40, fills=4, exposure_hours=1.0),
+                                 dict(cell="league:cfb", orders=40, fills=4, exposure_hours=1.0)],
+                 windows[1][0]: [dict(cell="global", orders=40, fills=0, exposure_hours=1.0),
+                                 dict(cell="league:cfb", orders=40, fills=0, exposure_hours=1.0)],
+                 windows[2][0]: []}
+        episodes = [dict(market="aec-cfb-a", opened_at=NOW - timedelta(days=d), closed_at=NOW,
+                         entry_client_order_id="e", pnl=p)
+                    for d, p in [(1, 1.0)] * 3 + [(10, -1.0)] * 3]
+        data = dict(observations=[dict(client_order_id="e", observed_at=NOW.isoformat())],
+                    intents=[dict(client_order_id="e", quote_observation_required=1)])
+        with mock.patch("scripts.calibration_report.fill_model_calibration",
+                        lambda d, *, since, now: dict(cells=cells[since])),                 mock.patch("scripts.calibration_report.position_episodes", lambda d: episodes):
+            history = ranker.weighted_league_history(data, windows)
+        # fills 0.5*4 over intervals 0.75*120 = 90
+        self.assertAlmostEqual(history["rates"]["cfb"], 2 / 90)
+        # results: (0.5*3 - 0.25*3) / (0.5*3 + 0.25*3)
+        self.assertAlmostEqual(history["results"]["cfb"], 0.75 / 2.25)
+        self.assertAlmostEqual(history["global_result"], 0.75 / 2.25)
+
     def test_score_applies_the_reward_factor(self):
         period = SimpleNamespace(period="day_of", reward_pool=200)
         relaxed = opportunity(side(0.001), side(0.002))

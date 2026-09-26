@@ -137,7 +137,7 @@ cd /home/polybot/liquidity-bot && .venv/bin/python -B scripts/market_ranker.py -
 
 **Ranker schedule.** Switched to the production script with `--install-cron`.
 
-## Ranker reward calibration (operator: "should be 2 weeks")
+## Ranker reward calibration (operator: "should be 2 weeks"; later 3 weighted weeks, below)
 
 `scripts/market_ranker.py` now multiplies the live model's reward estimate by a per-league factor.
 - **Factor:** actual PAID ÷ model-predicted reward over our own resting orders, where predicted = the stored placement-time `projected_reward` per 30 s × resting time.
@@ -154,3 +154,15 @@ cd /home/polybot/liquidity-bot && .venv/bin/python -B scripts/market_ranker.py -
 | About ×1.0 or below | modus ×1.02, pdcdarts ×0.76 (under 50 h, so overall is used), valorant ×0.56 (under 50 h, so overall is used) |
 
 Tests: two new cases (payout attribution, the minimum-hours fallback, the cap, and applying the factor).
+
+### Changed to 3 weighted weeks (operator: "3 weeks ... first week 50 percent then 25 for 2nd and 3rd")
+
+- **Weights:** most recent week 50%, week 2 25%, week 3 25% (`WEEK_WEIGHTS`, `week_windows`).
+- **Reward factor:** 3 weeks ending 3 days ago. Each market's PAID payout is split across the weeks by its predicted reward there, so nothing is counted twice; then paid and predicted are both weighted. The 50-hour minimum uses unweighted hours.
+- **Trading history:** fill rate and position results per league over 3 weeks ending now, same weights (fills by the week the quote started; positions by the week they opened). Minimums (50 orders, 5 closed) use unweighted counts.
+- **"Never paid" evidence:** rest 3 days to 3 weeks + 3 days old.
+- **Payout coverage checked:** the rewards snapshot holds 6,585 rows from June 23 to Sept 25, so all 3 weeks are covered.
+
+**Factors on the first weighted run (Sept 26; overall ×1.77):** setkameua ×1.97, itfme ×1.32, itfwo ×1.32, wtt ×2.02, setkamemd ×2.30, cs2 ×1.75, setkamecz ×2.32, modus ×1.08, atp ×1.86, dota2 ×1.84.
+
+Tests: two new cases (newest week weighs half; payout split across weeks; weighted fill rates and results).

@@ -85,3 +85,14 @@ Before this change, after a reboot or the loss of both processes the Windows wat
   - 39 runs across 12 cooldowns, then bounded attention;
   - resume refuses stop, attention and superseded launches, and resets the budget.
   - Deliberate reversals each fail.
+
+## Shutdown guard: built, then withdrawn (operator: "Ok remove it")
+
+A shutdown guard was pushed in `7f505f92e`, never installed, and reverted in `77806cf57`. The reasons:
+- Windows Update restarts can force-close it, so it would work only sometimes.
+- Windows 11 Home lacks shutdown scripts.
+- Reboots are already bounded by the 10-minute entry expiry and flat-proving host recovery, which resumes trading in `afb8497`.
+
+Operator guidance instead:
+- Set wide Windows Update active hours (e.g. 08:00–02:00), or pause updates.
+- When restarting the laptop yourself, restart without stopping the bot. A manual stop disarms the watchdog, so the bot would stay off after the reboot.

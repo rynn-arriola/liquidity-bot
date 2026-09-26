@@ -118,8 +118,12 @@ policy: 13 were ITF/UTR/Setka games that started at 00:00Z (8 PM ET) and
 could not be re-bound by any restart; 7 were still pregame inside their
 `day_of` window but their catalog spread is now below the 2-cent minimum entry
 spread, so a fresh scan refuses them even though the running bot had kept
-quoting them after binding; 1 passed and was re-bound. The minimum entry
-spread is a selection (entry) rule and is not re-applied to already-bound
-markets, so a restart converts retained tight-spread markets into refused new
-entries. Recovering them on restart ("warm restart" under retention rules) or
+quoting them after binding; 1 passed and was re-bound. This asymmetry is
+authorized policy (DECISIONS: keep the 2-cent fresh-selection gate; one-tick
+touch quoting only for a market already selected on a qualifying book):
+`entry_quote_price` joins one-tick books for bound markets, while the
+selector's `_catalog_spread_can_enter` and `spread_below_entry_minimum` refuse
+them as new entries. A restart forgets "already selected", so retained
+tight-spread markets become refused new entries. Whether they were already
+tight before the stop is not proven by this later read. Recovering them on restart ("warm restart" under retention rules) or
 changing the spread rule are operator decisions.

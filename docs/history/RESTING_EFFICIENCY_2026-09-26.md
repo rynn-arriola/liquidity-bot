@@ -50,3 +50,20 @@ Faster replacement needs one of two approaches:
   - marker with AC 39% → none; 55% → restart (auto 15 32 hybrid);
   - battery with marker → none; malicious marker → refused.
 - Full WSL suite result: see the commit.
+
+## Command 1 activation (13:47Z)
+
+- Graceful stop at 13:47:07Z, flat, 0 shutdown failures. 29 markets were active; scope saved.
+- Gate 1 at 13:47:13Z: all zero.
+- `cb8f6a029` fast-forwarded; hashes match. Trading changes versus `bd1a754`: `config/entry_expiry_policy.json`, `entry_expiry.py`, `event_guard.py`.
+- Production suite: 2,347 PASS.
+- Gate 2 at 13:49:29Z: all zero. `DEPLOYED_COMMIT=cb8f6a029`. Supervisor 634499 / runner 634519.
+
+Acceptance at 13:53Z:
+- warm restart readmitted 29/29;
+- 40 placements, all GTD, lifetime 233–600 s (shortened near kickoff as designed);
+- 25 orders on 21 markets, 0 positions, 0 unresolved/unknown;
+- 0 Traceback, critical, runtime-recovery or 404;
+- API 1.40/s, 0 failures.
+
+Next, compare resting side-hours per hour, expiry replacements per hour, fills per resting hour and loss per fill against 05:31–13:05Z (26.8 average sides; about 310 expiries/h; 125 fills per 7.5 h).

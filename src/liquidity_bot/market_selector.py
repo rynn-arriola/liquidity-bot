@@ -12,7 +12,7 @@ import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 from .adapters import AsyncReadOnlyGateway
 from .errors import AdapterError, ApiAdmissionDeferred
@@ -279,6 +279,10 @@ class RewardMarketSelection:
     catalog_spread_filtered_markets: int = 0
     event_pages_used: int = 0
     no_applicable_period_markets: int = 0
+    # Ranker slot priority evidence: markets in the loaded priority file, and
+    # how many of them passed every live gate in this scan.
+    ranker_priority_markets: int = 0
+    ranker_priority_viable: int = 0
 
     def top_viable(
         self, limit: int, *, exclude: frozenset[str] | set[str] = frozenset(),
@@ -511,6 +515,21 @@ def _opportunity_key(
     )
 
 
+def _prioritized_opportunity_key(priority: Mapping[str, int]):
+    """Ranker slot priority (operator, 2026-09-26) inside the viable split.
+
+    Viable markets still sort ahead of monitoring-only rows, so a ranked
+    market that fails a live gate never takes a slot. Among viable markets,
+    ranked ones come first in ranker order; unranked ones keep the
+    established order after them. An empty mapping reproduces the old order.
+    """
+
+    def key(item: RewardMarketOpportunity):
+        base = _opportunity_key(item)
+        return (base[0], priority.get(item.market.slug, math.inf), *base[1:])
+    return key
+
+
 class RewardMarketSelector:
     """Join bounded sports-event markets to exact rewards and score them."""
 
@@ -520,14 +539,26 @@ class RewardMarketSelector:
         policy: RewardSelectionPolicy | None = None,
         fill_hazard_model: MondayFillHazardModel | None = None,
         *, clock: Callable[[], datetime] | None = None, quality_sink=None,
+        priority_source: Callable[[datetime], Mapping[str, int]] | None = None,
     ):
         self.gateway = gateway
+        self.priority_source = priority_source
         self.policy = policy or RewardSelectionPolicy()
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
         self._book_cursor = 0
         self._last_selected_slug: str | None = None
         self.clock = clock
         self.quality_sink = quality_sink
+
+    def _priority(self, now: datetime) -> dict[str, int]:
+        """Ranker ranks by slug; empty whenever evidence is unavailable."""
+        if self.priority_source is None:
+            return {}
+        try:
+            return {str(slug): int(rank)
+                    for slug, rank in dict(self.priority_source(now)).items()}
+        except Exception:
+            return {}
 
     async def select(self, *, now: datetime) -> RewardMarketSelection:
         scope = getattr(self.gateway, "traffic_class", None)
@@ -613,7 +644,8 @@ class RewardMarketSelector:
                 quality_reasons[slug] = type(exc).__name__
 
         ranked = sorted(candidates, key=_candidate_key)
-        detailed, deferred = self._detailed_candidates(ranked)
+        priority = self._priority(now)
+        detailed, deferred = self._detailed_candidates(ranked, priority)
         opportunities: list[RewardMarketOpportunity] = []
         async with book_scope(self.gateway, [m.slug for m, _, _ in detailed]):
             for market, incentive, period in detailed:
@@ -637,7 +669,7 @@ class RewardMarketSelector:
         # Binding/action paths fetch genuine fresh lifecycle evidence again.
         opportunities = self._refresh_opportunity_times(
             opportunities, now, require_event_freshness=False)
-        opportunities.sort(key=_opportunity_key)
+        opportunities.sort(key=_prioritized_opportunity_key(priority))
         result = RewardMarketSelection(
             selected=next(
                 (item for item in opportunities
@@ -656,6 +688,10 @@ class RewardMarketSelector:
             catalog_spread_filtered_markets=catalog_spread_filtered,
             event_pages_used=event_pages_used,
             no_applicable_period_markets=no_period,
+            ranker_priority_markets=len(priority),
+            ranker_priority_viable=sum(
+                1 for item in opportunities
+                if item.viable_sides and item.market.slug in priority),
         )
         if result.selected is not None:
             self._last_selected_slug = result.selected.market.slug
@@ -748,7 +784,7 @@ class RewardMarketSelector:
             if opportunity.viable_sides:
                 opportunities.append(opportunity)
         opportunities = self._refresh_opportunity_times(opportunities, now)
-        opportunities.sort(key=_opportunity_key)
+        opportunities.sort(key=_prioritized_opportunity_key(self._priority(now)))
         return tuple(item for item in opportunities if item.viable_sides)
 
     def _refresh_opportunity_times(
@@ -821,6 +857,7 @@ class RewardMarketSelector:
         ranked: list[
             tuple[MarketMetadata, MarketIncentive, IncentivePeriod]
         ],
+        priority: Mapping[str, int] | None = None,
     ) -> tuple[
         list[tuple[MarketMetadata, MarketIncentive, IncentivePeriod]],
         tuple[str, ...],
@@ -832,12 +869,28 @@ class RewardMarketSelector:
         head and the current selection, then advances a round-robin window
         through the remainder. Low-pool programs are therefore not permanently
         hidden by the API cap.
+
+        Ranker-priority markets (operator, 2026-09-26) are read first, in
+        ranker order, before the head and the rotation share what is left.
+        Reading a book authorizes nothing; every gate still applies after it.
         """
 
-        budget = self.policy.max_book_candidates
-        if len(ranked) <= budget:
+        total = self.policy.max_book_candidates
+        if len(ranked) <= total:
             return list(ranked), ()
         all_ranked = ranked
+        priority = priority or {}
+        chosen = sorted(
+            (item for item in ranked if item[0].slug in priority),
+            key=lambda item: priority[item[0].slug])[:total]
+        chosen_slugs = {item[0].slug for item in chosen}
+        ranked = [item for item in ranked if item[0].slug not in chosen_slugs]
+        budget = total - len(chosen)
+        if budget <= 0 or not ranked:
+            deferred = tuple(
+                item[0].slug for item in all_ranked
+                if item[0].slug not in chosen_slugs)
+            return chosen, deferred
         day_of = [item for item in ranked if _candidate_key(item)[0] == 0]
         # Scan priority must survive the rotating tail too. Daily candidates
         # get only leftover book capacity; a previously selected daily market
@@ -847,9 +900,9 @@ class RewardMarketSelector:
         head_count = min(budget, max(
             min(5, max(1, budget // 5)),
             len(day_of) if len(day_of) < budget else 0))
-        chosen = list(ranked[:head_count])
-        chosen_slugs = {item[0].slug for item in chosen}
-        if self._last_selected_slug and len(chosen) < budget:
+        chosen.extend(ranked[:head_count])
+        chosen_slugs.update(item[0].slug for item in ranked[:head_count])
+        if self._last_selected_slug and len(chosen) < total:
             current = next(
                 (item for item in ranked
                  if item[0].slug == self._last_selected_slug),
@@ -859,7 +912,7 @@ class RewardMarketSelector:
                 chosen.append(current)
                 chosen_slugs.add(current[0].slug)
         tail = [item for item in ranked if item[0].slug not in chosen_slugs]
-        slots = budget - len(chosen)
+        slots = total - len(chosen)
         if tail and slots > 0:
             start = self._book_cursor % len(tail)
             count = min(slots, len(tail))

@@ -118,6 +118,7 @@ from .models import AccountBalance, BookSnapshot, MarketIncentive, MarketMetadat
 from .event_guard import EventAwareGateway
 from .notifications import DiscordNotifier, RuntimeNotificationDispatcher
 from .quote_size import MAX_QUOTE_SIZE, MIN_QUOTE_SIZE
+from .ranker_priority import RankerPriority
 from .slot_capacity import MAX_SLOT_CAPACITY, MIN_SLOT_CAPACITY
 from .readiness import ReadinessVerdict
 from .reward_calendar import (
@@ -467,6 +468,9 @@ class CommissioningRunner(
                 fill_hazard_model=self.fill_hazard_model,
                 clock=lambda: self._now(),
                 quality_sink=quality_sink,
+                # Operator 2026-09-26: ranker-listed markets get book reads
+                # and free slots first; every live gate still applies.
+                priority_source=RankerPriority().ranks,
             )
         self.account = AsyncAccountSnapshotGateway(
             self.gateway, resolve_client_id=ledger.resolve_client_order_id)

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Rank every rewarded market starting within six hours by what it would earn us.
 
-Measurement only: read-only venue reads on the opportunistic report lane, a
-read-only ledger snapshot and the market-quality archives. No order, no
-selection change. For each rewarded market (any market type) it reports:
+Read-only venue reads on the opportunistic report lane, a read-only ledger
+snapshot and the market-quality archives; it places no order. Its best
+markets are written to ``data/market-rankings/priority.json``, which the bot
+uses only to order book reads and free slots (operator, 2026-09-26); every
+live gate still decides. For each rewarded market (any market type) it reports:
 
 * expected reward per hour for our quote size on both sides, from the live
   reward model with the live policy except the 2-cent spread rule;
@@ -24,6 +26,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Iterable
@@ -341,6 +344,35 @@ async def collect(*, now, policy, max_books: int, market_types: tuple[str, ...],
                 never_paid_markets=never_paid, books=books, book_errors=errors)
 
 
+# Rules the bot applies before reading a book that a market cannot outgrow
+# within a scan; a narrow spread can widen, so it keeps its place.
+PERMANENT_BLOCKERS = frozenset({"not_moneyline", "excluded_league", "minimum_quantity"})
+
+
+def priority_payload(report: dict) -> dict:
+    """The bot's slot-priority file: positive net value; never-paid leagues and
+    markets the bot can never quote are left out.
+
+    Order only: the bot reads these books first and offers them free slots
+    first, but every live gate still decides (operator, 2026-09-26).
+    """
+    from liquidity_bot.ranker_priority import MAX_PRIORITY_MARKETS, PRIORITY_SCHEMA
+    rows = [r for r in report["rows"] if r["net_per_hour"] > 0 and not r["never_paid"]
+            and not PERMANENT_BLOCKERS.intersection(r.get("blocked_by", ()))]
+    return dict(schema=PRIORITY_SCHEMA, generated_at=report["generated_at"],
+                markets=[dict(slug=r["market"], rank=i, net_per_hour=r["net_per_hour"])
+                         for i, r in enumerate(rows[:MAX_PRIORITY_MARKETS], 1)])
+
+
+def write_priority(report: dict, output_root: Path) -> Path:
+    """Replace the priority file atomically so the bot never reads half a file."""
+    path = output_root / "priority.json"
+    tmp = path.with_name(f".priority.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(priority_payload(report), indent=1), encoding="utf8")
+    os.replace(tmp, path)
+    return path
+
+
 def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested=frozenset(),
           calibration=None) -> dict:
     relaxed_policy = replace(policy, minimum_entry_spread=MEASURE_SPREAD, excluded_leagues=frozenset())
@@ -368,7 +400,7 @@ def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested
     ranked = rank(rows)
     return dict(
         generated_at=now.isoformat(), horizon_hours=RANK_HORIZON_SECONDS / 3600,
-        enforcement="none", quote_size=policy.quote_size,
+        enforcement="slot_priority", quote_size=policy.quote_size,
         catalog_rows=collected["catalog_rows"], event_pages=collected["event_pages"],
         open_markets_in_window=len(collected["universe"]),
         rewarded_markets=len(collected["rewarded"]),
@@ -475,8 +507,9 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=False)
     (out / "ranking.json").write_text(json.dumps(report, indent=1, default=str), encoding="utf8")
     (out / "ranking.md").write_text(render(report), encoding="utf8")
+    write_priority(report, a.output_root)
     print(f"Ranking: {out}; scored={report['scored']} of rewarded={report['rewarded_markets']}; "
-          "enforcement=none")
+          "enforcement=slot_priority")
     return 0
 
 

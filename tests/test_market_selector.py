@@ -1048,3 +1048,59 @@ class SelectorTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RankerSlotPriorityTests(unittest.IsolatedAsyncioTestCase):
+    """Operator 2026-09-26: ranker markets are read and offered slots first;
+    every live gate still decides."""
+
+    def gateway(self, books=None):
+        slugs = ("big", "mid", "small", "tiny")
+        pools = dict(big=4000, mid=3000, small=2000, tiny=1000)
+        return FakeGateway({s: market(s) for s in slugs},
+                           {s: incentive(s, pool=pools[s]) for s in slugs},
+                           books or {s: book(s) for s in slugs})
+
+    async def test_ranked_markets_are_read_first_and_sorted_first(self):
+        gateway = self.gateway()
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(max_book_candidates=2), clock=lambda: NOW,
+            priority_source=lambda now: {"tiny": 1, "small": 2})
+        result = await selector.select(now=NOW)
+        self.assertEqual(gateway.book_calls, ["tiny", "small"])
+        self.assertEqual([o.market.slug for o in result.top_viable(2)], ["tiny", "small"])
+        self.assertEqual((result.ranker_priority_markets, result.ranker_priority_viable), (2, 2))
+        self.assertEqual(set(result.deferred_markets), {"big", "mid"})
+
+    async def test_ranked_market_that_fails_a_live_gate_gets_no_slot(self):
+        books = {s: book(s) for s in ("big", "mid", "small")}
+        books["tiny"] = book("tiny", bid=.50, offer=.51)  # one-cent book: not quotable
+        gateway = self.gateway(books)
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(), clock=lambda: NOW,
+            priority_source=lambda now: {"tiny": 1})
+        result = await selector.select(now=NOW)
+        self.assertNotIn("tiny", [o.market.slug for o in result.top_viable(4)])
+        self.assertEqual(result.selected.market.slug, "big")
+        self.assertEqual(result.ranker_priority_viable, 0)
+
+    async def test_no_or_failing_priority_keeps_the_established_order(self):
+        def broken(now):
+            raise RuntimeError("unreadable")
+        orders = []
+        for source in (None, lambda now: {}, broken, lambda now: {"absent": 1}):
+            gateway = self.gateway()
+            result = await RewardMarketSelector(
+                gateway, RewardSelectionPolicy(max_book_candidates=2), clock=lambda: NOW,
+                priority_source=source).select(now=NOW)
+            orders.append((tuple(gateway.book_calls),
+                           tuple(o.market.slug for o in result.opportunities)))
+        self.assertEqual(len(set(orders)), 1, orders)
+
+    async def test_revalidation_uses_the_same_priority(self):
+        gateway = self.gateway()
+        selector = RewardMarketSelector(
+            gateway, RewardSelectionPolicy(), clock=lambda: NOW,
+            priority_source=lambda now: {"small": 1})
+        validated = await selector.revalidate_viable(["big", "small"], now=NOW)
+        self.assertEqual([o.market.slug for o in validated], ["small", "big"])

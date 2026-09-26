@@ -203,6 +203,27 @@ class MarketRankerTests(unittest.TestCase):
         self.assertAlmostEqual(row["reward_per_hour"], 0.18)
         self.assertEqual((row["reward_factor"], row["reward_factor_basis"]), (0.5, "league"))
 
+    def test_priority_file_keeps_positive_paid_markets_in_rank_order(self):
+        import json, tempfile
+        from pathlib import Path
+        from liquidity_bot.ranker_priority import RankerPriority
+        rows = ranker.rank([dict(market="a", net_per_hour=0.5, never_paid=False),
+                            dict(market="b", net_per_hour=0.9, never_paid=True),
+                            dict(market="c", net_per_hour=0.2, never_paid=False),
+                            dict(market="d", net_per_hour=-0.1, never_paid=False),
+                            dict(market="e", net_per_hour=0.7, never_paid=False,
+                                 blocked_by=["excluded_league"]),
+                            dict(market="f", net_per_hour=0.1, never_paid=False,
+                                 blocked_by=["spread_below_2c"])])
+        report = dict(generated_at=NOW.isoformat(), rows=rows)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = ranker.write_priority(report, Path(tmp))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual([m["slug"] for m in data["markets"]], ["a", "c", "f"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["priority.json"])
+            loaded = RankerPriority(path, log=lambda line: None).ranks(NOW + timedelta(minutes=10))
+            self.assertEqual(loaded, {"a": 1, "c": 2, "f": 3})
+
     def test_rank_orders_by_net_value(self):
         rows = ranker.rank([dict(market="b", net_per_hour=0.1), dict(market="a", net_per_hour=0.5),
                             dict(market="c", net_per_hour=0.1)])

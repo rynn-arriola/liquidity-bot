@@ -123,6 +123,8 @@ class RunnerDiagnosticsMixin:
             f"failures={len(getattr(selection, 'failures', ()) or ())} "
             f"books_ranked={getattr(selection, 'books_evaluated', 0)} "
             f"viable={getattr(selection, 'viable_markets', 0)} "
+            f"ranker_priority={getattr(selection, 'ranker_priority_markets', 0)} "
+            f"ranker_priority_viable={getattr(selection, 'ranker_priority_viable', 0)} "
             f"payout_est_ge_1={self._payout_floor_count(selection, 1.0)} "
             f"payout_est_ge_1_5={self._payout_floor_count(selection, 1.5)} "
             f"scan_seconds={elapsed}",

@@ -1,5 +1,9 @@
 # Shadow "learning" ranking — design (measurement only)
 
+> **Backtest verdict (September 26): do not build as designed.** A walk-forward
+> backtest on existing data (below) found no ranking improvement over the
+> current model. Kept for the record; see "Backtest on existing data".
+
 September 26, 2026. Operator-approved design task (see DECISIONS). Nothing here
 changes selection, entry, exits or API usage. Implementation, deployment and
 any later live use each need separate operator approval.
@@ -100,3 +104,37 @@ Spearman across several independent days), not merely a different ranking.
   need more data.
 - Trailing windows lag regime changes (a league starting or stopping payouts).
 - Correlation is not causation; live use must still pass every safety gate.
+
+## Backtest on existing data (September 26, offline, 0 API)
+
+Inputs already on the laptop: ledger quote observations since 2026-08-24
+(137,991 rows with projected reward, fill probability, program, pool, share,
+total score, expected net), orders/fills since 2026-08-14 (170,103 / 19,012),
+PAID earnings since 2026-08-14 (6,208 rows), tracker archives since 09-23.
+`market_quality_report.py --days 33` produced 7,378 market-days
+(2026-08-23..09-24); markets with manual/unowned fills (220 market-days) and
+unposted game dates were excluded, leaving 5,935 markets.
+
+Walk-forward: for each game date D (31 test days), factors were learned only
+from markets with game dates in the prior 7 (or 14) days, with shrinkage
+(model $3, 20 side-hours). Test markets on D with ≥0.5 side-h were ranked by
+each score and compared with realized net (PAID + closed-fill P&L) per
+side-hour.
+
+| Score | Mean daily Spearman vs realized net | Top-half net $/h | Bottom-half net $/h |
+|---|---:|---:|---:|
+| Current model (expected reward/h) | 0.533 | 0.334 | 0.054 |
+| League payout ratio × model | 0.536 | 0.333 | 0.053 |
+| Same, 14-day window | 0.537 | 0.335 | 0.052 |
+| Program payout ratio × model + program trade/h | 0.521 | 0.331 | 0.057 |
+| League payout ratio × model + league trade/h | 0.487 | 0.336 | 0.052 |
+| League ratio × model − league loss/fill × fill rate | 0.477 | 0.335 | 0.053 |
+
+The current model already ranks low-value leagues (for example ITF) low;
+learned payout ratios add ≤0.004 Spearman and the trading terms hurt. ITF's
+large resting share comes from filling otherwise-empty slots with still
+positive (bottom-half ~$0.05/h) markets, which is a supply/threshold question,
+not a ranking error. The one clear cross-league signal — leagues that never pay
+— is handled directly by the approved UTR/R6 exclusion. Recommendation: do not
+implement the live shadow; revisit only with new features (e.g. time-to-kickoff
+bands or post-selection spread tightening) that the current model lacks.

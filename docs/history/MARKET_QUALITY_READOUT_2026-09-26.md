@@ -93,3 +93,23 @@ Examples: best 09-19 `aec-nhl-tor-mon` paid $46.01 over 3.0 side-h (net
 $38.91); worst 09-24 `aec-setkameua-saavih-matvas-2026-09-25` 5.0 side-h,
 unpaid so far, trading -$5.47. Paid amount per paid rested market-day: <$0.10
 388, $0.10-0.50 422, $0.50-2 354, ≥$2 130.
+
+## Is selection choosing the best markets? Model versus realized (offline)
+
+Markets rested on with posted game dates 09-18..09-24 (1,580 markets, 3,350
+side-h), joined per market across all dates. Model = tracker
+`placement_model_reward`; paid = PAID earnings for that slug; trade = closed
+fill P&L. Overall paid/model 1.59 (model conservative); paid $0.289/side-h,
+trading -$254.38, net $0.214/side-h.
+
+Ranking signal is real: market-level Spearman(model $/h, paid $/h) = 0.78
+(n=1,060 with >0.5 side-h); model quartiles paid $0.044, $0.140, $0.346,
+$0.820 per side-h. Two blind spots: (1) no feedback from actual payouts — R6
+model $20.60 / paid $0, UTR $8.51 / $0, modus and pdcdarts ~0.5×; (2) ranking
+uses reward, not realized net of trading: net/side-h wta 0.56, wtadb 0.49,
+atp 0.46, atpdb 0.41, wtt 0.36, setkameua 0.25, setkamemd 0.26, setkamecz
+0.17 versus cs2 0.022 (paid 0.336, trade -26.78), itfme 0.046, itfwo 0.011
+(ITF 815 side-h ≈ 24% of rest), dota2 0.030, pdcdarts -0.234, utr -0.047, r6
+-0.335. Limits: one week, account-wide earnings, approximate rest hours,
+small samples for several leagues, supply constraints (a lower-value market
+may still beat an empty slot) and no causal proof.

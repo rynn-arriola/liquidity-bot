@@ -186,7 +186,7 @@ are evidence the operator asked to see.
 | [FINDINGS.md](FINDINGS.md) | Measured evidence and corrected interpretations |
 | [BUGFIXES.md](BUGFIXES.md) | Production defect history: symptom, mechanism and fix |
 | [README.md](README.md) | Product overview and supported commands |
-| [docs/COMMISSIONING.md](docs/COMMISSIONING.md) | Live execution envelope and operating lifecycle |
+| [docs/COMMISSIONING.md](docs/COMMISSIONING.md) | Live execution envelope and operating lifecycle; processes, state files and who may restart are in [docs/OPERATIONS_MAP.md](docs/OPERATIONS_MAP.md) |
 | [docs/SAFETY_INVARIANTS.md](docs/SAFETY_INVARIANTS.md) | Rules no fix may weaken |
 | [docs/POLYMARKET_API_REFERENCE.md](docs/POLYMARKET_API_REFERENCE.md) | Canonical go-to reference for Polymarket rules, official sources, Retail/Institutional scope and audited implementation differences |
 | [docs/STABLE_RELEASE.md](docs/STABLE_RELEASE.md) | Immutable stable tags, rollback scope and required recovery procedure |

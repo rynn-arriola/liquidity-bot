@@ -103,3 +103,10 @@ The main weaknesses are throughput of the decision loop, the runner's structure,
   - 2 could change trading outcomes silently: `runner_streams.py` private-stream and bound-stream recovery. When the replacement stream cannot start, a best-effort blind cancel pass runs; if it failed, quotes could stay resting while no listener worked, and nothing said why.
   - Both now call `_log_blind_quarantine_failure`, which prints `[blind-quarantine-failed] component=… folded=… error=…` (redacted, at most once per component per minute, and it cannot raise). Behavior is unchanged: the pass stays best-effort and the bounded retries end the same way.
   - Test: `test_failed_blind_cancel_pass_is_named_once_per_minute` (both components). Restoring the silent `pass` fails it; removing the rate limit fails 2 subtests.
+- **Finding 7 — done (September 26).** `docs/OPERATIONS_MAP.md` covers:
+  - where things run, and the processes and schedules (including the new log rotation cron);
+  - runner exit codes and the supervisor's response to each;
+  - every production state file;
+  - who may stop or restart the bot, and under which guard.
+
+  Each claim was checked against `supervise_commissioning.sh`, `watch_host.ps1`, `host_recovery.py`, the live systemd units, `data/` and the process list. It is linked from the AI_OPERATOR index row for COMMISSIONING. Three stale atomic-write `.tmp` files (Sep 10/22/23) and the inactive 1.35 GB `scalp.db` are listed there but **not deleted**; that is left for the operator's approval.

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -121,13 +122,84 @@ def unpaid_leagues(paid: set[str] | None, rested: set[str]) -> set[str] | None:
     return None if paid is None else {league for league in rested if league not in paid}
 
 
+CALIBRATION_DAYS = 14          # operator: two weeks, not one week or a month
+PAYOUT_SETTLE_DAYS = 3         # payouts post 1-3 days late
+MIN_CALIBRATION_HOURS = 50.0   # resting order-hours before a league gets its own factor
+MAX_REWARD_FACTOR = 3.0
+
+
+def _stamp(value) -> datetime:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
+
+
+def reward_calibration(data: dict, payout_rows: list[dict], *, start: datetime,
+                       end: datetime) -> dict:
+    """Actual paid / model-predicted reward for our own resting, by league.
+
+    Every entry quote stored the live model's projected reward per 30 s at
+    placement; multiplying by the order's resting time (clipped to the window)
+    gives what the model expected. The market's PAID payouts are what the venue
+    actually paid. Leagues with under MIN_CALIBRATION_HOURS use the overall ratio.
+    """
+    projected = {o["client_order_id"]: o["projected_reward"] for o in data["observations"]
+                 if o.get("projected_reward") is not None}
+    created = {i["client_order_id"]: _stamp(i["created_at"]) for i in data["intents"]
+               if i["quote_observation_required"]}
+    predicted, hours, markets = defaultdict(float), defaultdict(float), defaultdict(set)
+    for order in data["orders"]:
+        cid = order["client_order_id"]
+        if cid not in created or cid not in projected:
+            continue
+        begin = created[cid]
+        finish = (end if order["status"] in ("OPEN", "NEW", "PARTIAL", "PENDING", "SUBMITTED")
+                  or not order["event_at"] else _stamp(order["event_at"]))
+        lo, hi = max(begin, start), min(finish, end)
+        if hi <= lo:
+            continue
+        league = league_from_slug(order["market_slug"]) or "other"
+        seconds = (hi - lo).total_seconds()
+        predicted[league] += float(projected[cid]) * seconds / 30
+        hours[league] += seconds / 3600
+        markets[league].add(order["market_slug"])
+    paid_by_market = defaultdict(float)
+    for row in payout_rows:
+        if str(row.get("status", "")).upper() == "PAID":
+            paid_by_market[row["market_slug"]] += float(row.get("reward") or 0)
+    leagues = {}
+    for league in predicted:
+        paid = sum(paid_by_market[m] for m in markets[league])
+        ratio = paid / predicted[league] if predicted[league] > 0 else None
+        leagues[league] = dict(predicted=round(predicted[league], 4), paid=round(paid, 4),
+                               resting_hours=round(hours[league], 1),
+                               ratio=None if ratio is None else round(ratio, 4))
+    total_pred = sum(predicted.values())
+    total_paid = sum(v["paid"] for v in leagues.values())
+    overall = total_paid / total_pred if total_pred > 0 else None
+    return dict(start=start.isoformat(), end=end.isoformat(), leagues=leagues,
+                overall_ratio=None if overall is None else round(overall, 4))
+
+
+def reward_factor(league: str | None, calibration: dict | None) -> tuple[float, str]:
+    if not calibration:
+        return 1.0, "uncalibrated"
+    row = calibration["leagues"].get(league or "other")
+    if row and row["ratio"] is not None and row["resting_hours"] >= MIN_CALIBRATION_HOURS:
+        return min(row["ratio"], MAX_REWARD_FACTOR), "league"
+    overall = calibration.get("overall_ratio")
+    if overall is not None:
+        return min(overall, MAX_REWARD_FACTOR), "overall"
+    return 1.0, "uncalibrated"
+
+
 def score_row(market, period, relaxed, live, *, now, policy, history, unpaid, traded,
-              rested=frozenset()) -> dict:
+              rested=frozenset(), calibration=None) -> dict:
     """One ranked row; reward and trading value per hour for our quote size."""
     league = league_from_slug(market.slug)
     per_hour = 3600 / policy.projection_horizon_seconds
     reward_sides = [s for s in relaxed.sides if s.projection.eligible]
-    reward = sum(s.projection.projected_reward for s in reward_sides) * per_hour
+    model_reward = sum(s.projection.projected_reward for s in reward_sides) * per_hour
+    factor, factor_basis = reward_factor(league, calibration)
+    reward = model_reward * factor
     never_paid = unpaid is not None and (league or "other") in unpaid
     counted_reward = 0.0 if never_paid else reward
     trading, basis = expected_trading_per_hour(league, max(len(reward_sides), 1), history)
@@ -139,7 +211,9 @@ def score_row(market, period, relaxed, live, *, now, policy, history, unpaid, tr
         hours_to_start=round((market.game_start - now).total_seconds() / 3600, 2),
         period=period.period, pool=float(period.reward_pool or 0),
         spread=round(relaxed.book.best_offer.price - relaxed.book.best_bid.price, 4),
-        reward_per_hour=round(reward, 4), never_paid=never_paid,
+        reward_per_hour=round(reward, 4), reward_model_per_hour=round(model_reward, 4),
+        reward_factor=round(factor, 4), reward_factor_basis=factor_basis,
+        never_paid=never_paid,
         reward_evidence=("never_paid" if never_paid else
                          "paid_before" if (league or "other") in rested else "no_history"),
         trading_per_hour=round(trading, 4), trading_basis=basis,
@@ -211,7 +285,8 @@ async def collect(*, now, policy, max_books: int, market_types: tuple[str, ...],
                 never_paid_markets=never_paid, books=books, book_errors=errors)
 
 
-def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested=frozenset()) -> dict:
+def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested=frozenset(),
+          calibration=None) -> dict:
     relaxed_policy = replace(policy, minimum_entry_spread=MEASURE_SPREAD, excluded_leagues=frozenset())
     rows, skipped = [], {"no_applicable_period": 0, "book_not_read": 0, "book_unusable": 0}
     skipped["no_applicable_period"] = len(collected["rewarded"]) - len(collected["with_period"])
@@ -230,7 +305,7 @@ def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested
             continue
         row = score_row(market, period, relaxed, live, now=now, policy=policy,
                         history=history, unpaid=unpaid, traded=market.slug in traded_slugs,
-                        rested=rested)
+                        rested=rested, calibration=calibration)
         row["blocked_by"] = pre_book_blockers(market, incentive, now=now, policy=policy) + (
             [] if row["live_viable"] else row["blocked_by"])
         rows.append(row)
@@ -242,7 +317,7 @@ def build(collected: dict, *, now, policy, history, unpaid, traded_slugs, rested
         open_markets_in_window=len(collected["universe"]),
         rewarded_markets=len(collected["rewarded"]),
         paying_now=len(collected["with_period"]), scored=len(ranked), skipped=skipped,
-        paid_history_known=unpaid is not None,
+        paid_history_known=unpaid is not None, reward_calibration=calibration,
         never_paid_leagues=sorted(unpaid or ()),
         never_paid_markets=collected.get("never_paid_markets", 0), rows=ranked)
 
@@ -304,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", type=Path, default=Path("data/commissioning.db"))
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
-    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--days", type=int, default=CALIBRATION_DAYS)
     p.add_argument("--max-books", type=int, default=150)
     p.add_argument("--install-cron", action="store_true",
                    help="install the 30-minute and nightly runs for this checkout")
@@ -323,18 +398,26 @@ def main(argv: list[str] | None = None) -> int:
     since = now - timedelta(days=a.days)
     history = league_history(fill_model_calibration(data, since=since, now=now)["cells"],
                              episode_summary(data, since=since).get("league", []))
-    paid = paid_leagues(read_archive_records(a.archive, {"rewards"}))
-    # Payouts post 1-3 days late: only rest at least 3 days old can prove "never paid".
-    settled = (now - timedelta(days=3)).isoformat()
+    reward_snapshots = read_archive_records(a.archive, {"rewards"})
+    paid = paid_leagues(reward_snapshots)
+    newest_rewards = (max(reward_snapshots, key=lambda s: s.get("at", ""))["rows"]
+                      if reward_snapshots else [])
+    settled_end = now - timedelta(days=PAYOUT_SETTLE_DAYS)
+    calibration = (reward_calibration(data, newest_rewards, start=settled_end - timedelta(days=a.days),
+                                      end=settled_end) if newest_rewards else None)
+    # Payouts post 1-3 days late: only rest at least 3 days old can prove "never paid";
+    # the same two-week window as the reward calibration.
+    settled = (now - timedelta(days=PAYOUT_SETTLE_DAYS)).isoformat()
     rested = {league_from_slug(o["market_slug"]) or "other" for o in data["observations"]
-              if (now - timedelta(days=30)).isoformat() <= o["observed_at"] <= settled}
+              if (now - timedelta(days=PAYOUT_SETTLE_DAYS + a.days)).isoformat()
+              <= o["observed_at"] <= settled}
     unpaid = unpaid_leagues(paid, rested)
     types = DAILY_TYPES if a.include_spreads_totals else FREQUENT_TYPES
     traded = traded_now(Path("data/tv-active-scope.json"))
     collected = asyncio.run(collect(now=now, policy=policy, max_books=a.max_books,
                                     market_types=types, traded=traded, unpaid=unpaid))
     report = build(collected, now=now, policy=policy, history=history, unpaid=unpaid,
-                   traded_slugs=traded, rested=rested)
+                   traded_slugs=traded, rested=rested, calibration=calibration)
     report["market_types"] = list(types)
     out = a.output_root / now.strftime("%Y%m%dT%H%M%SZ")
     out.mkdir(parents=True, exist_ok=False)

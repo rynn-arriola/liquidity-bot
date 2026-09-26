@@ -117,6 +117,45 @@ class MarketRankerTests(unittest.TestCase):
         self.assertFalse(frequent.endswith(ranker.DAILY_CRON_MARK))
         self.assertIn(rotate_line(Path("/bot")).split(" # ")[0][:20], rotate_line(Path("/bot")))
 
+    def test_reward_calibration_compares_model_to_actual_payouts_by_league(self):
+        start, end = NOW - timedelta(days=14), NOW
+        at = lambda h: (start + timedelta(hours=h)).isoformat()
+        data = dict(
+            observations=[dict(client_order_id="a", projected_reward=0.01),
+                          dict(client_order_id="b", projected_reward=0.02),
+                          dict(client_order_id="c", projected_reward=0.05)],
+            intents=[dict(client_order_id=c, created_at=at(1), quote_observation_required=1)
+                     for c in "abc"],
+            orders=[  # a: 100 h of setkameua rest; b: 60 h; c: 10 h of wtt (too few hours)
+                dict(client_order_id="a", market_slug="aec-setkameua-x-y", status="EXPIRED", event_at=at(101)),
+                dict(client_order_id="b", market_slug="aec-setkameua-z-w", status="EXPIRED", event_at=at(61)),
+                dict(client_order_id="c", market_slug="aec-wtt-p-q", status="CANCELED", event_at=at(11))])
+        payouts = [dict(market_slug="aec-setkameua-x-y", status="PAID", reward="300"),
+                   dict(market_slug="aec-setkameua-z-w", status="PAID", reward="36"),
+                   dict(market_slug="aec-wtt-p-q", status="PENDING", reward="9"),
+                   dict(market_slug="aec-wtt-p-q", status="PAID", reward="12")]
+        cal = ranker.reward_calibration(data, payouts, start=start, end=end)
+        # setkameua predicted: 0.01*100*120 + 0.02*60*120 = 120 + 144 = 264; paid 336
+        self.assertAlmostEqual(cal["leagues"]["setkameua"]["predicted"], 264.0)
+        self.assertAlmostEqual(cal["leagues"]["setkameua"]["ratio"], round(336 / 264, 4))
+        self.assertAlmostEqual(cal["leagues"]["wtt"]["ratio"], round(12 / 60, 4))
+        self.assertAlmostEqual(cal["overall_ratio"], round(348 / 324, 4))
+        self.assertEqual(ranker.reward_factor("setkameua", cal), (round(336 / 264, 4), "league"))
+        self.assertEqual(ranker.reward_factor("wtt", cal), (round(348 / 324, 4), "overall"))
+        self.assertEqual(ranker.reward_factor("x", None), (1.0, "uncalibrated"))
+        huge = dict(leagues={"cfb": dict(ratio=9.0, resting_hours=500)}, overall_ratio=1.0)
+        self.assertEqual(ranker.reward_factor("cfb", huge), (ranker.MAX_REWARD_FACTOR, "league"))
+
+    def test_score_applies_the_reward_factor(self):
+        period = SimpleNamespace(period="day_of", reward_pool=200)
+        relaxed = opportunity(side(0.001), side(0.002))
+        cal = dict(leagues={"cfb": dict(ratio=0.5, resting_hours=100)}, overall_ratio=1.0)
+        row = ranker.score_row(market(), period, relaxed, None, now=NOW, policy=POLICY,
+                               history=HISTORY, unpaid=set(), traded=False, calibration=cal)
+        self.assertAlmostEqual(row["reward_model_per_hour"], 0.36)
+        self.assertAlmostEqual(row["reward_per_hour"], 0.18)
+        self.assertEqual((row["reward_factor"], row["reward_factor_basis"]), (0.5, "league"))
+
     def test_rank_orders_by_net_value(self):
         rows = ranker.rank([dict(market="b", net_per_hour=0.1), dict(market="a", net_per_hour=0.5),
                             dict(market="c", net_per_hour=0.1)])

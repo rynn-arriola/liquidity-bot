@@ -136,3 +136,21 @@ cd /home/polybot/liquidity-bot && .venv/bin/python -B scripts/market_ranker.py -
 - New archive records are flowing: discovery 1, entry_suppressed 70, fill_markout 3.
 
 **Ranker schedule.** Switched to the production script with `--install-cron`.
+
+## Ranker reward calibration (operator: "should be 2 weeks")
+
+`scripts/market_ranker.py` now multiplies the live model's reward estimate by a per-league factor.
+- **Factor:** actual PAID ÷ model-predicted reward over our own resting orders, where predicted = the stored placement-time `projected_reward` per 30 s × resting time.
+- **Window:** 14 days ending 3 days ago (payouts post late).
+- **Fallbacks:** leagues under 50 resting hours use the overall ratio; the factor is capped at 3×.
+- **Same window elsewhere:** trading history and the "never paid" evidence also use 14 days.
+
+**First factors (window Sept 9–23; overall ×1.68):**
+
+| Factor | Leagues |
+|---|---|
+| About ×1.9–2.1 | setkameua ×1.89, setkamemd ×1.85, setkamecz ×1.95, wtt ×2.02, atp ×1.93, wta ×1.97, wtadb ×2.08, dota2 ×1.88 |
+| About ×1.2–1.6 | cs2 ×1.60, itfme ×1.19, itfwo ×1.17 |
+| About ×1.0 or below | modus ×1.02, pdcdarts ×0.76 (under 50 h, so overall is used), valorant ×0.56 (under 50 h, so overall is used) |
+
+Tests: two new cases (payout attribution, the minimum-hours fallback, the cap, and applying the factor).

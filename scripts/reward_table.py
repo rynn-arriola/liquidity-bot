@@ -937,6 +937,43 @@ def _discord_amount(value: str, width: int) -> str:
     return "--"
 
 
+PULSE_SHORT = {"Hot": "Hot", "Good": "Good", "Average": "Avg", "Low": "Low",
+               "Dead": "Dead", "Unrated": "--"}
+
+
+def load_pulse(root: Path, days: list[date]) -> dict[str, dict]:
+    """Reward Pulse grades already written by scripts/reward_pulse.py (local, read-only)."""
+    out: dict[str, dict] = {}
+    for day_value in days:
+        path = Path(root) / f"{day_value.isoformat()}.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            out[day_value.isoformat()] = dict(
+                level=str(data["level"]), vs_normal=data.get("vs_normal"),
+                per_hour=data.get("per_hour"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def _pulse_lines(days: list[date], pulse: dict[str, dict], today: date) -> list[str]:
+    lines = [f"{'Date':<6} {'Level':>7} {'vsNorm':>7} {'$/h':>7}",
+             "------ ------- ------- -------"]
+    for day_value in days:
+        row = pulse.get(day_value.isoformat())
+        label = f"{day_value.month}/{day_value.day}{'*' if day_value == today else ''}"
+        if row is None:
+            lines.append(f"{label:<6} {'--':>7} {'--':>7} {'--':>7}")
+            continue
+        ratio = row.get("vs_normal")
+        rate = row.get("per_hour")
+        lines.append(
+            f"{label:<6} {PULSE_SHORT.get(row['level'], '--'):>7} "
+            f"{('--' if ratio is None else f'{ratio:.2f}x'):>7} "
+            f"{('--' if rate is None else f'{rate:.2f}'):>7}")
+    return lines
+
+
 def build_discord_payload(
     days: list[date], *, pnl: dict, paid: dict, pending: dict,
     resting_hours: dict[str, float], elapsed_hours: dict[str, float],
@@ -945,6 +982,7 @@ def build_discord_payload(
     account_history: dict[str, Decimal] | None = None,
     settled_history: dict[str, Decimal | None] | None = None,
     period_hours: dict[str, dict[str, float]] | None = None,
+    pulse: dict[str, dict] | None = None,
 ) -> dict:
     """Build a compact settled-trading and reward report for Discord.
 
@@ -1027,6 +1065,13 @@ def build_discord_payload(
             "inline": False,
         },
     ]
+    if pulse:
+        # Operator 2026-09-27: Reward Pulse grade per day (vs our 3-week normal).
+        fields.append({
+            "name": "Reward Pulse",
+            "value": "```text\n" + "\n".join(_pulse_lines(days, pulse, today)) + "\n```",
+            "inline": False,
+        })
     embed = {
         "title": f"Rewards · {len(days)}d · ET",
         "description": (
@@ -1059,6 +1104,9 @@ async def main() -> int:
     parser.add_argument(
         "--post-discord", action="store_true",
         help="post to the dedicated rewards webhook")
+    parser.add_argument(
+        "--pulse-root", default="data/reward-pulse",
+        help="Reward Pulse grades to show in the Discord table (scripts/reward_pulse.py)")
     parser.add_argument(
         "--quiet", action="store_true",
         help="suppress the table on stdout; requires --post-discord")
@@ -1182,6 +1230,7 @@ async def main() -> int:
                 elapsed_hours=elapsed, today=today,
                 generated_at=now, unbalanced_markets=unbalanced,
                 period_hours=period_hours,
+                pulse=load_pulse(Path(args.pulse_root), days),
                 account_realized=account_realized,
                 account_history=history,
                 settled_history=settled_history),

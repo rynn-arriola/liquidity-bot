@@ -185,6 +185,38 @@ class RewardTableTests(unittest.TestCase):
             unbalanced_markets=0, settled_history={"2026-09-18": Decimal("-10")})
         self.assertIn("**P&L:** —", report["embeds"][0]["description"])
 
+    def test_reward_pulse_rows_are_added_to_discord_table_and_image(self):
+        from scripts.reward_image import render_reward_png
+        from scripts.reward_table import build_discord_payload, load_pulse
+        days = [date(2026, 9, 24), date(2026, 9, 25), date(2026, 9, 26), date(2026, 9, 27)]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for day, level, ratio, rate in (("2026-09-24", "Average", 0.765, 0.22),
+                                            ("2026-09-26", "Dead", 0.164, 0.045)):
+                (root / f"{day}.json").write_text(json.dumps(
+                    dict(level=level, vs_normal=ratio, per_hour=rate)), encoding="utf-8")
+            (root / "2026-09-25.json").write_text("{broken", encoding="utf-8")
+            pulse = load_pulse(root, days)
+        self.assertEqual(set(pulse), {"2026-09-24", "2026-09-26"})
+        payload = build_discord_payload(
+            days, pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
+            today=days[-1], generated_at=datetime(2026, 9, 27, 12, tzinfo=timezone.utc),
+            unbalanced_markets=0, pulse=pulse)
+        fields = payload["embeds"][0]["fields"]
+        self.assertEqual([f["name"] for f in fields][-1], "Reward Pulse")
+        text = fields[-1]["value"]
+        self.assertIn("9/24       Avg   0.77x    0.22", text)
+        self.assertIn("9/26      Dead   0.16x    0.04", text)
+        self.assertIn("9/27*       --      --      --", text)
+        self.assertTrue(all(len(line) <= 31 for line in text.splitlines()))
+        self.assertTrue(render_reward_png(payload).startswith(b"\x89PNG"))
+        # No grades yet: the post keeps its two-table layout.
+        plain = build_discord_payload(
+            days, pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
+            today=days[-1], generated_at=datetime(2026, 9, 27, 12, tzinfo=timezone.utc),
+            unbalanced_markets=0, pulse={})
+        self.assertEqual(len(plain["embeds"][0]["fields"]), 2)
+
     def test_discord_partial_split_and_large_values_stay_compact(self):
         day = date(2026, 12, 31)
         report = build_discord_payload([day], pnl={}, paid={day.isoformat(): Decimal("123456789")},

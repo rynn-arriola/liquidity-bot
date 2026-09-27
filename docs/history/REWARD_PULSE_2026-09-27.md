@@ -67,3 +67,13 @@
   | Sep 26 | Dead | 0.16× |
 
 - **Tests:** `tests/test_reward_pulse.py` (6).
+
+## Discord reward table (operator: "add it on discord reward table summary")
+
+- The hourly reward post (`scripts/reward_table.py --post-discord`, image via `scripts/reward_image.py`) now has a third section, **Reward Pulse**.
+- **Row format:** `Date · Level (Hot/Good/Avg/Low/Dead, colour-coded) · vs normal · $/order-hour`.
+- **Source:** the local `data/reward-pulse/<day>.json` grades. It makes no extra venue call; payouts per market come from the reward snapshot the bot already archives every 15 minutes.
+- **No grades:** without them the post keeps its two-table layout. A day without a grade shows `--` (today, or yesterday before the 05:10 run).
+- **First rows:** 9/21–9/24 Avg (0.92×, 0.76×, 0.78×, 0.77×), 9/25 Dead 0.23×, 9/26 Dead 0.16×.
+- **Full per-market grades** for each day stay in `data/reward-pulse/<day>.md`.
+- **Deployed restart-free** in `b172e6e55`; 2,358 tests PASS.

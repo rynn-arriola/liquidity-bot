@@ -60,9 +60,9 @@ class RiskWindowTests(unittest.TestCase):
         for size, slots in ((5, 20), (10, 32), (30, 24)):
             config = CommissioningConfig("market", True, True, True,
                                          quote_size=D(size), max_markets=slots)
-            self.assertEqual(config.hard_stop_loss_usd, D(30))
-            self.assertEqual(config.weekly_operating_reserve_usd, D(840))
-            self.assertEqual(config.entry_order_cap_for_loss(D(12)), min(30, slots * 2))
+            self.assertEqual(config.hard_stop_loss_usd, D(40))
+            self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), min(40, slots * 2))
             for hour in range(24):
                 # Operator 2026-09-27: 50 orders, never above two per market.
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)),
@@ -71,18 +71,18 @@ class RiskWindowTests(unittest.TestCase):
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
             "market", True, True, True, quote_size=D(15), max_markets=32)
-        self.assertEqual(config.hard_stop_loss_usd, D(30))
+        self.assertEqual(config.hard_stop_loss_usd, D(40))
         self.assertEqual(config.max_early_exit_loss_usd, D(12))
         self.assertEqual(config.max_stressed_exit_loss_usd, D(60))
         self.assertEqual(config.max_market_exposure_usd, D(135))
         self.assertEqual(config.max_portfolio_exposure_usd, D(630))
         self.assertEqual(config.execution_fee_observation_usd, D(20))
-        self.assertEqual(config.weekly_operating_reserve_usd, D(840))
+        self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
-             for loss in (0, 3, 6, 12, 18, 24, 30)],
-            # Operator 2026-09-27: size 10, window stop back to $30, cap 50 and
-            # scaled step-downs 40/30/20/10 at $6/$12/$18/$24 loss.
+             for loss in (0, 4, 8, 16, 24, 32, 40)],
+            # Operator 2026-09-27: size 10, 50 orders, $40 window stop and
+            # scaled step-downs 40/30/20/10 at $8/$16/$24/$32 loss.
             [50, 50, 40, 30, 20, 10, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):

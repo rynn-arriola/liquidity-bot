@@ -60,27 +60,27 @@ class RiskWindowTests(unittest.TestCase):
         for size, slots in ((5, 20), (10, 32), (30, 24)):
             config = CommissioningConfig("market", True, True, True,
                                          quote_size=D(size), max_markets=slots)
-            self.assertEqual(config.hard_stop_loss_usd, D(40))
-            self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
-            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 32)
+            self.assertEqual(config.hard_stop_loss_usd, D(30))
+            self.assertEqual(config.weekly_operating_reserve_usd, D(840))
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 24)
             for hour in range(24):
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 40)
 
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
             "market", True, True, True, quote_size=D(15), max_markets=32)
-        self.assertEqual(config.hard_stop_loss_usd, D(40))
+        self.assertEqual(config.hard_stop_loss_usd, D(30))
         self.assertEqual(config.max_early_exit_loss_usd, D(12))
         self.assertEqual(config.max_stressed_exit_loss_usd, D(60))
         self.assertEqual(config.max_market_exposure_usd, D(135))
         self.assertEqual(config.max_portfolio_exposure_usd, D(630))
         self.assertEqual(config.execution_fee_observation_usd, D(20))
-        self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
+        self.assertEqual(config.weekly_operating_reserve_usd, D(840))
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
-             for loss in (0, 6, 8, 16, 24, 32, 40)],
-            # Operator 2026-09-26 evening: cap 40, window stop $40, same
-            # remaining-budget fractions (caps drop at $8/$16/$24/$32 loss).
+             for loss in (0, 3, 6, 12, 18, 24, 30)],
+            # Operator 2026-09-27: size 10, window stop back to $30, cap 40 and
+            # the same remaining-budget fractions (drops at $6/$12/$18/$24).
             [40, 40, 32, 24, 16, 8, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):

@@ -136,7 +136,7 @@ After the UI-maintenance entry gate is loaded, **"pause entries"** runs `PYTHONP
   Clearly separate measured fact, inference and proposal.
 - The operator decides business behavior and risk: strategy rules, quote size,
   slot count, loss limits, capital, deployment timing, and stop/restart timing.
-  Do not turn a watchlist idea into trading logic without that decision.
+  Do not turn a watchlist idea into trading logic without that decision. Record every such change in [BUSINESS_CHANGES](docs/BUSINESS_CHANGES.md) before it goes live (baseline, expected effect, evaluation, undo, verdict).
 - Read-only diagnosis is allowed without repeated permission. A live mutation,
   strategy/configuration change, deploy, restart, force-stop or ledger repair
   must be within an explicit operator request and must satisfy the safety

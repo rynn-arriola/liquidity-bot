@@ -388,6 +388,9 @@ class CommissioningRunner(
         "stressed_exit_incomplete",
         "entry_quality_below_minimum",
         "projected_reward_does_not_cover_probability_weighted_exit_cost",
+        # BC-2026-09-27-A: a market whose every new entry is skipped for a thin
+        # book is an idle slot like any other economic refusal.
+        "thin_book_entry_skip",
     })
 
     def __init__(

@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
+from .thin_book import ThinBookPolicy, load_thin_book_policy
 from .entry_expiry import EntryExpiryPolicy
 from .selection_exclusions import SelectionExclusions
 from .risk_windows import RiskWindowPolicy, load_risk_window_policy
@@ -147,6 +148,9 @@ class CommissioningConfig:
         default_factory=load_entry_order_policy)
     entry_quality_policy: EntryQualityPolicy = field(
         default_factory=load_entry_quality_policy)
+    # Operator 2026-09-27 (BC-2026-09-27-A): skip NEW entries on thin one-tick
+    # books in high-forced-exit leagues. config/thin_book_policy.json.
+    thin_book_policy: ThinBookPolicy = field(default_factory=load_thin_book_policy)
     risk_window_policy: RiskWindowPolicy | None = field(
         default_factory=load_risk_window_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on

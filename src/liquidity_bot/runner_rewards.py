@@ -55,6 +55,19 @@ class RewardRotationMixin:
         self._record_economic_ineligibility(state, self._now())
         self._record_eligibility(state, self._now())
 
+    THIN_BOOK_LOG_SECONDS = 300.0
+
+    def _log_thin_book_skip(self, slug: str, side: str, spread: float,
+                            queue_ahead: float, now: datetime) -> None:
+        """Evidence for BC-2026-09-27-A, at most once per market side per 5 min."""
+        logged = self.__dict__.setdefault("_thin_book_logged_at", {})
+        last = logged.get((slug, side))
+        if last is not None and (now - last).total_seconds() < self.THIN_BOOK_LOG_SECONDS:
+            return
+        logged[(slug, side)] = now
+        print(f"[thin-book-skip] at={now.isoformat()} market={slug} side={side} "
+              f"spread={spread:.4f} queue_ahead={queue_ahead:g}", flush=True)
+
     def _record_economic_ineligibility(
         self, state: MarketState, now: datetime,
     ) -> None:
@@ -271,6 +284,17 @@ class RewardRotationMixin:
             )
             state.fill_probability_by_side[side] = fill_hazard.probability
             state.fill_risk_driver_by_side[side] = fill_hazard.driver
+            thin_blocker = self.config.thin_book_policy.blocker(
+                slug=state.slug, spread=spread, queue_ahead=queue_ahead,
+                already_resting=already_resting)
+            if thin_blocker:
+                # Entry-only (BC-2026-09-27-A): a resting side is never
+                # cancelled by this rule and exits never consult it. A zero
+                # expected net makes the reconciler drop the new entry.
+                state.economic_blocker_by_side[side] = thin_blocker
+                state.expected_net_by_side[side] = 0.0
+                self._log_thin_book_skip(state.slug, side, spread, queue_ahead, now)
+                continue
             if not projection.eligible:
                 state.economic_blocker_by_side[side] = projection.reason
                 continue

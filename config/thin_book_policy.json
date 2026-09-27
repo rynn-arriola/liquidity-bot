@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "max_spread": 0.01,
+  "min_queue_ahead": 50,
+  "leagues": ["itfme", "itfwo", "wtt", "cs2", "dota2", "pdcdarts", "valorant", "modus", "wta", "atpdb"]
+}

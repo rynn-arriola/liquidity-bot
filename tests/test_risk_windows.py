@@ -62,9 +62,11 @@ class RiskWindowTests(unittest.TestCase):
                                          quote_size=D(size), max_markets=slots)
             self.assertEqual(config.hard_stop_loss_usd, D(30))
             self.assertEqual(config.weekly_operating_reserve_usd, D(840))
-            self.assertEqual(config.entry_order_cap_for_loss(D(12)), 24)
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), min(30, slots * 2))
             for hour in range(24):
-                self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)), 40)
+                # Operator 2026-09-27: 50 orders, never above two per market.
+                self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)),
+                                 min(50, slots * 2))
 
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
@@ -79,9 +81,9 @@ class RiskWindowTests(unittest.TestCase):
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
              for loss in (0, 3, 6, 12, 18, 24, 30)],
-            # Operator 2026-09-27: size 10, window stop back to $30, cap 40 and
-            # the same remaining-budget fractions (drops at $6/$12/$18/$24).
-            [40, 40, 32, 24, 16, 8, 0])
+            # Operator 2026-09-27: size 10, window stop back to $30, cap 50 and
+            # scaled step-downs 40/30/20/10 at $6/$12/$18/$24 loss.
+            [50, 50, 40, 30, 20, 10, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
         self.observe(0)

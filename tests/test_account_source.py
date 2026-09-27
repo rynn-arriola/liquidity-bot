@@ -94,7 +94,7 @@ class ControlTests(TestCase):
     def test_source_policy_bounds(self):
         for kwargs in ({"default_mode": "auto"}, {"read_concurrency": 5},
                        {"read_concurrency": True}, {"verification_seconds": 0},
-                       {"rest_pending_entry_ceiling": 41}):
+                       {"rest_pending_entry_ceiling": 51}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 AccountSourcePolicy(**kwargs)
 

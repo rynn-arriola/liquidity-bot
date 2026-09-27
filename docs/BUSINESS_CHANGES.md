@@ -27,7 +27,7 @@ Each entry records:
 
 ## BC-2026-09-27-A — Skip new entries on thin one-tick books in high-loss leagues
 
-- **Status:** BUILT, loads at the next Command 1. Switch: `config/thin_book_policy.json` (`enabled`).
+- **Status:** LIVE since 17:44:04Z Sep 27 in `4adbafb38` (Command 1; the runner had self-stopped after a manual close, was force-stopped with the venue proven flat, and the ledger was reconciled). Evaluation window: Sep 28–30 ET. Switch: `config/thin_book_policy.json` (`enabled`).
 - **Operator:** "Ok do it" (option b, the narrow filter), 2026-09-27.
 - **Rule:** do not place a new entry quote when the spread is 1¢ **and** fewer than 50 contracts sit ahead at our price, **and** the league is one of: ITF M/W, WTT, CS2, Dota 2, darts, Valorant, Modus, WTA, ATP doubles.
   - A side already resting is never cancelled by this rule.

@@ -25,6 +25,7 @@ the live state, `STATUS.md` wins.
 | systemd `liquidity-ledger-backup.timer` | Daily at 04:17 UTC | Backs up the ledger. |
 | systemd `liquidity-scheduled-probe.timer` | Disabled | Not in use. |
 | `polybot` user crontab: `scripts/rotate_logs.py` | Daily at 03:17 local | logrotate decides weekly. `commissioning.log` → `commissioning.log-YYYYMMDD`, compressed from the second rotation, kept for 520 weeks. Uses `copytruncate`, so the runner never needs a restart. |
+| `polybot` user crontab: `scripts/reward_pulse.py` | Daily at 05:10 local | **Reward Pulse**: grades the last 3 market days, each league and each market Hot/Good/Average/Low/Dead against our own 3-week weighted normal, with pool/crowd/share drivers and an unpaid-despite-share list. Read-only (no API). Output `data/reward-pulse/<day>.md|json` and `latest.md`. |
 | Claude "Bot status scheduler" | Wakes at :13/:43 | Runs a full check only when the last check and the operator's latest chat are both ≥ 115 min old. Writes to `C:\Users\rynna\Bots\bot status 2 hour check.md`. Its guarded scripts are in `.local-tools/status-check/` (machine-local). |
 
 ## Runner exit codes (supervisor response)

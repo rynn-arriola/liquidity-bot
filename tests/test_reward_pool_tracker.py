@@ -1,10 +1,10 @@
-"""Pool Watch: offered pools by program family, changes and new programs."""
+"""Reward Pool Tracker: offered pools by program family, changes and new programs."""
 import unittest
 
-from scripts import pool_watch as pw
+from scripts import reward_pool_tracker as pw
 
 
-class PoolWatchTests(unittest.TestCase):
+class RewardPoolTrackerTests(unittest.TestCase):
     def test_family_strips_date_and_version(self):
         self.assertEqual(pw.family("table_tennis_moneyline_day_of_20260924"), "table_tennis_moneyline_day_of")
         self.assertEqual(pw.family("culture_low_20260924_v2"), "culture_low")

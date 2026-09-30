@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pool Watch: the reward pools Polymarket OFFERED, by program, and when they change.
+"""Reward Pool Tracker: the reward pools Polymarket OFFERED, by program, and when they change.
 
 Report-only (operator, 2026-09-30: "build it but dont connect it to the bot
 yet"; "dont look at the payment we got but the pool that was offered"). No API
@@ -16,7 +16,7 @@ For each family and period the report shows the pool offered per day, the
 latest pool, the previous different pool and the change, and flags families
 that changed or first appeared in the last ``--alert-days`` days.
 
-    .venv/bin/python -B scripts/pool_watch.py --db data/commissioning.db \\
+    .venv/bin/python -B scripts/reward_pool_tracker.py --db data/commissioning.db \\
         --archive data/market-quality/*.sqlite3
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 UTC = timezone.utc
-CRON_MARK = "# liquidity-bot pool watch"
+CRON_MARK = "# liquidity-bot reward pool tracker"
 _SUFFIX = re.compile(r"_\d{8}(?:_v\d+)?$")
 
 
@@ -95,7 +95,7 @@ def summarize(collected: dict, *, today: str, alert_days: int = 2) -> list[dict]
 
 def render(rows: list[dict], *, generated_at: str, today: str) -> str:
     alerts = [r for r in rows if r["alert"]]
-    out = [f"# Pool Watch — {today}", "",
+    out = [f"# Reward Pool Tracker — {today}", "",
            "Reward pools **offered** by Polymarket (not what we were paid), from what the bot recorded. "
            "Report-only; not connected to trading.", "",
            f"_Generated {generated_at[:16]}Z._", ""]
@@ -139,9 +139,9 @@ def read_observations(db: Path, since: str) -> list[tuple]:
 
 
 def cron_line(root: Path) -> str:
-    return (f"20 */3 * * * cd {root} && nice -n 10 ionice -c3 .venv/bin/python -B scripts/pool_watch.py "
+    return (f"20 */3 * * * cd {root} && nice -n 10 ionice -c3 .venv/bin/python -B scripts/reward_pool_tracker.py "
             f"--db data/commissioning.db --archive data/market-quality/*.sqlite3 "
-            f">> logs/pool-watch.log 2>&1 {CRON_MARK}")
+            f">> logs/reward-pool-tracker.log 2>&1 {CRON_MARK}")
 
 
 def install_cron(root: Path) -> int:
@@ -158,7 +158,7 @@ def main(argv=None) -> int:
     p.add_argument("--db", type=Path)
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
     p.add_argument("--since", default="2026-09-14")
-    p.add_argument("--output-root", type=Path, default=Path("data/pool-watch"))
+    p.add_argument("--output-root", type=Path, default=Path("data/reward-pool-tracker"))
     p.add_argument("--install-cron", action="store_true", help="install the 3-hourly run")
     a = p.parse_args(argv)
     if a.install_cron:
@@ -175,7 +175,7 @@ def main(argv=None) -> int:
     (a.output_root / "latest.json").write_text(json.dumps(rows, indent=1, default=str), encoding="utf8")
     (a.output_root / f"{now:%Y-%m-%d}.md").write_text(text, encoding="utf8")
     alerts = [r for r in rows if r["alert"]]
-    print(f"Pool Watch: {len(rows)} programs, {len(alerts)} alerts")
+    print(f"Reward Pool Tracker: {len(rows)} programs, {len(alerts)} alerts")
     return 0
 
 

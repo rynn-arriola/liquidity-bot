@@ -27,7 +27,7 @@ Each entry records:
 
 ## BC-2026-10-01-A — Lower pending entries 50 → 30 while pools are low
 
-- **Status:** BUILT; loads at the next window-boundary restart (Command 1). The risk-window policy cannot change mid-window.
+- **Status:** LIVE since 16:02:23Z Oct 1 (12:00 ET boundary) in `ff9627ab8`. The window row confirms cap 30 with tiers 24/18/12/6 and the $40 stop. Two operator manual closes that morning (10:40 and about 11:55 ET) made the runner self-stop, so it was force-stopped with the venue proven flat and the records reconciled read-only each time.
 - **Operator:** "Can you make max orders to 30 for now", "We will increase it once reward go back".
 - **Rule:**
   - Pending-entry cap 30, REST ceiling 30.

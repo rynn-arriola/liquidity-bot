@@ -224,19 +224,19 @@ class RewardTableTests(unittest.TestCase):
         now = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
         rows = [dict(family="table_tennis_moneyline_day_of", period="day_of", latest=15.0,
                      previous=35.0, change=-20 / 35, alert=""),
-                dict(family="itf_moneyline_dayof", period="day_of", latest=15.0,
-                     previous=None, change=None, alert=""),
                 dict(family="nhl_regular_moneyline_day_of", period="day_of", latest=50.0,
                      previous=None, change=None, alert="NEW")]
+        score = dict(all=dict(score=9.6, now=70177.0, reference=73000.0, programs=137),
+                     ours=dict(score=4.5, now=145.0, reference=320.0, programs=4), profitable="NO")
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "latest.json"
-            path.write_text(json.dumps(rows), encoding="utf-8")
+            (Path(tmp) / "latest.json").write_text(json.dumps(rows), encoding="utf-8")
+            path = Path(tmp) / "latest-score.json"
+            path.write_text(json.dumps(score), encoding="utf-8")
             os.utime(path, (now.timestamp(), now.timestamp()))
             pools = load_pools(Path(tmp), now=now)
             self.assertIsNone(load_pools(Path(tmp), now=now + timedelta(hours=13)))   # stale
             self.assertIsNone(load_pools(Path(tmp) / "missing", now=now))
-        self.assertEqual(pools["alerts"], 1)
-        self.assertEqual([r[0] for r in pools["rows"]], ["TableTennis", "ITF"])
+        self.assertEqual((pools["new"], pools["profitable"]), (["NHL REGULAR"], "NO"))
         day = date(2026, 10, 1)
         payload = build_discord_payload(
             [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
@@ -244,10 +244,10 @@ class RewardTableTests(unittest.TestCase):
         embed = payload["embeds"][0]
         text = embed["fields"][-1]["value"]
         self.assertEqual(embed["fields"][-1]["name"], "Reward Pools")
-        self.assertIn("TableTennis    15     35   -57%", text)
-        self.assertIn("ITF            15     --     --", text)
+        self.assertIn("4.5/10   9.6/10   70177      NO", text)
+        self.assertEqual(len(text.splitlines()), 5)                      # one data row
         self.assertTrue(all(len(line) <= 31 for line in text.splitlines()))
-        self.assertIn("pools: 1 new/changed", embed["footer"]["text"])
+        self.assertIn("pools new: NHL REGULAR", embed["footer"]["text"])
         self.assertTrue(render_reward_png(payload).startswith(b"\x89PNG"))
         both = build_discord_payload(
             [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},

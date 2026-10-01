@@ -41,3 +41,41 @@ The report compares offered pools only; payouts are tracked separately in Reward
 - **Source:** `data/reward-pool-tracker/latest.json`. The section is skipped if that file is missing or more than 12 hours old.
 - **Tracking only:** no API call and no trading effect.
 
+## Pool score 1-10 and the single summary line (operator, 2026-10-01)
+
+**Requests:** "it should be a 1 single section", "it should say good or bad", "the measure should be for all rewarded market", "measure it 1 out of 10", "in the future we might based it on the number if we are trading or no", "score from 5 under means its not profitable".
+
+**Rewards page, all programs:**
+- Every run the tracker also reads the public page https://polymarket.us/rewards: one request, every program with its period, pool, discount, target and market count.
+- It saves a snapshot to `data/reward-pool-tracker/site/` (kept 35 days).
+- If the page cannot be read, it falls back to the bot's own records.
+
+**Score definition (fixed, so it can later be backtested and used for decisions):**
+- For every program on the page now, the reference is the highest daily pool its family and period showed in the last 30 days (page snapshots plus bot records).
+- Score = 10 × sum(now) / sum(reference), one decimal, clamped to 1–10.
+- A program seen for the first time counts at its own level.
+
+**Two scores:**
+- **Our markets:** the six pre-game programs we trade.
+- **All rewarded markets:** every program on the page.
+
+**Profitable verdict, from the our-markets score:**
+
+| Score | Verdict |
+|---|---|
+| 5 or under | **NO** (operator rule) |
+| 5–8 | MAYBE (unproven) |
+| 8 or higher | YES |
+
+Anchors:
+- 10/10 = the pools before Sep 24 (net about +$112/day).
+- About 4.5/10 = the pools since (net about break-even).
+
+**Record:** each run writes `latest-score.json` and appends `score-history.jsonl`, so the cutoff can be checked against each day's actual net.
+
+**Discord:** the Reward Pools section is now one line (our score, all score, total pool offered now, Profitable?), plus a note naming new pre-game programs.
+
+**First run (Oct 1):**
+- Our markets 4.5/10 → profitable NO.
+- All markets about 10/10. Most non-sports programs have no history before today's first page snapshot, so this score becomes meaningful as snapshots build up.
+

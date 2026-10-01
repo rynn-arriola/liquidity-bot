@@ -956,42 +956,47 @@ def load_pulse(root: Path, days: list[date]) -> dict[str, dict]:
     return out
 
 
-# Reward Pool Tracker programs shown in Discord (the pre-game programs we trade).
-POOL_LABELS = (
-    ("table_tennis_moneyline_day_of", "TableTennis"), ("itf_moneyline_dayof", "ITF"),
-    ("atp_wta_moneyline_day_of", "ATP/WTA"), ("esports_moneyline_pre_game", "Esports"),
-    ("doubles_moneyline_day_of", "Doubles"), ("darts_moneyline_day_of", "Darts"))
+# Reward Pool Tracker in the Discord summary: one line with the 1-10 pool scores.
 POOL_MAX_AGE_SECONDS = 12 * 3600
 
 
 def load_pools(root: Path, *, now: datetime) -> dict | None:
-    """Offered pools from scripts/reward_pool_tracker.py output (local, read-only)."""
-    path = Path(root) / "latest.json"
+    """Pool scores from scripts/reward_pool_tracker.py output (local, read-only)."""
+    root = Path(root)
     try:
-        if now.timestamp() - path.stat().st_mtime > POOL_MAX_AGE_SECONDS:
+        score_path = root / "latest-score.json"
+        if now.timestamp() - score_path.stat().st_mtime > POOL_MAX_AGE_SECONDS:
             return None
-        rows = json.loads(path.read_text(encoding="utf-8"))
-        by_family = {(r["family"], r["period"]): r for r in rows}
+        score = json.loads(score_path.read_text(encoding="utf-8"))
+        rows = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+        allp, ours = score["all"], score["ours"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    shown = []
-    for fam, label in POOL_LABELS:
-        r = by_family.get((fam, "day_of"))
-        if r is not None:
-            shown.append((label, r["latest"], r.get("previous"), r.get("change")))
-    alerts = [r for r in rows if r.get("alert")]
-    return dict(rows=shown, alerts=len(alerts)) if shown else None
+    new = [r["family"].replace("_moneyline", "").replace("_day_of", "").replace("_dayof", "")
+           .replace("_", " ").upper() for r in rows
+           if r.get("alert") == "NEW" and r.get("period") == "day_of"]
+    changed = sum(1 for r in rows if r.get("alert") == "CHANGED")
+    return dict(all=allp, ours=ours, new=new, changed=changed,
+                profitable=str(score.get("profitable", "MAYBE")))
 
 
 def _pool_lines(pools: dict) -> list[str]:
-    lines = [f"{'Program':<11} {'Now':>5} {'Before':>6} {'Change':>6}",
-             "----------- ----- ------ ------"]
-    for label, now_pool, before, change in pools["rows"]:
-        lines.append(
-            f"{label:<11} {_discord_amount(f'{now_pool:.0f}', 5):>5} "
-            f"{('--' if before is None else _discord_amount(f'{before:.0f}', 6)):>6} "
-            f"{('--' if change is None else f'{change:+.0%}'):>6}")
-    return lines
+    ours = f"{pools['ours']['score']:.1f}/10"
+    allm = f"{pools['all']['score']:.1f}/10"
+    pool_now = _discord_amount(f"{pools['all']['now']:.0f}", 7)
+    return [f"{'OurMkts':<7} {'AllMkts':>7} {'PoolNow':>7} {'Profit?':>7}",
+            "------- ------- ------- -------",
+            f"{ours:<7} {allm:>7} {pool_now:>7} {pools['profitable']:>7}"]
+
+
+def pool_note(pools: dict) -> str:
+    """One short line for the footer / image note."""
+    parts = []
+    if pools.get("new"):
+        parts.append("new: " + ", ".join(pools["new"][:3]))
+    if pools.get("changed"):
+        parts.append(f"{pools['changed']} changed")
+    return "pools " + ("; ".join(parts) if parts else "unchanged")
 
 
 def _pulse_lines(days: list[date], pulse: dict[str, dict], today: date) -> list[str]:
@@ -1130,7 +1135,7 @@ def build_discord_payload(
         "footer": {"text": "P&L: closed fills + settlements · * today" + (
             " · posting: payouts still arriving" if posting_shown else "") + (
             " · + partial split; Avg includes untyped hours" if partial_split else "") + (
-            f" · pools: {pools['alerts']} new/changed" if pools and pools.get("alerts") else "")},
+            f" · {pool_note(pools)}" if pools else "")},
     }
     total_chars = (
         len(embed["title"]) + len(embed["description"])

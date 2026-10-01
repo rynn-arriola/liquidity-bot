@@ -27,7 +27,8 @@ CONTENT_RIGHT = CANVAS_WIDTH - 32
 TOTAL_CARD_GAP = 13
 TOTAL_CARD_WIDTH = 370
 SECTION_HEADERS = {"Reward Pulse": ["Date", "Level", "vs normal", "$/h"],
-                   "Reward Pools": ["Program", "Pool now", "Before", "Change"]}
+                   "Reward Pools": ["Our pools", "All pools", "Pool now $", "Profitable?"]}
+POOL_VERDICT_COLORS = {"YES": "#7bdfb2", "MAYBE": "#ffd166", "NO": "#ff959b"}
 PULSE_COLORS = {"Hot": "#ff9f43", "Good": "#7bdfb2", "Avg": "#ffd166",
                 "Low": "#ffa94d", "Dead": "#ff959b"}
 
@@ -67,8 +68,22 @@ def render_reward_png(payload: dict) -> bytes:
     # bubble has much more horizontal room.  Keep the same vertical density,
     # but use a wider canvas whose aspect ratio fills the mobile attachment
     # area without changing any report values.
+    footer = embed["footer"]["text"]
+    notes = []
+    if "posting: payouts still arriving" in footer:
+        notes.append("posting: payouts still arriving")
+    if "+ partial split" in footer:
+        notes.append("+ partial split · Avg includes untyped hours")
+    names = {name for name, _, _ in sections}
+    if "Reward Pulse" in names:
+        notes.append("Pulse: reward $/order-hour vs our 3-week normal")
+    if "Reward Pools" in names:
+        note = re.search(r"(pools [^·]+)", footer)
+        notes.append("Pools: score 1-10 vs best in 30 days; ours 5 or under = not profitable" +
+                     (f" · {note.group(1).strip()[6:]}" if note else ""))
     width = CANVAS_WIDTH
-    height = 266 + sum(112 + 56*len(rows) for _, _, rows in sections) + 108
+    height = (266 + sum(112 + 56*len(rows) for _, _, rows in sections) + 108
+              + 32 * max(0, len(notes) - 1))
     image = Image.new("RGB", (width, height), "#101720")
     draw = ImageDraw.Draw(image)
     white, muted, accent = "#eef3fa", "#a5b5c9", "#6abaff"
@@ -128,27 +143,19 @@ def render_reward_png(payload: dict) -> bytes:
                     elif value.startswith("+"): color = "#7bdfb2"
                 if name == "Reward Pulse" and col == 1:
                     color = PULSE_COLORS.get(value, white)
-                if name == "Reward Pools" and col == 3 and value not in ("--", "+0%"):
-                    color = "#ff959b" if value.startswith("-") else "#7bdfb2"
+                if name == "Reward Pools" and col == 3:
+                    color = POOL_VERDICT_COLORS.get(value, white)
+                if name == "Reward Pools" and col == 0 and value.endswith("/10"):
+                    score_value = float(value[:-3])
+                    color = ("#ff959b" if score_value <= 5 else "#ffd166" if score_value < 8 else "#7bdfb2")
                 text(value, positions[col], y+9, size=34, color=color,
                      right=col > 0, max_width=240 if col else 180)
             y += 56
         y += 12
     text("P&L: closed fills + settlements · * today · Hours: local rest",
          40, y+8, size=23, color=muted)
-    notes = []
-    if "posting: payouts still arriving" in embed["footer"]["text"]:
-        notes.append("posting: payouts still arriving")
-    if "+ partial split" in embed["footer"]["text"]:
-        notes.append("+ partial split · Avg includes untyped hours")
-    names = {name for name, _, _ in sections}
-    if "Reward Pulse" in names:
-        notes.append("Pulse: reward $/order-hour vs our 3-week normal")
-    if "Reward Pools" in names:
-        alert = re.search(r"pools: (\d+) new/changed", embed["footer"]["text"])
-        notes.append("Pools: offered pre-game pool" + (f" · {alert.group(1)} new/changed" if alert else ""))
-    if notes:
-        text(" · ".join(notes), 40, y+40, size=23, color=muted)
+    for i, line in enumerate(notes):
+        text(line, 40, y + 40 + 32 * i, size=23, color=muted)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     result = output.getvalue()

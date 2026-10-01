@@ -217,6 +217,45 @@ class RewardTableTests(unittest.TestCase):
             unbalanced_markets=0, pulse={})
         self.assertEqual(len(plain["embeds"][0]["fields"]), 2)
 
+    def test_reward_pools_section_from_tracker_file(self):
+        import os
+        from scripts.reward_image import render_reward_png
+        from scripts.reward_table import build_discord_payload, load_pools
+        now = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+        rows = [dict(family="table_tennis_moneyline_day_of", period="day_of", latest=15.0,
+                     previous=35.0, change=-20 / 35, alert=""),
+                dict(family="itf_moneyline_dayof", period="day_of", latest=15.0,
+                     previous=None, change=None, alert=""),
+                dict(family="nhl_regular_moneyline_day_of", period="day_of", latest=50.0,
+                     previous=None, change=None, alert="NEW")]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "latest.json"
+            path.write_text(json.dumps(rows), encoding="utf-8")
+            os.utime(path, (now.timestamp(), now.timestamp()))
+            pools = load_pools(Path(tmp), now=now)
+            self.assertIsNone(load_pools(Path(tmp), now=now + timedelta(hours=13)))   # stale
+            self.assertIsNone(load_pools(Path(tmp) / "missing", now=now))
+        self.assertEqual(pools["alerts"], 1)
+        self.assertEqual([r[0] for r in pools["rows"]], ["TableTennis", "ITF"])
+        day = date(2026, 10, 1)
+        payload = build_discord_payload(
+            [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
+            today=day, generated_at=now, unbalanced_markets=0, pools=pools)
+        embed = payload["embeds"][0]
+        text = embed["fields"][-1]["value"]
+        self.assertEqual(embed["fields"][-1]["name"], "Reward Pools")
+        self.assertIn("TableTennis    15     35   -57%", text)
+        self.assertIn("ITF            15     --     --", text)
+        self.assertTrue(all(len(line) <= 31 for line in text.splitlines()))
+        self.assertIn("pools: 1 new/changed", embed["footer"]["text"])
+        self.assertTrue(render_reward_png(payload).startswith(b"\x89PNG"))
+        both = build_discord_payload(
+            [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
+            today=day, generated_at=now, unbalanced_markets=0, pools=pools,
+            pulse={"2026-10-01": dict(level="Low", vs_normal=0.5, per_hour=0.1)})
+        self.assertEqual([f["name"] for f in both["embeds"][0]["fields"]][-2:], ["Reward Pulse", "Reward Pools"])
+        self.assertTrue(render_reward_png(both).startswith(b"\x89PNG"))
+
     def test_discord_partial_split_and_large_values_stay_compact(self):
         day = date(2026, 12, 31)
         report = build_discord_payload([day], pnl={}, paid={day.isoformat(): Decimal("123456789")},

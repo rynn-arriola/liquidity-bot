@@ -10,6 +10,7 @@ import asyncio
 import copy
 import io
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -25,6 +26,8 @@ CONTENT_LEFT = 32
 CONTENT_RIGHT = CANVAS_WIDTH - 32
 TOTAL_CARD_GAP = 13
 TOTAL_CARD_WIDTH = 370
+SECTION_HEADERS = {"Reward Pulse": ["Date", "Level", "vs normal", "$/h"],
+                   "Reward Pools": ["Program", "Pool now", "Before", "Change"]}
 PULSE_COLORS = {"Hot": "#ff9f43", "Good": "#7bdfb2", "Avg": "#ffd166",
                 "Low": "#ffa94d", "Dead": "#ff959b"}
 
@@ -54,11 +57,11 @@ def render_reward_png(payload: dict) -> bytes:
         rows = [line.split() for line in lines[3:-1]]
         if len(rows) > 7 or any(len(row) != 4 for row in rows):
             raise ValueError("invalid reward rows")
-        headers = (["Date", "P&L", "Paid", "Pend"], ["Date", "Day-of h", "Daily h", "Avg"],
-                   ["Date", "Level", "vs normal", "$/h"])[min(len(sections), 2)]
+        headers = SECTION_HEADERS.get(field["name"]) or (
+            ["Date", "P&L", "Paid", "Pend"] if not sections else ["Date", "Day-of h", "Daily h", "Avg"])
         sections.append((field["name"], headers, rows))
-    if len(sections) not in (2, 3):
-        raise ValueError("expected two reward tables (plus optional Reward Pulse)")
+    if not 2 <= len(sections) <= 4:
+        raise ValueError("expected two reward tables (plus optional Reward Pulse / Reward Pools)")
     # Discord constrains tall attachments by height on mobile.  A narrow
     # portrait canvas therefore renders as a small strip even when the message
     # bubble has much more horizontal room.  Keep the same vertical density,
@@ -125,6 +128,8 @@ def render_reward_png(payload: dict) -> bytes:
                     elif value.startswith("+"): color = "#7bdfb2"
                 if name == "Reward Pulse" and col == 1:
                     color = PULSE_COLORS.get(value, white)
+                if name == "Reward Pools" and col == 3 and value not in ("--", "+0%"):
+                    color = "#ff959b" if value.startswith("-") else "#7bdfb2"
                 text(value, positions[col], y+9, size=34, color=color,
                      right=col > 0, max_width=240 if col else 180)
             y += 56
@@ -136,8 +141,12 @@ def render_reward_png(payload: dict) -> bytes:
         notes.append("posting: payouts still arriving")
     if "+ partial split" in embed["footer"]["text"]:
         notes.append("+ partial split · Avg includes untyped hours")
-    if len(sections) == 3:
+    names = {name for name, _, _ in sections}
+    if "Reward Pulse" in names:
         notes.append("Pulse: reward $/order-hour vs our 3-week normal")
+    if "Reward Pools" in names:
+        alert = re.search(r"pools: (\d+) new/changed", embed["footer"]["text"])
+        notes.append("Pools: offered pre-game pool" + (f" · {alert.group(1)} new/changed" if alert else ""))
     if notes:
         text(" · ".join(notes), 40, y+40, size=23, color=muted)
     output = io.BytesIO()

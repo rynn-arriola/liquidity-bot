@@ -956,6 +956,44 @@ def load_pulse(root: Path, days: list[date]) -> dict[str, dict]:
     return out
 
 
+# Reward Pool Tracker programs shown in Discord (the pre-game programs we trade).
+POOL_LABELS = (
+    ("table_tennis_moneyline_day_of", "TableTennis"), ("itf_moneyline_dayof", "ITF"),
+    ("atp_wta_moneyline_day_of", "ATP/WTA"), ("esports_moneyline_pre_game", "Esports"),
+    ("doubles_moneyline_day_of", "Doubles"), ("darts_moneyline_day_of", "Darts"))
+POOL_MAX_AGE_SECONDS = 12 * 3600
+
+
+def load_pools(root: Path, *, now: datetime) -> dict | None:
+    """Offered pools from scripts/reward_pool_tracker.py output (local, read-only)."""
+    path = Path(root) / "latest.json"
+    try:
+        if now.timestamp() - path.stat().st_mtime > POOL_MAX_AGE_SECONDS:
+            return None
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        by_family = {(r["family"], r["period"]): r for r in rows}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    shown = []
+    for fam, label in POOL_LABELS:
+        r = by_family.get((fam, "day_of"))
+        if r is not None:
+            shown.append((label, r["latest"], r.get("previous"), r.get("change")))
+    alerts = [r for r in rows if r.get("alert")]
+    return dict(rows=shown, alerts=len(alerts)) if shown else None
+
+
+def _pool_lines(pools: dict) -> list[str]:
+    lines = [f"{'Program':<11} {'Now':>5} {'Before':>6} {'Change':>6}",
+             "----------- ----- ------ ------"]
+    for label, now_pool, before, change in pools["rows"]:
+        lines.append(
+            f"{label:<11} {_discord_amount(f'{now_pool:.0f}', 5):>5} "
+            f"{('--' if before is None else _discord_amount(f'{before:.0f}', 6)):>6} "
+            f"{('--' if change is None else f'{change:+.0%}'):>6}")
+    return lines
+
+
 def _pulse_lines(days: list[date], pulse: dict[str, dict], today: date) -> list[str]:
     lines = [f"{'Date':<6} {'Level':>7} {'vsNorm':>7} {'$/h':>7}",
              "------ ------- ------- -------"]
@@ -983,6 +1021,7 @@ def build_discord_payload(
     settled_history: dict[str, Decimal | None] | None = None,
     period_hours: dict[str, dict[str, float]] | None = None,
     pulse: dict[str, dict] | None = None,
+    pools: dict | None = None,
 ) -> dict:
     """Build a compact settled-trading and reward report for Discord.
 
@@ -1072,6 +1111,13 @@ def build_discord_payload(
             "value": "```text\n" + "\n".join(_pulse_lines(days, pulse, today)) + "\n```",
             "inline": False,
         })
+    if pools:
+        # Operator 2026-10-01: Reward Pool Tracker in the summary, tracking only.
+        fields.append({
+            "name": "Reward Pools",
+            "value": "```text\n" + "\n".join(_pool_lines(pools)) + "\n```",
+            "inline": False,
+        })
     embed = {
         "title": f"Rewards · {len(days)}d · ET",
         "description": (
@@ -1083,7 +1129,8 @@ def build_discord_payload(
         "timestamp": generated_at.isoformat(),
         "footer": {"text": "P&L: closed fills + settlements · * today" + (
             " · posting: payouts still arriving" if posting_shown else "") + (
-            " · + partial split; Avg includes untyped hours" if partial_split else "")},
+            " · + partial split; Avg includes untyped hours" if partial_split else "") + (
+            f" · pools: {pools['alerts']} new/changed" if pools and pools.get("alerts") else "")},
     }
     total_chars = (
         len(embed["title"]) + len(embed["description"])
@@ -1104,6 +1151,9 @@ async def main() -> int:
     parser.add_argument(
         "--post-discord", action="store_true",
         help="post to the dedicated rewards webhook")
+    parser.add_argument(
+        "--pool-root", default="data/reward-pool-tracker",
+        help="Reward Pool Tracker output to show in the Discord table")
     parser.add_argument(
         "--pulse-root", default="data/reward-pulse",
         help="Reward Pulse grades to show in the Discord table (scripts/reward_pulse.py)")
@@ -1231,6 +1281,7 @@ async def main() -> int:
                 generated_at=now, unbalanced_markets=unbalanced,
                 period_hours=period_hours,
                 pulse=load_pulse(Path(args.pulse_root), days),
+                pools=load_pools(Path(args.pool_root), now=now),
                 account_realized=account_realized,
                 account_history=history,
                 settled_history=settled_history),

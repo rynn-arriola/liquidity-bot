@@ -33,3 +33,11 @@ Pre-game (day-of), per market:
   - Sep 28: cricket early and live.
 
 The report compares offered pools only; payouts are tracked separately in Reward Pulse.
+
+## In the Discord reward summary (operator, 2026-10-01: "Add it in the summary just to track it")
+
+- **What it shows:** a **Reward Pools** section in the hourly reward post (`scripts/reward_table.py`, image via `scripts/reward_image.py`) for the pre-game programs we trade (TableTennis, ITF, ATP/WTA, Esports, Doubles, Darts): pool now, the previous pool and the change.
+- **Alerts:** the footer adds `pools: N new/changed` when the tracker has alerts.
+- **Source:** `data/reward-pool-tracker/latest.json`. The section is skipped if that file is missing or more than 12 hours old.
+- **Tracking only:** no API call and no trading effect.
+

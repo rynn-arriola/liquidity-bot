@@ -79,3 +79,8 @@ Anchors:
 - Our markets 4.5/10 → profitable NO.
 - All markets about 10/10. Most non-sports programs have no history before today's first page snapshot, so this score becomes meaningful as snapshots build up.
 
+
+**Update the same day:** operator: "we can add it on reward puls actually like a field on the same section".
+- The separate Reward Pools section is removed. The our-markets pool score is now the last column of the **Reward Pulse** section: `Date | Level | vs normal | Pool`.
+- Past days get their score from the bot's recorded pools: `ours_by_day` in `latest-score.json`, about 10.0 before Sep 24 and about 4.5 since.
+- The note under the section gives the all-markets score, the our-markets verdict (5 or under = not profitable) and any new pre-game programs.

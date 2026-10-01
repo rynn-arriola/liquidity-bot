@@ -59,6 +59,15 @@ class RewardPoolTrackerTests(unittest.TestCase):
         rows = pw.summarize(collected, today="2026-10-01")
         self.assertEqual({r["family"]: r["alert"] for r in rows}["nfl_live"], "")   # first rewards-page day: not NEW
 
+    def test_our_score_by_day_follows_the_pool_cut(self):
+        obs = []
+        for d, tt, itf in (("2026-09-22", 35, 30), ("2026-09-23", 35, 30), ("2026-09-24", 15, 15)):
+            obs += [("table_tennis_moneyline_day_of_20260914", "day_of", tt, f"{d}T10:00:00+00:00"),
+                    ("itf_moneyline_dayof_20260914", "day_of", itf, f"{d}T10:00:00+00:00")]
+        by_day = pw.our_scores_by_day(pw.collect(obs, []))
+        self.assertEqual(by_day, {"2026-09-22": 10.0, "2026-09-23": 10.0,
+                                  "2026-09-24": round(10 * 30 / 65, 1)})
+
     def test_recent_change_alerts(self):
         obs = [("x_day_of_20260901", "day_of", 100, "2026-09-28T01:00:00+00:00"),
                ("x_day_of_20260929", "day_of", 150, "2026-09-29T01:00:00+00:00")]

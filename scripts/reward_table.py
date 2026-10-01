@@ -956,7 +956,8 @@ def load_pulse(root: Path, days: list[date]) -> dict[str, dict]:
     return out
 
 
-# Reward Pool Tracker in the Discord summary: one line with the 1-10 pool scores.
+# Reward Pool Tracker: our-markets pool score (1-10) as a column of the Reward
+# Pulse section (operator, 2026-10-01), with the all-markets score in the note.
 POOL_MAX_AGE_SECONDS = 12 * 3600
 
 
@@ -977,43 +978,40 @@ def load_pools(root: Path, *, now: datetime) -> dict | None:
            if r.get("alert") == "NEW" and r.get("period") == "day_of"]
     changed = sum(1 for r in rows if r.get("alert") == "CHANGED")
     return dict(all=allp, ours=ours, new=new, changed=changed,
+                by_day=dict(score.get("ours_by_day") or {}),
                 profitable=str(score.get("profitable", "MAYBE")))
-
-
-def _pool_lines(pools: dict) -> list[str]:
-    ours = f"{pools['ours']['score']:.1f}/10"
-    allm = f"{pools['all']['score']:.1f}/10"
-    pool_now = _discord_amount(f"{pools['all']['now']:.0f}", 7)
-    return [f"{'OurMkts':<7} {'AllMkts':>7} {'PoolNow':>7} {'Profit?':>7}",
-            "------- ------- ------- -------",
-            f"{ours:<7} {allm:>7} {pool_now:>7} {pools['profitable']:>7}"]
 
 
 def pool_note(pools: dict) -> str:
     """One short line for the footer / image note."""
-    parts = []
+    parts = [f"all markets {pools['all']['score']:.1f}/10",
+             f"ours {pools['ours']['score']:.1f}/10 profitable {pools['profitable']}"]
     if pools.get("new"):
         parts.append("new: " + ", ".join(pools["new"][:3]))
     if pools.get("changed"):
         parts.append(f"{pools['changed']} changed")
-    return "pools " + ("; ".join(parts) if parts else "unchanged")
+    return "pools " + "; ".join(parts)
 
 
-def _pulse_lines(days: list[date], pulse: dict[str, dict], today: date) -> list[str]:
-    lines = [f"{'Date':<6} {'Level':>7} {'vsNorm':>7} {'$/h':>7}",
+def _pulse_lines(days: list[date], pulse: dict[str, dict], today: date,
+                 pools: dict | None = None) -> list[str]:
+    last = "Pool" if pools else "$/h"
+    lines = [f"{'Date':<6} {'Level':>7} {'vsNorm':>7} {last:>7}",
              "------ ------- ------- -------"]
     for day_value in days:
-        row = pulse.get(day_value.isoformat())
+        key = day_value.isoformat()
+        row = pulse.get(key) or {}
         label = f"{day_value.month}/{day_value.day}{'*' if day_value == today else ''}"
-        if row is None:
-            lines.append(f"{label:<6} {'--':>7} {'--':>7} {'--':>7}")
-            continue
         ratio = row.get("vs_normal")
-        rate = row.get("per_hour")
+        if pools:
+            v = pools["by_day"].get(key)
+            fourth = "--" if v is None else f"{v:.1f}"
+        else:
+            rate = row.get("per_hour")
+            fourth = "--" if rate is None else f"{rate:.2f}"
         lines.append(
-            f"{label:<6} {PULSE_SHORT.get(row['level'], '--'):>7} "
-            f"{('--' if ratio is None else f'{ratio:.2f}x'):>7} "
-            f"{('--' if rate is None else f'{rate:.2f}'):>7}")
+            f"{label:<6} {PULSE_SHORT.get(row.get('level'), '--'):>7} "
+            f"{('--' if ratio is None else f'{ratio:.2f}x'):>7} {fourth:>7}")
     return lines
 
 
@@ -1109,18 +1107,12 @@ def build_discord_payload(
             "inline": False,
         },
     ]
-    if pulse:
-        # Operator 2026-09-27: Reward Pulse grade per day (vs our 3-week normal).
+    if pulse or pools:
+        # Operator 2026-09-27: Reward Pulse grade per day (vs our 3-week normal);
+        # 2026-10-01: the our-markets pool score (1-10) is its last column.
         fields.append({
             "name": "Reward Pulse",
-            "value": "```text\n" + "\n".join(_pulse_lines(days, pulse, today)) + "\n```",
-            "inline": False,
-        })
-    if pools:
-        # Operator 2026-10-01: Reward Pool Tracker in the summary, tracking only.
-        fields.append({
-            "name": "Reward Pools",
-            "value": "```text\n" + "\n".join(_pool_lines(pools)) + "\n```",
+            "value": "```text\n" + "\n".join(_pulse_lines(days, pulse or {}, today, pools)) + "\n```",
             "inline": False,
         })
     embed = {

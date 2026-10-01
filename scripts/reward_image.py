@@ -26,9 +26,7 @@ CONTENT_LEFT = 32
 CONTENT_RIGHT = CANVAS_WIDTH - 32
 TOTAL_CARD_GAP = 13
 TOTAL_CARD_WIDTH = 370
-SECTION_HEADERS = {"Reward Pulse": ["Date", "Level", "vs normal", "$/h"],
-                   "Reward Pools": ["Our pools", "All pools", "Pool now $", "Profitable?"]}
-POOL_VERDICT_COLORS = {"YES": "#7bdfb2", "MAYBE": "#ffd166", "NO": "#ff959b"}
+SECTION_HEADERS = {"Reward Pulse": ["Date", "Level", "vs normal", "$/h"]}
 PULSE_COLORS = {"Hot": "#ff9f43", "Good": "#7bdfb2", "Avg": "#ffd166",
                 "Low": "#ffa94d", "Dead": "#ff959b"}
 
@@ -60,9 +58,11 @@ def render_reward_png(payload: dict) -> bytes:
             raise ValueError("invalid reward rows")
         headers = SECTION_HEADERS.get(field["name"]) or (
             ["Date", "P&L", "Paid", "Pend"] if not sections else ["Date", "Day-of h", "Daily h", "Avg"])
+        if field["name"] == "Reward Pulse" and lines[1].split()[-1] == "Pool":
+            headers = ["Date", "Level", "vs normal", "Pool /10"]
         sections.append((field["name"], headers, rows))
-    if not 2 <= len(sections) <= 4:
-        raise ValueError("expected two reward tables (plus optional Reward Pulse / Reward Pools)")
+    if not 2 <= len(sections) <= 3:
+        raise ValueError("expected two reward tables (plus optional Reward Pulse)")
     # Discord constrains tall attachments by height on mobile.  A narrow
     # portrait canvas therefore renders as a small strip even when the message
     # bubble has much more horizontal room.  Keep the same vertical density,
@@ -75,12 +75,13 @@ def render_reward_png(payload: dict) -> bytes:
     if "+ partial split" in footer:
         notes.append("+ partial split · Avg includes untyped hours")
     names = {name for name, _, _ in sections}
+    pool_column = any(name == "Reward Pulse" and headers[-1] == "Pool /10" for name, headers, _ in sections)
     if "Reward Pulse" in names:
-        notes.append("Pulse: reward $/order-hour vs our 3-week normal")
-    if "Reward Pools" in names:
-        note = re.search(r"(pools [^·]+)", footer)
-        notes.append("Pools: score 1-10 vs best in 30 days; ours 5 or under = not profitable" +
-                     (f" · {note.group(1).strip()[6:]}" if note else ""))
+        notes.append("Pulse: reward $/order-hour vs our 3-week normal" +
+                     (" · Pool: our pre-game pools 1-10, 5 or under = not profitable" if pool_column else ""))
+    note = re.search(r"pools ([^·]+)", footer)
+    if pool_column and note:
+        notes.append("Pools: " + note.group(1).strip())
     width = CANVAS_WIDTH
     height = (266 + sum(112 + 56*len(rows) for _, _, rows in sections) + 108
               + 32 * max(0, len(notes) - 1))
@@ -143,10 +144,8 @@ def render_reward_png(payload: dict) -> bytes:
                     elif value.startswith("+"): color = "#7bdfb2"
                 if name == "Reward Pulse" and col == 1:
                     color = PULSE_COLORS.get(value, white)
-                if name == "Reward Pools" and col == 3:
-                    color = POOL_VERDICT_COLORS.get(value, white)
-                if name == "Reward Pools" and col == 0 and value.endswith("/10"):
-                    score_value = float(value[:-3])
+                if name == "Reward Pulse" and col == 3 and headers[-1] == "Pool /10" and value != "--":
+                    score_value = float(value)
                     color = ("#ff959b" if score_value <= 5 else "#ffd166" if score_value < 8 else "#7bdfb2")
                 text(value, positions[col], y+9, size=34, color=color,
                      right=col > 0, max_width=240 if col else 180)

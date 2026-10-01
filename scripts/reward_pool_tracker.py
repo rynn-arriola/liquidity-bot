@@ -112,6 +112,27 @@ def score(current: list[dict], collected: dict, *, today: str,
     return result
 
 
+def our_scores_by_day(collected: dict, *, reference_days: int = SCORE_REFERENCE_DAYS) -> dict[str, float]:
+    """The our-markets score for every day with data (same definition as ``score``)."""
+    fams = [(f, "day_of") for f in OUR_FAMILIES]
+    days = sorted({d for k in fams for d in collected["seen"].get(k, {})})
+    out = {}
+    for d in days:
+        start = (date.fromisoformat(d) - timedelta(days=reference_days)).isoformat()
+        now = reference = 0.0
+        for k in fams:
+            by_day = collected["seen"].get(k, {})
+            if d not in by_day:
+                continue
+            pool = day_pool(by_day[d])
+            best = max([day_pool(c) for x, c in by_day.items() if start <= x <= d] + [pool])
+            now += pool
+            reference += best
+        if reference:
+            out[d] = round(min(10.0, max(1.0, 10 * now / reference)), 1)
+    return out
+
+
 def profit_verdict(our_score: float) -> str:
     """Operator rule (2026-10-01): an our-markets score of 5 or under means NOT profitable.
 
@@ -308,6 +329,8 @@ def main(argv=None) -> int:
     (a.output_root / "latest.json").write_text(json.dumps(rows, indent=1, default=str), encoding="utf8")
     (a.output_root / f"{now:%Y-%m-%d}.md").write_text(text, encoding="utf8")
     if pool_score:
+        pool_score["ours_by_day"] = our_scores_by_day(collected)
+        pool_score["ours_by_day"][today] = pool_score["ours"]["score"]
         record = dict(at=now.isoformat(), **pool_score)
         (a.output_root / "latest-score.json").write_text(json.dumps(record, indent=1), encoding="utf8")
         with (a.output_root / "score-history.jsonl").open("a", encoding="utf8") as fh:

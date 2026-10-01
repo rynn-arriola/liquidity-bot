@@ -217,17 +217,16 @@ class RewardTableTests(unittest.TestCase):
             unbalanced_markets=0, pulse={})
         self.assertEqual(len(plain["embeds"][0]["fields"]), 2)
 
-    def test_reward_pools_section_from_tracker_file(self):
+    def test_pool_score_is_a_column_of_the_reward_pulse_section(self):
         import os
         from scripts.reward_image import render_reward_png
         from scripts.reward_table import build_discord_payload, load_pools
         now = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
-        rows = [dict(family="table_tennis_moneyline_day_of", period="day_of", latest=15.0,
-                     previous=35.0, change=-20 / 35, alert=""),
-                dict(family="nhl_regular_moneyline_day_of", period="day_of", latest=50.0,
+        rows = [dict(family="nhl_regular_moneyline_day_of", period="day_of", latest=50.0,
                      previous=None, change=None, alert="NEW")]
         score = dict(all=dict(score=9.6, now=70177.0, reference=73000.0, programs=137),
-                     ours=dict(score=4.5, now=145.0, reference=320.0, programs=4), profitable="NO")
+                     ours=dict(score=4.5, now=145.0, reference=320.0, programs=4), profitable="NO",
+                     ours_by_day={"2026-09-23": 10.0, "2026-09-30": 4.6, "2026-10-01": 4.5})
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "latest.json").write_text(json.dumps(rows), encoding="utf-8")
             path = Path(tmp) / "latest-score.json"
@@ -236,25 +235,23 @@ class RewardTableTests(unittest.TestCase):
             pools = load_pools(Path(tmp), now=now)
             self.assertIsNone(load_pools(Path(tmp), now=now + timedelta(hours=13)))   # stale
             self.assertIsNone(load_pools(Path(tmp) / "missing", now=now))
-        self.assertEqual((pools["new"], pools["profitable"]), (["NHL REGULAR"], "NO"))
-        day = date(2026, 10, 1)
+        days = [date(2026, 9, 23), date(2026, 9, 30), date(2026, 10, 1)]
         payload = build_discord_payload(
-            [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
-            today=day, generated_at=now, unbalanced_markets=0, pools=pools)
+            days, pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
+            today=days[-1], generated_at=now, unbalanced_markets=0, pools=pools,
+            pulse={"2026-09-30": dict(level="Low", vs_normal=0.5, per_hour=0.1)})
         embed = payload["embeds"][0]
+        self.assertEqual([f["name"] for f in embed["fields"]][-1], "Reward Pulse")
+        self.assertNotIn("Reward Pools", [f["name"] for f in embed["fields"]])
         text = embed["fields"][-1]["value"]
-        self.assertEqual(embed["fields"][-1]["name"], "Reward Pools")
-        self.assertIn("4.5/10   9.6/10   70177      NO", text)
-        self.assertEqual(len(text.splitlines()), 5)                      # one data row
+        self.assertIn("Date     Level  vsNorm    Pool", text)
+        self.assertIn("9/23        --      --    10.0", text)
+        self.assertIn("9/30       Low   0.50x     4.6", text)
+        self.assertIn("10/1*       --      --     4.5", text)
         self.assertTrue(all(len(line) <= 31 for line in text.splitlines()))
-        self.assertIn("pools new: NHL REGULAR", embed["footer"]["text"])
+        footer = embed["footer"]["text"]
+        self.assertIn("pools all markets 9.6/10; ours 4.5/10 profitable NO; new: NHL REGULAR", footer)
         self.assertTrue(render_reward_png(payload).startswith(b"\x89PNG"))
-        both = build_discord_payload(
-            [day], pnl={}, paid={}, pending={}, resting_hours={}, elapsed_hours={},
-            today=day, generated_at=now, unbalanced_markets=0, pools=pools,
-            pulse={"2026-10-01": dict(level="Low", vs_normal=0.5, per_hour=0.1)})
-        self.assertEqual([f["name"] for f in both["embeds"][0]["fields"]][-2:], ["Reward Pulse", "Reward Pools"])
-        self.assertTrue(render_reward_png(both).startswith(b"\x89PNG"))
 
     def test_discord_partial_split_and_large_values_stay_compact(self):
         day = date(2026, 12, 31)

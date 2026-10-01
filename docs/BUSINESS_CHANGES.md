@@ -25,6 +25,28 @@ Each entry records:
 
 ---
 
+## BC-2026-10-01-A — Lower pending entries 50 → 30 while pools are low
+
+- **Status:** BUILT; loads at the next window-boundary restart (Command 1). The risk-window policy cannot change mid-window.
+- **Operator:** "Can you make max orders to 30 for now", "We will increase it once reward go back".
+- **Rule:**
+  - Pending-entry cap 30, REST ceiling 30.
+  - Scaled step-downs 24/18/12/6 at $8/$16/$24/$32 settled loss.
+  - $40 stop and size 10 unchanged.
+- **Why:**
+  - Pools offered are about half of before (Reward Pool Tracker, our-markets score about 4.7/10, under 5 = not profitable).
+  - More resting at low pools did not raise rewards: Sep 27–28 had 943–1,026 order-hours for $43–67.
+- **Baseline (50 orders, Sep 28–30):**
+  - 89–99% of cap used, about 1,000 order-hours/day.
+  - Rewards $28–68/day, trading −$12 to −$40/day.
+- **Expected:**
+  - Fewer forced exits and lower trading loss.
+  - Rewards down somewhat less than proportionally, because the ranker fills the best markets first.
+- **Evaluate after 3 days:** trading $/day, rewards/day (Reward Pulse), order-hours/day and pool score.
+- **Revisit when the Reward Pool Tracker pool score rises above 5:** raise the cap again then.
+- **Undo:** restore 50 and 40/30/20/10 in `config/risk_window_policy.json` and the 50 ceiling in `config/account_source_policy.json`, then restart at a window boundary.
+- **Verdict:** pending.
+
 ## BC-2026-09-27-A — Skip new entries on thin one-tick books in high-loss leagues
 
 - **Status:** LIVE since 17:44:04Z Sep 27 in `4adbafb38` (Command 1; the runner had self-stopped after a manual close, was force-stopped with the venue proven flat, and the ledger was reconciled). Evaluation window: Sep 28–30 ET. Switch: `config/thin_book_policy.json` (`enabled`).

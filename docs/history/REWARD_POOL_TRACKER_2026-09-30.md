@@ -105,4 +105,4 @@ Anchors:
 - **Stale rule:** a missing, unreadable, future-dated or >3 h old score means no evidence, so the bot trades normally and logs `[reward-pool-gate] ... detail=...`.
 - **Cron:** tracker now runs hourly at :20 (`--install-cron`).
 - **Tests:** `tests/test_reward_pool_gate.py` (thresholds, stale/missing fallback, throttle, policy) and a runner test (pause → cancel request → Discord → resume above 5). Full suite passes on WSL.
-- **Loads at the next Command 1.** At the Oct 2 score (3.0) the bot pauses new entries right after start.
+- **Loaded 16:31:13Z Oct 2 (Command 1, `453726061`).** First check 16:32:10Z: score 3.0 → `[entry-pause] state=paused reason=reward_pool_low`; 0 orders, 0 positions.

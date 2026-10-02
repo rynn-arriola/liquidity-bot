@@ -27,7 +27,7 @@ Each entry records:
 
 ## BC-2026-10-02-A — Pause new entries while our reward pool score is 5 or under
 
-- **Status:** BUILT, not loaded. Loads at the next Command 1. Switch: `config/reward_pool_gate_policy.json` (`enabled`).
+- **Status:** LIVE since 16:31:13Z Oct 2 in `453726061` (Command 1). First check 16:32:10Z: score 3.0 → paused new entries, 0 orders/0 positions. Switch: `config/reward_pool_gate_policy.json` (`enabled`).
 - **Operator:** "I think lets add the reward pool filter now"; chose "Pause new entries when score is 5 or under" and an hourly pool refresh (2026-10-02). Earlier rule: "Make sure score from 5 under means its not profitable".
 - **Rule:**
   - Read the Reward Pool Tracker's our-markets score (`data/reward-pool-tracker/latest-score.json`, `ours.score`) once a minute.

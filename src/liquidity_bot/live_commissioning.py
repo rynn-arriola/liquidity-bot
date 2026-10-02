@@ -78,6 +78,7 @@ from .entry_pause import (
     operator_entry_pause_requested,
     probe_polymarket_us_homepage,
 )
+from .reward_pool_gate import REWARD_POOL_PAUSE_REASON, RewardPoolGate
 from .fill_hazard import MondayFillHazardModel
 from .live_orders import (
     AsyncTradingGateway,
@@ -414,6 +415,7 @@ class CommissioningRunner(
         maintenance_cache_path: Path = MAINTENANCE_CACHE_PATH,
         quality_sink: Any = None,
         reward_cache_scope: str | None = None,
+        reward_pool_gate: RewardPoolGate | None = None,
     ):
         self.client = client
         self.config = config
@@ -432,6 +434,8 @@ class CommissioningRunner(
             ui_availability_probe or probe_polymarket_us_homepage)
         self._operator_entry_pause_path = operator_entry_pause_path
         self._manual_entry_paused = False
+        # BC-2026-10-02-A: None (tests, disabled policy) never pauses.
+        self._reward_pool_gate = reward_pool_gate
         self._ui_entry_paused = False
         self._ui_availability_initialized = False
         self._ui_availability_state = UiTradingState.UNKNOWN
@@ -1501,7 +1505,12 @@ class CommissioningRunner(
             or self._market_fault_pause_until is not None
             or self._scheduled_maintenance_pause_active()
             or (self._ui_availability_initialized and self._ui_entry_paused)
+            or self._reward_pool_paused()
         )
+
+    def _reward_pool_paused(self) -> bool:
+        gate = self._reward_pool_gate
+        return gate is not None and gate.paused
 
     def _scheduled_maintenance_pause_active(self) -> bool:
         """Fail closed until the official schedule has initialized."""
@@ -1557,6 +1566,8 @@ class CommissioningRunner(
             if self._ui_availability_state == UiTradingState.HEALTHY:
                 return "polymarket_us_ui_recovery_pending"
             return "polymarket_us_ui_unavailable"
+        if self._reward_pool_paused():
+            return REWARD_POOL_PAUSE_REASON
         return None
 
     def _apply_maintenance_schedule(
@@ -1759,6 +1770,17 @@ class CommissioningRunner(
         previous_reason = self._current_entry_pause_reason()
         self._manual_entry_paused = operator_entry_pause_requested(
             self._operator_entry_pause_path)
+        if self._reward_pool_gate is not None:
+            reading = self._reward_pool_gate.refresh(now)
+            if reading is not None:
+                score = "none" if reading.score is None else f"{reading.score:.1f}"
+                print(
+                    f"[reward-pool-gate] at={now.isoformat()} "
+                    f"paused={str(reading.paused).lower()} score={score} "
+                    f"threshold={self._reward_pool_gate.policy.pause_at_or_below:g} "
+                    f"detail={reading.detail}",
+                    flush=True,
+                )
 
         if startup:
             try:
@@ -4699,6 +4721,14 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
     runner_options = dict(account_state_mode=account_state_mode,
                           source_policy=source_policy, rest_polling_policy=polling_policy,
                           market_stream_factory=RefreshingMarketStream)
+    try:
+        from .reward_pool_gate import load_reward_pool_gate_policy
+        pool_policy = load_reward_pool_gate_policy()
+    except (ValueError, TypeError, OSError) as exc:
+        raise CommissioningRefused(f"reward-pool gate policy: {exc}") from exc
+    if pool_policy.enabled:
+        # Relative to the runtime working directory, like the operator latch.
+        runner_options["reward_pool_gate"] = RewardPoolGate(pool_policy)
     secrets = load_runtime_secrets(require_polymarket=True)
     if not (secrets.discord_configured and secrets.discord_errors_configured):
         raise CommissioningRefused(

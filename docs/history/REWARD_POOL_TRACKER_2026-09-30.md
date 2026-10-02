@@ -4,7 +4,7 @@
 
 ## Built
 
-`scripts/reward_pool_tracker.py` (named by the operator: "we calling this reward pool tracker"; tracking only, "lets track this for now") runs every 3 hours from cron.
+`scripts/reward_pool_tracker.py` (named by the operator: "we calling this reward pool tracker"; tracking only, "lets track this for now") runs every 3 hours from cron (hourly since 2026-10-02, see below).
 - **Sources:** the pools the bot recorded as **offered**, from every entry quote (program id + pool, since Sep 14) and every program its scans saw (since Sep 23).
 - **Does not:** call the API, trade, or post to Discord.
 - **Output:** pool per program family and day, before/now changes, and alerts for NEW programs or CHANGED pools in the last 2 days.
@@ -97,3 +97,12 @@ Anchors:
 
 - Live and futures pools for esports, table tennis, ITF and ATP/WTA were also cut 38–62%.
 - Our-markets pool score: 4.7 → 3.0.
+
+## 2026-10-02 — reward pool entry gate (BC-2026-10-02-A)
+
+- **Operator:** "I think lets add the reward pool filter now"; chose "Pause new entries when score is 5 or under" and "Every hour".
+- **Built:** `src/liquidity_bot/reward_pool_gate.py` + `config/reward_pool_gate_policy.json`. The runner reads `latest-score.json` once a minute (no network) and adds reason `reward_pool_low` to the existing entry pause while `ours.score <= 5`. Exits, reducers and cancels keep running; resting entry quotes are cancelled like a maintenance pause.
+- **Stale rule:** a missing, unreadable, future-dated or >3 h old score means no evidence, so the bot trades normally and logs `[reward-pool-gate] ... detail=...`.
+- **Cron:** tracker now runs hourly at :20 (`--install-cron`).
+- **Tests:** `tests/test_reward_pool_gate.py` (thresholds, stale/missing fallback, throttle, policy) and a runner test (pause → cancel request → Discord → resume above 5). Full suite passes on WSL.
+- **Loads at the next Command 1.** At the Oct 2 score (3.0) the bot pauses new entries right after start.

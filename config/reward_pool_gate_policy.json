@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "pause_at_or_below": 5.0,
+  "max_score_age_seconds": 10800,
+  "check_interval_seconds": 60,
+  "score_path": "data/reward-pool-tracker/latest-score.json"
+}

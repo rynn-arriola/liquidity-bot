@@ -298,7 +298,7 @@ def read_observations(db: Path, since: str) -> list[tuple]:
 
 
 def cron_line(root: Path) -> str:
-    return (f"20 */3 * * * cd {root} && nice -n 10 ionice -c3 .venv/bin/python -B scripts/reward_pool_tracker.py "
+    return (f"20 * * * * cd {root} && nice -n 10 ionice -c3 .venv/bin/python -B scripts/reward_pool_tracker.py "
             f"--db data/commissioning.db --archive data/market-quality/*.sqlite3 "
             f">> logs/reward-pool-tracker.log 2>&1 {CRON_MARK}")
 
@@ -318,7 +318,7 @@ def main(argv=None) -> int:
     p.add_argument("--archive", type=Path, action="extend", nargs="+", default=[])
     p.add_argument("--since", default="2026-09-14")
     p.add_argument("--output-root", type=Path, default=Path("data/reward-pool-tracker"))
-    p.add_argument("--install-cron", action="store_true", help="install the 3-hourly run")
+    p.add_argument("--install-cron", action="store_true", help="install the hourly run")
     p.add_argument("--no-site", action="store_true", help="skip reading the public rewards page")
     a = p.parse_args(argv)
     if a.install_cron:

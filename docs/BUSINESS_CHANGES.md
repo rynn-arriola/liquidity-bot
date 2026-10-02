@@ -25,6 +25,27 @@ Each entry records:
 
 ---
 
+## BC-2026-10-02-A — Pause new entries while our reward pool score is 5 or under
+
+- **Status:** BUILT, not loaded. Loads at the next Command 1. Switch: `config/reward_pool_gate_policy.json` (`enabled`).
+- **Operator:** "I think lets add the reward pool filter now"; chose "Pause new entries when score is 5 or under" and an hourly pool refresh (2026-10-02). Earlier rule: "Make sure score from 5 under means its not profitable".
+- **Rule:**
+  - Read the Reward Pool Tracker's our-markets score (`data/reward-pool-tracker/latest-score.json`, `ours.score`) once a minute.
+  - Score ≤ 5.0: pause NEW entries through the existing entry pause (reason `reward_pool_low`); resting entry quotes are cancelled, exactly as for maintenance. Cancels, reducers and position exits keep running.
+  - Score > 5.0: resume.
+  - Missing, unreadable, future-dated or older than 3 hours: no pool evidence, so trade normally (log `[reward-pool-gate] ... detail=score_missing|score_unreadable|score_stale_*`).
+  - Tracker cron changed from every 3 hours to hourly at :20, so a pool change shows within about an hour.
+  - Discord gets the normal "paused NEW ENTRIES ... Reason: reward_pool_low" / "resumed" messages.
+- **Why:** the pools offered on our six program families fell to 30% of their 30-day best (score 3.0 on Oct 2, 4.7 Sep 24–Oct 1). At those pools rewards barely covered trading: Sep 28–30 rewards $28–68/day against trading −$12 to −$40/day.
+- **Baseline (Sep 28–30, 50 orders, pool score 4.7):** rewards $28–68/day, trading −$12 to −$40/day, about 1,000 order-hours/day (BC-2026-10-01-A).
+- **Expected:**
+  - At today's score (3.0) the bot rests nothing: rewards and trading losses both go to about $0.
+  - When pools recover above 5 it resumes automatically.
+- **Risk:** the score compares to the best pool of the last 30 days, so if Polymarket keeps the lower pools for good, the score stays low and the bot stays paused. Review the threshold on the Sunday Oct 4 review.
+- **Evaluate:** daily `[reward-pool-gate]` / `[entry-pause]` lines, hours paused per day, and for resumed days rewards vs trading (Reward Pulse).
+- **Undo:** set `enabled` to `false` in `config/reward_pool_gate_policy.json` and restart (Command 1). Changing the threshold works the same way.
+- **Verdict:** pending.
+
 ## BC-2026-10-01-A — Lower pending entries 50 → 30 while pools are low
 
 - **Status:** LIVE since 16:02:23Z Oct 1 (12:00 ET boundary) in `ff9627ab8`. The window row confirms cap 30 with tiers 24/18/12/6 and the $40 stop. Two operator manual closes that morning (10:40 and about 11:55 ET) made the runner self-stop, so it was force-stopped with the venue proven flat and the records reconciled read-only each time.

@@ -1387,6 +1387,43 @@ class LiveCommissioningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._entry_pause_active())
         self.assertEqual(runner._current_entry_pause_reason(), "operator")
 
+    async def test_low_reward_pool_pauses_entries_and_resumes_above_five(self):
+        from liquidity_bot.reward_pool_gate import (
+            RewardPoolGate, RewardPoolGatePolicy)
+        runner, _, notifier = self.build_runner()
+        await runner.preflight()
+        score_path = runner.ledger.path.parent / "latest-score.json"
+
+        def write(score, at=NOW):
+            score_path.write_text(json.dumps(
+                {"at": at.isoformat(), "ours": {"score": score}}),
+                encoding="utf-8")
+
+        runner._reward_pool_gate = RewardPoolGate(RewardPoolGatePolicy(
+            enabled=True, check_interval_seconds=60,
+            score_path=str(score_path)))
+        await runner._refresh_entry_pause(NOW, startup=True)
+        self.assertIsNone(runner._current_entry_pause_reason())  # no file: trade
+
+        write(3.0)
+        later = NOW + timedelta(minutes=1)
+        await runner._refresh_entry_pause(later)
+        self.assertTrue(runner._entry_pause_active())
+        self.assertEqual(runner._current_entry_pause_reason(), "reward_pool_low")
+        self.assertTrue(runner._entry_pause_cancel_requested)
+        self.assertIn("reward_pool_low", notifier.messages[-1][0])
+        runner._evaluate_rewards(later)
+        self.assertFalse(runner._frame(later).new_risk_allowed)
+
+        write(5.1, later)
+        await runner._refresh_entry_pause(later + timedelta(seconds=30))
+        self.assertTrue(runner._entry_pause_active())  # throttled re-read
+        await runner._refresh_entry_pause(later + timedelta(minutes=1))
+        self.assertFalse(runner._entry_pause_active())
+        self.assertIn("resumed", notifier.messages[-1][0])
+        await runner.private_stream.close()
+        await runner.market_stream.close()
+
     async def test_startup_probe_failure_enters_reduce_only_without_crashing(self):
         runner, _, _ = self.build_runner()
         runner._ui_availability_probe = Mock(

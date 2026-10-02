@@ -1,5 +1,6 @@
 """Reward Pool Tracker: offered pools by program family, changes and new programs."""
 import unittest
+from pathlib import Path
 
 from scripts import reward_pool_tracker as pw
 
@@ -73,6 +74,11 @@ class RewardPoolTrackerTests(unittest.TestCase):
                ("x_day_of_20260929", "day_of", 150, "2026-09-29T01:00:00+00:00")]
         rows = pw.summarize(pw.collect(obs, []), today="2026-09-30")
         self.assertEqual((rows[0]["alert"], rows[0]["change"]), ("CHANGED", 0.5))
+
+    def test_cron_runs_hourly_for_the_entry_gate(self):
+        line = pw.cron_line(Path("/r"))
+        self.assertTrue(line.startswith("20 * * * * cd "))
+        self.assertTrue(line.endswith(pw.CRON_MARK))
 
 
 if __name__ == "__main__":

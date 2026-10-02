@@ -7,6 +7,19 @@ and [the retained-value audit](docs/history/RETAINED_VALUE_SHADOW_2026-08-30.md)
 
 ## Active collection map
 
+**SUNDAY Oct 4 operator review (operator: "I will wait till sunday"; no trading change before then).** Review on Sunday:
+- Reward Pool Tracker score: our markets 3.0/10 on Oct 2 after a second cut (table tennis $10, esports $20, ATP/WTA $60).
+- 7-day rewards and trading table.
+- BC-2026-10-01-A: 30 orders.
+- BC-2026-09-27-A: thin-book filter.
+- Trade Scorer shadow results.
+- Open options:
+  - (a) fewer orders;
+  - (b) pause overnight;
+  - (c) pause until the pool score is above 5;
+  - exclude ATP/WTA;
+  - entry quality 80%.
+
 **NEW September27 — Polymarket "Max Spread" reward rule (docs.polymarket.us/incentives/liquidity; verified on the live API, read-only).** A per-program `timePeriods[].maxSpread` (dollars). Both sides must reach Target Size with size-adjusted prices within Max Spread of their midpoint, or nobody is paid for that second (forfeited, not redistributed). Live 17:5xZ: all 800 programs on the first 8 unfiltered pages carry it (culture_low_20260924_v2 449, midterms_t4_house_winners 237, politics_t4_coverage 114; `daily_event`, 6¢, pool $40, target 500). **None of our 30 held sports markets' 60 time periods has it.** Our code does not read `maxSpread` (the adapter drops it), so if sports programs gain it, the reward model would over-estimate wide books (e.g. NCAA 3-way soccer). Watch: recheck held/candidate sports programs for `maxSpread`; if it appears, add it to the reward model before trusting ranker/Pulse estimates for those markets. The scoring formula, Target Size, Discount Factor and periods (early / day-of = 6 h pre-game / live / daily ET) match what the code already assumes.
 
 **DECIDED September26 (evening) — UTR and R6 excluded; loads at the next Command 1.** The operator chose to exclude leagues we rested in but were never paid for, and to keep barely-tried leagues (RL, BBL, UFC, LGS Cup) in. A later full-history check found zero rows of any program type for UTR, and zero for UTR by exact slug. Original notes follow.

@@ -84,3 +84,16 @@ Anchors:
 - The separate Reward Pools section is removed. The our-markets pool score is now the last column of the **Reward Pulse** section: `Date | Level | vs normal | Pool`.
 - Past days get their score from the bot's recorded pools: `ours_by_day` in `latest-score.json`, about 10.0 before Sep 24 and about 4.5 since.
 - The note under the section gives the all-markets score, the our-markets verdict (5 or under = not profitable) and any new pre-game programs.
+
+**Fix (Oct 2):** the 07:20Z and 10:20Z cron runs were killed by the kernel (log line `Killed`). Loading every archived discovery record in full peaked at about **15 GB**. The tracker now streams those records and keeps only their pool lists: about **0.12 GB**.
+
+**Pool change seen the same day:**
+
+| Program | Before | Now |
+|---|---:|---:|
+| Table tennis pre-game | $15 | $10 |
+| Esports pre-game | $50 | $20 |
+| ATP/WTA pre-game | $100 | $60 |
+
+- Live and futures pools for esports, table tennis, ITF and ATP/WTA were also cut 38–62%.
+- Our-markets pool score: 4.7 → 3.0.

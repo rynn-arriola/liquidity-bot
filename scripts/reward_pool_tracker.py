@@ -250,6 +250,41 @@ def render(rows: list[dict], *, generated_at: str, today: str, pool_score: dict 
     return "\n".join(out) + "\n"
 
 
+def read_discovery_pools(paths) -> list[dict]:
+    """Only {at, pools} from archived discovery records, one record at a time.
+
+    Discovery records carry the full bounded catalog; loading them all at once
+    (scripts.calibration_report.read_archive_records) peaked at about 15 GB and
+    got the cron run killed on 2026-10-02. This streams rows, verifies each one
+    and keeps only the small pool list.
+    """
+    import hashlib
+    import zlib
+    from liquidity_bot.market_quality_store import MAX_DISCOVERY_BYTES, PACKED
+    out = []
+    for path in paths:
+        conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            for body, digest in conn.execute("SELECT body, sha256 FROM records WHERE kind='discovery'"):
+                if isinstance(body, bytes):
+                    if not body.startswith(PACKED):
+                        continue
+                    unpacker = zlib.decompressobj()
+                    raw = unpacker.decompress(body[len(PACKED):], MAX_DISCOVERY_BYTES + 1)
+                    if len(raw) > MAX_DISCOVERY_BYTES or not unpacker.eof:
+                        continue
+                    body = raw.decode("utf8")
+                if hashlib.sha256(body.encode()).hexdigest() != digest:
+                    continue
+                payload = json.loads(body)
+                if isinstance(payload, dict) and payload.get("pools"):
+                    out.append(dict(at=payload.get("at"), pools=payload["pools"]))
+                del payload, body
+        finally:
+            conn.close()
+    return out
+
+
 def read_observations(db: Path, since: str) -> list[tuple]:
     conn = sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
     try:
@@ -290,7 +325,6 @@ def main(argv=None) -> int:
         return install_cron(Path.cwd().resolve())
     if a.db is None:
         p.error("--db is required")
-    from scripts.calibration_report import read_archive_records
     now = datetime.now(UTC)
     today = now.date().isoformat()
     a.output_root.mkdir(parents=True, exist_ok=True)
@@ -319,7 +353,7 @@ def main(argv=None) -> int:
             continue
     if not current and snaps and (now - datetime.fromisoformat(snaps[-1]["at"])).total_seconds() <= 12 * 3600:
         current = snaps[-1]["programs"]
-    discovery = read_archive_records(a.archive, {"discovery"}) if a.archive else []
+    discovery = read_discovery_pools(a.archive) if a.archive else []
     collected = collect(read_observations(a.db, a.since), discovery, snaps)
     rows = summarize(collected, today=today)
     pool_score = score(current, collected, today=today) if current else None

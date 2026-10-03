@@ -24,6 +24,13 @@ class SportRule:
     periods: tuple[str, ...] = ()          # period labels that count as "last" (clock sports)
     max_clock_minutes: float | None = None  # countdown clock at or below this
     min_minute: int | None = None          # soccer-style match minute at or above this
+    # Score-based sports (operator: "we are doing all sports market"):
+    # kind "sets": tennis / table tennis score "6-4, 3-5:30-15" or "11-8, 9-4";
+    #   almost over = the leader needs only the current unit and has >= min_current in it.
+    # kind "maps": esports maps score "1-0"; almost over = the leader needs one more map.
+    kind: str | None = None
+    units_to_win: int | None = None
+    min_current: int | None = None
 
 
 @dataclass(frozen=True)
@@ -62,12 +69,16 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
     raw = json.loads(path.read_text(encoding="utf-8"))
     rules = {}
     for sport, r in (raw.pop("rules", None) or {}).items():
-        unknown = set(r) - {"periods", "max_clock_minutes", "min_minute"}
+        unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
+                            "kind", "units_to_win", "min_current"}
         if unknown:
             raise ValueError(f"unknown rule fields for {sport}: {sorted(unknown)}")
+        if r.get("kind") not in (None, "sets", "maps"):
+            raise ValueError(f"unknown rule kind for {sport}")
         rules[sport] = SportRule(periods=tuple(r.get("periods", ())),
                                  max_clock_minutes=r.get("max_clock_minutes"),
-                                 min_minute=r.get("min_minute"))
+                                 min_minute=r.get("min_minute"), kind=r.get("kind"),
+                                 units_to_win=r.get("units_to_win"), min_current=r.get("min_current"))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
@@ -89,11 +100,44 @@ def clock_minutes(text) -> float | None:
     return int(m.group(1)) + int(m.group(2)) / 60 if m else None
 
 
+def _pairs(text) -> list[tuple[int, int]] | None:
+    out = []
+    for part in str(text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d{1,3})\s*-\s*(\d{1,3})", part)
+        if not m:
+            return None
+        out.append((int(m.group(1)), int(m.group(2))))
+    return out or None
+
+
+def sets_almost_over(score, units_to_win: int, min_current: int) -> bool:
+    """Leader has units_to_win-1 completed units and >= min_current (and ahead) in the current one."""
+    units = _pairs(str(score or "").split(":")[0])
+    if not units:
+        return False
+    done, (a, b) = units[:-1], units[-1]
+    won = (sum(x > y for x, y in done), sum(y > x for x, y in done))
+    return any(won[i] == units_to_win - 1 and (a, b)[i] >= min_current and (a, b)[i] > (a, b)[1 - i]
+               for i in (0, 1))
+
+
+def maps_almost_over(score, units_to_win: int) -> bool:
+    units = _pairs(score)
+    return bool(units) and len(units) == 1 and max(units[0]) == units_to_win - 1
+
+
 def almost_over(sport: str | None, period: str | None, elapsed: str | None,
-                rules: dict) -> bool:
+                rules: dict, score: str | None = None) -> bool:
     rule = rules.get(sport or "")
     if rule is None:
         return False
+    if rule.kind == "sets":
+        return sets_almost_over(score, rule.units_to_win or 2, rule.min_current or 0)
+    if rule.kind == "maps":
+        return maps_almost_over(score, rule.units_to_win or 2)
     if rule.min_minute is not None:
         minute = match_minute(period, elapsed)
         return minute is not None and minute >= rule.min_minute
@@ -131,7 +175,8 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
     get = lambda k: state.get(k) if state.get(k) is not None else event.get(k)
     if get("live") is not True or get("ended") is True:
         return None
-    if not almost_over(state.get("type"), get("period"), get("elapsed"), policy.rules):
+    if not almost_over(state.get("type"), get("period"), get("elapsed"), policy.rules,
+                       score=get("score")):
         return None
     best = None
     for m in event.get("markets") or []:

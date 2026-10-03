@@ -86,6 +86,7 @@ class RuleTests(unittest.TestCase):
         # Soccer and hockey (data so far); operator: "Its ok profit is profit",
         # "Would even better 93-99", "95-99 actually" -> 95-99c.
         self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))
+        self.assertEqual(p.max_spread, 0.03)                                # "Ok do 3c spread"
         # Operator: "Why only soccer we are doing all sports market" (cricket has no stage).
         self.assertEqual(sorted(p.rules), ["basketball", "esports", "football", "hockey",
                                            "soccer", "table-tennis", "tennis"])

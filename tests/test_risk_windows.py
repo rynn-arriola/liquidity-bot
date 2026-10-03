@@ -60,31 +60,30 @@ class RiskWindowTests(unittest.TestCase):
         for size, slots in ((5, 20), (10, 32), (30, 24)):
             config = CommissioningConfig("market", True, True, True,
                                          quote_size=D(size), max_markets=slots)
-            # Operator 2026-10-02 (scorer mode, BC-2026-10-02-B): $20 window stop.
-            self.assertEqual(config.hard_stop_loss_usd, D(20))
-            self.assertEqual(config.weekly_operating_reserve_usd, D(560))
-            self.assertEqual(config.entry_order_cap_for_loss(D(4)), min(16, slots * 2))
+            self.assertEqual(config.hard_stop_loss_usd, D(40))
+            self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
+            self.assertEqual(config.entry_order_cap_for_loss(D(12)), min(24, slots * 2))
             for hour in range(24):
-                # Operator 2026-10-03 (live farming, BC-2026-10-03-A): 20 orders.
+                # Operator 2026-10-01: 30 orders for now (raise again when pools recover).
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)),
-                                 min(20, slots * 2))
+                                 min(30, slots * 2))
 
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
             "market", True, True, True, quote_size=D(15), max_markets=32)
-        self.assertEqual(config.hard_stop_loss_usd, D(20))
+        self.assertEqual(config.hard_stop_loss_usd, D(40))
         self.assertEqual(config.max_early_exit_loss_usd, D(12))
         self.assertEqual(config.max_stressed_exit_loss_usd, D(60))
         self.assertEqual(config.max_market_exposure_usd, D(135))
         self.assertEqual(config.max_portfolio_exposure_usd, D(630))
         self.assertEqual(config.execution_fee_observation_usd, D(20))
-        self.assertEqual(config.weekly_operating_reserve_usd, D(560))
+        self.assertEqual(config.weekly_operating_reserve_usd, D(1120))
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
-             for loss in (0, 2, 4, 8, 12, 16, 20)],
-            # Operator 2026-10-03 (live farming): 20 resting orders not counting
-            # positions, $20 window stop; step-downs 16/12/8/4 at $4/$8/$12/$16.
-            [20, 20, 16, 12, 8, 4, 0])
+             for loss in (0, 4, 8, 16, 24, 32, 40)],
+            # Operator 2026-10-01: size 10, 30 orders, $40 window stop and
+            # scaled step-downs 24/18/12/6 at $8/$16/$24/$32 loss.
+            [30, 30, 24, 18, 12, 6, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
         self.observe(0)

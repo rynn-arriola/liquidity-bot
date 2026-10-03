@@ -307,13 +307,25 @@ class Trader:
         next_status = now_utc()
         log(f"start mode={self.mode} risk=${self.policy.risk_per_trade_usd:g} max_open={self.policy.max_open_positions} "
             f"daily_stop=${self.policy.daily_loss_stop_usd:g} band={self.policy.min_price:g}-{self.policy.max_price:g} "
-            f"rules={sorted(self.policy.rules)}")
+            f"max_spread={self.policy.max_spread:g} rules={sorted(self.policy.rules)}")
         while stop_at is None or now_utc() < stop_at:
             cycle = now_utc()
             # Watchdog: a cycle that does not finish within CYCLE_WATCHDOG seconds
             # dumps every stack to the log and exits; the 1-minute cron restarts it.
             faulthandler.dump_traceback_later(CYCLE_WATCHDOG, exit=True)
             try:
+                # Settings (including live_orders) are re-read every cycle, so a change
+                # to config/late_favorite_policy.json applies within one poll.
+                fresh = load_policy()
+                mode = "live" if (fresh.enabled and fresh.live_orders) else "dry"
+                if mode != self.mode or fresh != self.policy:
+                    log(f"policy reloaded mode={mode} band={fresh.min_price:g}-{fresh.max_price:g} "
+                        f"max_spread={fresh.max_spread:g} rules={sorted(fresh.rules)}")
+                self.policy, self.mode = fresh, mode
+                if not fresh.enabled:
+                    log("policy disabled; not trading")
+                    await asyncio.sleep(30)
+                    continue
                 if STOP_FILE.exists():
                     log("STOP file present; not trading")
                     await asyncio.sleep(30)

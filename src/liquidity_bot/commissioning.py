@@ -155,6 +155,10 @@ class CommissioningConfig:
     # BC-2026-10-03-A: pregame / live switches. The default is the pregame-only
     # bot; the live runner passes config/strategy_policy.json explicitly.
     strategy: StrategyPolicy = field(default_factory=StrategyPolicy)
+    # Operator 2026-10-03: the five-minute "Trading Bots" card (scripts/bots_summary.py)
+    # replaces the runner's routine summary; the live runner sets this False from
+    # config/summary_policy.json. Critical and shutdown summaries still send.
+    routine_summary: bool = True
     risk_window_policy: RiskWindowPolicy | None = field(
         default_factory=load_risk_window_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on

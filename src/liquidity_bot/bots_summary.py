@@ -243,7 +243,7 @@ def render_bots_card(model: BotsModel) -> bytes:
     text(status, 36, 122, size=28, color=HEAD)
 
     # Two panels.
-    top, ph, pw = 172, 470, 564
+    top, ph, pw = 172, 470, (W - 72 - 36) // 2
     panels = [
         ("LIQUIDITY TRADER", [
             ("State", ("ON · " + (liq.strategy or "")) if liq.running else "OFF"),

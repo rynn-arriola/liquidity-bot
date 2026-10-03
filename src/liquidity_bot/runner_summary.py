@@ -394,6 +394,8 @@ class SummaryReportingMixin:
         """
 
         now = max(now, self._now())
+        if not getattr(self.config, "routine_summary", True):
+            return now + timedelta(minutes=5)       # the Trading Bots card posts instead
         if not self._scheduled_summary_has_transient_capital_ambiguity(now):
             self._summary_proof_wait_started_at = None
             await self._send_summary(now)

@@ -4756,7 +4756,17 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         raise CommissioningRefused(str(exc)) from exc
     if not (strategy.pregame_enabled or strategy.live_enabled):
         raise CommissioningRefused("strategy policy enables neither pregame nor live")
+    try:
+        import json as _json
+        summary_policy = _json.loads((Path(__file__).resolve().parents[2] / "config"
+                                      / "summary_policy.json").read_text(encoding="utf-8"))
+        routine_summary = bool(summary_policy.get("runner_routine_summary", True))
+    except FileNotFoundError:
+        routine_summary = True
+    except (ValueError, OSError) as exc:
+        raise CommissioningRefused(f"summary policy: {exc}") from exc
     config = CommissioningConfig(
+        routine_summary=routine_summary,
         strategy=strategy,
         allow_daily_event_rewards=not getattr(args, "disable_daily_event_rewards", False),
         daily_event_horizon_seconds=3600 * getattr(args, "daily_event_entry_hours", 24),

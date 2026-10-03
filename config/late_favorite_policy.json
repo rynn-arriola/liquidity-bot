@@ -5,7 +5,7 @@
   "max_open_positions": 50,
   "daily_loss_stop_usd": 50,
   "min_price": 0.90,
-  "max_price": 0.97,
+  "max_price": 0.99,
   "poll_seconds": 10,
   "rules": {
     "soccer": {"min_minute": 90},

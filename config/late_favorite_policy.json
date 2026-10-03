@@ -14,7 +14,7 @@
     "basketball": {"periods": ["Q4", "OT"], "max_clock_minutes": 2},
     "football": {"periods": ["Q4", "OT"], "max_clock_minutes": 2},
     "tennis": {"kind": "sets", "units_to_win": 2, "min_current": 5},
-    "table-tennis": {"kind": "sets", "units_to_win": 3, "min_current": 8},
+    "table-tennis": {"kind": "sets", "units_to_win": 3, "min_current": 0, "min_lead": 6},
     "esports": {"kind": "maps", "units_to_win": 2}
   }
 }

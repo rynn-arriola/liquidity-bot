@@ -51,6 +51,10 @@ class RuleTests(unittest.TestCase):
         self.assertTrue(sets_almost_over("11-8, 11-6, 9-4", 3, 8))
         self.assertFalse(sets_almost_over("6-11, 5-11, 0-0", 3, 8))
         self.assertFalse(sets_almost_over("not a score", 3, 8))
+        # 6+ point lead in the deciding game (the 8-5 comeback loss would not qualify)
+        self.assertFalse(sets_almost_over("11-6, 12-14, 11-8, 7-11, 5-8", 3, 0, 6))
+        self.assertTrue(sets_almost_over("11-6, 12-14, 11-8, 7-11, 3-9", 3, 0, 6))
+        self.assertTrue(sets_almost_over("11-6, 11-4, 6-0", 3, 0, 6))
         # esports best of 3: a team on 1 map
         self.assertTrue(maps_almost_over("1-0", 2))
         self.assertFalse(maps_almost_over("0-0", 2))
@@ -86,6 +90,7 @@ class RuleTests(unittest.TestCase):
         # Soccer and hockey (data so far); operator: "Its ok profit is profit",
         # "Would even better 93-99", "95-99 actually" -> 95-99c.
         self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))
+        self.assertEqual(p.rules["table-tennis"].min_lead, 6)                 # "Ok maybe 6+ points"
         self.assertEqual(p.max_spread, 0.10)                                # "Actually do 10c"
         # Operator: "Why only soccer we are doing all sports market" (cricket has no stage).
         self.assertEqual(sorted(p.rules), ["basketball", "esports", "football", "hockey",

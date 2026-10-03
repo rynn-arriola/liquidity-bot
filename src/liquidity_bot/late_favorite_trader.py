@@ -31,6 +31,9 @@ class SportRule:
     kind: str | None = None
     units_to_win: int | None = None
     min_current: int | None = None
+    # Lead needed in the current unit (operator, after the 8-5 table-tennis comeback:
+    # "Ok maybe 6+ points").
+    min_lead: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,7 +77,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
     rules = {}
     for sport, r in (raw.pop("rules", None) or {}).items():
         unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
-                            "kind", "units_to_win", "min_current"}
+                            "kind", "units_to_win", "min_current", "min_lead"}
         if unknown:
             raise ValueError(f"unknown rule fields for {sport}: {sorted(unknown)}")
         if r.get("kind") not in (None, "sets", "maps"):
@@ -82,7 +85,8 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
         rules[sport] = SportRule(periods=tuple(r.get("periods", ())),
                                  max_clock_minutes=r.get("max_clock_minutes"),
                                  min_minute=r.get("min_minute"), kind=r.get("kind"),
-                                 units_to_win=r.get("units_to_win"), min_current=r.get("min_current"))
+                                 units_to_win=r.get("units_to_win"), min_current=r.get("min_current"),
+                                 min_lead=r.get("min_lead"))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
@@ -117,15 +121,17 @@ def _pairs(text) -> list[tuple[int, int]] | None:
     return out or None
 
 
-def sets_almost_over(score, units_to_win: int, min_current: int) -> bool:
-    """Leader has units_to_win-1 completed units and >= min_current (and ahead) in the current one."""
+def sets_almost_over(score, units_to_win: int, min_current: int, min_lead: int = 1) -> bool:
+    """Leader has units_to_win-1 completed units, >= min_current and a lead of >= min_lead
+    in the current one."""
     units = _pairs(str(score or "").split(":")[0])
     if not units:
         return False
     done, (a, b) = units[:-1], units[-1]
     won = (sum(x > y for x, y in done), sum(y > x for x, y in done))
-    return any(won[i] == units_to_win - 1 and (a, b)[i] >= min_current and (a, b)[i] > (a, b)[1 - i]
-               for i in (0, 1))
+    lead = max(1, min_lead)
+    return any(won[i] == units_to_win - 1 and (a, b)[i] >= min_current
+               and (a, b)[i] - (a, b)[1 - i] >= lead for i in (0, 1))
 
 
 def maps_almost_over(score, units_to_win: int) -> bool:
@@ -139,7 +145,8 @@ def almost_over(sport: str | None, period: str | None, elapsed: str | None,
     if rule is None:
         return False
     if rule.kind == "sets":
-        return sets_almost_over(score, rule.units_to_win or 2, rule.min_current or 0)
+        return sets_almost_over(score, rule.units_to_win or 2, rule.min_current or 0,
+                                rule.min_lead or 1)
     if rule.kind == "maps":
         return maps_almost_over(score, rule.units_to_win or 2)
     if rule.min_minute is not None:

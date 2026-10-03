@@ -27,8 +27,8 @@ Each entry records:
 
 ## BC-2026-10-02-B — Scorer mode: rest only entries the Trade Scorer rates ≥ 60% (normal reward farming switched off, not removed)
 
-- **Status:** code BUILT and tested. Needs the operator's confirmation of the two config files, then a restart at a window boundary (the risk limits change).
-- **Operator:** "Ok lets do what u recommend, but do not delete how we normally farm reward this is a different way to make profit on this bot, we will just disable for now the normal way we farm reward"; "We are just switching off the normal way to farm reward and enabling this one for now" (2026-10-02). Recommendation accepted: 60% minimum, at most 10 orders, $10 stop per 6-hour window.
+- **Status:** BUILT and tested; settings confirmed by the operator; loads at the 12:00 AM ET Oct 3 window boundary (operator chose "12 AM ET").
+- **Operator:** "Ok lets do what u recommend, but do not delete how we normally farm reward this is a different way to make profit on this bot, we will just disable for now the normal way we farm reward"; "We are just switching off the normal way to farm reward and enabling this one for now" (2026-10-02). Recommendation (60% minimum) accepted; the operator then set "15 contract per trade", "Max order 30", "20 usd stop loss per 6 hours" / "Dont do 10 usd stop loss".
 - **Switch:** `config/trade_score_policy.json` `mode`: `"scorer"` = this mode; `"reward"` (or no file) = normal reward farming exactly as before. The reward-pool pause (BC-2026-10-02-A) applies only in reward mode.
 - **Rule (scorer mode):**
   - Every existing check still runs (selection, entry quality, thin-book, reward/exit economics, risk caps). On top, a NEW entry quote is placed only if the Trade Scorer's chance of a profitable exit is ≥ 0.60 (`trade_score_below_minimum` otherwise; idle slots rotate as for other economic refusals).
@@ -36,13 +36,13 @@ Each entry records:
   - The model is the trade-scorer project's daily model (retrained 05:30 ET, exported to `data/trade-scorer/latest-model.json`), reloaded within 10 minutes of a change. A retrain with test AUC < 0.70 is rejected and the last good model kept. No model, or a model older than 72 h: no new entries (fail closed, `trade_score_model_unavailable`).
   - The scoring code is a copy of the trade-scorer math; a parity test checks 300 random entries against the project to 12 decimals.
   - Evidence: `[trade-score]` / `[trade-score-model]` / `[trading-mode]` log lines; each placed entry's quote observation records `trade_score_win_probability` and `trade_score_model`.
-- **Risk limits for this mode** (`config/risk_window_policy.json`): 10 pending entries, $10 window stop, step-downs 8/6/4/2 at $2/$4/$6/$8 loss.
+- **Size and risk for this mode:** quote size **15** (start argument; was 10), **30** pending entries (unchanged), **$20** window stop in `config/risk_window_policy.json` (was $40), step-downs 24/18/12/6 at $4/$8/$12/$16 loss.
 - **Why:** reward pools are low (our score 3.0/10) and normal farming lost on trading. In the Trade Scorer's shadow check (692 trades Sep 29–Oct 2, model saved before each trade) the ≥60% trades made +$16.71 (260 trades, about 4 in 5 profitable) while all trades lost −$65.76; the held-out test showed the same pattern. Rewards still accrue on what rests.
 - **Baseline:** normal farming Sep 28–30: trading −$12 to −$40/day, rewards $28–68/day; Oct 2 afternoon: paused by the pool gate ($0/$0).
-- **Expected:** trading about break-even to +$5–15/day plus small rewards; far fewer orders resting.
+- **Expected:** trading about break-even to +$5–20/day (size 15 scales gains and losses by about 1.5×) plus small rewards; far fewer orders resting than normal farming.
 - **Known limits:** about 3 days of evidence; per-trade gains are small (about 6¢); the model only saw trades taken while farming rewards; once live it mostly sees trades it approved, which can bias later retrains (check the shadow AUC on scorer-mode trades).
 - **Evaluate after 3 days:** trading $/day (settled fills), rewards/day (Reward Pulse), share of `[trade-score]` allows, profitable-exit rate of placed entries vs predicted, window stops hit.
-- **Undo:** `mode: "reward"` in `config/trade_score_policy.json`, restore 30 orders / $40 / 24-18-12-6 in `config/risk_window_policy.json`, restart at a window boundary.
+- **Undo:** `mode: "reward"` in `config/trade_score_policy.json`, restore the $40 stop in `config/risk_window_policy.json`, start with size 10, at a window boundary.
 - **Verdict:** pending.
 
 ## BC-2026-10-02-A — Pause new entries while our reward pool score is 5 or under

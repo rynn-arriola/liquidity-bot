@@ -120,6 +120,13 @@ class TradeScoreModelTests(unittest.TestCase):
         scorer.refresh(NOW + timedelta(seconds=61))
         self.assertLess(scorer.win_probability({}, NOW), 0.5)
 
+    def test_checked_in_switch_is_the_operator_decision(self):
+        # Operator 2026-10-02: "switching off the normal way to farm reward and
+        # enabling this one for now"; 60% recommended and accepted.
+        shipped = load_trade_score_policy()
+        self.assertEqual((shipped.mode, shipped.min_win_probability), ("scorer", 0.60))
+        self.assertEqual(shipped.model_path, "data/trade-scorer/latest-model.json")
+
     def test_policy_validation(self):
         self.assertFalse(TradeScorePolicy().scorer_mode)          # default = reward farming
         self.assertFalse(load_trade_score_policy(Path(self.tmp.name) / "none.json").scorer_mode)

@@ -1,0 +1,8 @@
+{
+  "mode": "scorer",
+  "min_win_probability": 0.60,
+  "model_path": "data/trade-scorer/latest-model.json",
+  "max_model_age_hours": 72,
+  "min_model_test_auc": 0.70,
+  "check_interval_seconds": 600
+}

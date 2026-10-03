@@ -63,8 +63,8 @@ class RuleTests(unittest.TestCase):
         self.assertEqual((p.risk_per_trade_usd, p.max_open_positions, p.daily_loss_stop_usd),
                          (10, 50, 50))
         # Soccer and hockey (data so far); operator: "Its ok profit is profit",
-        # "Would even better 93-99" -> 93-99c.
-        self.assertEqual((p.min_price, p.max_price), (0.93, 0.99))
+        # "Would even better 93-99", "95-99 actually" -> 95-99c.
+        self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))
         self.assertEqual(sorted(p.rules), ["hockey", "soccer"])
         # Operator: "make sure its market almost ending so we dont stay that long".
         self.assertEqual(p.rules["soccer"].min_minute, 90)

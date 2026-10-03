@@ -43,6 +43,8 @@ CRON_MARK = "# liquidity-bot late favorite trader"
 LOOKBACK_HOURS = 14
 SLIPPAGE = 0.02
 SETTLES_PER_CYCLE = 2
+MAX_ATTEMPTS_PER_EVENT = 3
+STEP_TIMEOUT = 60  # a read step that hangs is abandoned; the next cycle retries
 SETTLE_RETRY_MINUTES = 5
 PAGE_SIZE = 500
 
@@ -53,7 +55,8 @@ CREATE TABLE IF NOT EXISTS trades(
   mode TEXT NOT NULL, status TEXT NOT NULL, exchange_order_id TEXT, filled_qty REAL,
   avg_price REAL, created_at TEXT NOT NULL, updated_at TEXT, error TEXT,
   game_state TEXT, settlement REAL, settled_at TEXT, result REAL, next_settle_at TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_event ON trades(event_slug, mode);
+DROP INDEX IF EXISTS idx_trades_event;
+CREATE INDEX IF NOT EXISTS idx_trades_event_mode ON trades(event_slug, mode);
 """
 
 
@@ -179,13 +182,11 @@ class Trader:
         stamp = iso(now_utc())
         with self.db:
             cur = self.db.execute(
-                "INSERT OR IGNORE INTO trades(event_slug,market_slug,side,price,cost,qty,fee_coefficient,"
+                "INSERT INTO trades(event_slug,market_slug,side,price,cost,qty,fee_coefficient,"
                 "mode,status,created_at,game_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (cand.event_slug, cand.market_slug, cand.side, float(price), cand.cost, float(qty),
                  cand.fee_coefficient, self.mode, "SENDING" if self.mode == "live" else "FILLED",
                  stamp, game))
-        if cur.rowcount == 0:
-            return                                      # already traded this event
         trade_id = cur.lastrowid
         log(f"BUY mode={self.mode} event={cand.event_slug} market={cand.market_slug} side={cand.side} "
             f"price={price} cost={cand.cost:.3f} qty={qty} game={game}")
@@ -302,7 +303,7 @@ class Trader:
                     await asyncio.sleep(30)
                     continue
                 if self.mode == "live" and now_utc() >= next_account:
-                    await self.refresh_account(account)
+                    await asyncio.wait_for(self.refresh_account(account), STEP_TIMEOUT)
                     next_account = now_utc() + timedelta(seconds=60)
                 blocked = None
                 if self.mode == "live" and bot_runner_running():
@@ -311,25 +312,32 @@ class Trader:
                     blocked = "uncertain_order"
                 elif daily_stop_hit(realized_today(self.db, self.mode), self.policy):
                     blocked = "daily_stop"
-                events = await self.list_live_events(gateway, client)
+                events = await asyncio.wait_for(self.list_live_events(gateway, client), STEP_TIMEOUT)
                 still_playing = {e.get("slug") for e in events
                                  if not ((e.get("eventState") or {}).get("ended") or e.get("ended"))}
-                await self.settle(gateway, still_playing)
+                await asyncio.wait_for(self.settle(gateway, still_playing), STEP_TIMEOUT)
                 for event in events:
                     if blocked or self.open_count() >= self.policy.max_open_positions:
                         break
                     cand = pick_entry(event, self.policy)
                     if cand is None:
                         continue
-                    if self.db.execute("SELECT 1 FROM trades WHERE event_slug=? AND mode=?",
-                                       (cand.event_slug, self.mode)).fetchone():
+                    # One position per event; an IOC that did not fill (price moved past
+                    # the cap) may be retried, at most MAX_ATTEMPTS_PER_EVENT times.
+                    held, attempts = self.db.execute(
+                        "SELECT COALESCE(SUM(status NOT IN ('NOT_FILLED','FAILED')),0), COUNT(*) "
+                        "FROM trades WHERE event_slug=? AND mode=?",
+                        (cand.event_slug, self.mode)).fetchone()
+                    if held or attempts >= MAX_ATTEMPTS_PER_EVENT:
                         continue
                     if self.mode == "live" and cand.market_slug in self.positions:
                         continue
+                    # No timeout around buy(): cancelling a sent order mid-flight would
+                    # leave its outcome unknown; the client itself times out at 15 s.
                     await self.buy(gateway, trading, cand, event)
                     if self.mode == "live":
                         next_account = now_utc()          # recount positions before the next buy
-                        await self.refresh_account(account)
+                        await asyncio.wait_for(self.refresh_account(account), STEP_TIMEOUT)
                 if now_utc() >= next_status:
                     next_status = now_utc() + timedelta(minutes=15)
                     log(f"status mode={self.mode} open={self.open_count()} realized_today=${realized_today(self.db, self.mode):.2f} "

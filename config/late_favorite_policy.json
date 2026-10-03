@@ -7,7 +7,7 @@
   "min_price": 0.95,
   "max_price": 0.99,
   "poll_seconds": 10,
-  "max_spread": 0.03,
+  "max_spread": 0.05,
   "rules": {
     "soccer": {"min_minute": 90},
     "hockey": {"periods": ["P3", "OT"], "max_clock_minutes": 2},

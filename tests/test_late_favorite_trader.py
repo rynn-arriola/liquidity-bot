@@ -62,11 +62,12 @@ class RuleTests(unittest.TestCase):
         p = load_policy()
         self.assertEqual((p.risk_per_trade_usd, p.max_open_positions, p.daily_loss_stop_usd),
                          (10, 50, 50))
-        self.assertEqual((p.min_price, p.max_price), (0.90, 0.99))
-        self.assertEqual(sorted(p.rules), ["basketball", "football", "hockey", "soccer"])
+        # Recommended setup for today: 90-97c, soccer and hockey (data so far).
+        self.assertEqual((p.min_price, p.max_price), (0.90, 0.97))
+        self.assertEqual(sorted(p.rules), ["hockey", "soccer"])
         # Operator: "make sure its market almost ending so we dont stay that long".
         self.assertEqual(p.rules["soccer"].min_minute, 90)
-        self.assertEqual({p.rules[s].max_clock_minutes for s in ("hockey", "basketball", "football")}, {2})
+        self.assertEqual(p.rules["hockey"].max_clock_minutes, 2)
 
     def test_policy_validation(self):
         for bad in (dict(min_price=0.95, max_price=0.9), dict(max_open_positions=0),

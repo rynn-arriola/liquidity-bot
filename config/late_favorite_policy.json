@@ -5,12 +5,10 @@
   "max_open_positions": 50,
   "daily_loss_stop_usd": 50,
   "min_price": 0.90,
-  "max_price": 0.99,
+  "max_price": 0.97,
   "poll_seconds": 10,
   "rules": {
     "soccer": {"min_minute": 90},
-    "hockey": {"periods": ["P3"], "max_clock_minutes": 2},
-    "basketball": {"periods": ["Q4"], "max_clock_minutes": 2},
-    "football": {"periods": ["Q4"], "max_clock_minutes": 2}
+    "hockey": {"periods": ["P3"], "max_clock_minutes": 2}
   }
 }

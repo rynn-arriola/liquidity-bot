@@ -119,8 +119,9 @@ class RuleTests(unittest.TestCase):
 
     def test_checked_in_policy_is_the_operator_decision(self):
         p = load_policy()
+        # Operator 2026-10-03: "make the risk to 30 USD per trade and stop loss to 90".
         self.assertEqual((p.risk_per_trade_usd, p.max_open_positions, p.daily_loss_stop_usd),
-                         (10, 50, 50))
+                         (30, 50, 90))
         # Soccer and hockey (data so far); operator: "Its ok profit is profit",
         # "Would even better 93-99", "95-99 actually" -> 95-99c.
         self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))

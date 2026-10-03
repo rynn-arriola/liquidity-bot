@@ -39,6 +39,9 @@ LIVE_PRICE_BLOCKER = "live_price_out_of_band"
 @dataclass(frozen=True)
 class LivePolicy:
     min_price: float = 0.15
+    # Fresh-selection spread for in-play markets (pregame keeps 2c). Operator
+    # 2026-10-03: "Ok we can do 1c". A one-tick book quotes both touches.
+    min_entry_spread: float = 0.02
     entry_lifetime_seconds: float = 60.0
     max_inventory_age_seconds: float = 120.0
     jumpy_touch_changes_30s: int = 3
@@ -49,6 +52,7 @@ class LivePolicy:
     def __post_init__(self) -> None:
         for name, value, low, high in (
                 ("min_price", self.min_price, 0.01, 0.49),
+                ("min_entry_spread", self.min_entry_spread, 0.01, 0.05),
                 ("entry_lifetime_seconds", self.entry_lifetime_seconds, 60.0, 600.0),
                 ("max_inventory_age_seconds", self.max_inventory_age_seconds, 30.0, 900.0),
                 ("assumed_period_seconds", self.assumed_period_seconds, 1800.0, 21600.0)):

@@ -3,6 +3,7 @@
   "live_enabled": true,
   "live": {
     "min_price": 0.15,
+    "min_entry_spread": 0.01,
     "entry_lifetime_seconds": 60,
     "max_inventory_age_seconds": 120,
     "jumpy_touch_changes_30s": 3,

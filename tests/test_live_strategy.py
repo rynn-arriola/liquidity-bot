@@ -51,6 +51,7 @@ class StrategyPolicyTests(unittest.TestCase):
         self.assertEqual(shipped.live.entry_lifetime_seconds, 60)
         self.assertEqual(shipped.live.max_inventory_age_seconds, 120)
         self.assertEqual(shipped.live.min_price, 0.15)
+        self.assertEqual(shipped.live.min_entry_spread, 0.01)            # "Ok we can do 1c"
         self.assertEqual(shipped.live.jumpy_touch_changes_30s, 3)
 
     def test_validation(self):
@@ -151,6 +152,26 @@ class LiveRewardTests(unittest.TestCase):
             period=live_period(), now=NOW, policy=policy)
         blockers = {s.side: s.blocker for s in result.sides}
         self.assertEqual(blockers["bid"], "price_too_extreme")       # 0.13 < 0.15
+
+
+    def test_live_markets_accept_a_one_cent_spread_pregame_keeps_two(self):
+        one_cent = book(SLUG, bid=.49, offer=.50)
+        live_inc = replace(incentive(SLUG, pool=300), periods=(live_period(),))
+        live_policy = RewardSelectionPolicy(
+            quote_size=10, strategy=replace(LIVE_ONLY, live=LivePolicy(min_entry_spread=0.01)))
+        result = evaluate_market_opportunity(started(), live_inc, one_cent, period=live_period(),
+                                             now=NOW, policy=live_policy)
+        self.assertNotIn("spread_below_entry_minimum", {s.blocker for s in result.sides})
+        pregame = evaluate_market_opportunity(
+            market(SLUG), incentive(SLUG, pool=300), one_cent,
+            period=incentive(SLUG, pool=300).periods[0], now=NOW,
+            policy=RewardSelectionPolicy(quote_size=10, strategy=BOTH))
+        self.assertEqual({s.blocker for s in pregame.sides}, {"spread_below_entry_minimum"})
+        selector = RewardMarketSelector(FakeGateway({}, {}, {}), live_policy, clock=lambda: NOW)
+        tight = replace(started(), catalog_best_bid=.49, catalog_best_offer=.50)
+        self.assertTrue(selector._catalog_spread_can_enter(tight))
+        self.assertFalse(RewardMarketSelector(FakeGateway({}, {}, {}), RewardSelectionPolicy(
+            quote_size=10), clock=lambda: NOW)._catalog_spread_can_enter(tight))
 
 
 class LiveExitTests(unittest.TestCase):

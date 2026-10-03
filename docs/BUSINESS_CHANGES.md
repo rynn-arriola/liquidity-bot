@@ -31,7 +31,7 @@ Each entry records:
 - **Operator (2026-10-03):** "Can we disable trade scorer and lets create a version of the normal incentive farming of a live version of that"; "Turn off everything and focus on the new version which is not pregame and it would be live version. also dont remove pre-game we should be able to switch it on or off"; "We would start with 20 resting orders not including open position and 10 contracts, 20 usd stop loss 6 hr time"; "But we should optimize it for live trading"; "Just bid on best price like pregame"; "We will try to make gains on trades too".
 - **Switch:** `config/strategy_policy.json` `pregame_enabled` / `live_enabled` (+ `live` settings). No file, or live off, is exactly the pregame bot (all earlier tests unchanged). Trade Scorer `mode: "reward"`; the scorer and the reward-pool pause only apply to pregame.
 - **Live rules (BC-2026-10-03-A):**
-  - Market: game positively started and fresh (< 30 s) evidence it is in play and not ended; active `live` reward row; moneyline; same 2¢ fresh-selection spread rule and checks as pregame.
+  - Market: game positively started and fresh (< 30 s) evidence it is in play and not ended; active `live` reward row; moneyline; same checks as pregame except the fresh-selection spread is **1¢** for live (operator: "Ok we can do 1c"; a one-tick book quotes both touches; the thin-book rule still applies).
   - Price band: no new entry while min(mid, 1−mid) < 0.15 (nearly decided games).
   - Jumpy: no new entry while the touch moved ≥ 3 times in 30 s; resting entries are cancelled at once (no reward dwell) and come back when calm.
   - Entries at the best price like pregame, GTD **60 s**.

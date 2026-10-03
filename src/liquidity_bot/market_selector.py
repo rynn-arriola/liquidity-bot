@@ -351,6 +351,8 @@ def evaluate_market_opportunity(
     live = policy.strategy.is_live(market, now)
     price_floor = (max(policy.minimum_entry_price, policy.strategy.live.min_price)
                    if live else policy.minimum_entry_price)
+    spread_floor = (policy.strategy.live.min_entry_spread if live
+                    else policy.minimum_entry_spread)
     sides: list[SideOpportunity] = []
     for side, price in (("bid", book.best_bid.price),
                         ("offer", book.best_offer.price)):
@@ -398,7 +400,7 @@ def evaluate_market_opportunity(
         expected: float | None = None
         if min(price, 1.0 - price) < price_floor - 1e-9:
             blocker = "price_too_extreme"
-        elif spread + 1e-9 < policy.minimum_entry_spread:
+        elif spread + 1e-9 < spread_floor:
             blocker = "spread_below_entry_minimum"
         elif not projection.eligible:
             blocker = projection.reason
@@ -870,7 +872,11 @@ class RewardMarketSelector:
                 or market.catalog_best_offer is None):
             return True
         spread = market.catalog_best_offer - market.catalog_best_bid
-        return spread + 1e-9 >= self.policy.minimum_entry_spread
+        floor = self.policy.minimum_entry_spread
+        now = self.clock() if self.clock is not None else datetime.now(timezone.utc)
+        if self.policy.strategy.is_live(market, now):
+            floor = self.policy.strategy.live.min_entry_spread
+        return spread + 1e-9 >= floor
 
     def _detailed_candidates(
         self,

@@ -171,7 +171,9 @@ class Trader:
         # The trigger band (min_price..max_price) decides WHEN to buy; the fill may
         # go up to SLIPPAGE above the quote but never past ORDER_PRICE_CAP, where a
         # win still clears the fee (operator: "Did you do market order").
-        worst_cost = min(ORDER_PRICE_CAP, cand.cost + SLIPPAGE)
+        # Operator: "its ok as long we get filled any price between 90-99 as long its
+        # profitable" -> the order takes any price up to the cap.
+        worst_cost = ORDER_PRICE_CAP
         qty = contracts_for(self.policy.risk_per_trade_usd, worst_cost, market.minimum_trade_qty or 0.01)
         if qty <= 0:
             return

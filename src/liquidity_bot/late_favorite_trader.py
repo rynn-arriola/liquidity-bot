@@ -34,6 +34,8 @@ class SportRule:
     # Lead needed in the current unit (operator, after the 8-5 table-tennis comeback:
     # "Ok maybe 6+ points").
     min_lead: int | None = None
+    # Per-sport floor on the middle price (esports "map point" is often mid-map: 97c).
+    min_price: float | None = None
 
 
 @dataclass(frozen=True)
@@ -77,7 +79,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
     rules = {}
     for sport, r in (raw.pop("rules", None) or {}).items():
         unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
-                            "kind", "units_to_win", "min_current", "min_lead"}
+                            "kind", "units_to_win", "min_current", "min_lead", "min_price"}
         if unknown:
             raise ValueError(f"unknown rule fields for {sport}: {sorted(unknown)}")
         if r.get("kind") not in (None, "sets", "maps"):
@@ -86,7 +88,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
                                  max_clock_minutes=r.get("max_clock_minutes"),
                                  min_minute=r.get("min_minute"), kind=r.get("kind"),
                                  units_to_win=r.get("units_to_win"), min_current=r.get("min_current"),
-                                 min_lead=r.get("min_lead"))
+                                 min_lead=r.get("min_lead"), min_price=r.get("min_price"))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
@@ -211,10 +213,11 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
         # The trigger is the MIDDLE of the book (the market's view); the price limit is
         # what we pay. A thin 89/99 book has a 94c middle and is skipped at 95c.
         mid = (bid + ask) / 2
+        floor = max(policy.min_price, (rule.min_price or 0) if rule is not None else 0)
         options = []
-        if policy.min_price <= mid and ask <= policy.max_price:
+        if floor <= mid and ask <= policy.max_price:
             options.append(("long", ask, ask))
-        if policy.min_price <= 1 - mid and 1 - bid <= policy.max_price:
+        if floor <= 1 - mid and 1 - bid <= policy.max_price:
             options.append(("short", bid, round(1 - bid, 6)))
         for side, price, cost in options:
             # Only buy when a win still clears the taker fee.

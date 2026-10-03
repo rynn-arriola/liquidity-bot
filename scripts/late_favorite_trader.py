@@ -47,6 +47,7 @@ ORDER_PRICE_CAP = 0.99
 SETTLES_PER_CYCLE = 2
 MAX_ATTEMPTS_PER_EVENT = 3
 CYCLE_WATCHDOG = 180
+THIN_RECHECK_SECONDS = 60
 STEP_TIMEOUT = 60  # a read step that hangs is abandoned; the next cycle retries
 SETTLE_RETRY_MINUTES = 5
 PAGE_SIZE = 500
@@ -113,6 +114,7 @@ class Trader:
         self.positions: dict[str, Decimal] = {}
         self.positions_at: datetime | None = None
         self.buying_power: Decimal | None = None
+        self.thin_until: dict[str, datetime] = {}
 
     async def list_live_events(self, gateway, client) -> list[dict]:
         now = now_utc()
@@ -185,6 +187,25 @@ class Trader:
         steps = Decimal(str(limit)) / tick
         steps = steps.to_integral_value(rounding="ROUND_CEILING" if rounding == "up" else "ROUND_FLOOR")
         price = steps * tick
+        # Depth check (operator: "do 1"): only send when our whole size is available at
+        # or inside the cap; thin books caused partial fills (Vaasan 5/10) and misses.
+        now = now_utc()
+        if self.thin_until.get(cand.market_slug, now) > now:
+            return
+        try:
+            book = await gateway.fetch_book(cand.market_slug)
+        except Exception as exc:
+            log(f"depth check failed market={cand.market_slug} error={type(exc).__name__}")
+            self.thin_until[cand.market_slug] = now + timedelta(seconds=THIN_RECHECK_SECONDS)
+            return
+        if cand.side == "long":
+            available = sum(l.size for l in book.offers if l.price <= float(price) + 1e-9)
+        else:
+            available = sum(l.size for l in book.bids if l.price >= float(price) - 1e-9)
+        if available + 1e-9 < float(qty):
+            log(f"skip thin book market={cand.market_slug} side={cand.side} available={available:g} need={qty}")
+            self.thin_until[cand.market_slug] = now + timedelta(seconds=THIN_RECHECK_SECONDS)
+            return
         state = event.get("eventState") or {}
         game = json.dumps({k: state.get(k, event.get(k)) for k in ("type", "period", "elapsed", "score")})
         stamp = iso(now_utc())

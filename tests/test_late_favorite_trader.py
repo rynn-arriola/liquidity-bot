@@ -81,6 +81,10 @@ class RuleTests(unittest.TestCase):
         # A tied clock-sport game is skipped; score sports are unaffected.
         self.assertIsNone(pick_entry(event(score="2-2"), POLICY))
         self.assertIsNone(pick_entry(event(score=None), POLICY))
+        # Per-sport floor: esports needs a 97c middle.
+        es = replace(POLICY, rules={"esports": SportRule(kind="maps", units_to_win=2, min_price=.97)})
+        self.assertIsNone(pick_entry(event(sport="esports", score="1-0", bid=.95, ask=.96), es))
+        self.assertIsNotNone(pick_entry(event(sport="esports", score="1-0", bid=.97, ask=.98), es))
 
     def test_sizing_daily_stop_and_results(self):
         self.assertEqual(contracts_for(10, 0.92, 0.01), Decimal("10.86"))
@@ -97,7 +101,8 @@ class RuleTests(unittest.TestCase):
         # Soccer and hockey (data so far); operator: "Its ok profit is profit",
         # "Would even better 93-99", "95-99 actually" -> 95-99c.
         self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))
-        self.assertEqual(p.rules["table-tennis"].min_lead, 6)                 # "Ok maybe 6+ points"
+        self.assertEqual(p.rules["table-tennis"].min_lead, 6)
+        self.assertEqual(p.rules["esports"].min_price, 0.97)                 # "Ok maybe 6+ points"
         self.assertEqual(p.max_spread, 0.10)                                # "Actually do 10c"
         # Operator: "Why only soccer we are doing all sports market" (cricket has no stage).
         self.assertEqual(sorted(p.rules), ["basketball", "esports", "football", "hockey",

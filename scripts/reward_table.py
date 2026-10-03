@@ -1141,6 +1141,65 @@ def build_discord_payload(
     return {"embeds": [embed]}
 
 
+# --- Rewards card (operator 2026-10-03: "change the reward discord summary so it looks
+# better"): three totals, one daily table, short notes. Same data sources as before.
+
+def _signed(value: Decimal | None, missing: str = "--") -> str:
+    if value is None:
+        return missing
+    return f"{'+' if value > 0 else '-' if value < 0 else ''}{abs(value):.2f}"
+
+
+def build_rewards_payload(
+    days: list[date], *, paid: dict, pending: dict, today: date, generated_at: datetime,
+    settled_history: dict[str, Decimal | None], pools: dict | None = None,
+) -> dict:
+    """Trading / Paid / Pending / Net per day for the Liquidity Trader, plus 7-day totals."""
+    if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+        raise ValueError("generated_at must be timezone-aware")
+    if len(days) > 7:
+        raise ValueError("the rewards card supports at most 7 days")
+    rows = ["Date Trading Paid Pending Net", "---- ------- ---- ------- ---"]
+    trading_total = rewards_total = Decimal(0)
+    posting = reward_posting_days(paid, today=today)
+    posting_shown = False
+    for day_value in days:
+        key = day_value.isoformat()
+        label = f"{day_value.month}/{day_value.day}{'*' if day_value == today else ''}"
+        trading = settled_history.get(key)
+        p, q = paid.get(key), pending.get(key)
+        has_reward = p is not None or q is not None
+        reward = (p or Decimal(0)) + (q or Decimal(0)) if has_reward else None
+        net = None if trading is None and reward is None else (trading or Decimal(0)) + (reward or Decimal(0))
+        trading_total += trading or Decimal(0)
+        rewards_total += reward or Decimal(0)
+        if has_reward and key in posting and not q:
+            pending_text, posting_shown = "posting", True
+        else:
+            pending_text = f"{q or Decimal(0):.2f}" if has_reward else "--"
+        paid_text = f"{p or Decimal(0):.2f}" if has_reward else "--"
+        rows.append(f"{label} {_signed(trading)} {paid_text} {pending_text} {_signed(net)}")
+    notes = ["Net = trading (closed fills + settlements) + paid + pending · * today"]
+    if posting_shown:
+        notes.append("posting: payouts for that day are still arriving")
+    if pools and pools.get("ours"):
+        score = pools["ours"].get("score")
+        notes.append(f"Reward pools (our pre-game markets): {score}/10 - "
+                     f"{'worth farming' if (score or 0) > 5 else 'not profitable to farm'}")
+    embed = {
+        "title": f"Rewards · {len(days)}d · ET",
+        "description": (f"**Trading:** {_signed(trading_total)}\n**Rewards:** {_signed(rewards_total)}\n"
+                        f"**Net:** {_signed(trading_total + rewards_total)}"),
+        "fields": [{"name": "Daily results", "value": "```text\n" + "\n".join(rows) + "\n```",
+                    "inline": False}],
+        "color": 0x3498DB, "timestamp": generated_at.isoformat(),
+        "footer": {"text": "\n".join(notes)},
+    }
+    if len(embed["fields"][0]["value"]) > 1024:
+        raise ValueError("rewards table exceeds a field's 1,024-character cap")
+    return {"embeds": [embed]}
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
@@ -1269,19 +1328,12 @@ async def main() -> int:
             # report or fabricate zero hours if the evidence cannot be read.
             period_hours = None
             print("Reward-period hours unavailable; totals retained.", file=sys.stderr)
-        result = await send_reward_report(
-            build_discord_payload(
-                days, pnl=pnl, paid=paid, pending=pending,
-                resting_hours=({key: sum(values.values()) for key, values in period_hours.items()}
-                               if period_hours is not None else resting),
-                elapsed_hours=elapsed, today=today,
-                generated_at=now, unbalanced_markets=unbalanced,
-                period_hours=period_hours,
-                pulse=load_pulse(Path(args.pulse_root), days),
-                pools=load_pools(Path(args.pool_root), now=now),
-                account_realized=account_realized,
-                account_history=history,
-                settled_history=settled_history),
+        from scripts.reward_image import send_summary_report
+        result = await send_summary_report(
+            build_rewards_payload(
+                days, paid=paid, pending=pending, today=today, generated_at=now,
+                settled_history=settled_history,
+                pools=load_pools(Path(args.pool_root), now=now)),
             secrets, notifier)
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",

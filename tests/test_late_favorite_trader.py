@@ -66,6 +66,10 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(pick_entry(event(status="MARKET_STATUS_HALTED"), POLICY))
         self.assertIsNone(pick_entry(event(mtype="SPORTS_MARKET_TYPE_TOTAL"), POLICY))
         self.assertIsNotNone(pick_entry(event(bid=.985, ask=.99), POLICY))      # 99c still profits
+        # Wide or one-sided books are skipped (the CS2 trade: bid 2c / ask 6c).
+        self.assertIsNone(pick_entry(event(bid=.02, ask=.06), POLICY))
+        self.assertIsNotNone(pick_entry(event(bid=.02, ask=.04), POLICY))
+        self.assertIsNone(pick_entry(event(bid=None, ask=.96), POLICY))
 
     def test_sizing_daily_stop_and_results(self):
         self.assertEqual(contracts_for(10, 0.92, 0.01), Decimal("10.86"))

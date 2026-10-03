@@ -43,6 +43,9 @@ class LateFavoritePolicy:
     min_price: float = 0.90
     max_price: float = 0.99
     poll_seconds: float = 10.0
+    # Operator 2026-10-03 (CS2 trade paid 98c on a 2-6c spread while the mid was
+    # ~96c): only trade tight books so the price paid matches the market's view.
+    max_spread: float = 0.02
     rules: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -53,7 +56,8 @@ class LateFavoritePolicy:
                 ("daily_loss_stop_usd", self.daily_loss_stop_usd, 1, 1000),
                 ("min_price", self.min_price, 0.5, 0.99),
                 ("max_price", self.max_price, 0.5, 0.99),
-                ("poll_seconds", self.poll_seconds, 5, 120)):
+                ("poll_seconds", self.poll_seconds, 5, 120),
+                ("max_spread", self.max_spread, 0.001, 0.10)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
                 raise ValueError(f"late-favourite {name} must be in [{low}, {high}]")
         if not isinstance(self.max_open_positions, int) or not 1 <= self.max_open_positions <= 200:
@@ -184,6 +188,8 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
                 or m.get("status") != "MARKET_STATUS_OPEN" or m.get("closed") is True):
             continue
         bid, ask = _quote(m.get("bestBidQuote")), _quote(m.get("bestAskQuote"))
+        if bid is None or ask is None or ask - bid > policy.max_spread + 1e-9:
+            continue                     # one-sided or wide book: the price is not reliable
         try:
             fee = float(m["feeCoefficient"]) if m.get("feeCoefficient") is not None else None
         except (TypeError, ValueError):

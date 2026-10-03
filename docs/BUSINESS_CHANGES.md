@@ -25,6 +25,27 @@ Each entry records:
 
 ---
 
+## BC-2026-10-03-A — Live (in-game) reward farming; pregame switched off (kept, switchable)
+
+- **Status:** BUILT and tested (`d6ad519bd` + docs), not loaded. New entries paused by the operator latch since 12:37Z Oct 3 ("Turn off everything"); Trade Scorer shadow stopped. Loads with a restart at a window boundary (the risk caps change) after the operator's go.
+- **Operator (2026-10-03):** "Can we disable trade scorer and lets create a version of the normal incentive farming of a live version of that"; "Turn off everything and focus on the new version which is not pregame and it would be live version. also dont remove pre-game we should be able to switch it on or off"; "We would start with 20 resting orders not including open position and 10 contracts, 20 usd stop loss 6 hr time"; "But we should optimize it for live trading"; "Just bid on best price like pregame"; "We will try to make gains on trades too".
+- **Switch:** `config/strategy_policy.json` `pregame_enabled` / `live_enabled` (+ `live` settings). No file, or live off, is exactly the pregame bot (all earlier tests unchanged). Trade Scorer `mode: "reward"`; the scorer and the reward-pool pause only apply to pregame.
+- **Live rules (BC-2026-10-03-A):**
+  - Market: game positively started and fresh (< 30 s) evidence it is in play and not ended; active `live` reward row; moneyline; same 2¢ fresh-selection spread rule and checks as pregame.
+  - Price band: no new entry while min(mid, 1−mid) < 0.15 (nearly decided games).
+  - Jumpy: no new entry while the touch moved ≥ 3 times in 30 s; resting entries are cancelled at once (no reward dwell) and come back when calm.
+  - Entries at the best price like pregame, GTD **60 s**.
+  - Exit: the same passive reducer one tick inside the touch when not losing (trading gains); forced cross at **120 s** with no early-exit deferral; immediate forced exit when the game ends or the market closes.
+  - Reward projection for the live row spreads the pool over an assumed 4 h game (ranking estimate only).
+  - Slots: a live game is released when it ends (fresh evidence), its market closes, or its live program stops paying; positions held at startup are exit-only as before.
+- **Size and risk:** 10 contracts; **20** pending entries (positions excluded); **$20** window stop; step-downs 16/12/8/4 at $4/$8/$12/$16.
+- **Why:** pregame pools are at 3.0/10 and pregame lost on trading; live pools are much larger (e.g. CS2/esports live $115 per market vs $20 pregame, MLB live $1,000, ATP/WTA live $300).
+- **Dry run (read-only, 13:36Z Oct 3, 9:36 AM ET):** 41 in-play executable markets, 29 with live rewards, 18 filtered by the 2¢ spread rule, 9 eligible, 3 viable (CS2, ITF W). Projected reward is small per side (about $0.0001–0.006 per 30 s).
+- **Risks:** in-play prices jump on points/goals (adverse fills); the fill model is pregame-calibrated (it puts every live market in its shortest-time cell, the most fill-prone); many liquid live markets have 1¢ spreads and are filtered by the 2¢ rule; the 4 h assumed length is a guess.
+- **Evaluate after 3 days:** rewards/day from live programs (earnings API), trading $/day, forced-exit share, window stops hit, orders resting per hour.
+- **Undo:** `live_enabled: false` (and `pregame_enabled: true` to resume pregame) in `config/strategy_policy.json`; restore caps in `config/risk_window_policy.json`; restart at a window boundary.
+- **Verdict:** pending.
+
 ## BC-2026-10-02-B — Scorer mode: rest only entries the Trade Scorer rates ≥ 60% (normal reward farming switched off, not removed)
 
 - **Status:** LIVE since 00:58:09Z Oct 3 (8:58 PM ET Oct 2) in `1c9aa3790` (operator "Restart now"), with the **$40** stop still loaded; the $20 stop (`cd192aa8f`) loads at the next restart at/after a window boundary, on operator request (no scheduled restarts). First 7 minutes: 34 allow / 15 skip, 22 orders on 12 markets, 0 errors.

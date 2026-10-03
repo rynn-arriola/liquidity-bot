@@ -1208,3 +1208,9 @@ These are implementation requirements, not suggestions.
     reports yield to pending observations and urgent exits without retry bursts.
     This is the routine-report exception to74/88/110, not a boundary, transfer,
     ownership, risk-freshness or source-readiness bypass.
+
+## Live strategy exceptions (BC-2026-10-03-A)
+
+Only when `config/strategy_policy.json` sets `live_enabled: true`, and only for a market whose game has positively started:
+- Invariants 13, 37, 39 (live rows), 56, 101, 102 (pregame evidence) and 108 (pregame GTD boundary) are replaced by the live rules: fresh (< 30 s) in-play-and-not-ended evidence instead of pregame evidence; an active `live` reward row; GTD entries of the live lifetime; no kickoff flatten; the live inventory clock is an absolute deadline (no early-exit deferral); a game that ends or a market that closes forces the exit at once.
+- Every other invariant (exact ownership, terminal proofs, risk windows, caps, exits always available, maintenance and HARD evacuation) is unchanged. With `live_enabled: false` none of this applies and the pregame invariants hold exactly.

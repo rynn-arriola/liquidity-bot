@@ -86,6 +86,18 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(pick_entry(event(sport="esports", score="1-0", bid=.95, ask=.96), es))
         self.assertIsNotNone(pick_entry(event(sport="esports", score="1-0", bid=.97, ask=.98), es))
 
+    def test_soccer_buys_only_yes_team_wins(self):
+        pol = replace(POLICY, rules={"soccer": SportRule(min_minute=90, winner_only=True)})
+        def ev(slug, bid, ask):
+            e = event(sport="soccer", period="2H", elapsed="90+2'", score="2-0", bid=bid, ask=ask,
+                      mtype="SPORTS_MARKET_TYPE_DRAWABLE_OUTCOME")
+            e["markets"][0]["slug"] = slug
+            return e
+        self.assertEqual(pick_entry(ev("atc-x-home", .96, .97), pol).side, "long")      # Yes home wins
+        self.assertIsNone(pick_entry(ev("atc-x-away", .03, .04), pol))                  # No away wins
+        self.assertIsNone(pick_entry(ev("atc-x-draw", .03, .04), pol))                  # draw market
+        self.assertIsNone(pick_entry(ev("atc-x-draw", .96, .97), pol))
+
     def test_sizing_daily_stop_and_results(self):
         self.assertEqual(contracts_for(10, 0.92, 0.01), Decimal("10.86"))
         self.assertLessEqual(float(contracts_for(10, 0.99, 0.01)) * 0.99, 10)
@@ -102,7 +114,8 @@ class RuleTests(unittest.TestCase):
         # "Would even better 93-99", "95-99 actually" -> 95-99c.
         self.assertEqual((p.min_price, p.max_price), (0.95, 0.99))
         self.assertEqual(p.rules["table-tennis"].min_lead, 6)
-        self.assertEqual(p.rules["esports"].min_price, 0.97)                 # "Ok maybe 6+ points"
+        self.assertEqual(p.rules["esports"].min_price, 0.97)
+        self.assertTrue(p.rules["soccer"].winner_only)                 # "Ok maybe 6+ points"
         self.assertEqual(p.max_spread, 0.10)                                # "Actually do 10c"
         # Operator: "Why only soccer we are doing all sports market" (cricket has no stage).
         self.assertEqual(sorted(p.rules), ["basketball", "esports", "football", "hockey",

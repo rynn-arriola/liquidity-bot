@@ -36,6 +36,9 @@ class SportRule:
     min_lead: int | None = None
     # Per-sport floor on the middle price (esports "map point" is often mid-map: 97c).
     min_price: float | None = None
+    # Soccer (operator: "we should actually bet on winners and not the 3 options its
+    # too risky"): only "Yes, <team> wins" - no draw markets and no "No" sides.
+    winner_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,7 +82,8 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
     rules = {}
     for sport, r in (raw.pop("rules", None) or {}).items():
         unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
-                            "kind", "units_to_win", "min_current", "min_lead", "min_price"}
+                            "kind", "units_to_win", "min_current", "min_lead", "min_price",
+                            "winner_only"}
         if unknown:
             raise ValueError(f"unknown rule fields for {sport}: {sorted(unknown)}")
         if r.get("kind") not in (None, "sets", "maps"):
@@ -88,7 +92,8 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
                                  max_clock_minutes=r.get("max_clock_minutes"),
                                  min_minute=r.get("min_minute"), kind=r.get("kind"),
                                  units_to_win=r.get("units_to_win"), min_current=r.get("min_current"),
-                                 min_lead=r.get("min_lead"), min_price=r.get("min_price"))
+                                 min_lead=r.get("min_lead"), min_price=r.get("min_price"),
+                                 winner_only=bool(r.get("winner_only", False)))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
@@ -203,6 +208,9 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
         if (not isinstance(m, dict) or m.get("sportsMarketTypeV2") not in TRADABLE_TYPES
                 or m.get("status") != "MARKET_STATUS_OPEN" or m.get("closed") is True):
             continue
+        winner_only = rule is not None and rule.winner_only
+        if winner_only and str(m.get("slug", "")).endswith("-draw"):
+            continue
         bid, ask = _quote(m.get("bestBidQuote")), _quote(m.get("bestAskQuote"))
         if bid is None or ask is None or ask - bid > policy.max_spread + 1e-9:
             continue                     # one-sided or wide book: the price is not reliable
@@ -217,7 +225,7 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
         options = []
         if floor <= mid and ask <= policy.max_price:
             options.append(("long", ask, ask))
-        if floor <= 1 - mid and 1 - bid <= policy.max_price:
+        if not winner_only and floor <= 1 - mid and 1 - bid <= policy.max_price:
             options.append(("short", bid, round(1 - bid, 6)))
         for side, price, cost in options:
             # Only buy when a win still clears the taker fee.

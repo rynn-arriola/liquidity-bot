@@ -9,7 +9,7 @@
   "poll_seconds": 10,
   "max_spread": 0.10,
   "rules": {
-    "soccer": {"min_minute": 90},
+    "soccer": {"min_minute": 90, "winner_only": true},
     "hockey": {"periods": ["P3", "OT"], "max_clock_minutes": 2},
     "basketball": {"periods": ["Q4", "OT"], "max_clock_minutes": 2},
     "football": {"periods": ["Q4", "OT"], "max_clock_minutes": 2},

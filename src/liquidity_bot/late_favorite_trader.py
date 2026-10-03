@@ -39,6 +39,10 @@ class SportRule:
     # Soccer (operator: "we should actually bet on winners and not the 3 options its
     # too risky"): only "Yes, <team> wins" - no draw markets and no "No" sides.
     winner_only: bool = False
+    # Baseball (kind "innings", operator "yes add basesball"): period "Top 9th" /
+    # "Bot 10th" / "Mid 9th" / "End 8th"; almost over = inning >= min_inning and the
+    # leader is up >= min_lead runs.
+    min_inning: int | None = None
 
 
 @dataclass(frozen=True)
@@ -83,17 +87,18 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
     for sport, r in (raw.pop("rules", None) or {}).items():
         unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
                             "kind", "units_to_win", "min_current", "min_lead", "min_price",
-                            "winner_only"}
+                            "winner_only", "min_inning"}
         if unknown:
             raise ValueError(f"unknown rule fields for {sport}: {sorted(unknown)}")
-        if r.get("kind") not in (None, "sets", "maps"):
+        if r.get("kind") not in (None, "sets", "maps", "innings"):
             raise ValueError(f"unknown rule kind for {sport}")
         rules[sport] = SportRule(periods=tuple(r.get("periods", ())),
                                  max_clock_minutes=r.get("max_clock_minutes"),
                                  min_minute=r.get("min_minute"), kind=r.get("kind"),
                                  units_to_win=r.get("units_to_win"), min_current=r.get("min_current"),
                                  min_lead=r.get("min_lead"), min_price=r.get("min_price"),
-                                 winner_only=bool(r.get("winner_only", False)))
+                                 winner_only=bool(r.get("winner_only", False)),
+                                 min_inning=r.get("min_inning"))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
@@ -141,6 +146,15 @@ def sets_almost_over(score, units_to_win: int, min_current: int, min_lead: int =
                and (a, b)[i] - (a, b)[1 - i] >= lead for i in (0, 1))
 
 
+def innings_almost_over(period, score, min_inning: int, min_lead: int) -> bool:
+    m = re.match(r"\s*(?:top|bot|bottom|mid|middle|end)\s+(\d{1,2})(?:st|nd|rd|th)?",
+                 str(period or ""), re.IGNORECASE)
+    units = _pairs(score)
+    if not m or not units or len(units) != 1:
+        return False
+    return int(m.group(1)) >= min_inning and abs(units[0][0] - units[0][1]) >= max(1, min_lead)
+
+
 def maps_almost_over(score, units_to_win: int) -> bool:
     units = _pairs(score)
     return bool(units) and len(units) == 1 and max(units[0]) == units_to_win - 1
@@ -156,6 +170,8 @@ def almost_over(sport: str | None, period: str | None, elapsed: str | None,
                                 rule.min_lead or 1)
     if rule.kind == "maps":
         return maps_almost_over(score, rule.units_to_win or 2)
+    if rule.kind == "innings":
+        return innings_almost_over(period, score, rule.min_inning or 9, rule.min_lead or 2)
     if rule.min_minute is not None:
         minute = match_minute(period, elapsed)
         return minute is not None and minute >= rule.min_minute

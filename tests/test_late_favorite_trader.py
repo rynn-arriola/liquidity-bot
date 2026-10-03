@@ -86,6 +86,17 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(pick_entry(event(sport="esports", score="1-0", bid=.95, ask=.96), es))
         self.assertIsNotNone(pick_entry(event(sport="esports", score="1-0", bid=.97, ask=.98), es))
 
+    def test_baseball_ninth_inning_with_two_run_lead(self):
+        from liquidity_bot.late_favorite_trader import innings_almost_over
+        self.assertTrue(innings_almost_over("Top 9th", "5-3", 9, 2))
+        self.assertTrue(innings_almost_over("Bot 10th", "2-4", 9, 2))
+        self.assertFalse(innings_almost_over("Bot 9th", "4-3", 9, 2))       # one-run game
+        self.assertFalse(innings_almost_over("End 8th", "6-0", 9, 2))       # too early
+        self.assertFalse(innings_almost_over("LIVE", "6-0", 9, 2))
+        p = load_policy()
+        self.assertEqual((p.rules["baseball"].kind, p.rules["baseball"].min_inning,
+                          p.rules["baseball"].min_lead), ("innings", 9, 2))
+
     def test_soccer_buys_only_yes_team_wins(self):
         pol = replace(POLICY, rules={"soccer": SportRule(min_minute=90, winner_only=True)})
         def ev(slug, bid, ask):
@@ -118,7 +129,7 @@ class RuleTests(unittest.TestCase):
         self.assertTrue(p.rules["soccer"].winner_only)                 # "Ok maybe 6+ points"
         self.assertEqual(p.max_spread, 0.10)                                # "Actually do 10c"
         # Operator: "Why only soccer we are doing all sports market" (cricket has no stage).
-        self.assertEqual(sorted(p.rules), ["basketball", "esports", "football", "hockey",
+        self.assertEqual(sorted(p.rules), ["baseball", "basketball", "esports", "football", "hockey",
                                            "soccer", "table-tennis", "tennis"])
         # Operator: "make sure its market almost ending so we dont stay that long".
         self.assertEqual(p.rules["soccer"].min_minute, 90)

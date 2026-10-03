@@ -59,6 +59,9 @@ class LateFavoritePolicy:
     # ~96c): only trade tight books so the price paid matches the market's view.
     max_spread: float = 0.02
     rules: dict = field(default_factory=dict)
+    # Combo Builder legs (operator: "maybe for this one halfway?"): looser "halfway"
+    # stage rules used only for the shared candidates file, never for the trader.
+    combo_rules: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool or type(self.live_orders) is not bool:
@@ -79,12 +82,14 @@ class LateFavoritePolicy:
         for sport, rule in self.rules.items():
             if not isinstance(rule, SportRule):
                 raise ValueError(f"rule for {sport} is invalid")
+        for sport, rule in self.combo_rules.items():
+            if not isinstance(rule, SportRule):
+                raise ValueError(f"combo rule for {sport} is invalid")
 
 
-def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def _parse_rules(section: dict) -> dict:
     rules = {}
-    for sport, r in (raw.pop("rules", None) or {}).items():
+    for sport, r in (section or {}).items():
         unknown = set(r) - {"periods", "max_clock_minutes", "min_minute",
                             "kind", "units_to_win", "min_current", "min_lead", "min_price",
                             "winner_only", "min_inning"}
@@ -99,10 +104,17 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
                                  min_lead=r.get("min_lead"), min_price=r.get("min_price"),
                                  winner_only=bool(r.get("winner_only", False)),
                                  min_inning=r.get("min_inning"))
+    return rules
+
+
+def load_policy(path: Path = DEFAULT_POLICY_PATH) -> LateFavoritePolicy:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    rules = _parse_rules(raw.pop("rules", None))
+    combo_rules = _parse_rules(raw.pop("combo_rules", None))
     unknown = set(raw) - set(LateFavoritePolicy.__dataclass_fields__)
     if unknown:
         raise ValueError(f"unknown late-favourite fields: {sorted(unknown)}")
-    return LateFavoritePolicy(rules=rules, **raw)
+    return LateFavoritePolicy(rules=rules, combo_rules=combo_rules, **raw)
 
 
 def match_minute(*texts) -> int | None:
@@ -278,7 +290,8 @@ def combo_candidates(events: list[dict], policy: LateFavoritePolicy, floor: floa
     soccer) with the price floor lowered to ``floor``; one leg per event.
     """
     from dataclasses import replace
-    relaxed = replace(policy, min_price=min(policy.min_price, floor), max_price=0.99)
+    relaxed = replace(policy, min_price=min(policy.min_price, floor), max_price=0.99,
+                      rules=policy.combo_rules or policy.rules)
     out = []
     for event in events:
         cand = pick_entry(event, relaxed)

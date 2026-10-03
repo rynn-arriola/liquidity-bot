@@ -32,5 +32,20 @@ class ComboBuilderTests(unittest.TestCase):
         self.assertEqual(combo_candidates([tied], policy), [])
 
 
+class HalfwayRulesTests(unittest.TestCase):
+    def test_combo_candidates_use_halfway_rules_trader_keeps_final_minutes(self):
+        from dataclasses import replace
+        from liquidity_bot.late_favorite_trader import load_policy, pick_entry
+        policy = replace(load_policy(), min_price=.95)
+        self.assertIn("hockey", policy.combo_rules)
+        event = {"slug": "nhl-y", "eventState": {"type": "hockey", "period": "P2", "elapsed": "08:00",
+                                                  "live": True, "ended": False, "score": "3-0"},
+                 "markets": [{"slug": "aec-nhl-y", "sportsMarketTypeV2": "SPORTS_MARKET_TYPE_MONEYLINE",
+                              "status": "MARKET_STATUS_OPEN", "bestBidQuote": {"value": "0.95"},
+                              "bestAskQuote": {"value": "0.96"}}]}
+        self.assertIsNone(pick_entry(event, policy))                      # trader: not final minutes
+        self.assertEqual([c["market"] for c in combo_candidates([event], policy)], ["aec-nhl-y"])
+
+
 if __name__ == "__main__":
     unittest.main()

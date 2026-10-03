@@ -1,7 +1,7 @@
 {
   "timezone": "America/New_York",
   "window_start_hours": [0, 6, 12, 18],
-  "stop_loss_usd": "40",
+  "stop_loss_usd": "20",
   "max_pending_entry_orders": 30,
   "remaining_budget_tiers": [
     {"remaining_fraction": "0.80", "max_pending_entry_orders": 24},

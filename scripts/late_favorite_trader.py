@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Late-favourite trader (BC-2026-10-03-B): buy the near-certain favourite when a match is
+"""Endgame Trader (internal name: late-favourite trader, BC-2026-10-03-B): buy the near-certain favourite when a match is
 almost over and hold it to settlement. Rules: src/liquidity_bot/late_favorite_trader.py;
 settings: config/late_favorite_policy.json.
 

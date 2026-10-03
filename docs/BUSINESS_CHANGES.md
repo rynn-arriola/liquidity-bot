@@ -25,7 +25,7 @@ Each entry records:
 
 ---
 
-## BC-2026-10-03-B — Late-favourite trader: buy the 90–99¢ favourite in the final minutes, hold to settlement
+## BC-2026-10-03-B — Endgame Trader (late-favourite): buy the 90–99¢ favourite in the final minutes, hold to settlement
 
 - **Status:** dry run from 16:01Z Oct 3 with the recommended setup; **real orders switched on Oct 3** after the operator turned off auto mode ("Ok i switch to manual") and approved each step, for running it today ("No recommendation for set up because im running it today"). Reward farming is unchanged and switchable ("dont remove the usual way of farming rewards").
 - **Operator (2026-10-03):** "buy that trade like when its 90 percent winning and there is not much time left", "This dont need to be reward market", "10 usd risk per trade with max 50 open positions", "50 usd a day is stop", "90-99 is also ok if there is profit on 99", "we can do market order as long we still profit", "make sure its market almost ending so we dont stay that long on a trade and not waste slot".

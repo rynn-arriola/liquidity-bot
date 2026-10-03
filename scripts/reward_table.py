@@ -1141,6 +1141,116 @@ def build_discord_payload(
     return {"embeds": [embed]}
 
 
+# --- Trading summary (operator 2026-10-03: "change summary section and add end game
+# trader info ... remove unnecessary data and just provide useful information") ---
+
+ENDGAME_DB = Path("data/late-favorite/trader.db")
+
+
+def endgame_by_day(days: list[date], path: Path = ENDGAME_DB) -> dict:
+    """Endgame Trader real trades per ET day (by buy day) plus what is open now."""
+    out = {"days": {d.isoformat(): {"trades": 0, "won": 0, "lost": 0, "result": None} for d in days},
+           "open": 0, "at_risk": Decimal(0), "available": path.exists()}
+    if not path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT created_at, cost, avg_price, qty, filled_qty, settlement, result FROM trades "
+                "WHERE mode='live' AND status='FILLED'").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        out["available"] = False
+        return out
+    for created, cost, avg, qty, filled, settlement, result in rows:
+        day = reward_day(datetime.fromisoformat(created.replace("Z", "+00:00")))
+        if settlement is None:
+            out["open"] += 1
+            out["at_risk"] += Decimal(str(avg if avg is not None else cost)) * Decimal(str(filled or qty))
+        cell = out["days"].get(day)
+        if cell is None:
+            continue
+        cell["trades"] += 1
+        if result is not None:
+            cell["won" if result > 0 else "lost"] += 1
+            cell["result"] = (cell["result"] or Decimal(0)) + Decimal(str(result))
+    return out
+
+
+def bots_running() -> dict[str, bool]:
+    """Which bots are up right now (report-only; never affects trading)."""
+    try:
+        import subprocess
+        args = subprocess.run(["ps", "-eo", "args="], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return {}
+    return {"Liquidity": "liquidity_bot.live_commissioning" in args,
+            "Endgame": "late_favorite_trader.py run" in args}
+
+
+def _signed(value: Decimal | None, missing: str = "--") -> str:
+    if value is None:
+        return missing
+    return f"{'+' if value > 0 else '-' if value < 0 else ''}{abs(value):.2f}"
+
+
+def build_summary_payload(
+    days: list[date], *, paid: dict, pending: dict, today: date, generated_at: datetime,
+    settled_history: dict[str, Decimal | None], endgame: dict, pools: dict | None = None,
+    running: dict[str, bool] | None = None,
+) -> dict:
+    """One clean card: Liquidity Trader (trading, rewards, net) and Endgame Trader per day."""
+    if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+        raise ValueError("generated_at must be timezone-aware")
+    if len(days) > 7:
+        raise ValueError("the summary layout supports at most 7 days")
+    liq = ["Date Trading Rewards Net", "---- ------- ------- ---"]
+    end = ["Date Trades W-L Result", "---- ------ --- ------"]
+    liq_total = Decimal(0)
+    end_total = Decimal(0)
+    for day_value in days:
+        key = day_value.isoformat()
+        label = f"{day_value.month}/{day_value.day}{'*' if day_value == today else ''}"
+        trading = settled_history.get(key)
+        has_reward = paid.get(key) is not None or pending.get(key) is not None
+        reward = (paid.get(key) or Decimal(0)) + (pending.get(key) or Decimal(0)) if has_reward else None
+        net = None if trading is None and reward is None else (trading or Decimal(0)) + (reward or Decimal(0))
+        liq_total += net or Decimal(0)
+        liq.append(f"{label} {_signed(trading)} {'--' if reward is None else f'{reward:.2f}'} {_signed(net)}")
+        cell = endgame["days"].get(key, {"trades": 0, "won": 0, "lost": 0, "result": None})
+        end_total += cell["result"] or Decimal(0)
+        if cell["trades"] or day_value == today:
+            # Only days it traded (and today): no rows of dashes before it existed.
+            wl = f"{cell['won']}-{cell['lost']}" if cell["trades"] else "--"
+            end.append(f"{label} {cell['trades'] or '--'} {wl} {_signed(cell['result'])}")
+    notes = ["Net = trading (closed fills + settlements) + rewards (paid + pending) · * today"]
+    if running:
+        status = " · ".join(f"{name} {'ON' if on else 'OFF'}" for name, on in running.items())
+        if endgame.get("available"):
+            status += f" · Endgame open {endgame['open']} (${endgame['at_risk']:.2f} at risk)"
+        notes.append("Now: " + status)
+    if pools and pools.get("ours"):
+        score = pools["ours"].get("score")
+        notes.append(f"Reward pools (our pre-game markets): {score}/10 - "
+                     f"{'worth farming' if (score or 0) > 5 else 'not profitable to farm'}")
+    fields = [
+        {"name": "Liquidity Trader", "value": "```text\n" + "\n".join(liq) + "\n```", "inline": False},
+        {"name": "Endgame Trader", "value": "```text\n" + "\n".join(end) + "\n```", "inline": False},
+    ]
+    embed = {
+        "title": f"Trading summary · {len(days)}d · ET",
+        "description": (f"**Liquidity:** {_signed(liq_total)}\n**Endgame:** {_signed(end_total)}\n"
+                        f"**Total:** {_signed(liq_total + end_total)}"),
+        "fields": fields, "color": 0x3498DB, "timestamp": generated_at.isoformat(),
+        "footer": {"text": "\n".join(notes)},
+    }
+    if any(len(f["value"]) > 1024 for f in fields):
+        raise ValueError("summary table exceeds a field's 1,024-character cap")
+    return {"embeds": [embed]}
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/commissioning.db")
@@ -1269,19 +1379,12 @@ async def main() -> int:
             # report or fabricate zero hours if the evidence cannot be read.
             period_hours = None
             print("Reward-period hours unavailable; totals retained.", file=sys.stderr)
-        result = await send_reward_report(
-            build_discord_payload(
-                days, pnl=pnl, paid=paid, pending=pending,
-                resting_hours=({key: sum(values.values()) for key, values in period_hours.items()}
-                               if period_hours is not None else resting),
-                elapsed_hours=elapsed, today=today,
-                generated_at=now, unbalanced_markets=unbalanced,
-                period_hours=period_hours,
-                pulse=load_pulse(Path(args.pulse_root), days),
-                pools=load_pools(Path(args.pool_root), now=now),
-                account_realized=account_realized,
-                account_history=history,
-                settled_history=settled_history),
+        from scripts.reward_image import send_summary_report
+        result = await send_summary_report(
+            build_summary_payload(
+                days, paid=paid, pending=pending, today=today, generated_at=now,
+                settled_history=settled_history, endgame=endgame_by_day(days),
+                pools=load_pools(Path(args.pool_root), now=now), running=bots_running()),
             secrets, notifier)
         if not result.sent:
             print(f"reward table Discord post failed: {result.reason}",

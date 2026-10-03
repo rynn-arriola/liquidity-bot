@@ -32,7 +32,8 @@ OUT = Path("data/combo-builder")
 DB = OUT / "probes.db"
 CRON_MARK = "# liquidity-bot combo builder"
 MIN_LEG_MID = 0.95          # leg quality for a combo (operator band 90-99; start at 95)
-MAX_LEGS = 5                # operator: "Im thinking 5 legs" (was 3)
+MIN_LEGS = 5                # operator: "minimum of 5 legs max 8"
+MAX_LEGS = 8
 QTY = "10"                  # contracts asked for in the quote request
 QUOTE_WINDOW_SECONDS = 12
 MIN_GAP_SECONDS = 120       # at most one probe every 2 minutes
@@ -64,7 +65,8 @@ def open_db() -> sqlite3.Connection:
     return conn
 
 
-def pick_legs(candidates: list[dict], min_mid: float = MIN_LEG_MID, max_legs: int = MAX_LEGS) -> list[dict]:
+def pick_legs(candidates: list[dict], min_mid: float = MIN_LEG_MID, max_legs: int = MAX_LEGS,
+              min_legs: int = MIN_LEGS) -> list[dict]:
     """Strongest favourites from different events (one leg per event)."""
     legs, seen = [], set()
     for c in sorted(candidates, key=lambda c: -(c.get("fav_mid") or 0)):
@@ -74,7 +76,7 @@ def pick_legs(candidates: list[dict], min_mid: float = MIN_LEG_MID, max_legs: in
         legs.append(c)
         if len(legs) == max_legs:
             break
-    return legs if len(legs) >= 2 else []
+    return legs if len(legs) >= min_legs else []
 
 
 def fair_price(legs: list[dict]) -> float:

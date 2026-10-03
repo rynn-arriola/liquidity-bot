@@ -12,9 +12,13 @@ def cand(event, mid, market=None, side="long"):
 class ComboBuilderTests(unittest.TestCase):
     def test_pick_legs_one_per_event_strongest_first(self):
         legs = pick_legs([cand("a", .96), cand("a", .99, "aec-a2"), cand("b", .97), cand("c", .94),
-                          cand("d", .98)], min_mid=.95, max_legs=3)
+                          cand("d", .98)], min_mid=.95, max_legs=3, min_legs=2)
         self.assertEqual([l["market"] for l in legs], ["aec-a2", "aec-d", "aec-b"])
-        self.assertEqual(pick_legs([cand("a", .99), cand("b", .90)], min_mid=.95), [])   # need 2+
+        self.assertEqual(pick_legs([cand("a", .99), cand("b", .90)], min_mid=.95, min_legs=2), [])
+        # Operator: "minimum of 5 legs max 8".
+        many = [cand(e, .97) for e in "abcdefghij"]
+        self.assertEqual(len(pick_legs(many)), 8)
+        self.assertEqual(pick_legs(many[:4]), [])
         self.assertAlmostEqual(fair_price([cand("a", .97), cand("b", .96)]), .9312)
 
     def test_combo_candidates_reuse_trader_rules_with_lower_floor(self):

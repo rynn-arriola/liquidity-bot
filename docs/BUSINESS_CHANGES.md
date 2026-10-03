@@ -44,7 +44,7 @@ Each entry records:
 - **Risks:** in-play prices jump on points/goals (adverse fills); the fill model is pregame-calibrated (it puts every live market in its shortest-time cell, the most fill-prone); many liquid live markets have 1¢ spreads and are filtered by the 2¢ rule; the 4 h assumed length is a guess.
 - **Evaluate after 3 days:** rewards/day from live programs (earnings API), trading $/day, forced-exit share, window stops hit, orders resting per hour.
 - **Undo:** `live_enabled: false` (and `pregame_enabled: true` to resume pregame) in `config/strategy_policy.json`; restore caps in `config/risk_window_policy.json`; restart at a window boundary.
-- **Verdict:** pending.
+- **Verdict (2026-10-03, after 26 minutes): STOPPED by the operator ("Stop the bot", 14:54Z, flat).** 59 closed trades, trading **−$24.02** (16 wins +$2.06, 43 losses −$26.07); window meter −$26.29. Losses were adverse selection: our resting order at the touch filled just before the price kept moving (median loss move about 5¢, up to 25¢ in 29 s on table tennis); 46 of 59 exits were passive at the touch, 13 forced. The jumpy filter (334 blocks) reacts only after 3 moves. Worst leagues: table tennis (setkame*) −$14.63, CS2 −$5.66. Rewards in that time are cents. Live farming is OFF until a different design is approved; the noon restart was cancelled.
 
 ## BC-2026-10-02-B — Scorer mode: rest only entries the Trade Scorer rates ≥ 60% (normal reward farming switched off, not removed)
 

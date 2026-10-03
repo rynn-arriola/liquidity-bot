@@ -18,6 +18,7 @@ Safety:
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import asyncio
 import json
 import sqlite3
@@ -45,6 +46,7 @@ SLIPPAGE = 0.02
 ORDER_PRICE_CAP = 0.99
 SETTLES_PER_CYCLE = 2
 MAX_ATTEMPTS_PER_EVENT = 3
+CYCLE_WATCHDOG = 180
 STEP_TIMEOUT = 60  # a read step that hangs is abandoned; the next cycle retries
 SETTLE_RETRY_MINUTES = 5
 PAGE_SIZE = 500
@@ -289,6 +291,11 @@ class Trader:
             raise SystemExit("late-favourite policy is disabled")
         lease = SingleInstanceLease(OUT / "trader.lease")
         lease.acquire()
+        # A previous process that exited mid-send leaves SENDING rows: their outcome
+        # is unknown until account positions explain them (blocks new buys till then).
+        with self.db:
+            self.db.execute("UPDATE trades SET status='UNCERTAIN', updated_at=? WHERE status='SENDING'",
+                            (iso(now_utc()),))
         client = client_from_environment()
         gateway = AsyncReadOnlyGateway(
             client, limiter=shared_api_limiter(4.0, state_path=Path.cwd() / "data" / "api-rate-limiter.state"),
@@ -303,6 +310,9 @@ class Trader:
             f"rules={sorted(self.policy.rules)}")
         while stop_at is None or now_utc() < stop_at:
             cycle = now_utc()
+            # Watchdog: a cycle that does not finish within CYCLE_WATCHDOG seconds
+            # dumps every stack to the log and exits; the 1-minute cron restarts it.
+            faulthandler.dump_traceback_later(CYCLE_WATCHDOG, exit=True)
             try:
                 if STOP_FILE.exists():
                     log("STOP file present; not trading")
@@ -371,7 +381,7 @@ def status(_args) -> int:
 
 
 def cron_line(root: Path, code: Path = ROOT) -> str:
-    return (f"*/5 * * * * cd {root} && flock -n data/late-favorite/trader-cron.lock "
+    return (f"* * * * * cd {root} && flock -n data/late-favorite/trader-cron.lock "
             f"{root}/.venv/bin/python -B {code}/scripts/late_favorite_trader.py run "
             f">> logs/late-favorite-trader.log 2>&1 {CRON_MARK}")
 

@@ -458,7 +458,8 @@ class StartupMixin:
                 and not self._entry_pause_active()
                 and not self._loss_cap_blocks_new_entry(self._now())),
             entry_expiry_policy=self.config.entry_expiry_policy,
-            force_exit_before_start_seconds=self.config.force_exit_before_start_seconds)
+            force_exit_before_start_seconds=self.config.force_exit_before_start_seconds,
+            strategy=self.config.strategy)
         self._orders_before = self.ledger.query(
             "SELECT COUNT(*) n FROM execution_intents WHERE operation='PLACE'")[0]["n"]
         hard_recovery = recovery_only and self._hard_stop_active()

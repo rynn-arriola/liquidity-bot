@@ -100,7 +100,9 @@ class AccountRiskMixin:
             and self._nontrading_cash_day == today
             and not self._cash_report_blocked
             and not self._entry_pause_active()
-            and market.event_allows_entry(now)
+            # Pregame evidence, or (BC-2026-10-03-A) live in-play evidence.
+            and self.config.strategy.allows_entry(market, now)
+            and self._live_entry_blocker(market.slug, now) is None
         )
         if not allowed:
             try:

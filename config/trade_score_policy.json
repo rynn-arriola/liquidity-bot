@@ -1,5 +1,5 @@
 {
-  "mode": "scorer",
+  "mode": "reward",
   "min_win_probability": 0.60,
   "model_path": "data/trade-scorer/latest-model.json",
   "max_model_age_hours": 72,

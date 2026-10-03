@@ -144,7 +144,8 @@ class TopUpSchedulingMixin:
                         market, now=now, window_end=window_end):
                     # Closed, started, excluded league or not tradable now.
                     dropped["not_executable"] += 1
-                elif ((market.game_start - now).total_seconds()
+                elif (not selector.policy.strategy.is_live(market, now)
+                      and (market.game_start - now).total_seconds()
                       <= self.config.force_exit_before_start_seconds):
                     dropped["inside_flatten_window"] += 1
                 elif (slug not in incentives or selector._applicable_period(

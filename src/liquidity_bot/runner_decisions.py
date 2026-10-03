@@ -830,7 +830,7 @@ class DecisionMixin:
                 )
                 return None, mutation_delay
             if (chosen.kind == ActionKind.PLACE_POST_ONLY and position == 0):
-                if not state.market.event_allows_entry(self._now()):
+                if not self.config.strategy.allows_entry(state.market, self._now()):
                     return None, 1.0
                 if self.config.entry_quality_policy.enabled:
                     # Recheck the actual action after planning; do not consume

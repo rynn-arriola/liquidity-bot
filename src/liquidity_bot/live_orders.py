@@ -300,8 +300,13 @@ class AsyncTradingGateway:
                         "entry expired during admission; request not sent",
                         error_code="LOCAL_ENTRY_EXPIRED", retry_after_seconds=1.0)
             check = getattr(self.gateway, "event_entry_allowed", None)
-            if (not reducing and callable(check)
-                    and not check(str(payload.get("marketSlug", "")))):
+            live_check = getattr(self.gateway, "event_live_entry_allowed", None)
+            slug = str(payload.get("marketSlug", ""))
+            if (not reducing and callable(check) and not check(slug)
+                    # BC-2026-10-03-A: an in-play entry needs fresh in-play
+                    # evidence instead (only possible with the live strategy).
+                    and not (getattr(self.gateway, "live_strategy", False)
+                             and callable(live_check) and live_check(slug))):
                 raise ApiAdmissionDeferred(
                     "event pregame evidence expired; request not sent",
                     error_code="LOCAL_EVENT_ENTRY_BLOCKED", retry_after_seconds=1.0)

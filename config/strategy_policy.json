@@ -1,0 +1,11 @@
+{
+  "pregame_enabled": false,
+  "live_enabled": true,
+  "live": {
+    "min_price": 0.15,
+    "entry_lifetime_seconds": 60,
+    "max_inventory_age_seconds": 120,
+    "jumpy_touch_changes_30s": 3,
+    "assumed_period_seconds": 14400
+  }
+}

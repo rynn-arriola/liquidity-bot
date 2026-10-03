@@ -58,6 +58,20 @@ class MarketMetadata:
     event_checked_at: datetime | None = None
     event_not_started: bool = False
     event_started_at: datetime | None = None
+    # BC-2026-10-03-A: fresh parent evidence that the game is being played and
+    # has not ended. Only the live strategy reads it.
+    event_in_play: bool = False
+
+    def event_allows_live_entry(self, now: datetime) -> bool:
+        """Live strategy: positively started, not ended, evidence under 30 s."""
+        if not self.event_guard_required:
+            return self.game_start is not None and self.game_start <= now
+        return (
+            self.event_started_at is not None
+            and self.event_in_play
+            and self.event_checked_at is not None
+            and 0 <= (now - self.event_checked_at).total_seconds() < 30
+        )
 
     def event_allows_entry(self, now: datetime) -> bool:
         if not self.event_guard_required:

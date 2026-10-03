@@ -88,7 +88,8 @@ class RiskDiagnostics:
             (runner._market_fault_pause_until is not None, "market_fault_pause"),
             (runner._scheduled_maintenance_pause_active(), "scheduled_maintenance"),
             (runner._ui_availability_initialized and runner._ui_entry_paused, "ui_pause"),
-            (not market.event_allows_entry(now), "event_lifecycle"),
+            (not runner.config.strategy.allows_entry(market, now), "event_lifecycle"),
+            (runner._live_entry_blocker(market.slug, now) is not None, "live_entry_gate"),
         )
         reasons.extend(label for failed, label in checks if failed)
         labels = tuple(reasons) or ("unclassified",)

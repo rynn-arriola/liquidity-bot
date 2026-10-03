@@ -110,6 +110,8 @@ class ReconcilerPolicy:
     # risk removal or changing the desired touch price.
     entry_touch_reprice_dwell_seconds: float = 10.0
     force_exit_before_start_seconds: float = 300.0
+    # BC-2026-10-03-A: inventory clock for in-play markets (live strategy).
+    live_max_inventory_age_seconds: float = 120.0
     # A fractional maker fill can leave only a few cents of maximum settlement
     # exposure while still retaining a whole reward slot. Give that position a
     # short passive chance, then use the ordinary cancel-confirm-IOC machinery
@@ -188,6 +190,10 @@ class MarketFrame:
     # Explicitly revoked public depth cannot remain usable just because its
     # last valid receipt is young. This does not gate risk-removing cancels.
     book_known: bool = True
+    # BC-2026-10-03-A live strategy: this market's game is in play. Kickoff is
+    # then no deadline; the live inventory clock (no early deferral) and the
+    # game ending are.
+    live_market: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (("now", self.now),
@@ -622,6 +628,14 @@ class DesiredStateReconciler:
         pre_kickoff_due = (
             seconds_to_event is not None
             and seconds_to_event <= self.policy.force_exit_before_start_seconds)
+        if frame.live_market:
+            # In play there is no later deadline to defer an expensive cross
+            # to, so the live clock is absolute (same fallback, no deferral),
+            # and a game that ended or a market that closed exits at once.
+            deadline = self.policy.live_max_inventory_age_seconds
+            pre_kickoff_due = (
+                inventory_age >= deadline
+                or not frame.market.active or frame.market.closed)
         maintenance_due = (
             frame.maintenance_flatten_required or frame.hard_stop_flatten_required)
         # Use the durable position-open clock. An initially tiny partial fill
@@ -842,8 +856,9 @@ class DesiredStateReconciler:
             if frame.market.game_start is not None else None)
         market_open = (frame.market.active and not frame.market.closed
                        and seconds_to_event is not None
-                       and seconds_to_event
-                       > self.policy.force_exit_before_start_seconds)
+                       and (frame.live_market
+                            or seconds_to_event
+                            > self.policy.force_exit_before_start_seconds))
         if not market_open:
             self._clear_entry_quality_recovery(slug)
         # Why each side stopped being wanted, so the cancel can name it. A

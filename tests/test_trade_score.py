@@ -121,10 +121,10 @@ class TradeScoreModelTests(unittest.TestCase):
         self.assertLess(scorer.win_probability({}, NOW), 0.5)
 
     def test_checked_in_switch_is_the_operator_decision(self):
-        # Operator 2026-10-02: "switching off the normal way to farm reward and
-        # enabling this one for now"; 60% recommended and accepted.
+        # Operator 2026-10-03: "Can we disable trade scorer" (live farming);
+        # the 60% setting is kept for when scorer mode is switched back on.
         shipped = load_trade_score_policy()
-        self.assertEqual((shipped.mode, shipped.min_win_probability), ("scorer", 0.60))
+        self.assertEqual((shipped.mode, shipped.min_win_probability), ("reward", 0.60))
         self.assertEqual(shipped.model_path, "data/trade-scorer/latest-model.json")
 
     def test_policy_validation(self):

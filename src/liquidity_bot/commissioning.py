@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .entry_quality import EntryQualityPolicy, load_entry_quality_policy
 from .thin_book import ThinBookPolicy, load_thin_book_policy
+from .strategy import StrategyPolicy
 from .entry_expiry import EntryExpiryPolicy
 from .selection_exclusions import SelectionExclusions
 from .risk_windows import RiskWindowPolicy, load_risk_window_policy
@@ -151,6 +152,9 @@ class CommissioningConfig:
     # Operator 2026-09-27 (BC-2026-09-27-A): skip NEW entries on thin one-tick
     # books in high-forced-exit leagues. config/thin_book_policy.json.
     thin_book_policy: ThinBookPolicy = field(default_factory=load_thin_book_policy)
+    # BC-2026-10-03-A: pregame / live switches. The default is the pregame-only
+    # bot; the live runner passes config/strategy_policy.json explicitly.
+    strategy: StrategyPolicy = field(default_factory=StrategyPolicy)
     risk_window_policy: RiskWindowPolicy | None = field(
         default_factory=load_risk_window_policy)
     # maker-lab exit latency, 112 reconstructed position episodes on
@@ -444,6 +448,7 @@ class CommissioningConfig:
             daily_event_horizon_seconds=self.daily_event_horizon_seconds,
             entry_quality_policy=self.entry_quality_policy,
             excluded_leagues=self.selection_exclusions.excluded_leagues,
+            strategy=self.strategy,
         )
 
     def blockers(self, *, now: datetime) -> tuple[str, ...]:

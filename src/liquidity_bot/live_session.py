@@ -8,7 +8,7 @@ runner, and all exchange mutations still flow through ``LiveOrderExecutor``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Callable, Iterable
 
@@ -194,13 +194,16 @@ class ControlledActionDriver:
                  risk_guard: SessionRiskGuard | None = None,
                  new_entry_allowed: Callable[[], bool] | None = None,
                  entry_expiry_policy: EntryExpiryPolicy | None = None,
-                 force_exit_before_start_seconds: int = 300):
+                 force_exit_before_start_seconds: int = 300,
+                 strategy=None):
         self.executor = executor
         self.ledger = ledger
         self.risk_guard = risk_guard
         self.new_entry_allowed = new_entry_allowed
         self.entry_expiry_policy = entry_expiry_policy
         self.force_exit_before_start_seconds = force_exit_before_start_seconds
+        # BC-2026-10-03-A: in-play entries use the live lifetime, no kickoff cutoff.
+        self.strategy = strategy
 
     def _owned_order(self, exchange_order_id: str):
         rows = self.ledger.query(
@@ -288,7 +291,12 @@ class ControlledActionDriver:
                         "reducing_quote_not_exact_position",
                         "inventory quote must reduce the entire exact position")
             expiry = None
-            if not reducing and self.entry_expiry_policy is not None:
+            live = (self.strategy is not None
+                    and self.strategy.is_live(market, now))
+            if not reducing and live:
+                expiry = now + timedelta(
+                    seconds=self.strategy.live.entry_lifetime_seconds)
+            elif not reducing and self.entry_expiry_policy is not None:
                 expiry = self.entry_expiry_policy.deadline(
                     now, market.game_start, self.force_exit_before_start_seconds)
                 if expiry is not None and expiry <= now:

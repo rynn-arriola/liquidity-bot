@@ -63,11 +63,11 @@ class RiskWindowTests(unittest.TestCase):
             # Operator 2026-10-02 (scorer mode, BC-2026-10-02-B): $20 window stop.
             self.assertEqual(config.hard_stop_loss_usd, D(20))
             self.assertEqual(config.weekly_operating_reserve_usd, D(560))
-            self.assertEqual(config.entry_order_cap_for_loss(D(4)), min(24, slots * 2))
+            self.assertEqual(config.entry_order_cap_for_loss(D(4)), min(16, slots * 2))
             for hour in range(24):
-                # Operator 2026-10-01: 30 orders for now (raise again when pools recover).
+                # Operator 2026-10-03 (live farming, BC-2026-10-03-A): 20 orders.
                 self.assertEqual(config.entry_order_cap_for_time(START + timedelta(hours=hour)),
-                                 min(30, slots * 2))
+                                 min(20, slots * 2))
 
     def test_authorized_size_fifteen_scales_exposure_and_window_tiers(self):
         config = CommissioningConfig(
@@ -82,10 +82,9 @@ class RiskWindowTests(unittest.TestCase):
         self.assertEqual(
             [config.entry_order_cap_for_loss(D(loss))
              for loss in (0, 2, 4, 8, 12, 16, 20)],
-            # Operator 2026-10-02 (scorer mode): size 15, 30 orders, $20 window
-            # stop ("Dont do 10 usd stop loss") and step-downs 24/18/12/6 at
-            # $4/$8/$12/$16 loss.
-            [30, 30, 24, 18, 12, 6, 0])
+            # Operator 2026-10-03 (live farming): 20 resting orders not counting
+            # positions, $20 window stop; step-downs 16/12/8/4 at $4/$8/$12/$16.
+            [20, 20, 16, 12, 8, 4, 0])
 
     def test_cap_recovers_only_in_new_window_and_restart_does_not_rebase(self):
         self.observe(0)

@@ -65,6 +65,24 @@ def event_phase(event: dict) -> str:
     return "pregame" if pregame and not malformed else "unknown"
 
 
+def event_ended(event: dict) -> bool:
+    """Positive completion evidence (BC-2026-10-03-A live strategy)."""
+    sources = [event]
+    for key in ("eventState",):
+        if isinstance(event.get(key), dict):
+            sources.append(event[key])
+    metadata = event.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("gameState"), dict):
+        sources.append(metadata["gameState"])
+    for source in sources:
+        if source.get("ended") is True:
+            return True
+        period = source.get("period")
+        if isinstance(period, str) and period.strip().upper() in {"FT", "FINISHED", "ENDED"}:
+            return True
+    return event.get("closed") is True
+
+
 class EventAwareGateway(AsyncReadOnlyGateway):
     """Batch parent checks with 30-second freshness and bounded failure retry.
 
@@ -93,7 +111,10 @@ class EventAwareGateway(AsyncReadOnlyGateway):
             if not isinstance(event_slug, str) or not event_slug.strip():
                 raise AdapterError("event slug is unavailable")
             phase = event_phase(event)
-            self._event_status[event_slug] = (at, phase)
+            # "ended" is a started phase for every pregame rule (it is not
+            # "pregame"); only the live strategy distinguishes it.
+            status = "ended" if phase == "started" and event_ended(event) else phase
+            self._event_status[event_slug] = (at, status)
             self._event_members[event_slug] = set()
             for row in event["markets"]:
                 slug = row.get("slug") if isinstance(row, dict) else None
@@ -130,7 +151,9 @@ class EventAwareGateway(AsyncReadOnlyGateway):
             event_slug=parent, event_checked_at=evidence[0] if evidence else None,
             event_not_started=bool(evidence and evidence[1] == "pregame" and start is None
                                    and market.slug in self._event_members.get(parent, set())),
-            event_started_at=start[1] if start else None)
+            event_started_at=start[1] if start else None,
+            event_in_play=bool(evidence and evidence[1] == "started" and start is not None
+                               and market.slug in self._event_members.get(parent, set())))
 
     def event_entry_allowed(self, slug: str) -> bool:
         """Zero-I/O recheck immediately after mutation admission waits."""
@@ -141,17 +164,31 @@ class EventAwareGateway(AsyncReadOnlyGateway):
                     and slug in self._event_members.get(parent, set())
                     and 0 <= (self._event_now() - evidence[0]).total_seconds() < 30)
 
+    def event_live_entry_allowed(self, slug: str) -> bool:
+        """Live strategy zero-I/O recheck: in play, not ended, fresh, exact member."""
+        parent = self._parent.get(slug)
+        evidence = self._event_status.get(parent)
+        return bool(slug in self._started and evidence
+                    and evidence[1] == "started"
+                    and slug in self._event_members.get(parent, set())
+                    and 0 <= (self._event_now() - evidence[0]).total_seconds() < 30)
+
     async def refresh_event_states(self, slugs: Iterable[str], *, force=False,
-                                   min_remaining_seconds: float = 0.0) -> None:
+                                   min_remaining_seconds: float = 0.0,
+                                   include_started: bool = False) -> None:
         """Refetch parents whose evidence would expire within the margin."""
         now = self._event_now()
+        # Set by the runner when the live strategy is on (BC-2026-10-03-A).
+        include_started = include_started or getattr(self, "live_strategy", False)
         reuse_below = EVENT_FRESHNESS_SECONDS - min_remaining_seconds
         if not force and self._event_retry_at is not None and now < self._event_retry_at:
             return
         requested = set(slugs)
         parents = set()
         for slug in requested:
-            if slug in self._started:
+            # Pregame needs no more evidence once a game started; the live
+            # strategy keeps refreshing so it can see the game end.
+            if slug in self._started and not include_started:
                 continue
             parent = self._parent.get(slug)
             if parent is None:

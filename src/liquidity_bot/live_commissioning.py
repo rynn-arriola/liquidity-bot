@@ -471,6 +471,9 @@ class CommissioningRunner(
         self.gateway = EventAwareGateway(
             client, limiter=limiter, ledger=ledger, now=lambda: self._now())
         self.gateway.entry_admission_check = self._check_entry_admission
+        # BC-2026-10-03-A: keep refreshing started events so live games show
+        # their end; pregame-only leaves this off (unchanged reads).
+        self.gateway.live_strategy = config.strategy.live_enabled
         self.fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
         self.reward_selector = reward_selector
         if self.reward_selector is None and config.auto_select_reward_markets:
@@ -786,6 +789,8 @@ class CommissioningRunner(
             minimum_entry_price=float(config.minimum_entry_price),
             force_exit_before_start_seconds=float(
                 config.force_exit_before_start_seconds),
+            live_max_inventory_age_seconds=float(
+                config.strategy.live.max_inventory_age_seconds),
             small_residual_min_qty=config.small_residual_min_qty,
             small_residual_max_qty=config.small_residual_max_qty,
             small_residual_timeout_seconds=float(
@@ -1166,7 +1171,24 @@ class CommissioningRunner(
         if state.market.game_start is None:
             raise CommissioningUnavailable(
                 f"{slug} start clock is unavailable")
-        if state.market.game_start <= now:
+        live = self.config.strategy.is_live(state.market, now)
+        if live and not state.market.event_allows_live_entry(now):
+            # BC-2026-10-03-A: fresh evidence that the game is no longer in
+            # play (ended) is this owner's lifecycle end, like kickoff is for
+            # pregame; stale evidence only withholds entry, as pregame does.
+            ended = (state.market.event_checked_at is not None
+                     and 0 <= (now - state.market.event_checked_at).total_seconds() < 30
+                     and not state.market.event_in_play)
+            state.incentive = None
+            state.reward_eligible = frozenset()
+            state.clear_economics()
+            if ended and accept_bound_lifecycle_end:
+                self._request_lifecycle_top_up(now)
+                return
+            raise CommissioningUnavailable(
+                f"{slug} event live state is unavailable"
+                f" ({'ended' if ended else 'evidence_stale'})")
+        if state.market.game_start <= now and not live:
             if accept_bound_lifecycle_end:
                 state.incentive = None
                 state.reward_eligible = frozenset()
@@ -1174,7 +1196,7 @@ class CommissioningRunner(
                 self._request_lifecycle_top_up(now)
                 return
             raise CommissioningUnavailable(f"{slug} is no longer pregame")
-        if not state.market.event_allows_entry(now):
+        if not live and not state.market.event_allows_entry(now):
             state.incentive = None
             state.reward_eligible = frozenset()
             state.clear_economics()
@@ -1187,12 +1209,14 @@ class CommissioningRunner(
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
-                allow_daily_event=self.config.allow_daily_event_rewards,
+                allow_daily_event=self.config.allow_daily_event_rewards and not live,
                 daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
                 daily_event_observed_at=state.incentive.observed_at)
         except AmbiguousIncentiveError as exc:
             raise CommissioningUnavailable(
                 f"{slug} has ambiguous incentive periods") from exc
+        if live and period is not None and period.period != "live":
+            period = None
         if period is None:
             if (self.config.allow_daily_event_rewards
                     and self.config.daily_event_horizon_seconds > 21600
@@ -1232,9 +1256,9 @@ class CommissioningRunner(
                 state.incentive = None
                 state.clear_economics()
                 return
-        if period is None or period.period == "live":
+        if period is None or (period.period == "live") != live:
             raise _RewardUnavailable(
-                f"{slug} has no applicable pregame liquidity period")
+                f"{slug} has no applicable {'live' if live else 'pregame'} liquidity period")
         state.reward_program_id = period.program_id
         state.reward_program_ends_at = period.ends_at
         state.reward_period_ended_at = None
@@ -1890,6 +1914,10 @@ class CommissioningRunner(
                     and state.market.event_guard_required
                     and state.market.event_started_at is None):
                 due = due or not state.market.event_allows_entry(now)
+            elif (slug not in isolated and state.market is not None
+                  and self.config.strategy.is_live(state.market, now)):
+                # BC-2026-10-03-A: keep in-play evidence fresh for entry.
+                due = due or not state.market.event_allows_live_entry(now)
             if slug not in self._inactive_market_wait_slugs:
                 due = due or (
                     state.next_book_refresh is None
@@ -1901,7 +1929,10 @@ class CommissioningRunner(
                      or slug in positions or slug in working)
                 and (retired.next_retry_at is None
                      or now >= retired.next_retry_at))
-            if slug in working:
+            if slug in working and not (
+                    state.market is not None
+                    and self.config.strategy.is_live(state.market, now)):
+                # A live game has no kickoff flatten deadline.
                 game_start = getattr(state.market, "game_start", None)
                 if game_start is not None:
                     flatten_at = game_start - timedelta(
@@ -2443,7 +2474,8 @@ class CommissioningRunner(
                 new_risk_allowed=False,
                 hard_stop_flatten_required=self._hard_stop_active(),
                 maintenance_flatten_required=(
-                    self._scheduled_maintenance_flatten_required()))
+                    self._scheduled_maintenance_flatten_required()),
+                live_market=self.config.strategy.is_live(state.market, now))
         new_risk_allowed = self._entry_risk_allowed(now, state.market)
         eligible = state.reward_eligible
         if position == 0 and not new_risk_allowed:
@@ -2474,6 +2506,7 @@ class CommissioningRunner(
             hard_stop_flatten_required=self._hard_stop_active(),
             maintenance_flatten_required=(
                 self._scheduled_maintenance_flatten_required()),
+            live_market=self.config.strategy.is_live(state.market, now),
         )
 
     def _check_entry_admission(self, payload: Mapping[str, Any]) -> None:
@@ -2503,7 +2536,8 @@ class CommissioningRunner(
             (market.game_start - now).total_seconds()
             if market.game_start is not None else None)
         daily_clock_allowed = True
-        if (state.incentive is not None and market.game_start is not None
+        live = self.config.strategy.is_live(market, now)
+        if (not live and state.incentive is not None and market.game_start is not None
                 and any(str(p.period).strip().lower() in {"daily_event", "daily-event"}
                         for p in state.incentive.periods)):
             # Admission can wait across midnight or an explicit reward end.
@@ -2531,7 +2565,10 @@ class CommissioningRunner(
             and market.active and not market.closed
             and market.is_supported_moneyline
             and seconds_to_event is not None
-            and seconds_to_event > self.reconciler.policy.force_exit_before_start_seconds
+            # BC-2026-10-03-A: a live game has no kickoff deadline; its own
+            # gates are in _entry_risk_allowed (in play, calm, price band).
+            and (live or seconds_to_event
+                 > self.reconciler.policy.force_exit_before_start_seconds)
             and 0 <= (now - state.book_observed_at).total_seconds()
             <= self.reconciler.policy.max_book_age_seconds
             and len(working) + reservations <= self._effective_entry_order_cap(now)
@@ -2938,10 +2975,25 @@ class CommissioningRunner(
         """
 
         try:
-            start = self.state_for(slug).market.game_start
+            market = self.state_for(slug).market
         except Exception:
             return False
-        return start is not None and start <= self._now()
+        return self._game_lifecycle_over(market, self._now())
+
+    def _game_lifecycle_over(self, market, now: datetime) -> bool:
+        """Pregame: the game started. Live strategy (BC-2026-10-03-A): the game
+        positively ended (fresh evidence it is no longer in play) or the
+        market is no longer open; a game still being played is not over."""
+        start = getattr(market, "game_start", None)
+        if start is None or start > now:
+            return False
+        if not self.config.strategy.live_enabled:
+            return True
+        checked = getattr(market, "event_checked_at", None)
+        return (not market.active or market.closed
+                or (checked is not None
+                    and 0 <= (now - checked).total_seconds() < 30
+                    and not getattr(market, "event_in_play", False)))
 
     # A market that placed or cancelled this recently is mid-cycle, not stuck.
     # Measured 2026-08-19: markets cycled every 17-40s under the churn, so a
@@ -3140,13 +3192,25 @@ class CommissioningRunner(
             if owner.market is None:
                 continue
             previous = owner.market.event_started_at
+            was_in_play = owner.market.event_in_play
             owner.market = self.gateway.apply_event_status(owner.market)
             if owner.market.event_started_at is not None and previous is None:
                 self._mark_market_dirty(owner.slug, self._now())
                 if owner.slug in self._retired:
                     self._retired[owner.slug].next_retry_at = self._now()
                 self._request_lifecycle_top_up(self._now())
+                action = ("live_rules" if self.config.strategy.live_enabled
+                          else "cancel_entries_and_exit")
                 print(f"[event-started] at={self._now().isoformat()} "
+                      f"market={owner.slug} action={action}", flush=True)
+            elif (self.config.strategy.live_enabled and was_in_play
+                  and not owner.market.event_in_play
+                  and owner.market.event_checked_at is not None):
+                # BC-2026-10-03-A: fresh evidence the game ended -> cancel
+                # entries, exit, and free the slot once flat.
+                self._mark_market_dirty(owner.slug, self._now())
+                self._request_lifecycle_top_up(self._now())
+                print(f"[event-ended] at={self._now().isoformat()} "
                       f"market={owner.slug} action=cancel_entries_and_exit", flush=True)
 
     def _entry_observation_pending(self) -> bool:
@@ -3849,8 +3913,7 @@ class CommissioningRunner(
         """
 
         state = self._markets.get(slug)
-        start = getattr(getattr(state, "market", None), "game_start", None)
-        return start is not None and start <= now
+        return self._game_lifecycle_over(getattr(state, "market", None), now)
 
     # Retirement reasons that being flat does not resolve. A market retired
     # because its book will not parse is still unquotable once flat, so
@@ -4687,9 +4750,14 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         entry_expiry_policy = load_entry_expiry_policy()
         from .selection_exclusions import load_selection_exclusions
         selection_exclusions = load_selection_exclusions()
-    except (ValueError, OSError) as exc:
+        from .strategy import load_strategy_policy
+        strategy = load_strategy_policy()
+    except (ValueError, OSError, TypeError) as exc:
         raise CommissioningRefused(str(exc)) from exc
+    if not (strategy.pregame_enabled or strategy.live_enabled):
+        raise CommissioningRefused("strategy policy enables neither pregame nor live")
     config = CommissioningConfig(
+        strategy=strategy,
         allow_daily_event_rewards=not getattr(args, "disable_daily_event_rewards", False),
         daily_event_horizon_seconds=3600 * getattr(args, "daily_event_entry_hours", 24),
         market_slug=(AUTO_REWARD_MARKET if auto_select else args.market_slug),
@@ -4740,11 +4808,21 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         score_policy = load_trade_score_policy()
     except (ValueError, TypeError, OSError) as exc:
         raise CommissioningRefused(f"trade-score policy: {exc}") from exc
-    print(f"[trading-mode] mode={score_policy.mode} "
+    # The Trade Scorer and the pool score are both built from pregame
+    # trading/programs, so they apply only while pregame farming is on.
+    pregame = strategy.pregame_enabled
+    print(f"[trading-mode] strategy={strategy.label} mode={score_policy.mode} "
           f"min_win_probability={score_policy.min_win_probability:g} "
-          f"reward_pool_gate={'on' if pool_policy.enabled and not score_policy.scorer_mode else 'off'}",
+          f"reward_pool_gate={'on' if pregame and pool_policy.enabled and not score_policy.scorer_mode else 'off'}"
+          + (f" live_min_price={strategy.live.min_price:g}"
+             f" live_entry_lifetime={strategy.live.entry_lifetime_seconds:g}s"
+             f" live_max_inventory_age={strategy.live.max_inventory_age_seconds:g}s"
+             f" live_jumpy={strategy.live.jumpy_touch_changes_30s}/30s"
+             if strategy.live_enabled else ""),
           flush=True)
-    if score_policy.scorer_mode:
+    if not pregame:
+        pass
+    elif score_policy.scorer_mode:
         # BC-2026-10-02-B: scorer mode replaces normal reward farming, so the
         # reward-pool pause (a reward-farming rule) does not apply.
         runner_options["trade_scorer"] = TradeScorer(score_policy)

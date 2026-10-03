@@ -197,8 +197,13 @@ def _projection_period_bounds(
     incentive: IncentivePeriod,
     event_start: datetime,
     now: datetime,
+    live_period_seconds: float | None = None,
 ) -> tuple[datetime, datetime, datetime] | None:
-    """Return pool start/end and this pregame bot's accessible end.
+    """Return pool start/end and this bot's accessible end.
+
+    ``live`` (BC-2026-10-03-A) is projected only when the live strategy passes
+    an assumed game length: the pool is spread from the start over that length
+    and the whole period is accessible. Without it, live fails closed as before.
 
     The pool duration determines dollars per second.  ``accessible_end`` can
     be earlier: a daily pool may continue after kickoff, but this executor may
@@ -219,6 +224,13 @@ def _projection_period_bounds(
             local_date + timedelta(days=1), time.min,
             tzinfo=_REWARD_TIMEZONE,
         ).astimezone(timezone.utc)
+    elif kind == "live" and live_period_seconds is not None:
+        period_start = event_start
+        period_end = event_start + timedelta(seconds=float(live_period_seconds))
+        if incentive.ends_at is not None:
+            _require_aware(incentive.ends_at, "incentive.ends_at")
+            period_end = min(period_end, incentive.ends_at)
+        return period_start, period_end, period_end
     else:
         return None
 
@@ -375,6 +387,7 @@ def project_order_reward(
     haircut: float = 0.5,
     minimum_payout: float = 1.0,
     order_already_resting: bool = False,
+    live_period_seconds: float | None = None,
 ) -> RewardProjection:
     """Project a conservative one-side reward from the current full book.
 
@@ -413,7 +426,8 @@ def project_order_reward(
         return RewardProjection(
             False, 0.0, 0.0, 0.0, 0.0, 0.0, score.reason)
 
-    bounds = _projection_period_bounds(incentive, event_start, now)
+    bounds = _projection_period_bounds(
+        incentive, event_start, now, live_period_seconds=live_period_seconds)
     if bounds is None:
         return RewardProjection(
             False, score.score, 0.0, 0.0, 0.0, 0.0,
@@ -487,9 +501,10 @@ def project_order_reward(
             False, score.score, total_score, share, 0.0, maximum,
             "below_minimum_payout")
     projected = dollars_per_second * min(horizon, remaining)
-    entry_end = min(
-        accessible_end,
-        event_start - timedelta(seconds=ENTRY_REWARD_EXIT_BUFFER_SECONDS))
+    entry_end = (
+        accessible_end if _normalized_period(incentive.period) == "live"
+        else min(accessible_end,
+                 event_start - timedelta(seconds=ENTRY_REWARD_EXIT_BUFFER_SECONDS)))
     entry_seconds = max(0.0, (entry_end - now).total_seconds())
     return RewardProjection(
         True, score.score, total_score, share, projected, maximum,

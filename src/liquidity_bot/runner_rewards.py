@@ -68,6 +68,45 @@ class RewardRotationMixin:
         print(f"[thin-book-skip] at={now.isoformat()} market={slug} side={side} "
               f"spread={spread:.4f} queue_ahead={queue_ahead:g}", flush=True)
 
+    LIVE_BLOCK_LOG_SECONDS = 60.0
+
+    def _live_entry_blocker(self, slug: str, now: datetime) -> str | None:
+        """BC-2026-10-03-A: per-market live entry gates (None = allowed).
+
+        Read by ``_entry_risk_allowed``, so a blocked live market's resting
+        entries are cancelled at once (no reward-eligibility dwell) while its
+        exits stay available. Pregame markets always return None.
+        """
+        try:
+            state = self.state_for(slug)
+        except Exception:
+            return None
+        market = state.market
+        if market is None or not self.config.strategy.is_live(market, now):
+            return None
+        live = self.config.strategy.live
+        blocker = None
+        if state.book is None or not state.book.is_two_sided:
+            blocker = "live_book_one_sided"
+        else:
+            mid = (state.book.best_bid.price + state.book.best_offer.price) / 2
+            from .strategy import LIVE_JUMPY_BLOCKER, LIVE_PRICE_BLOCKER
+            if min(mid, 1.0 - mid) < live.min_price - 1e-9:
+                blocker = LIVE_PRICE_BLOCKER
+            elif state.touch_changes(now, seconds=30) >= live.jumpy_touch_changes_30s:
+                blocker = LIVE_JUMPY_BLOCKER
+        logged = self.__dict__.setdefault("_live_block_logged", {})
+        last = logged.get(slug)
+        if blocker is not None and (
+                last is None or last[1] != blocker
+                or (now - last[0]).total_seconds() >= self.LIVE_BLOCK_LOG_SECONDS):
+            logged[slug] = (now, blocker)
+            print(f"[live-entry-block] at={now.isoformat()} market={slug} reason={blocker} "
+                  f"touch_changes_30s={state.touch_changes(now, seconds=30)}", flush=True)
+        elif blocker is None and last is not None:
+            logged.pop(slug, None)
+        return blocker
+
     TRADE_SCORE_LOG_SECONDS = 300.0
 
     def _trade_score_blocker(
@@ -81,7 +120,9 @@ class RewardRotationMixin:
         records (and the Trade Scorer trained on) for this exact price.
         """
         scorer = getattr(self, "trade_scorer", None)
-        if scorer is None or already_resting:
+        if (scorer is None or already_resting
+                or self.config.strategy.is_live(state.market, now)):
+            # The model was trained on pregame trades only.
             return None
         from .trade_score import (
             TRADE_SCORE_BELOW_MINIMUM, TRADE_SCORE_MODEL_UNAVAILABLE, league_of)
@@ -229,17 +270,22 @@ class RewardRotationMixin:
                 "offer": "unsupported_market_structure",
             }
             return
+        live = self.config.strategy.is_live(state.market, now)
         try:
             period = select_applicable_period(
                 state.incentive.periods, state.market.game_start, now,
-                allow_daily_event=self.config.allow_daily_event_rewards,
+                allow_daily_event=self.config.allow_daily_event_rewards and not live,
                 daily_event_horizon_seconds=self.config.daily_event_horizon_seconds,
                 daily_event_observed_at=state.incentive.observed_at)
         except AmbiguousIncentiveError:
             state.economic_blocker_by_side = {
                 "bid": "ambiguous_incentive", "offer": "ambiguous_incentive"}
             return
-        if period is None or period.period == "live" or state.market.tick_size is None:
+        if live and period is not None and period.period != "live":
+            # BC-2026-10-03-A: an in-play game is farmed only on its live row.
+            period = None
+        if (period is None or (period.period == "live" and not live)
+                or state.market.tick_size is None):
             # Invariant 39: only approved pregame reward clocks qualify. Which of the
             # three it is matters -- "no applicable period" is a slate that has
             # not opened yet, "live" is a market we may never quote, and a
@@ -284,8 +330,10 @@ class RewardRotationMixin:
             if price is None:
                 state.economic_blocker_by_side[side] = "book_sides_overlap"
                 continue
-            if min(price, 1.0 - price) < (
-                    float(self.config.minimum_entry_price) - 1e-9):
+            price_floor = float(self.config.minimum_entry_price)
+            if live:
+                price_floor = max(price_floor, self.config.strategy.live.min_price)
+            if min(price, 1.0 - price) < price_floor - 1e-9:
                 # The reconciler already refuses the same candidate.  Record
                 # it here as economics as well so a flat market that drifts to
                 # an untradeable extreme cannot silently own a slot forever.
@@ -324,6 +372,8 @@ class RewardRotationMixin:
                 # per-market/period $1 payout floor is measured separately.
                 minimum_payout=0.0,
                 order_already_resting=already_resting,
+                live_period_seconds=(
+                    self.config.strategy.live.assumed_period_seconds if live else None),
             )
             state.reward_projection_by_side[side] = projection
             queue_ahead = (
@@ -534,9 +584,11 @@ class RewardRotationMixin:
             return False
         market = state.market
         if (market is None or market.game_start is None
-                or market.game_start <= now):
+                or (market.game_start <= now
+                    and not self.config.strategy.is_live(market, now))):
             # Past kickoff belongs to `_expired_and_flat`, whose separate
-            # lifecycle rule is already covered and logged.
+            # lifecycle rule is already covered and logged. A live game
+            # (BC-2026-10-03-A) whose live program stopped paying is released here.
             return False
         return self._owner_is_flat_and_clear(slug)
 
@@ -568,8 +620,9 @@ class RewardRotationMixin:
             state.incentive is None
             and state.market is not None
             and state.market.game_start is not None
-            and state.market.game_start > now
-            and state.market.event_allows_entry(now)
+            # Pregame: before kickoff with pregame evidence; live strategy:
+            # in play with fresh evidence (BC-2026-10-03-A).
+            and self.config.strategy.allows_entry(state.market, now)
             and not self._market_metadata_proves_not_open(state.market)
             and (observed - since).total_seconds()
             >= self.config.economic_idle_replacement_seconds

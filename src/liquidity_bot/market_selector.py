@@ -35,6 +35,7 @@ from .risk import OpportunityEconomics
 from .shadow_math import cross_exit
 from .entry_quality import EntryQualityPolicy
 from .selection_books import book_scope
+from .strategy import StrategyPolicy
 
 
 SUPPORTED_EVENT_PERIODS = frozenset({
@@ -118,6 +119,9 @@ class RewardSelectionPolicy:
     # Operator business filter from config/selection_exclusions.json. Empty
     # by default: selection is unchanged until a league is explicitly listed.
     excluded_leagues: frozenset[str] = frozenset()
+    # BC-2026-10-03-A: which games may be farmed (pregame / live). The default
+    # is the pregame-only selector.
+    strategy: StrategyPolicy = StrategyPolicy()
 
     def __post_init__(self) -> None:
         if not isinstance(self.excluded_leagues, frozenset):
@@ -344,6 +348,9 @@ def evaluate_market_opportunity(
     fill_hazard_model = fill_hazard_model or MondayFillHazardModel()
     spread = book.best_offer.price - book.best_bid.price
     seconds_to_event = max(0.0, (market.game_start - now).total_seconds())
+    live = policy.strategy.is_live(market, now)
+    price_floor = (max(policy.minimum_entry_price, policy.strategy.live.min_price)
+                   if live else policy.minimum_entry_price)
     sides: list[SideOpportunity] = []
     for side, price in (("bid", book.best_bid.price),
                         ("offer", book.best_offer.price)):
@@ -371,6 +378,8 @@ def evaluate_market_opportunity(
             # below $1. Live behavior therefore stays unchanged at zero while
             # a separate report-only measurement collects current evidence.
             minimum_payout=0.0,
+            live_period_seconds=(
+                policy.strategy.live.assumed_period_seconds if live else None),
         )
         queue_ahead = (
             book.best_bid.size if side == "bid" else book.best_offer.size)
@@ -387,7 +396,7 @@ def evaluate_market_opportunity(
         exit_complete = False
         exit_pnl = 0.0
         expected: float | None = None
-        if min(price, 1.0 - price) < policy.minimum_entry_price - 1e-9:
+        if min(price, 1.0 - price) < price_floor - 1e-9:
             blocker = "price_too_extreme"
         elif spread + 1e-9 < policy.minimum_entry_spread:
             blocker = "spread_below_entry_minimum"
@@ -463,7 +472,7 @@ def _candidate_key(
     # Preserve the established event-lifecycle strategy. Daily-per-event can
     # fill otherwise empty capacity, but never displaces a valid day-of row.
     phase = 0 if str(period.period).strip().lower() in {
-        "day_of", "day-of", "dayof",
+        "day_of", "day-of", "dayof", "live",
     } else 1
     density = period.reward_pool / period.target_size
     midpoint_distance = 1.0
@@ -488,7 +497,7 @@ def _opportunity_key(
     return (
         0 if item.viable_sides else 1,
         0 if str(item.period.period).strip().lower() in {
-            "day_of", "day-of", "dayof",
+            "day_of", "day-of", "dayof", "live",
         } else 1,
         # Projected reward first, because it is the quantity we are paid on.
         #
@@ -825,8 +834,7 @@ class RewardMarketSelector:
             and not market.closed
             and market.status in OPEN_MARKET_STATUSES
             and market.game_start is not None
-            and now < market.game_start <= window_end
-            and market.event_allows_entry(now)
+            and self._entry_clock_allows(market, now=now, window_end=window_end)
             and market.tick_size is not None
             and market.minimum_trade_qty is not None
             # The venue minimum must fit inside one quote, so this scales
@@ -837,6 +845,18 @@ class RewardMarketSelector:
             # no reads. Empty exclusions leave this gate unchanged.
             and league_from_slug(market.slug) not in self.policy.excluded_leagues
         )
+
+    def _entry_clock_allows(
+        self, market: MarketMetadata, *, now: datetime, window_end: datetime,
+    ) -> bool:
+        """Pregame: inside the horizon with fresh pregame evidence. Live
+        (BC-2026-10-03-A): started, in play, fresh evidence."""
+        phase = self.policy.strategy.entry_phase(market, now)
+        if phase == "pregame":
+            return now < market.game_start <= window_end and market.event_allows_entry(now)
+        if phase == "live":
+            return market.event_allows_live_entry(now)
+        return False
 
     def _catalog_spread_can_enter(self, market: MarketMetadata) -> bool:
         """Use catalog BBO only to skip known-tight rows before book reads.
@@ -931,7 +951,24 @@ class RewardMarketSelector:
         incentive: MarketIncentive,
         now: datetime, *, require_event_freshness: bool = True,
     ) -> IncentivePeriod | None:
+        if (market.active and not market.closed
+                and market.status in OPEN_MARKET_STATUSES
+                and market.game_start is not None
+                and market.tick_size is not None
+                and market.minimum_trade_qty is not None
+                and market.minimum_trade_qty <= self.policy.quote_size
+                and market.is_supported_moneyline
+                and self.policy.strategy.is_live(market, now)):
+            # BC-2026-10-03-A: an in-play game uses only its live reward row.
+            if require_event_freshness and not market.event_allows_live_entry(now):
+                return None
+            period = select_applicable_period(
+                incentive.periods, market.game_start, now, allow_daily_event=False)
+            if period is None or str(period.period).strip().lower() != "live":
+                return None
+            return period
         if (not market.active or market.closed
+                or not self.policy.strategy.pregame_enabled
                 or market.status not in OPEN_MARKET_STATUSES
                 or market.game_start is None or market.game_start <= now
                 or market.event_started_at is not None

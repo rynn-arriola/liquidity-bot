@@ -485,7 +485,19 @@ class ShutdownMixin:
                 # planning.
                 continue
             state = self._markets.get(slug)
-            start = getattr(getattr(state, "market", None), "game_start", None)
+            market = getattr(state, "market", None)
+            if market is not None and self.config.strategy.is_live(market, now):
+                # BC-2026-10-03-A: a live game has no kickoff; its deadline is
+                # the live inventory clock. Near = within 45 s of the forced
+                # exit (a scan blocks decisions for ~25 s), or clock unknown.
+                basis = self.ledger.inventory_basis(slug)
+                if basis is None or basis.opened_at is None:
+                    return True
+                age = (now - basis.opened_at).total_seconds()
+                if age >= self.config.strategy.live.max_inventory_age_seconds - 45:
+                    return True
+                continue
+            start = getattr(market, "game_start", None)
             if start is None:
                 return True
             if (start - now).total_seconds() <= margin:

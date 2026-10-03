@@ -954,7 +954,9 @@ class RestFallbackRunner(CommissioningRunner):
         if market is None or basis is None:
             return None
         policy = self.reconciler.policy
-        age_limit = policy.max_inventory_age_seconds
+        live = self.config.strategy.is_live(market, self._now())
+        age_limit = (policy.live_max_inventory_age_seconds if live
+                     else policy.max_inventory_age_seconds)
         minimum = getattr(market, "minimum_trade_qty", None)
         minimum = Decimal(str(minimum)) if minimum is not None else None
         if (policy.small_residual_min_qty <= quantity <= policy.small_residual_max_qty
@@ -962,7 +964,7 @@ class RestFallbackRunner(CommissioningRunner):
                 and quantity >= minimum and quantity % minimum == 0):
             age_limit = min(age_limit, policy.small_residual_timeout_seconds)
         deadline = basis.opened_at + timedelta(seconds=age_limit)
-        if market.game_start is not None:
+        if market.game_start is not None and not live:
             deadline = min(deadline, market.game_start - timedelta(
                 seconds=policy.force_exit_before_start_seconds))
         return deadline

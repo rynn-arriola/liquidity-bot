@@ -27,7 +27,7 @@ Each entry records:
 
 ## BC-2026-10-02-B — Scorer mode: rest only entries the Trade Scorer rates ≥ 60% (normal reward farming switched off, not removed)
 
-- **Status:** BUILT and tested; settings confirmed by the operator; loads at the 12:00 AM ET Oct 3 window boundary (operator chose "12 AM ET").
+- **Status:** LIVE since 00:58:09Z Oct 3 (8:58 PM ET Oct 2) in `1c9aa3790` (operator "Restart now"), with the **$40** stop still loaded; the $20 stop (`cd192aa8f`) loads at the next restart at/after a window boundary, on operator request (no scheduled restarts). First 7 minutes: 34 allow / 15 skip, 22 orders on 12 markets, 0 errors.
 - **Operator:** "Ok lets do what u recommend, but do not delete how we normally farm reward this is a different way to make profit on this bot, we will just disable for now the normal way we farm reward"; "We are just switching off the normal way to farm reward and enabling this one for now" (2026-10-02). Recommendation (60% minimum) accepted; the operator then set "15 contract per trade", "Max order 30", "20 usd stop loss per 6 hours" / "Dont do 10 usd stop loss".
 - **Switch:** `config/trade_score_policy.json` `mode`: `"scorer"` = this mode; `"reward"` (or no file) = normal reward farming exactly as before. The reward-pool pause (BC-2026-10-02-A) applies only in reward mode.
 - **Rule (scorer mode):**

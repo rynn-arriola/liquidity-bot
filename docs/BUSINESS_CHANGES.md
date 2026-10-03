@@ -25,6 +25,17 @@ Each entry records:
 
 ---
 
+## BC-2026-10-03-B — Late-favourite trader: buy the 90–99¢ favourite in the final minutes, hold to settlement
+
+- **Status:** PRACTICE MODE (dry run, no orders) from Oct 3 on the operator's choice of the recommendation ("I want to do your recommendation based on best optimization"): 1–2 days of paper trades with the exact rules, then real orders only for the rules that clear break-even (needs the operator's go; the auto-mode safety check refused to switch real orders on).
+- **Operator (2026-10-03):** "buy that trade like when its 90 percent winning and there is not much time left", "This dont need to be reward market", "10 usd risk per trade with max 50 open positions", "50 usd a day is stop", "90-99 is also ok if there is profit on 99", "we can do market order as long we still profit", "make sure its market almost ending so we dont stay that long on a trade and not waste slot".
+- **Rule:** every live sports event (any league, rewarded or not), moneyline or soccer win/draw markets; buy the side priced 90–99¢ (only if a win clears the fee) when the match is in its final minutes: soccer 90'+ (incl. stoppage), hockey P3 / basketball Q4 / football Q4 with ≤ 2:00 on the clock. One trade per event; hold to settlement.
+- **Orders (when live):** market-style IOC, at most the quote + 2¢ and never above 99¢; size = $10 / that worst price. Limits: $10 per trade, ≤ 50 open positions (venue count), $50 daily stop (settled, ET day), buying power per buy, uncertain orders block buys, kill switch `data/late-favorite/STOP`; refuses to run beside the liquidity bot.
+- **Evidence so far:** August data (75 settled moneylines): first touch of 90¢ lost 0.9¢/contract; last-5-minutes (hindsight) won 52/53. Today's tracker: 23 qualifying matches in 43 minutes; from 90' soccer ended ~6 min later, hockey from 2:00 ~5 min; results ~15 min after the end.
+- **Go-live test (practice results):** per sport, win rate vs average cost + fee, and $ per trade over ≥ 100 settled paper trades; keep only sports/stages that are positive.
+- **Undo / stop:** `enabled: false` in `config/late_favorite_policy.json` or the STOP file; remove cron `# liquidity-bot late favorite trader`.
+- **Verdict:** pending.
+
 ## BC-2026-10-03-A — Live (in-game) reward farming; pregame switched off (kept, switchable)
 
 - **Status:** LIVE since 14:28:05Z Oct 3 (10:28 AM ET) in `62eb0800e` (operator "Command 1", "Start now, $40/30 until noon"): live strategy on, pregame off, size 10, the current window's 30 orders / $40 stop; the 20 orders / $20 stop (`b13d12af8`, tree identical to the tested `5bbd2235a`) load at the 12:00 ET restart. First check 14:31Z: 14 viable live markets, 8 orders on 7 markets, 3 positions, 0 errors; window loss $2.27 (a table-tennis swing 0.40→0.65 in 30 s cost $2.44).

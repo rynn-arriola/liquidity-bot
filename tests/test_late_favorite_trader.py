@@ -64,6 +64,9 @@ class RuleTests(unittest.TestCase):
                          (10, 50, 50))
         self.assertEqual((p.min_price, p.max_price), (0.90, 0.99))
         self.assertEqual(sorted(p.rules), ["basketball", "football", "hockey", "soccer"])
+        # Operator: "make sure its market almost ending so we dont stay that long".
+        self.assertEqual(p.rules["soccer"].min_minute, 90)
+        self.assertEqual({p.rules[s].max_clock_minutes for s in ("hockey", "basketball", "football")}, {2})
 
     def test_policy_validation(self):
         for bad in (dict(min_price=0.95, max_price=0.9), dict(max_open_positions=0),

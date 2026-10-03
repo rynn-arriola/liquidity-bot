@@ -42,6 +42,8 @@ ET = ZoneInfo("America/New_York")
 CRON_MARK = "# liquidity-bot late favorite trader"
 LOOKBACK_HOURS = 14
 SLIPPAGE = 0.02
+SETTLES_PER_CYCLE = 2
+SETTLE_RETRY_MINUTES = 5
 PAGE_SIZE = 500
 
 SCHEMA = """
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS trades(
   side TEXT NOT NULL, price REAL, cost REAL, qty REAL, fee_coefficient REAL,
   mode TEXT NOT NULL, status TEXT NOT NULL, exchange_order_id TEXT, filled_qty REAL,
   avg_price REAL, created_at TEXT NOT NULL, updated_at TEXT, error TEXT,
-  game_state TEXT, settlement REAL, settled_at TEXT, result REAL);
+  game_state TEXT, settlement REAL, settled_at TEXT, result REAL, next_settle_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_event ON trades(event_slug, mode);
 """
 
@@ -236,15 +238,28 @@ class Trader:
                              filled, avg_cost, iso(now_utc()), trade_id))
         log(f"order sent id={response.get('id')} filled={filled} avg_cost={avg_cost}")
 
-    async def settle(self, gateway) -> None:
-        rows = self.db.execute("SELECT * FROM trades WHERE mode=? AND status='FILLED' AND settlement IS NULL",
-                               (self.mode,)).fetchall()
+    async def settle(self, gateway, still_playing: set[str]) -> None:
+        """Read a result only once its match is no longer being played, at most
+        SETTLES_PER_CYCLE per cycle and every SETTLE_RETRY_MINUTES per trade."""
+        now = now_utc()
+        rows = self.db.execute(
+            "SELECT * FROM trades WHERE mode=? AND status='FILLED' AND settlement IS NULL "
+            "AND (next_settle_at IS NULL OR next_settle_at<=?) ORDER BY id", (self.mode, iso(now))).fetchall()
+        tried = 0
         for r in rows:
+            if r["event_slug"] in still_playing:
+                continue
             if self.mode == "live" and r["market_slug"] in self.positions:
                 continue                                 # still held: not settled yet
+            if tried >= SETTLES_PER_CYCLE:
+                break
+            tried += 1
             try:
                 value = await gateway.fetch_settlement(r["market_slug"])
             except Exception:
+                with self.db:
+                    self.db.execute("UPDATE trades SET next_settle_at=? WHERE id=?",
+                                    (iso(now + timedelta(minutes=SETTLE_RETRY_MINUTES)), r["id"]))
                 continue
             qty = r["filled_qty"] or r["qty"]
             cost = r["avg_price"] if r["avg_price"] is not None else r["cost"]
@@ -289,7 +304,6 @@ class Trader:
                 if self.mode == "live" and now_utc() >= next_account:
                     await self.refresh_account(account)
                     next_account = now_utc() + timedelta(seconds=60)
-                await self.settle(gateway)
                 blocked = None
                 if self.mode == "live" and bot_runner_running():
                     blocked = "liquidity_bot_running"
@@ -298,6 +312,9 @@ class Trader:
                 elif daily_stop_hit(realized_today(self.db, self.mode), self.policy):
                     blocked = "daily_stop"
                 events = await self.list_live_events(gateway, client)
+                still_playing = {e.get("slug") for e in events
+                                 if not ((e.get("eventState") or {}).get("ended") or e.get("ended"))}
+                await self.settle(gateway, still_playing)
                 for event in events:
                     if blocked or self.open_count() >= self.policy.max_open_positions:
                         break

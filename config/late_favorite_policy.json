@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "live_orders": false,
+  "live_orders": true,
   "risk_per_trade_usd": 10,
   "max_open_positions": 50,
   "daily_loss_stop_usd": 50,

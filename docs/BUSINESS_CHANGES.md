@@ -25,6 +25,15 @@ Each entry records:
 
 ---
 
+## BC-2026-10-03-C — Combo Builder (phase 1: quote-only, no trading)
+
+- **Status:** running from Oct 3; never accepts or confirms a quote, so it cannot trade.
+- **Operator:** "You think we can do a combo builder where we get markets from live that has 90-99", "This is a separare work ... we can use the same markets so we dont waste market scans", "We might need to retry this once we get rejected because combo odds change but we still doing market order" (phase 2).
+- **How:** the Endgame Trader writes its scan's late-stage favourites (≥ 90¢ middle, all its other rules) to `data/late-favorite/candidates.json` every cycle (no extra market calls). `scripts/combo_builder.py` reads it; when 2–3 favourites ≥ 95¢ from different events are live together, it creates the combo (`POST /v1/combos`), requests quotes for 10 contracts (`POST /v1/rfqs`), records every quote for 12 s (`GET /v1/rfqs/quotes`) and deletes the RFQ. At most one probe per 2 minutes, 60 per day (venue quota 1,000 new combos per week shared by all users).
+- **Measures:** whether makers quote live combos, speed, quoted price vs fair (product of the legs' middle prices), quote lifetime. Results `data/combo-builder/probes.db`; `combo_builder.py report`.
+- **Phase 2 (needs operator go):** accept the best quote when it is still profitable vs fair; on rejection/expiry re-request and retry up to ~3 times at the best new price (market-style with a profit cap).
+- **Undo:** remove the cron line `# liquidity-bot combo builder`.
+
 ## BC-2026-10-03-B — Endgame Trader (late-favourite): buy the 90–99¢ favourite in the final minutes, hold to settlement
 
 - **Status:** dry run from 16:01Z Oct 3 with the recommended setup; **real orders switched on Oct 3** after the operator turned off auto mode ("Ok i switch to manual") and approved each step, for running it today ("No recommendation for set up because im running it today"). Reward farming is unchanged and switchable ("dont remove the usual way of farming rewards").

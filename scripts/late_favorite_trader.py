@@ -34,11 +34,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from liquidity_bot.late_favorite_trader import (  # noqa: E402
-    contracts_for, daily_stop_hit, load_policy, pick_entry, realized_result)
+    combo_candidates, contracts_for, daily_stop_hit, load_policy, pick_entry, realized_result)
 
 OUT = Path("data/late-favorite")
 DB = OUT / "trader.db"
 STOP_FILE = OUT / "STOP"
+CANDIDATES_FILE = OUT / "candidates.json"
 ET = ZoneInfo("America/New_York")
 CRON_MARK = "# liquidity-bot late favorite trader"
 LOOKBACK_HOURS = 24      # operator: matches can run long (was 14)
@@ -133,6 +134,16 @@ class Trader:
             if len(batch) < PAGE_SIZE:
                 break
         return events
+
+    def publish_candidates(self, events: list[dict]) -> None:
+        """Share this scan's late-stage favourites with the Combo Builder (no extra API)."""
+        try:
+            payload = {"at": iso(now_utc()), "candidates": combo_candidates(events, self.policy)}
+            tmp = CANDIDATES_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(CANDIDATES_FILE)
+        except Exception as exc:
+            log(f"candidates file not written error={type(exc).__name__}")
 
     async def refresh_account(self, account) -> None:
         now = now_utc()
@@ -362,6 +373,7 @@ class Trader:
                 elif daily_stop_hit(realized_today(self.db, self.mode), self.policy):
                     blocked = "daily_stop"
                 events = await asyncio.wait_for(self.list_live_events(gateway, client), STEP_TIMEOUT)
+                self.publish_candidates(events)
                 still_playing = {e.get("slug") for e in events
                                  if not ((e.get("eventState") or {}).get("ended") or e.get("ended"))}
                 await asyncio.wait_for(self.settle(gateway, still_playing), STEP_TIMEOUT)

@@ -269,3 +269,30 @@ def realized_result(side: str, cost: float, qty: float, settlement: float,
 
 def daily_stop_hit(realized_today: float, policy: LateFavoritePolicy) -> bool:
     return realized_today <= -policy.daily_loss_stop_usd + 1e-9 and math.isfinite(realized_today)
+
+
+def combo_candidates(events: list[dict], policy: LateFavoritePolicy, floor: float = 0.90) -> list[dict]:
+    """Late-stage favourites for the Combo Builder (shared scan, BC-2026-10-03-C).
+
+    Same rules as the trader (stage, ties, spread, per-sport floors, winners-only
+    soccer) with the price floor lowered to ``floor``; one leg per event.
+    """
+    from dataclasses import replace
+    relaxed = replace(policy, min_price=min(policy.min_price, floor), max_price=0.99)
+    out = []
+    for event in events:
+        cand = pick_entry(event, relaxed)
+        if cand is None:
+            continue
+        state = event.get("eventState") if isinstance(event.get("eventState"), dict) else {}
+        market = next((m for m in event.get("markets") or [] if m.get("slug") == cand.market_slug), {})
+        bid, ask = _quote(market.get("bestBidQuote")), _quote(market.get("bestAskQuote"))
+        mid = None if bid is None or ask is None else (bid + ask) / 2
+        out.append({
+            "event": cand.event_slug, "market": cand.market_slug, "side": cand.side,
+            "cost": cand.cost, "bid": bid, "ask": ask,
+            "fav_mid": None if mid is None else round(mid if cand.side == "long" else 1 - mid, 4),
+            "sport": state.get("type"), "period": state.get("period") or event.get("period"),
+            "score": state.get("score") or event.get("score"),
+        })
+    return out

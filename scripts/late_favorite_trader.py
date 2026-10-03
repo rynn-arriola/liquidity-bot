@@ -42,6 +42,7 @@ ET = ZoneInfo("America/New_York")
 CRON_MARK = "# liquidity-bot late favorite trader"
 LOOKBACK_HOURS = 14
 SLIPPAGE = 0.02
+ORDER_PRICE_CAP = 0.99
 SETTLES_PER_CYCLE = 2
 MAX_ATTEMPTS_PER_EVENT = 3
 STEP_TIMEOUT = 60  # a read step that hangs is abandoned; the next cycle retries
@@ -167,7 +168,10 @@ class Trader:
         # take what is offered now, paying at most SLIPPAGE above the quoted price and
         # never more than max_price, so a win always clears the fee. Size on that worst
         # price so one trade never risks more than risk_per_trade_usd.
-        worst_cost = min(self.policy.max_price, cand.cost + SLIPPAGE)
+        # The trigger band (min_price..max_price) decides WHEN to buy; the fill may
+        # go up to SLIPPAGE above the quote but never past ORDER_PRICE_CAP, where a
+        # win still clears the fee (operator: "Did you do market order").
+        worst_cost = min(ORDER_PRICE_CAP, cand.cost + SLIPPAGE)
         qty = contracts_for(self.policy.risk_per_trade_usd, worst_cost, market.minimum_trade_qty or 0.01)
         if qty <= 0:
             return

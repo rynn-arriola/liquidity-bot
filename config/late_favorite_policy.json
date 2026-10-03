@@ -4,7 +4,7 @@
   "risk_per_trade_usd": 10,
   "max_open_positions": 50,
   "daily_loss_stop_usd": 50,
-  "min_price": 0.90,
+  "min_price": 0.93,
   "max_price": 0.99,
   "poll_seconds": 10,
   "rules": {

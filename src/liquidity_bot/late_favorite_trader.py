@@ -189,6 +189,13 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
     if not almost_over(state.get("type"), get("period"), get("elapsed"), policy.rules,
                        score=get("score")):
         return None
+    rule = policy.rules.get(state.get("type") or "")
+    if rule is not None and rule.kind is None:
+        # Clock/minute sports (soccer, hockey, basketball, football): a tied game in the
+        # final minutes is never decided (Vaasan Sport 2-2 with 1:29 left, 16:34Z).
+        units = _pairs(get("score"))
+        if not units or len(units) != 1 or units[0][0] == units[0][1]:
+            return None
     best = None
     for m in event.get("markets") or []:
         if (not isinstance(m, dict) or m.get("sportsMarketTypeV2") not in TRADABLE_TYPES
@@ -201,10 +208,13 @@ def pick_entry(event: dict, policy: LateFavoritePolicy) -> Candidate | None:
             fee = float(m["feeCoefficient"]) if m.get("feeCoefficient") is not None else None
         except (TypeError, ValueError):
             fee = None
+        # The trigger is the MIDDLE of the book (the market's view); the price limit is
+        # what we pay. A thin 89/99 book has a 94c middle and is skipped at 95c.
+        mid = (bid + ask) / 2
         options = []
-        if ask is not None and policy.min_price <= ask <= policy.max_price:
+        if policy.min_price <= mid and ask <= policy.max_price:
             options.append(("long", ask, ask))
-        if bid is not None and policy.min_price <= 1 - bid <= policy.max_price:
+        if policy.min_price <= 1 - mid and 1 - bid <= policy.max_price:
             options.append(("short", bid, round(1 - bid, 6)))
         for side, price, cost in options:
             # Only buy when a win still clears the taker fee.

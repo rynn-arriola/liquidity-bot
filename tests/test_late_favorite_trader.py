@@ -14,9 +14,9 @@ POLICY = LateFavoritePolicy(enabled=True, rules=RULES)
 
 
 def event(sport="hockey", period="P3", elapsed="04:00", bid=.95, ask=.96, live=True,
-          mtype="SPORTS_MARKET_TYPE_MONEYLINE", status="MARKET_STATUS_OPEN"):
+          mtype="SPORTS_MARKET_TYPE_MONEYLINE", status="MARKET_STATUS_OPEN", score="3-1"):
     return {"slug": "ev", "eventState": {"type": sport, "period": period, "elapsed": elapsed,
-                                         "live": live, "ended": False},
+                                         "live": live, "ended": False, "score": score},
             "markets": [{"slug": "m1", "sportsMarketTypeV2": mtype, "status": status, "feeCoefficient": 0.0695,
                          "bestBidQuote": {"value": str(bid)}, "bestAskQuote": {"value": str(ask)}}]}
 
@@ -74,6 +74,13 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(pick_entry(event(bid=.02, ask=.06), POLICY))
         self.assertIsNotNone(pick_entry(event(bid=.02, ask=.04), POLICY))
         self.assertIsNone(pick_entry(event(bid=None, ask=.96), POLICY))
+        # Middle of the book is the trigger: Vaasan Sport 89/99 -> mid 94c < 95c.
+        strict = replace(POLICY, min_price=.95, max_spread=.10)
+        self.assertIsNone(pick_entry(event(bid=.89, ask=.99), strict))
+        self.assertIsNotNone(pick_entry(event(bid=.95, ask=.97), strict))
+        # A tied clock-sport game is skipped; score sports are unaffected.
+        self.assertIsNone(pick_entry(event(score="2-2"), POLICY))
+        self.assertIsNone(pick_entry(event(score=None), POLICY))
 
     def test_sizing_daily_stop_and_results(self):
         self.assertEqual(contracts_for(10, 0.92, 0.01), Decimal("10.86"))

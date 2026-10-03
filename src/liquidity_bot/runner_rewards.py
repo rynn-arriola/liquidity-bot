@@ -68,6 +68,72 @@ class RewardRotationMixin:
         print(f"[thin-book-skip] at={now.isoformat()} market={slug} side={side} "
               f"spread={spread:.4f} queue_ahead={queue_ahead:g}", flush=True)
 
+    TRADE_SCORE_LOG_SECONDS = 300.0
+
+    def _trade_score_blocker(
+        self, state, side: str, *, price: float, spread: float,
+        already_resting: bool, order_score, fill_probability: float,
+        exit_result, seconds_to_event: float, now: datetime,
+    ) -> str | None:
+        """Scorer mode only: refuse a new entry the Trade Scorer rates too low.
+
+        The traits are the same decision-time facts the quote observation
+        records (and the Trade Scorer trained on) for this exact price.
+        """
+        scorer = getattr(self, "trade_scorer", None)
+        if scorer is None or already_resting:
+            return None
+        from .trade_score import (
+            TRADE_SCORE_BELOW_MINIMUM, TRADE_SCORE_MODEL_UNAVAILABLE, league_of)
+        better = at_quote = 0.0
+        for level_price, level_size in state.book.levels(side):
+            if (side == "bid" and level_price > price + 1e-9
+                    or side == "offer" and level_price < price - 1e-9):
+                better += level_size
+            elif abs(level_price - price) <= 1e-9:
+                at_quote += level_size
+        stake = exit_result.entry_cost
+        traits = {
+            "quote_price": price, "spread": spread, "side": side,
+            "seconds_to_event": seconds_to_event,
+            "observed_queue_ahead": better + at_quote,
+            "depth_at_quote": at_quote, "depth_better_than_quote": better,
+            "bid_depth": state.book.bid_depth, "offer_depth": state.book.offer_depth,
+            "retained_value_ratio": ((stake + exit_result.pnl) / stake
+                                     if exit_result.complete and stake > 0 else None),
+            "fill_probability": fill_probability,
+            "touch_changes_30s": state.touch_changes(now, seconds=30),
+            "touch_changes_120s": state.touch_changes(now, seconds=120),
+            "seconds_since_touch_change": state.seconds_since_touch_change(now),
+            "ticks_from_best": order_score.ticks_from_best,
+            "quantity": float(self.config.quote_size),
+            "stressed_exit_pnl": exit_result.pnl,
+            "league": league_of(state.slug),
+        }
+        try:
+            probability = scorer.win_probability(traits, now)
+        except Exception as exc:
+            print(f"[trade-score] at={now.isoformat()} market={state.slug} side={side} "
+                  f"error={type(exc).__name__}", flush=True)
+            probability = None
+        minimum = scorer.policy.min_win_probability
+        if probability is None:
+            blocker = TRADE_SCORE_MODEL_UNAVAILABLE
+        else:
+            state.trade_score_by_side[side] = probability
+            blocker = TRADE_SCORE_BELOW_MINIMUM if probability < minimum else None
+        logged = self.__dict__.setdefault("_trade_score_logged", {})
+        decision = "skip" if blocker else "allow"
+        last = logged.get((state.slug, side))
+        if (last is None or last[1] != decision
+                or (now - last[0]).total_seconds() >= self.TRADE_SCORE_LOG_SECONDS):
+            logged[(state.slug, side)] = (now, decision)
+            shown = "none" if probability is None else f"{probability:.3f}"
+            print(f"[trade-score] at={now.isoformat()} market={state.slug} side={side} "
+                  f"p={shown} min={minimum:g} decision={decision} "
+                  f"model={scorer.model.label if scorer.model else 'none'}", flush=True)
+        return blocker
+
     def _record_economic_ineligibility(
         self, state: MarketState, now: datetime,
     ) -> None:
@@ -338,6 +404,19 @@ class RewardRotationMixin:
             )
             state.opportunity_economics_by_side[side] = economics
             if economics.should_quote or not self.config.enforce_reward_cost_gate:
+                score_blocker = self._trade_score_blocker(
+                    state, side, price=price, spread=spread,
+                    already_resting=already_resting, order_score=result,
+                    fill_probability=fill_hazard.probability,
+                    exit_result=exit_result,
+                    seconds_to_event=seconds_to_event, now=now)
+                if score_blocker:
+                    # Entry-only (BC-2026-10-02-B), like the thin-book rule: a
+                    # zero expected net makes the reconciler drop the new
+                    # entry; resting sides and exits never consult it.
+                    state.economic_blocker_by_side[side] = score_blocker
+                    state.expected_net_by_side[side] = 0.0
+                    continue
                 # The reconciler only quotes a side whose expected net is
                 # strictly positive. With the gate advisory this value is
                 # frequently negative, so a market would be selected and then

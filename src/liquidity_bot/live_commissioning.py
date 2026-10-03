@@ -392,6 +392,8 @@ class CommissioningRunner(
         # BC-2026-09-27-A: a market whose every new entry is skipped for a thin
         # book is an idle slot like any other economic refusal.
         "thin_book_entry_skip",
+        # BC-2026-10-02-B: scorer mode refused every new entry here.
+        "trade_score_below_minimum",
     })
 
     def __init__(
@@ -416,6 +418,7 @@ class CommissioningRunner(
         quality_sink: Any = None,
         reward_cache_scope: str | None = None,
         reward_pool_gate: RewardPoolGate | None = None,
+        trade_scorer: Any = None,
     ):
         self.client = client
         self.config = config
@@ -436,6 +439,8 @@ class CommissioningRunner(
         self._manual_entry_paused = False
         # BC-2026-10-02-A: None (tests, disabled policy) never pauses.
         self._reward_pool_gate = reward_pool_gate
+        # BC-2026-10-02-B: None = normal reward farming (no scorer filter).
+        self.trade_scorer = trade_scorer
         self._ui_entry_paused = False
         self._ui_availability_initialized = False
         self._ui_availability_state = UiTradingState.UNKNOWN
@@ -1770,6 +1775,10 @@ class CommissioningRunner(
         previous_reason = self._current_entry_pause_reason()
         self._manual_entry_paused = operator_entry_pause_requested(
             self._operator_entry_pause_path)
+        if self.trade_scorer is not None:
+            line = self.trade_scorer.refresh(now)
+            if line:
+                print(line, flush=True)
         if self._reward_pool_gate is not None:
             reading = self._reward_pool_gate.refresh(now)
             if reading is not None:
@@ -4726,7 +4735,20 @@ async def _run(args: argparse.Namespace) -> CommissioningResult:
         pool_policy = load_reward_pool_gate_policy()
     except (ValueError, TypeError, OSError) as exc:
         raise CommissioningRefused(f"reward-pool gate policy: {exc}") from exc
-    if pool_policy.enabled:
+    try:
+        from .trade_score import TradeScorer, load_trade_score_policy
+        score_policy = load_trade_score_policy()
+    except (ValueError, TypeError, OSError) as exc:
+        raise CommissioningRefused(f"trade-score policy: {exc}") from exc
+    print(f"[trading-mode] mode={score_policy.mode} "
+          f"min_win_probability={score_policy.min_win_probability:g} "
+          f"reward_pool_gate={'on' if pool_policy.enabled and not score_policy.scorer_mode else 'off'}",
+          flush=True)
+    if score_policy.scorer_mode:
+        # BC-2026-10-02-B: scorer mode replaces normal reward farming, so the
+        # reward-pool pause (a reward-farming rule) does not apply.
+        runner_options["trade_scorer"] = TradeScorer(score_policy)
+    elif pool_policy.enabled:
         # Relative to the runtime working directory, like the operator latch.
         runner_options["reward_pool_gate"] = RewardPoolGate(pool_policy)
     secrets = load_runtime_secrets(require_polymarket=True)

@@ -393,6 +393,12 @@ class DecisionMixin:
                 selection_provenance=provenance,
                 fill_model_horizon_seconds=self.config.reward_projection_horizon_seconds,
                 fill_model_calibration_id=CALIBRATION_ID,
+                trade_score_win_probability=state.trade_score_by_side.get(side),
+                trade_score_model=(
+                    self.trade_scorer.model.label
+                    if getattr(self, "trade_scorer", None) is not None
+                    and self.trade_scorer.model is not None
+                    and side in state.trade_score_by_side else None),
             )
         except Exception as exc:
             # Observation is reporting.  It must never turn a valid action

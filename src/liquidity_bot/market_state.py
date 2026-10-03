@@ -65,6 +65,8 @@ class MarketState:
     opportunity_economics_by_side: dict[str, OpportunityEconomics] = field(
         default_factory=dict)
     model_queue_ahead_by_side: dict[str, float] = field(default_factory=dict)
+    # BC-2026-10-02-B: Trade Scorer win chance for a new entry (scorer mode).
+    trade_score_by_side: dict[str, float] = field(default_factory=dict)
     # A bounded stream of BBO CHANGE times, not every book message.  This
     # measures touch velocity without increasing public subscriptions or REST
     # work, and has no scheduler/strategy consumer.
@@ -125,6 +127,7 @@ class MarketState:
         self.stressed_exit_by_side = {}
         self.opportunity_economics_by_side = {}
         self.model_queue_ahead_by_side = {}
+        self.trade_score_by_side = {}
 
     def forget_contracts(self) -> None:
         """Forget metadata and book so nothing stale can authorize risk."""

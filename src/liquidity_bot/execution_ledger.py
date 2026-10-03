@@ -603,6 +603,10 @@ class QuoteObservation:
     selection_provenance: dict | None = None
     fill_model_horizon_seconds: float | None = None
     fill_model_calibration_id: str | None = None
+    # BC-2026-10-02-B evidence: the Trade Scorer's win chance and model for
+    # this entry (scorer mode only). JSON-only, never an execution input.
+    trade_score_win_probability: float | None = None
+    trade_score_model: str | None = None
 
     def __post_init__(self) -> None:
         if not self.market_slug or self.side not in {"bid", "offer"}:

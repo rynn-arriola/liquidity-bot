@@ -27,7 +27,7 @@ Each entry records:
 
 ## BC-2026-10-03-A — Live (in-game) reward farming; pregame switched off (kept, switchable)
 
-- **Status:** BUILT and tested (`d6ad519bd` + docs), not loaded. New entries paused by the operator latch since 12:37Z Oct 3 ("Turn off everything"); Trade Scorer shadow stopped. Loads with a restart at a window boundary (the risk caps change) after the operator's go.
+- **Status:** LIVE since 14:28:05Z Oct 3 (10:28 AM ET) in `62eb0800e` (operator "Command 1", "Start now, $40/30 until noon"): live strategy on, pregame off, size 10, the current window's 30 orders / $40 stop; the 20 orders / $20 stop (`b13d12af8`, tree identical to the tested `5bbd2235a`) load at the 12:00 ET restart. First check 14:31Z: 14 viable live markets, 8 orders on 7 markets, 3 positions, 0 errors; window loss $2.27 (a table-tennis swing 0.40→0.65 in 30 s cost $2.44).
 - **Operator (2026-10-03):** "Can we disable trade scorer and lets create a version of the normal incentive farming of a live version of that"; "Turn off everything and focus on the new version which is not pregame and it would be live version. also dont remove pre-game we should be able to switch it on or off"; "We would start with 20 resting orders not including open position and 10 contracts, 20 usd stop loss 6 hr time"; "But we should optimize it for live trading"; "Just bid on best price like pregame"; "We will try to make gains on trades too".
 - **Switch:** `config/strategy_policy.json` `pregame_enabled` / `live_enabled` (+ `live` settings). No file, or live off, is exactly the pregame bot (all earlier tests unchanged). Trade Scorer `mode: "reward"`; the scorer and the reward-pool pause only apply to pregame.
 - **Live rules (BC-2026-10-03-A):**
